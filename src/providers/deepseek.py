@@ -1,19 +1,21 @@
 import os
 from openai import OpenAI
-from core.llm import LLMProvider
+from src.core.llm import LLMProvider
+from src.config import settings
 
 class DeepSeekProvider(LLMProvider):
     
-    def __init__(self, api_key: str = None, model: str = "deepseek-chat"):
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key or settings.deepseek_api_key
+        self.model = model or settings.deepseek_model
+        
         if not self.api_key:
-            raise ValueError("DEEPSEEK_API_KEY не установлен.")
+            raise ValueError("DEEPSEEK_API_KEY is not set")
         
         self.client = OpenAI(
             api_key=self.api_key,
             base_url="https://api.deepseek.com"
         )
-        self.model = model
 
     def generate(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
         response = self.client.chat.completions.create(

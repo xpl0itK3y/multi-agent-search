@@ -1,4 +1,4 @@
-from core.agent import BaseAgent
+from src.core.agent import BaseAgent
 
 class PromptOptimizerAgent(BaseAgent):
     

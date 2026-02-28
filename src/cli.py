@@ -1,13 +1,9 @@
-import os
 import sys
-from dotenv import load_dotenv
-from providers.deepseek import DeepSeekProvider
-from agents.optimizer import PromptOptimizerAgent
-
-load_dotenv()
+from src.providers.deepseek import DeepSeekProvider
+from src.agents.optimizer import PromptOptimizerAgent
+from src.config import settings
 
 def safe_input(prompt: str) -> str:
-
     sys.stdout.write(prompt)
     sys.stdout.flush()
     try:
@@ -19,15 +15,14 @@ def safe_input(prompt: str) -> str:
         return "exit"
 
 def main():
-    print("--- Prompt Optimizer Agent (DeepSeek) ---")
+    print(f"--- {settings.app_name} (CLI) ---")
     print("Type 'exit' or 'quit' to exit.\n")
 
     try:
-        llm = DeepSeekProvider()
+        llm = DeepSeekProvider(api_key=settings.deepseek_api_key, model=settings.deepseek_model)
         agent = PromptOptimizerAgent(llm)
     except ValueError as e:
         print(f"Error: {e}")
-        print("Please set the DEEPSEEK_API_KEY environment variable.")
         sys.exit(1)
     except Exception as e:
         print(f"Unexpected error during initialization: {e}")
