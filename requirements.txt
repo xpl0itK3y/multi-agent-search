@@ -3,3 +3,6 @@ python-dotenv
 fastapi
 uvicorn
 pydantic-settings
+pytest
+pytest-mock
+httpx
