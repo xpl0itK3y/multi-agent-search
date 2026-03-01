@@ -24,6 +24,7 @@ def test_optimize_invalid_payload(client):
     assert response.status_code == 422 # Validation error
 
 def test_decompose_endpoint(client, mocker):
+    # Мокаем работу оркестратора
     mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
     mock_decompose.return_value = [
         {"id": "123", "description": "Search for X", "queries": ["query X"], "status": "pending"},
@@ -37,4 +38,27 @@ def test_decompose_endpoint(client, mocker):
     assert len(response.json()["tasks"]) == 2
     assert response.json()["tasks"][0]["id"] == "123"
     assert response.json()["tasks"][0]["status"] == "pending"
-    assert response.json()["depth"] == "easy"
+    assert "created_at" in response.json()["tasks"][0]
+
+def test_list_tasks(client):
+    response = client.get("/v1/tasks")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+def test_update_task_status(client):
+    # Сначала создаем задачу через фиксированный мок или напрямую через менеджер для теста
+    from src.core.task_manager import task_manager
+    task_id = "test-uuid"
+    task_manager.add_task({
+        "id": task_id,
+        "description": "test",
+        "queries": ["q"],
+        "status": "pending"
+    })
+    
+    payload = {"status": "running", "log": "Started searching"}
+    response = client.patch(f"/v1/tasks/{task_id}", json=payload)
+    
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert "Started searching" in response.json()["logs"]
