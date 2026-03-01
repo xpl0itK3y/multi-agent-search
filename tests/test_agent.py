@@ -1,5 +1,7 @@
-import pytest
 from src.agents.optimizer import PromptOptimizerAgent
+from src.agents.orchestrator import OrchestratorAgent
+from src.api.schemas import SearchDepth
+import json
 
 def test_optimizer_agent_run(mock_llm):
     agent = PromptOptimizerAgent(mock_llm)
@@ -8,3 +10,15 @@ def test_optimizer_agent_run(mock_llm):
     
     assert "Optimized: test prompt" in result
     assert agent.SYSTEM_PROMPT is not None
+
+def test_orchestrator_agent_decompose(mocker, mock_llm):
+    agent = OrchestratorAgent(mock_llm)
+    mock_response = '[{"description": "task 1", "queries": ["query 1"]}, {"description": "task 2", "queries": ["query 2"]}]'
+    
+    mocker.patch.object(mock_llm, "generate", return_value=mock_response)
+    
+    tasks = agent.run_decompose("complex task", SearchDepth.EASY)
+    
+    assert len(tasks) == 2
+    assert tasks[0]["description"] == "task 1"
+    assert tasks[1]["queries"] == ["query 2"]
