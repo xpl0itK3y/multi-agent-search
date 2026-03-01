@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from enum import Enum
-from typing import List, Optional, Any
-from datetime import datetime
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
 
 class SearchDepth(str, Enum):
     EASY = "easy"
@@ -14,33 +14,58 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class ResearchStatus(str, Enum):
+    PROCESSING = "processing"
+    ANALYZING = "analyzing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class OptimizeRequest(BaseModel):
-    prompt: str = Field(..., description="The raw prompt to be optimized", min_length=1)
+    prompt: str = Field(..., description="The original user prompt to optimize", min_length=1)
 
 class OptimizeResponse(BaseModel):
-    optimized_prompt: str = Field(..., description="The improved and structured prompt")
+    optimized_prompt: str
     status: str = "success"
 
 class DecomposeRequest(BaseModel):
-    prompt: str = Field(..., description="The complex prompt to be broken into search tasks")
-    depth: SearchDepth = Field(SearchDepth.EASY, description="Search depth (number of tasks)")
+    prompt: str = Field(..., description="The complex query to decompose")
+    depth: SearchDepth = Field(default=SearchDepth.EASY, description="Depth of the search (easy, medium, hard)")
 
 class SearchTask(BaseModel):
-    id: str = Field(..., description="Unique ID for the task")
-    description: str = Field(..., description="Description of the search task for a bot")
-    queries: List[str] = Field(..., description="Specific search queries for this task")
-    status: TaskStatus = Field(TaskStatus.PENDING, description="Current status of the task")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    result: Optional[Any] = None
-    logs: List[str] = []
+    id: str
+    research_id: Optional[str] = None
+    description: str
+    queries: List[str]
+    status: TaskStatus = TaskStatus.PENDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    result: Optional[List[Dict[str, Any]]] = None
+    logs: List[str] = Field(default_factory=list)
 
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
-    result: Optional[Any] = None
+    result: Optional[List[Dict[str, Any]]] = None
     log: Optional[str] = None
 
 class DecomposeResponse(BaseModel):
-    tasks: List[SearchTask] = Field(..., description="List of search tasks for bots")
+    tasks: List[SearchTask]
     depth: SearchDepth
-    status: str = "success"
+
+class ResearchRequest(BaseModel):
+    prompt: str = Field(..., description="The goal or topic of the research")
+    depth: SearchDepth = Field(default=SearchDepth.EASY)
+
+class ResearchRecord(BaseModel):
+    id: str
+    prompt: str
+    depth: SearchDepth
+    status: ResearchStatus = ResearchStatus.PROCESSING
+    task_ids: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    final_report: Optional[str] = None
+
+class ResearchResponse(BaseModel):
+    research_id: str
+    status: str
+    message: str

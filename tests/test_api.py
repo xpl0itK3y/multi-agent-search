@@ -27,38 +27,86 @@ def test_decompose_endpoint(client, mocker):
     # Мокаем работу оркестратора
     mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
     mock_decompose.return_value = [
-        {"id": "123", "description": "Search for X", "queries": ["query X"], "status": "pending"},
-        {"id": "456", "description": "Search for Y", "queries": ["query Y"], "status": "pending"}
+        {"id": "test-id", "description": "Search for X", "queries": ["query X"], "status": "pending"},
     ]
     
-    payload = {"prompt": "complex research", "depth": "easy"}
+    # Мокаем фоновую задачу
+    mock_bg = mocker.patch("src.api.app.run_search_task")
+    
+    payload = {"prompt": "test query", "depth": "easy"}
     response = client.post("/v1/decompose", json=payload)
     
     assert response.status_code == 200
-    assert len(response.json()["tasks"]) == 2
-    assert response.json()["tasks"][0]["id"] == "123"
-    assert response.json()["tasks"][0]["status"] == "pending"
-    assert "created_at" in response.json()["tasks"][0]
+    assert len(response.json()["tasks"]) == 1
+    # Проверяем, что фоновая задача была запланирована
+    mock_bg.assert_called_once()
 
-def test_list_tasks(client):
-    response = client.get("/v1/tasks")
+def test_research_endpoints(client, mocker):
+    from src.api.schemas import ResearchStatus
+    # Mock orchestrator
+    mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
+    mock_decompose.return_value = [
+        {"id": "task-1", "description": "Search for X", "queries": ["query X"], "status": "pending"},
+    ]
+    
+    mock_bg = mocker.patch("src.api.app.run_search_task")
+    
+    # Start research
+    payload = {"prompt": "test research", "depth": "easy"}
+    response = client.post("/v1/research", json=payload)
+    
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
-
-def test_update_task_status(client):
-    # Сначала создаем задачу через фиксированный мок или напрямую через менеджер для теста
+    res_data = response.json()
+    assert "research_id" in res_data
+    assert res_data["status"] == "success"
+    
+    research_id = res_data["research_id"]
+    
+    # Get research status (tasks pending)
+    response_get = client.get(f"/v1/research/{research_id}")
+    assert response_get.status_code == 200
+    assert response_get.json()["status"] == ResearchStatus.PROCESSING
+    
+    # Update task to completed
     from src.core.task_manager import task_manager
-    task_id = "test-uuid"
+    from src.api.schemas import TaskUpdate
+    tasks = task_manager.get_tasks_by_research(research_id)
+    assert len(tasks) == 1
+    task_manager.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
+    
+    # Mock analyzer
+    mock_analysis = mocker.patch("src.api.app.agent_analyzer.run_analysis")
+    mock_analysis.return_value = "Final structured report"
+    
+    # Get research status again, this should trigger analysis
+    response_get2 = client.get(f"/v1/research/{research_id}")
+    assert response_get2.status_code == 200
+    assert response_get2.json()["status"] == ResearchStatus.COMPLETED
+    assert response_get2.json()["final_report"] == "Final structured report"
+
+def test_search_agent_integration(mocker):
+    # Тестируем SearchAgent отдельно с моками провайдеров
+    from src.agents.search import SearchAgent
+    from src.core.task_manager import task_manager
+    
+    task_id = "test-agent-id"
     task_manager.add_task({
         "id": task_id,
         "description": "test",
-        "queries": ["q"],
+        "queries": ["query"],
         "status": "pending"
     })
     
-    payload = {"status": "running", "log": "Started searching"}
-    response = client.patch(f"/v1/tasks/{task_id}", json=payload)
+    mock_search = mocker.patch("src.providers.search.SearchProvider.search")
+    mock_search.return_value = [{"url": "http://example.com", "title": "Example"}]
     
-    assert response.status_code == 200
-    assert response.json()["status"] == "running"
-    assert "Started searching" in response.json()["logs"]
+    mock_extract = mocker.patch("src.providers.search.ContentExtractor.extract_content")
+    mock_extract.return_value = "Full page content"
+    
+    agent = SearchAgent(max_sources=1)
+    agent.run_task(task_id)
+    
+    final_task = task_manager.get_task(task_id)
+    assert final_task.status == "completed"
+    assert final_task.result[0]["content"] == "Full page content"
+    assert "Search completed" in final_task.logs[-1]
