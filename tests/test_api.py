@@ -26,8 +26,8 @@ def test_optimize_invalid_payload(client):
 def test_decompose_endpoint(client, mocker):
     mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
     mock_decompose.return_value = [
-        {"description": "Search for X", "queries": ["query X"]},
-        {"description": "Search for Y", "queries": ["query Y"]}
+        {"id": "123", "description": "Search for X", "queries": ["query X"], "status": "pending"},
+        {"id": "456", "description": "Search for Y", "queries": ["query Y"], "status": "pending"}
     ]
     
     payload = {"prompt": "complex research", "depth": "easy"}
@@ -35,5 +35,6 @@ def test_decompose_endpoint(client, mocker):
     
     assert response.status_code == 200
     assert len(response.json()["tasks"]) == 2
-    assert response.json()["tasks"][0]["description"] == "Search for X"
+    assert response.json()["tasks"][0]["id"] == "123"
+    assert response.json()["tasks"][0]["status"] == "pending"
     assert response.json()["depth"] == "easy"
