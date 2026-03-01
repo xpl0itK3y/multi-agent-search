@@ -3,6 +3,8 @@ python-dotenv
 fastapi
 uvicorn
 pydantic-settings
+ddgs
+trafilatura
 pytest
 pytest-mock
 httpx
