@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from enum import Enum
-from typing import List
+from typing import List, Optional, Any
+from datetime import datetime
 
 class SearchDepth(str, Enum):
     EASY = "easy"
@@ -29,6 +30,15 @@ class SearchTask(BaseModel):
     description: str = Field(..., description="Description of the search task for a bot")
     queries: List[str] = Field(..., description="Specific search queries for this task")
     status: TaskStatus = Field(TaskStatus.PENDING, description="Current status of the task")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    result: Optional[Any] = None
+    logs: List[str] = []
+
+class TaskUpdate(BaseModel):
+    status: Optional[TaskStatus] = None
+    result: Optional[Any] = None
+    log: Optional[str] = None
 
 class DecomposeResponse(BaseModel):
     tasks: List[SearchTask] = Field(..., description="List of search tasks for bots")
