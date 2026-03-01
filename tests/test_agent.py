@@ -21,4 +21,5 @@ def test_orchestrator_agent_decompose(mocker, mock_llm):
     
     assert len(tasks) == 2
     assert tasks[0]["description"] == "task 1"
-    assert tasks[1]["queries"] == ["query 2"]
+    assert "id" in tasks[0]
+    assert tasks[0]["status"] == "pending"

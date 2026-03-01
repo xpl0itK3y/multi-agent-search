@@ -1,6 +1,7 @@
 import json
+import uuid
 from src.core.agent import BaseAgent
-from src.api.schemas import SearchDepth
+from src.api.schemas import SearchDepth, TaskStatus
 
 class OrchestratorAgent(BaseAgent):
     
@@ -19,7 +20,6 @@ class OrchestratorAgent(BaseAgent):
     """
 
     def run_decompose(self, prompt: str, depth: SearchDepth) -> list:
-        # Map depth to count
         depth_map = {
             SearchDepth.EASY: 2,
             SearchDepth.MEDIUM: 4,
@@ -34,7 +34,6 @@ class OrchestratorAgent(BaseAgent):
             user_prompt=prompt
         )
         
-        # Clean response text in case LLM adds code blocks
         clean_text = response_text.strip()
         if clean_text.startswith("```json"):
             clean_text = clean_text[7:]
@@ -43,13 +42,26 @@ class OrchestratorAgent(BaseAgent):
         clean_text = clean_text.strip()
         
         try:
-            tasks = json.loads(clean_text)
-            return tasks
+            tasks_raw = json.loads(clean_text)
+            
+            # Enrich tasks with IDs and Statuses
+            enriched_tasks = []
+            for item in tasks_raw:
+                enriched_tasks.append({
+                    "id": str(uuid.uuid4()),
+                    "description": item.get("description", "No description"),
+                    "queries": item.get("queries", []),
+                    "status": TaskStatus.PENDING
+                })
+            return enriched_tasks
         except json.JSONDecodeError:
-            # Fallback or error handling
-            return [{"description": "Error parsing LLM response", "queries": [prompt]}]
+            return [{
+                "id": str(uuid.uuid4()),
+                "description": "Error parsing LLM response", 
+                "queries": [prompt],
+                "status": TaskStatus.FAILED
+            }]
 
     def run(self, input_data: str) -> str:
-        # Default behavior for BaseAgent compatibility
         tasks = self.run_decompose(input_data, SearchDepth.EASY)
         return json.dumps(tasks, ensure_ascii=False)

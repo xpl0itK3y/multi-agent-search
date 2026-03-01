@@ -7,6 +7,12 @@ class SearchDepth(str, Enum):
     MEDIUM = "medium"
     HARD = "hard"
 
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., description="The raw prompt to be optimized", min_length=1)
 
@@ -19,8 +25,10 @@ class DecomposeRequest(BaseModel):
     depth: SearchDepth = Field(SearchDepth.EASY, description="Search depth (number of tasks)")
 
 class SearchTask(BaseModel):
+    id: str = Field(..., description="Unique ID for the task")
     description: str = Field(..., description="Description of the search task for a bot")
     queries: List[str] = Field(..., description="Specific search queries for this task")
+    status: TaskStatus = Field(TaskStatus.PENDING, description="Current status of the task")
 
 class DecomposeResponse(BaseModel):
     tasks: List[SearchTask] = Field(..., description="List of search tasks for bots")
