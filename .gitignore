@@ -3,7 +3,3 @@ venv
 __pycache__
 .pytest_cache
 agent.md
-PROJECT_DESCRIPTION.local.md
-IMPLEMENTATION_GUIDE_RU.local.md
-PROJECT_DESCRIPTION.local.md
-PROJECT_VISION_RU.local.md
