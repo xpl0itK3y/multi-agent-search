@@ -34,3 +34,9 @@ def test_settings_defaults_to_postgres_task_store():
     settings = Settings(_env_file=None)
 
     assert settings.task_store_backend == "postgres"
+
+
+def test_settings_supports_optional_smoke_analyzer_report():
+    settings = Settings(_env_file=None, smoke_analyzer_report="stub report")
+
+    assert settings.smoke_analyzer_report == "stub report"
