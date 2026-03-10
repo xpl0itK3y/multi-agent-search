@@ -11,6 +11,8 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchStatus,
     SearchDepth,
+    SearchTask,
+    TaskUpdate,
     TaskStatus,
 )
 from src.repositories.protocols import TaskStore
@@ -40,6 +42,15 @@ class ResearchService:
     def optimize_prompt(self, prompt: str) -> str:
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
         return optimizer.run(prompt)
+
+    def list_tasks(self) -> list[SearchTask]:
+        return self.task_store.get_all_tasks()
+
+    def get_task(self, task_id: str) -> SearchTask | None:
+        return self.task_store.get_task(task_id)
+
+    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
+        return self.task_store.update_task(task_id, update)
 
     def decompose_prompt(
         self,
