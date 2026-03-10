@@ -17,7 +17,7 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.analyzer import AnalyzerAgent
 from src.providers.deepseek import DeepSeekProvider
 from src.config import settings
-from src.core.task_manager import task_manager
+from src.repositories import create_task_store
 from src.services import ResearchService
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
@@ -35,7 +35,7 @@ except Exception as e:
     print(f"Warning: Failed to initialize agents: {e}")
 
 research_service = ResearchService(
-    task_manager=task_manager,
+    task_manager=create_task_store(),
     optimizer=agent_optimizer,
     orchestrator=agent_orchestrator,
     analyzer=agent_analyzer,
@@ -66,18 +66,18 @@ async def decompose_prompt(request: DecomposeRequest, background_tasks: Backgrou
 
 @app.get("/v1/tasks", response_model=List[SearchTask])
 async def list_tasks():
-    return task_manager.get_all_tasks()
+    return research_service.task_manager.get_all_tasks()
 
 @app.get("/v1/tasks/{task_id}", response_model=SearchTask)
 async def get_task(task_id: str):
-    task = task_manager.get_task(task_id)
+    task = research_service.task_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
 async def update_task(task_id: str, update: TaskUpdate):
-    task = task_manager.update_task(task_id, update)
+    task = research_service.task_manager.update_task(task_id, update)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
