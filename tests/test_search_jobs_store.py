@@ -30,3 +30,23 @@ def test_in_memory_store_tracks_search_jobs():
     assert updated is not None
     assert updated.status == SearchJobStatus.RUNNING
     assert store.get_latest_search_task_job("task-1").id == job.id
+
+
+def test_in_memory_store_claims_next_search_job():
+    store = InMemoryTaskStore()
+    store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+    first = store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    store.add_search_task_job("task-1", SearchDepth.EASY.value)
+
+    claimed = store.claim_next_search_task_job()
+
+    assert claimed is not None
+    assert claimed.id == first.id
+    assert claimed.status == SearchJobStatus.RUNNING

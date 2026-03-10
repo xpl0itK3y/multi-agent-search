@@ -163,6 +163,25 @@ class SQLAlchemyTaskStore:
             jobs = session.execute(statement).scalars().all()
             return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
+    def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.PENDING.value)
+                .order_by(ResearchFinalizeJobORM.created_at.asc())
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+
+            job.status = FinalizeJobStatus.RUNNING.value
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
+
     def update_research_finalize_job(
         self,
         job_id: str,
@@ -222,6 +241,25 @@ class SQLAlchemyTaskStore:
             )
             jobs = session.execute(statement).scalars().all()
             return [search_task_job_orm_to_schema(job) for job in jobs]
+
+    def claim_next_search_task_job(self) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.PENDING.value)
+                .order_by(SearchTaskJobORM.created_at.asc())
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+
+            job.status = SearchJobStatus.RUNNING.value
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
 
     def update_search_task_job(
         self,

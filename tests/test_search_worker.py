@@ -14,7 +14,7 @@ def test_search_worker_processes_pending_jobs(mocker):
             "status": TaskStatus.PENDING,
         }
     )
-    task_store.add_search_task_job("task-1", SearchDepth.HARD.value)
+    job = task_store.add_search_task_job("task-1", SearchDepth.HARD.value)
     service = ResearchService(task_store=task_store)
     process_job = mocker.patch.object(service, "process_search_task_job")
 
@@ -22,3 +22,4 @@ def test_search_worker_processes_pending_jobs(mocker):
 
     assert processed_count == 1
     process_job.assert_called_once()
+    assert task_store.get_search_task_job(job.id).status.value == "running"
