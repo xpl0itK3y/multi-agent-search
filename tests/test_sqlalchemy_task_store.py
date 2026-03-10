@@ -34,6 +34,7 @@ def test_sqlalchemy_task_store_persists_research_and_tasks():
             "status": TaskStatus.PENDING,
         }
     )
+    synced_research = store.set_research_task_ids(research.id, [task_id])
     updated = store.update_task(
         task.id,
         TaskUpdate(
@@ -54,7 +55,10 @@ def test_sqlalchemy_task_store_persists_research_and_tasks():
     assert fetched_research is not None
     assert fetched_research.status == ResearchStatus.COMPLETED
     assert fetched_research.final_report == "final report"
+    assert fetched_research.task_ids == [task_id]
     assert research_status is not None
+    assert synced_research is not None
+    assert synced_research.task_ids == [task_id]
     assert task.status == TaskStatus.PENDING
     assert updated is not None
     assert updated.status == TaskStatus.COMPLETED

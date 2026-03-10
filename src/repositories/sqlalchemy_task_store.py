@@ -91,6 +91,22 @@ class SQLAlchemyTaskStore:
             persisted = session.execute(statement).scalar_one()
             return search_task_orm_to_schema(persisted)
 
+    def set_research_task_ids(
+        self,
+        research_id: str,
+        task_ids: list[str],
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            research.task_ids = task_ids
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
     def get_task(self, task_id: str) -> SearchTask | None:
         with self.session_scope() as session:
             statement = (
