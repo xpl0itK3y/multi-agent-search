@@ -25,7 +25,7 @@ class RecordingLLM(LLMProvider):
 
 
 def test_decompose_requires_initialized_orchestrator(mocker):
-    service = ResearchService(task_manager=InMemoryTaskStore(), orchestrator=None)
+    service = ResearchService(task_store=InMemoryTaskStore(), orchestrator=None)
 
     with pytest.raises(HTTPException) as exc_info:
         service.decompose_prompt(
@@ -71,7 +71,7 @@ def test_decompose_does_not_schedule_failed_tasks(mocker):
             "status": TaskStatus.FAILED,
         }
     ]
-    service = ResearchService(task_manager=InMemoryTaskStore(), orchestrator=orchestrator)
+    service = ResearchService(task_store=InMemoryTaskStore(), orchestrator=orchestrator)
     background_tasks = BackgroundTasks()
 
     response = service.decompose_prompt(
