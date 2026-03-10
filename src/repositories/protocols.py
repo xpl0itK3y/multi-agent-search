@@ -1,6 +1,14 @@
 from typing import Protocol
 
-from src.api.schemas import ResearchRecord, ResearchRequest, ResearchStatus, SearchTask, TaskUpdate
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchFinalizeJob,
+    ResearchRecord,
+    ResearchRequest,
+    ResearchStatus,
+    SearchTask,
+    TaskUpdate,
+)
 
 
 class TaskStore(Protocol):
@@ -20,6 +28,19 @@ class TaskStore(Protocol):
         research_id: str,
         task_ids: list[str],
     ) -> ResearchRecord | None: ...
+
+    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob: ...
+
+    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
+
+    def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]: ...
+
+    def update_research_finalize_job(
+        self,
+        job_id: str,
+        status: FinalizeJobStatus,
+        error: str | None = None,
+    ) -> ResearchFinalizeJob | None: ...
 
     def add_task(self, task_data: dict) -> SearchTask: ...
 

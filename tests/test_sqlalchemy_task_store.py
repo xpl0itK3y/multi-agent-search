@@ -3,14 +3,26 @@ import uuid
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from src.api.schemas import ResearchRequest, SearchDepth, ResearchStatus, TaskStatus, TaskUpdate
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchRequest,
+    SearchDepth,
+    ResearchStatus,
+    TaskStatus,
+    TaskUpdate,
+)
 from src.config import settings
 from src.repositories import SQLAlchemyTaskStore
 
 
 def _truncate_tables(session_factory):
     with session_factory() as session:
-        session.execute(text("TRUNCATE TABLE search_results, search_tasks, researches RESTART IDENTITY CASCADE"))
+        session.execute(
+            text(
+                "TRUNCATE TABLE research_finalize_jobs, search_results, search_tasks, researches "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         session.commit()
 
 
@@ -65,3 +77,29 @@ def test_sqlalchemy_task_store_persists_research_and_tasks():
     assert updated.logs[-1] == "done"
     assert updated.result[0]["url"] == "https://example.com"
     assert len(fetched_tasks) == 1
+
+
+def test_sqlalchemy_task_store_persists_finalize_jobs():
+    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    store = SQLAlchemyTaskStore(session_factory)
+    _truncate_tables(session_factory)
+
+    research = store.add_research(
+        ResearchRequest(prompt="research topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    job = store.add_research_finalize_job(research.id)
+
+    assert job.status == FinalizeJobStatus.PENDING
+
+    pending = store.get_pending_research_finalize_jobs()
+    assert [item.id for item in pending] == [job.id]
+
+    updated = store.update_research_finalize_job(
+        job.id,
+        FinalizeJobStatus.COMPLETED,
+    )
+    assert updated is not None
+    assert updated.status == FinalizeJobStatus.COMPLETED
+    assert store.get_pending_research_finalize_jobs() == []
