@@ -208,6 +208,9 @@ class ResearchService:
     def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         return self.task_store.get_search_task_job(job_id)
 
+    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
+        return self.task_store.get_latest_search_task_job(task_id)
+
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)
         if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:

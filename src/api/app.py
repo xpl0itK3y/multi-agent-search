@@ -12,6 +12,7 @@ from src.api.schemas import (
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
+    SearchTaskJob,
     SearchTask,
     TaskUpdate,
 )
@@ -69,6 +70,22 @@ async def update_task(task_id: str, update: TaskUpdate, request: Request):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@app.get("/v1/tasks/{task_id}/search-job", response_model=SearchTaskJob)
+async def get_latest_search_job(task_id: str, request: Request):
+    job = get_research_service(request).get_latest_search_task_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Search job not found")
+    return job
+
+
+@app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob)
+async def get_search_job(job_id: str, request: Request):
+    job = get_research_service(request).get_search_task_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Search job not found")
+    return job
 
 @app.post("/v1/research", response_model=ResearchResponse)
 async def start_research(request: Request, payload: ResearchRequest, background_tasks: BackgroundTasks):
