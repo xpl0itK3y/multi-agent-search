@@ -105,7 +105,11 @@ class ResearchService:
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
 
-        if research.status in [ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+        if research.status in [
+            ResearchStatus.ANALYZING,
+            ResearchStatus.COMPLETED,
+            ResearchStatus.FAILED,
+        ]:
             return research
 
         tasks = self.task_store.get_tasks_by_research(research_id)

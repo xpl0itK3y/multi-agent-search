@@ -2,7 +2,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import ResearchRequest, SearchDepth, SearchTask, TaskStatus
+from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -112,3 +112,29 @@ def test_start_research_persists_task_ids_in_task_store(mocker):
     research = task_store.get_research(response.research_id)
     assert research is not None
     assert research.task_ids == ["task-1", "task-2"]
+
+
+def test_get_research_status_does_not_rerun_analysis_while_analyzing(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    task_store.update_research_status(research.id, ResearchStatus.ANALYZING)
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    current = service.get_research_status(research.id)
+
+    assert current.status == ResearchStatus.ANALYZING
+    analyzer.run_analysis.assert_not_called()
