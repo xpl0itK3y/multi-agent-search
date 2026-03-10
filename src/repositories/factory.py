@@ -6,14 +6,12 @@ from src.repositories.in_memory_task_store import InMemoryTaskStore
 from src.repositories.protocols import TaskStore
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
 
-task_store = InMemoryTaskStore()
-
 
 def create_task_store() -> TaskStore:
     backend = settings.task_store_backend.lower()
 
     if backend == "memory":
-        return task_store
+        return InMemoryTaskStore()
 
     if backend == "postgres":
         engine = create_engine_from_settings()
