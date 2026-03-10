@@ -3,6 +3,9 @@ python-dotenv
 fastapi
 uvicorn
 pydantic-settings
+sqlalchemy
+psycopg[binary]
+alembic
 ddgs
 trafilatura
 pytest
