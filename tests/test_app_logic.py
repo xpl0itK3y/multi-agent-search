@@ -138,3 +138,78 @@ def test_get_research_status_does_not_rerun_analysis_while_analyzing(mocker):
 
     assert current.status == ResearchStatus.ANALYZING
     analyzer.run_analysis.assert_not_called()
+
+
+def test_get_research_status_is_read_only_when_tasks_are_done(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    current = service.get_research_status(research.id)
+
+    assert current.status == ResearchStatus.PROCESSING
+    analyzer.run_analysis.assert_not_called()
+
+
+def test_finalize_research_runs_analysis_when_tasks_are_complete(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.run_analysis.return_value = "final report"
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    finalized = service.finalize_research(research.id)
+
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert finalized.final_report == "final report"
+    analyzer.run_analysis.assert_called_once()
+
+
+def test_finalize_research_rejects_incomplete_tasks():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "pending task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    service = ResearchService(task_store=task_store)
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.finalize_research(research.id)
+
+    assert exc_info.value.status_code == 409
