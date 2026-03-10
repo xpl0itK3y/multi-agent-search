@@ -2,7 +2,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import SearchDepth, SearchTask, TaskStatus
+from src.api.schemas import ResearchRequest, SearchDepth, SearchTask, TaskStatus
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -83,3 +83,32 @@ def test_decompose_does_not_schedule_failed_tasks(mocker):
     assert len(response.tasks) == 1
     assert response.tasks[0].status == TaskStatus.FAILED
     assert background_tasks.tasks == []
+
+
+def test_start_research_persists_task_ids_in_task_store(mocker):
+    orchestrator = mocker.Mock()
+    orchestrator.run_decompose.return_value = [
+        {
+            "id": "task-1",
+            "description": "task one",
+            "queries": ["query one"],
+            "status": TaskStatus.PENDING,
+        },
+        {
+            "id": "task-2",
+            "description": "task two",
+            "queries": ["query two"],
+            "status": TaskStatus.PENDING,
+        },
+    ]
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store, orchestrator=orchestrator)
+
+    response = service.start_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        BackgroundTasks(),
+    )
+
+    research = task_store.get_research(response.research_id)
+    assert research is not None
+    assert research.task_ids == ["task-1", "task-2"]

@@ -42,6 +42,19 @@ class InMemoryTaskStore:
         self.tasks[task.id] = task
         return task
 
+    def set_research_task_ids(
+        self,
+        research_id: str,
+        task_ids: list[str],
+    ) -> ResearchRecord | None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return None
+
+        research.task_ids = task_ids
+        research.updated_at = datetime.now(timezone.utc)
+        return research
+
     def get_task(self, task_id: str) -> SearchTask | None:
         return self.tasks.get(task_id)
 

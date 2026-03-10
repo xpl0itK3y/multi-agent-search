@@ -88,7 +88,7 @@ class ResearchService:
             registered_tasks.append(task)
             task_ids.append(task.id)
 
-        research.task_ids = task_ids
+        self.task_store.set_research_task_ids(research.id, task_ids)
 
         for task in registered_tasks:
             if task.status == TaskStatus.PENDING and task.queries:
