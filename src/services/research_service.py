@@ -11,16 +11,15 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchStatus,
     SearchDepth,
-    SearchTask,
     TaskStatus,
 )
-from src.core.task_manager import TaskManager
+from src.repositories.protocols import TaskStore
 
 
 class ResearchService:
     def __init__(
         self,
-        task_manager: TaskManager,
+        task_manager: TaskStore,
         optimizer: PromptOptimizerAgent | None = None,
         orchestrator: OrchestratorAgent | None = None,
         analyzer: AnalyzerAgent | None = None,
