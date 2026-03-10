@@ -1,0 +1,88 @@
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.db.session import Base
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ResearchORM(Base):
+    __tablename__ = "researches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    depth: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+    tasks: Mapped[list["SearchTaskORM"]] = relationship(
+        back_populates="research",
+        cascade="all, delete-orphan",
+    )
+
+
+class SearchTaskORM(Base):
+    __tablename__ = "search_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    research_id: Mapped[str | None] = mapped_column(
+        ForeignKey("researches.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    queries: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    logs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+    research: Mapped[ResearchORM | None] = relationship(back_populates="tasks")
+    results: Mapped[list["SearchResultORM"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )
+
+
+class SearchResultORM(Base):
+    __tablename__ = "search_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("search_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+    task: Mapped[SearchTaskORM] = relationship(back_populates="results")
