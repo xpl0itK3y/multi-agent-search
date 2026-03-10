@@ -1,6 +1,6 @@
 from src.config import Settings
-from src.core.task_manager import task_manager
 from src.repositories.factory import create_task_store
+from src.repositories.in_memory_task_store import InMemoryTaskStore
 
 
 def test_create_task_store_returns_memory_store(monkeypatch):
@@ -11,7 +11,7 @@ def test_create_task_store_returns_memory_store(monkeypatch):
 
     store = create_task_store()
 
-    assert store is task_manager
+    assert isinstance(store, InMemoryTaskStore)
 
 
 def test_create_task_store_returns_postgres_store(monkeypatch):
