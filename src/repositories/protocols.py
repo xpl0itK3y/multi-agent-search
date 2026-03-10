@@ -3,6 +3,8 @@ from typing import Protocol
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchFinalizeJob,
+    SearchJobStatus,
+    SearchTaskJob,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
@@ -46,6 +48,21 @@ class TaskStore(Protocol):
         status: FinalizeJobStatus,
         error: str | None = None,
     ) -> ResearchFinalizeJob | None: ...
+
+    def add_search_task_job(self, task_id: str) -> SearchTaskJob: ...
+
+    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
+
+    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None: ...
+
+    def get_pending_search_task_jobs(self) -> list[SearchTaskJob]: ...
+
+    def update_search_task_job(
+        self,
+        job_id: str,
+        status: SearchJobStatus,
+        error: str | None = None,
+    ) -> SearchTaskJob | None: ...
 
     def add_task(self, task_data: dict) -> SearchTask: ...
 

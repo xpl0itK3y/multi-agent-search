@@ -1,12 +1,20 @@
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchFinalizeJob,
+    SearchJobStatus,
+    SearchTaskJob,
     ResearchRecord,
     ResearchStatus,
     SearchTask,
     TaskStatus,
 )
-from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchResultORM, SearchTaskORM
+from src.db.models import (
+    ResearchFinalizeJobORM,
+    ResearchORM,
+    SearchResultORM,
+    SearchTaskJobORM,
+    SearchTaskORM,
+)
 
 
 def research_orm_to_record(research: ResearchORM) -> ResearchRecord:
@@ -61,6 +69,17 @@ def research_finalize_job_orm_to_schema(job: ResearchFinalizeJobORM) -> Research
         id=job.id,
         research_id=job.research_id,
         status=FinalizeJobStatus(job.status),
+        error=job.error,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
+def search_task_job_orm_to_schema(job: SearchTaskJobORM) -> SearchTaskJob:
+    return SearchTaskJob(
+        id=job.id,
+        task_id=job.task_id,
+        status=SearchJobStatus(job.status),
         error=job.error,
         created_at=job.created_at,
         updated_at=job.updated_at,

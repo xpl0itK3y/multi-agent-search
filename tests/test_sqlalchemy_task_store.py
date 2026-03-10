@@ -8,6 +8,7 @@ from src.api.schemas import (
     ResearchRequest,
     SearchDepth,
     ResearchStatus,
+    SearchJobStatus,
     TaskStatus,
     TaskUpdate,
 )
@@ -19,7 +20,7 @@ def _truncate_tables(session_factory):
     with session_factory() as session:
         session.execute(
             text(
-                "TRUNCATE TABLE research_finalize_jobs, search_results, search_tasks, researches "
+                "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -103,3 +104,36 @@ def test_sqlalchemy_task_store_persists_finalize_jobs():
     assert updated is not None
     assert updated.status == FinalizeJobStatus.COMPLETED
     assert store.get_pending_research_finalize_jobs() == []
+
+
+def test_sqlalchemy_task_store_persists_search_jobs():
+    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    store = SQLAlchemyTaskStore(session_factory)
+    _truncate_tables(session_factory)
+
+    research = store.add_research(
+        ResearchRequest(prompt="research topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    store.add_task(
+        {
+            "id": str(uuid.uuid4()),
+            "research_id": research.id,
+            "description": "desc",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    task = store.get_tasks_by_research(research.id)[0]
+
+    job = store.add_search_task_job(task.id)
+    assert job.status == SearchJobStatus.PENDING
+
+    pending = store.get_pending_search_task_jobs()
+    assert [item.id for item in pending] == [job.id]
+
+    updated = store.update_search_task_job(job.id, SearchJobStatus.COMPLETED)
+    assert updated is not None
+    assert updated.status == SearchJobStatus.COMPLETED
+    assert store.get_latest_search_task_job(task.id).id == job.id
