@@ -16,11 +16,11 @@ class SearchAgent:
 
     def run_task(self, task_id: str):
         """
-        Execute a search task: search for queries, extract content, and update TaskManager.
+        Execute a search task: search for queries, extract content, and update the configured task store.
         """
         task = self.task_store.get_task(task_id)
         if not task:
-            logger.error(f"Task {task_id} not found in TaskManager")
+            logger.error(f"Task {task_id} not found in task store")
             return
 
         self.task_store.update_task(
