@@ -1,0 +1,144 @@
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Callable
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from src.api.schemas import ResearchRecord, ResearchRequest, ResearchStatus, SearchTask, TaskUpdate
+from src.db.models import ResearchORM, SearchTaskORM
+from src.repositories.mappers import (
+    research_orm_to_record,
+    search_result_dicts_to_orm,
+    search_task_orm_to_schema,
+)
+
+
+class SQLAlchemyTaskStore:
+    def __init__(self, session_factory: Callable[[], Session]):
+        self.session_factory = session_factory
+
+    @contextmanager
+    def session_scope(self):
+        session = self.session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
+        research = ResearchORM(
+            id=str(uuid.uuid4()),
+            prompt=request.prompt,
+            depth=request.depth.value,
+            status=ResearchStatus.PROCESSING.value,
+            task_ids=task_ids,
+        )
+        with self.session_scope() as session:
+            session.add(research)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
+    def get_research(self, research_id: str) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+            return research_orm_to_record(research)
+
+    def update_research_status(
+        self,
+        research_id: str,
+        status: ResearchStatus,
+        report: str | None = None,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            research.status = status.value
+            if report is not None:
+                research.final_report = report
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
+    def add_task(self, task_data: dict) -> SearchTask:
+        task = SearchTaskORM(
+            id=task_data["id"],
+            research_id=task_data.get("research_id"),
+            description=task_data["description"],
+            queries=task_data.get("queries", []),
+            status=getattr(task_data.get("status"), "value", task_data.get("status", "pending")),
+            logs=task_data.get("logs", []),
+        )
+        with self.session_scope() as session:
+            session.add(task)
+            session.flush()
+            statement = (
+                select(SearchTaskORM)
+                .options(selectinload(SearchTaskORM.results))
+                .where(SearchTaskORM.id == task.id)
+            )
+            persisted = session.execute(statement).scalar_one()
+            return search_task_orm_to_schema(persisted)
+
+    def get_task(self, task_id: str) -> SearchTask | None:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskORM)
+                .options(selectinload(SearchTaskORM.results))
+                .where(SearchTaskORM.id == task_id)
+            )
+            task = session.execute(statement).scalar_one_or_none()
+            if task is None:
+                return None
+            return search_task_orm_to_schema(task)
+
+    def get_all_tasks(self) -> list[SearchTask]:
+        with self.session_scope() as session:
+            statement = select(SearchTaskORM).options(selectinload(SearchTaskORM.results))
+            tasks = session.execute(statement).scalars().all()
+            return [search_task_orm_to_schema(task) for task in tasks]
+
+    def get_tasks_by_research(self, research_id: str) -> list[SearchTask]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskORM)
+                .options(selectinload(SearchTaskORM.results))
+                .where(SearchTaskORM.research_id == research_id)
+            )
+            tasks = session.execute(statement).scalars().all()
+            return [search_task_orm_to_schema(task) for task in tasks]
+
+    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskORM)
+                .options(selectinload(SearchTaskORM.results))
+                .where(SearchTaskORM.id == task_id)
+            )
+            task = session.execute(statement).scalar_one_or_none()
+            if task is None:
+                return None
+
+            if update.status is not None:
+                task.status = update.status.value
+            if update.result is not None:
+                task.results = search_result_dicts_to_orm(task_id, update.result)
+            if update.log:
+                task.logs = [*task.logs, update.log]
+
+            task.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(task)
+            refreshed = session.execute(statement).scalar_one()
+            return search_task_orm_to_schema(refreshed)
