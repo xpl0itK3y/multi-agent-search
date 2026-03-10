@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     postgres_password: str = "app"
     postgres_db: str = "multi_agent_search"
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 5433
     database_url: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
