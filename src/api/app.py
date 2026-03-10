@@ -7,6 +7,8 @@ from src.api.schemas import (
     DecomposeResponse,
     OptimizeRequest,
     OptimizeResponse,
+    ResearchFinalizeJob,
+    ResearchFinalizeResponse,
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
@@ -82,7 +84,18 @@ async def get_research_status(research_id: str, request: Request):
     return get_research_service(request).get_research_status(research_id)
 
 
-@app.post("/v1/research/{research_id}/finalize", response_model=ResearchRecord)
+@app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
 async def finalize_research(research_id: str, request: Request):
-    research, _ = get_research_service(request).enqueue_research_finalization(research_id)
-    return research
+    research, job = get_research_service(request).enqueue_research_finalization(research_id)
+    return ResearchFinalizeResponse(
+        research=research,
+        finalize_job_id=job.id if job else None,
+    )
+
+
+@app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob)
+async def get_finalize_job(job_id: str, request: Request):
+    job = get_research_service(request).get_research_finalize_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Finalize job not found")
+    return job

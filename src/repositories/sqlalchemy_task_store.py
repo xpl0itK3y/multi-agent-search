@@ -135,6 +135,21 @@ class SQLAlchemyTaskStore:
                 return None
             return research_finalize_job_orm_to_schema(job)
 
+    def get_latest_research_finalize_job(
+        self,
+        research_id: str,
+    ) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.research_id == research_id)
+                .order_by(ResearchFinalizeJobORM.created_at.desc())
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+            return research_finalize_job_orm_to_schema(job)
+
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         with self.session_scope() as session:
             statement = (

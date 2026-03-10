@@ -33,6 +33,11 @@ class TaskStore(Protocol):
 
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
+    def get_latest_research_finalize_job(
+        self,
+        research_id: str,
+    ) -> ResearchFinalizeJob | None: ...
+
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]: ...
 
     def update_research_finalize_job(

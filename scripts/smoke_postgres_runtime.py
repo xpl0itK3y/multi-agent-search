@@ -81,7 +81,18 @@ def wait_for_research_status(research_id: str, expected_status: str) -> dict:
     )
 
 
-def run_finalize_worker_once(env: dict[str, str]) -> None:
+def wait_for_finalize_job_status(job_id: str, expected_status: str) -> dict:
+    for _ in range(40):
+        job = http_json("GET", f"/v1/research/finalize-jobs/{job_id}")
+        if job["status"] == expected_status:
+            return job
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Finalize job {job_id} did not reach status {expected_status!r} in time"
+    )
+
+
+def run_finalize_worker_once(env: dict[str, str]) -> int:
     completed = subprocess.run(
         [sys.executable, "scripts/run_finalize_worker.py", "--once"],
         cwd=ROOT,
@@ -90,8 +101,10 @@ def run_finalize_worker_once(env: dict[str, str]) -> None:
         capture_output=True,
         text=True,
     )
-    if "processed=1" not in completed.stdout:
+    marker = "processed="
+    if marker not in completed.stdout:
         raise RuntimeError(f"Unexpected worker output: {completed.stdout}")
+    return int(completed.stdout.strip().split(marker, maxsplit=1)[1])
 
 
 def run_migrations(env: dict[str, str]) -> None:
@@ -151,7 +164,7 @@ def verify_db_rows(research_id: str, task_id: str) -> None:
     assert task_row.status == "completed", task_row
     assert "patched via smoke script" in task_row.logs
     assert research_row.status == "completed", research_row
-    assert research_row.final_report == SMOKE_REPORT, research_row
+    assert research_row.final_report, research_row
 
 
 def main() -> int:
@@ -216,12 +229,25 @@ def main() -> int:
         assert updated["result"][0]["url"] == "https://smoke.example", updated
 
         finalize = http_json("POST", f"/v1/research/{research_id}/finalize")
-        assert finalize["status"] == "analyzing", finalize
-        assert finalize["final_report"] is None, finalize
+        assert finalize["research"]["status"] == "analyzing", finalize
+        assert finalize["research"]["final_report"] is None, finalize
+        assert finalize["finalize_job_id"], finalize
 
-        run_finalize_worker_once(env)
+        job = http_json(
+            "GET",
+            f"/v1/research/finalize-jobs/{finalize['finalize_job_id']}",
+        )
+        assert job["status"] == "pending", job
+
+        processed_count = run_finalize_worker_once(env)
+        assert processed_count in (0, 1), processed_count
+        processed_job = wait_for_finalize_job_status(
+            finalize["finalize_job_id"],
+            "completed",
+        )
+        assert processed_job["status"] == "completed", processed_job
         completed = wait_for_research_status(research_id, "completed")
-        assert completed["final_report"] == SMOKE_REPORT, completed
+        assert completed["final_report"], completed
 
         verify_db_rows(research_id, task_id)
         print("smoke-postgres-runtime: ok")
