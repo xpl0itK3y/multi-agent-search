@@ -105,40 +105,48 @@ class ResearchService:
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
 
-        if research.status in [
-            ResearchStatus.ANALYZING,
-            ResearchStatus.COMPLETED,
-            ResearchStatus.FAILED,
-        ]:
+        return research
+
+    def finalize_research(self, research_id: str) -> ResearchRecord:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
             return research
 
         tasks = self.task_store.get_tasks_by_research(research_id)
         all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
         any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
-        if all_done:
-            if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
+        if not tasks:
+            raise HTTPException(status_code=409, detail="Research has no tasks to finalize")
+
+        if not all_done:
+            raise HTTPException(status_code=409, detail="Research tasks are still in progress")
+
+        if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
+            self.task_store.update_research_status(
+                research_id,
+                ResearchStatus.FAILED,
+                "All tasks failed.",
+            )
+        else:
+            analyzer = self.require_agent(self.analyzer, "Analyzer")
+            self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
+            try:
+                report = analyzer.run_analysis(research.prompt, tasks)
+                self.task_store.update_research_status(
+                    research_id,
+                    ResearchStatus.COMPLETED,
+                    report,
+                )
+            except Exception as exc:
                 self.task_store.update_research_status(
                     research_id,
                     ResearchStatus.FAILED,
-                    "All tasks failed.",
+                    f"Analysis failed: {str(exc)}",
                 )
-            else:
-                analyzer = self.require_agent(self.analyzer, "Analyzer")
-                self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
-                try:
-                    report = analyzer.run_analysis(research.prompt, tasks)
-                    self.task_store.update_research_status(
-                        research_id,
-                        ResearchStatus.COMPLETED,
-                        report,
-                    )
-                except Exception as exc:
-                    self.task_store.update_research_status(
-                        research_id,
-                        ResearchStatus.FAILED,
-                        f"Analysis failed: {str(exc)}",
-                    )
 
         return self.task_store.get_research(research_id)
 

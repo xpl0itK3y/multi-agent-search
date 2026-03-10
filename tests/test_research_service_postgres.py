@@ -72,7 +72,11 @@ def test_research_service_full_postgres_lifecycle():
         assert updated is not None
         assert updated.status == TaskStatus.COMPLETED
 
-    research = service.get_research_status(response.research_id)
-    assert research.status == ResearchStatus.COMPLETED
-    assert research.final_report == "postgres final report"
-    assert research.task_ids == ["task-1", "task-2"]
+    current = service.get_research_status(response.research_id)
+    assert current.status == ResearchStatus.PROCESSING
+    assert current.task_ids == ["task-1", "task-2"]
+
+    finalized = service.finalize_research(response.research_id)
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert finalized.final_report == "postgres final report"
+    assert finalized.task_ids == ["task-1", "task-2"]

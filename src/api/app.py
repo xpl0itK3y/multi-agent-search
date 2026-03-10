@@ -80,3 +80,8 @@ async def start_research(request: Request, payload: ResearchRequest, background_
 @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
 async def get_research_status(research_id: str, request: Request):
     return get_research_service(request).get_research_status(research_id)
+
+
+@app.post("/v1/research/{research_id}/finalize", response_model=ResearchRecord)
+async def finalize_research(research_id: str, request: Request):
+    return get_research_service(request).finalize_research(research_id)
