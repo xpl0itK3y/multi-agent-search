@@ -134,5 +134,5 @@ class ResearchService:
             SearchDepth.HARD: 20,
         }
         limit = source_limit_map.get(depth, 5)
-        agent = SearchAgent(max_sources=limit)
+        agent = SearchAgent(task_store=self.task_manager, max_sources=limit)
         agent.run_task(task_id)
