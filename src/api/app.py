@@ -83,5 +83,6 @@ async def get_research_status(research_id: str, request: Request):
 
 
 @app.post("/v1/research/{research_id}/finalize", response_model=ResearchRecord)
-async def finalize_research(research_id: str, request: Request, background_tasks: BackgroundTasks):
-    return get_research_service(request).queue_research_finalization(research_id, background_tasks)
+async def finalize_research(research_id: str, request: Request):
+    research, _ = get_research_service(request).enqueue_research_finalization(research_id)
+    return research

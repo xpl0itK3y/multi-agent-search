@@ -81,6 +81,30 @@ def wait_for_research_status(research_id: str, expected_status: str) -> dict:
     )
 
 
+def run_finalize_worker_once(env: dict[str, str]) -> None:
+    completed = subprocess.run(
+        [sys.executable, "scripts/run_finalize_worker.py", "--once"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if "processed=1" not in completed.stdout:
+        raise RuntimeError(f"Unexpected worker output: {completed.stdout}")
+
+
+def run_migrations(env: dict[str, str]) -> None:
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def seed_task() -> tuple[str, str]:
     os.environ.setdefault("TASK_STORE_BACKEND", "postgres")
     os.environ.setdefault("POSTGRES_HOST", "localhost")
@@ -138,6 +162,7 @@ def main() -> int:
     env.setdefault("POSTGRES_HOST", "localhost")
     env.setdefault("POSTGRES_PORT", "5433")
     env.setdefault("SMOKE_ANALYZER_REPORT", SMOKE_REPORT)
+    run_migrations(env)
     app_port = pick_app_port()
     BASE_URL = f"http://127.0.0.1:{app_port}"
 
@@ -194,6 +219,7 @@ def main() -> int:
         assert finalize["status"] == "analyzing", finalize
         assert finalize["final_report"] is None, finalize
 
+        run_finalize_worker_once(env)
         completed = wait_for_research_status(research_id, "completed")
         assert completed["final_report"] == SMOKE_REPORT, completed
 
