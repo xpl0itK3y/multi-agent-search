@@ -275,6 +275,33 @@ def test_process_finalize_job_runs_analysis_and_marks_job_completed(mocker):
     analyzer.run_analysis.assert_called_once()
 
 
+def test_get_research_finalize_job_returns_persisted_job(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    _, job = service.enqueue_research_finalization(research.id)
+
+    fetched = service.get_research_finalize_job(job.id)
+
+    assert fetched is not None
+    assert fetched.id == job.id
+    assert fetched.research_id == research.id
+
+
 def test_queue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

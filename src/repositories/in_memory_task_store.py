@@ -73,6 +73,19 @@ class InMemoryTaskStore:
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.finalize_jobs.get(job_id)
 
+    def get_latest_research_finalize_job(
+        self,
+        research_id: str,
+    ) -> ResearchFinalizeJob | None:
+        matching_jobs = [
+            job
+            for job in self.finalize_jobs.values()
+            if job.research_id == research_id
+        ]
+        if not matching_jobs:
+            return None
+        return max(matching_jobs, key=lambda item: item.created_at)
+
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         return [
             job
