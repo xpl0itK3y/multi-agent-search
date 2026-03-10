@@ -6,10 +6,12 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.search import SearchAgent
 from src.api.schemas import (
     DecomposeResponse,
+    FinalizeJobStatus,
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
     ResearchStatus,
+    ResearchFinalizeJob,
     SearchDepth,
     SearchTask,
     TaskUpdate,
@@ -159,19 +161,44 @@ class ResearchService:
 
         return self.task_store.get_research(research_id)
 
+    def enqueue_research_finalization(self, research_id: str) -> tuple[ResearchRecord, ResearchFinalizeJob | None]:
+        research = self._get_research_for_finalization(research_id)
+        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+            return research, None
+
+        self.require_agent(self.analyzer, "Analyzer")
+        self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
+        job = self.task_store.add_research_finalize_job(research_id)
+        return self.task_store.get_research(research_id), job
+
     def queue_research_finalization(
         self,
         research_id: str,
         background_tasks: BackgroundTasks,
     ) -> ResearchRecord:
-        research = self._get_research_for_finalization(research_id)
-        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
-            return research
+        research, job = self.enqueue_research_finalization(research_id)
+        if job is not None:
+            background_tasks.add_task(self.process_finalize_job, job.id)
+        return research
 
-        self.require_agent(self.analyzer, "Analyzer")
-        self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
-        background_tasks.add_task(self.complete_research_finalization, research_id)
-        return self.task_store.get_research(research_id)
+    def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        job = self.task_store.get_research_finalize_job(job_id)
+        if job is None:
+            return None
+
+        self.task_store.update_research_finalize_job(job_id, FinalizeJobStatus.RUNNING)
+        try:
+            self.complete_research_finalization(job.research_id)
+            return self.task_store.update_research_finalize_job(
+                job_id,
+                FinalizeJobStatus.COMPLETED,
+            )
+        except Exception as exc:
+            return self.task_store.update_research_finalize_job(
+                job_id,
+                FinalizeJobStatus.FAILED,
+                str(exc),
+            )
 
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)
