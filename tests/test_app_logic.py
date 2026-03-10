@@ -219,6 +219,62 @@ def test_queue_research_finalization_marks_research_analyzing(mocker):
     analyzer.run_analysis.assert_not_called()
 
 
+def test_enqueue_research_finalization_persists_job_record(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    queued, job = service.enqueue_research_finalization(research.id)
+
+    assert queued.status == ResearchStatus.ANALYZING
+    assert job is not None
+    assert job.research_id == research.id
+    assert task_store.get_research_finalize_job(job.id) is not None
+
+
+def test_process_finalize_job_runs_analysis_and_marks_job_completed(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.run_analysis.return_value = "background report"
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    _, job = service.enqueue_research_finalization(research.id)
+
+    processed = service.process_finalize_job(job.id)
+
+    assert processed is not None
+    assert processed.status.value == "completed"
+    assert task_store.get_research(research.id).final_report == "background report"
+    analyzer.run_analysis.assert_called_once()
+
+
 def test_queue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
