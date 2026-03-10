@@ -86,3 +86,26 @@ class SearchResultORM(Base):
     )
 
     task: Mapped[SearchTaskORM] = relationship(back_populates="results")
+
+
+class ResearchFinalizeJobORM(Base):
+    __tablename__ = "research_finalize_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    research_id: Mapped[str] = mapped_column(
+        ForeignKey("researches.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
