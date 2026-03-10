@@ -40,3 +40,10 @@ def test_settings_supports_optional_smoke_analyzer_report():
     settings = Settings(_env_file=None, smoke_analyzer_report="stub report")
 
     assert settings.smoke_analyzer_report == "stub report"
+
+
+def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
+    settings = Settings(_env_file=None)
+
+    assert settings.job_max_attempts == 3
+    assert settings.worker_heartbeat_ttl_seconds == 30

@@ -3,9 +3,11 @@ import uuid
 
 from src.api.schemas import (
     FinalizeJobStatus,
+    QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,
+    WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
@@ -20,6 +22,7 @@ class InMemoryTaskStore:
         self.researches: dict[str, ResearchRecord] = {}
         self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
         self.search_jobs: dict[str, SearchTaskJob] = {}
+        self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
 
     def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
         research_id = str(uuid.uuid4())
@@ -67,9 +70,13 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
-    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+    def add_research_finalize_job(
+        self,
+        research_id: str,
+        max_attempts: int = 3,
+    ) -> ResearchFinalizeJob:
         job_id = str(uuid.uuid4())
-        job = ResearchFinalizeJob(id=job_id, research_id=research_id)
+        job = ResearchFinalizeJob(id=job_id, research_id=research_id, max_attempts=max_attempts)
         self.finalize_jobs[job_id] = job
         return job
 
@@ -110,6 +117,7 @@ class InMemoryTaskStore:
 
         job = pending_jobs[0]
         job.status = FinalizeJobStatus.RUNNING
+        job.attempt_count += 1
         job.updated_at = datetime.now(timezone.utc)
         return job
 
@@ -128,9 +136,32 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
-    def add_search_task_job(self, task_id: str, depth: str) -> SearchTaskJob:
+    def record_research_finalize_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.error = error
+        job.status = (
+            FinalizeJobStatus.DEAD_LETTER
+            if job.attempt_count >= job.max_attempts
+            else FinalizeJobStatus.PENDING
+        )
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def add_search_task_job(
+        self,
+        task_id: str,
+        depth: str,
+        max_attempts: int = 3,
+    ) -> SearchTaskJob:
         job_id = str(uuid.uuid4())
-        job = SearchTaskJob(id=job_id, task_id=task_id, depth=depth)
+        job = SearchTaskJob(id=job_id, task_id=task_id, depth=depth, max_attempts=max_attempts)
         self.search_jobs[job_id] = job
         return job
 
@@ -168,6 +199,7 @@ class InMemoryTaskStore:
 
         job = pending_jobs[0]
         job.status = SearchJobStatus.RUNNING
+        job.attempt_count += 1
         job.updated_at = datetime.now(timezone.utc)
         return job
 
@@ -185,6 +217,53 @@ class InMemoryTaskStore:
         job.error = error
         job.updated_at = datetime.now(timezone.utc)
         return job
+
+    def record_search_task_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> SearchTaskJob | None:
+        job = self.search_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.error = error
+        job.status = (
+            SearchJobStatus.DEAD_LETTER
+            if job.attempt_count >= job.max_attempts
+            else SearchJobStatus.PENDING
+        )
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def upsert_worker_heartbeat(
+        self,
+        worker_name: str,
+        processed_jobs: int,
+        status: str,
+        last_error: str | None = None,
+    ) -> WorkerHeartbeat:
+        heartbeat = WorkerHeartbeat(
+            worker_name=worker_name,
+            processed_jobs=processed_jobs,
+            status=status,
+            last_error=last_error,
+        )
+        self.worker_heartbeats[worker_name] = heartbeat
+        return heartbeat
+
+    def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
+        return self.worker_heartbeats.get(worker_name)
+
+    def get_queue_metrics(self) -> QueueMetrics:
+        return QueueMetrics(
+            pending_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.PENDING),
+            running_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.RUNNING),
+            dead_letter_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.DEAD_LETTER),
+            pending_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.PENDING),
+            running_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.RUNNING),
+            dead_letter_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.DEAD_LETTER),
+        )
 
     def get_task(self, task_id: str) -> SearchTask | None:
         return self.tasks.get(task_id)

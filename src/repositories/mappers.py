@@ -1,8 +1,10 @@
 from src.api.schemas import (
     FinalizeJobStatus,
+    QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,
+    WorkerHeartbeat,
     ResearchRecord,
     ResearchStatus,
     SearchTask,
@@ -14,6 +16,7 @@ from src.db.models import (
     SearchResultORM,
     SearchTaskJobORM,
     SearchTaskORM,
+    WorkerHeartbeatORM,
 )
 
 
@@ -69,6 +72,8 @@ def research_finalize_job_orm_to_schema(job: ResearchFinalizeJobORM) -> Research
         id=job.id,
         research_id=job.research_id,
         status=FinalizeJobStatus(job.status),
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
         error=job.error,
         created_at=job.created_at,
         updated_at=job.updated_at,
@@ -81,7 +86,19 @@ def search_task_job_orm_to_schema(job: SearchTaskJobORM) -> SearchTaskJob:
         task_id=job.task_id,
         depth=job.depth,
         status=SearchJobStatus(job.status),
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
         error=job.error,
         created_at=job.created_at,
         updated_at=job.updated_at,
+    )
+
+
+def worker_heartbeat_orm_to_schema(heartbeat: WorkerHeartbeatORM) -> WorkerHeartbeat:
+    return WorkerHeartbeat(
+        worker_name=heartbeat.worker_name,
+        processed_jobs=heartbeat.processed_jobs,
+        status=heartbeat.status,
+        last_error=heartbeat.last_error,
+        last_seen_at=heartbeat.last_seen_at,
     )

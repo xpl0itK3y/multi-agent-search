@@ -371,6 +371,45 @@ def test_get_latest_search_task_job_returns_persisted_job():
     assert fetched.id == job.id
 
 
+def test_get_queue_metrics_reports_dead_letter_counts():
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    search_job = task_store.add_search_task_job("task-1", SearchDepth.EASY.value, max_attempts=1)
+    task_store.claim_next_search_task_job()
+    task_store.record_search_task_job_failure(search_job.id, "boom")
+
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    finalize_job = task_store.add_research_finalize_job(research.id, max_attempts=1)
+    task_store.claim_next_research_finalize_job()
+    task_store.record_research_finalize_job_failure(finalize_job.id, "boom")
+
+    metrics = ResearchService(task_store=task_store).get_queue_metrics()
+
+    assert metrics.dead_letter_search_jobs == 1
+    assert metrics.dead_letter_finalize_jobs == 1
+
+
+def test_get_worker_heartbeat_returns_latest_value():
+    task_store = InMemoryTaskStore()
+    task_store.upsert_worker_heartbeat("job-worker", processed_jobs=2, status="busy")
+
+    heartbeat = ResearchService(task_store=task_store).get_worker_heartbeat("job-worker")
+
+    assert heartbeat is not None
+    assert heartbeat.worker_name == "job-worker"
+    assert heartbeat.processed_jobs == 2
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

@@ -214,6 +214,10 @@ def main() -> int:
         assert search_job["task_id"] == task_id, search_job
         assert search_job["id"] == seeded_search_job_id, search_job
 
+        queue_health = http_json("GET", "/health/queues")
+        assert queue_health["pending_search_jobs"] == 0, queue_health
+        assert queue_health["dead_letter_search_jobs"] == 0, queue_health
+
         research = http_json("GET", f"/v1/research/{research_id}")
         assert research["status"] == "processing", research
 
@@ -255,6 +259,9 @@ def main() -> int:
         assert processed_job["status"] == "completed", processed_job
         completed_search_job = http_json("GET", f"/v1/search-jobs/{search_job['id']}")
         assert completed_search_job["status"] == "completed", completed_search_job
+        worker_health = http_json("GET", "/health/workers/job-worker")
+        assert worker_health["worker_name"] == "job-worker", worker_health
+        assert worker_health["processed_jobs"] >= 0, worker_health
         completed = wait_for_research_status(research_id, "completed")
         assert completed["final_report"], completed
 

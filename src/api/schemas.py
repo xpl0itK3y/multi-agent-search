@@ -26,6 +26,7 @@ class FinalizeJobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
 
 
 class SearchJobStatus(str, Enum):
@@ -33,6 +34,7 @@ class SearchJobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
 
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., description="The original user prompt to optimize", min_length=1)
@@ -89,6 +91,8 @@ class ResearchFinalizeJob(BaseModel):
     id: str
     research_id: str
     status: FinalizeJobStatus = FinalizeJobStatus.PENDING
+    attempt_count: int = 0
+    max_attempts: int = 3
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -99,6 +103,8 @@ class SearchTaskJob(BaseModel):
     task_id: str
     depth: SearchDepth
     status: SearchJobStatus = SearchJobStatus.PENDING
+    attempt_count: int = 0
+    max_attempts: int = 3
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -107,3 +113,20 @@ class SearchTaskJob(BaseModel):
 class ResearchFinalizeResponse(BaseModel):
     research: ResearchRecord
     finalize_job_id: Optional[str] = None
+
+
+class WorkerHeartbeat(BaseModel):
+    worker_name: str
+    processed_jobs: int = 0
+    status: str = "idle"
+    last_error: Optional[str] = None
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class QueueMetrics(BaseModel):
+    pending_search_jobs: int = 0
+    running_search_jobs: int = 0
+    dead_letter_search_jobs: int = 0
+    pending_finalize_jobs: int = 0
+    running_finalize_jobs: int = 0
+    dead_letter_finalize_jobs: int = 0

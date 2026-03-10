@@ -7,6 +7,7 @@ from src.agents.search import SearchAgent
 from src.api.schemas import (
     DecomposeResponse,
     FinalizeJobStatus,
+    QueueMetrics,
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
@@ -18,7 +19,9 @@ from src.api.schemas import (
     SearchTask,
     TaskUpdate,
     TaskStatus,
+    WorkerHeartbeat,
 )
+from src.config import settings
 from src.repositories.protocols import TaskStore
 
 
@@ -69,7 +72,7 @@ class ResearchService:
             task = self.task_store.add_task(task_dict)
             registered_tasks.append(task)
             if task.status == TaskStatus.PENDING and task.queries:
-                self.task_store.add_search_task_job(task.id, depth.value)
+                self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
@@ -94,7 +97,7 @@ class ResearchService:
 
         for task in registered_tasks:
             if task.status == TaskStatus.PENDING and task.queries:
-                self.task_store.add_search_task_job(task.id, request.depth.value)
+                self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
 
         return ResearchResponse(
             research_id=research.id,
@@ -144,20 +147,12 @@ class ResearchService:
 
         tasks = self.task_store.get_tasks_by_research(research_id)
         analyzer = self.require_agent(self.analyzer, "Analyzer")
-
-        try:
-            report = analyzer.run_analysis(research.prompt, tasks)
-            self.task_store.update_research_status(
-                research_id,
-                ResearchStatus.COMPLETED,
-                report,
-            )
-        except Exception as exc:
-            self.task_store.update_research_status(
-                research_id,
-                ResearchStatus.FAILED,
-                f"Analysis failed: {str(exc)}",
-            )
+        report = analyzer.run_analysis(research.prompt, tasks)
+        self.task_store.update_research_status(
+            research_id,
+            ResearchStatus.COMPLETED,
+            report,
+        )
 
         return self.task_store.get_research(research_id)
 
@@ -168,7 +163,7 @@ class ResearchService:
 
         self.require_agent(self.analyzer, "Analyzer")
         self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
-        job = self.task_store.add_research_finalize_job(research_id)
+        job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
         return self.task_store.get_research(research_id), job
 
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
@@ -183,11 +178,14 @@ class ResearchService:
                 FinalizeJobStatus.COMPLETED,
             )
         except Exception as exc:
-            return self.task_store.update_research_finalize_job(
-                job_id,
-                FinalizeJobStatus.FAILED,
-                str(exc),
-            )
+            failed_job = self.task_store.record_research_finalize_job_failure(job_id, str(exc))
+            if failed_job and failed_job.status == FinalizeJobStatus.DEAD_LETTER:
+                self.task_store.update_research_status(
+                    job.research_id,
+                    ResearchStatus.FAILED,
+                    f"Analysis failed: {str(exc)}",
+                )
+            return failed_job
 
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)
@@ -197,6 +195,12 @@ class ResearchService:
 
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
         return self.task_store.get_latest_search_task_job(task_id)
+
+    def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
+        return self.task_store.get_worker_heartbeat(worker_name)
+
+    def get_queue_metrics(self) -> QueueMetrics:
+        return self.task_store.get_queue_metrics()
 
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)
@@ -231,13 +235,31 @@ class ResearchService:
 
         try:
             self.run_search_task(task.id, job.depth)
-            return self.task_store.update_search_task_job(
-                job_id,
-                SearchJobStatus.COMPLETED,
-            )
+            task = self.task_store.get_task(task.id)
+            if task is not None and task.status == TaskStatus.FAILED:
+                failed_job = self.task_store.record_search_task_job_failure(
+                    job_id,
+                    task.logs[-1] if task.logs else "Search task failed",
+                )
+                if failed_job and failed_job.status == SearchJobStatus.PENDING:
+                    self.task_store.update_task(
+                        task.id,
+                        TaskUpdate(
+                            status=TaskStatus.PENDING,
+                            log="Search job scheduled for retry",
+                        ),
+                    )
+                return failed_job
+
+            return self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
         except Exception as exc:
-            return self.task_store.update_search_task_job(
-                job_id,
-                SearchJobStatus.FAILED,
-                str(exc),
-            )
+            failed_job = self.task_store.record_search_task_job_failure(job_id, str(exc))
+            if failed_job and failed_job.status == SearchJobStatus.PENDING:
+                self.task_store.update_task(
+                    task.id,
+                    TaskUpdate(
+                        status=TaskStatus.PENDING,
+                        log="Search job scheduled for retry",
+                    ),
+                )
+            return failed_job

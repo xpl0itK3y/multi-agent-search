@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     task_store_backend: str = "postgres"
     allow_memory_task_store: bool = False
     smoke_analyzer_report: Optional[str] = None
+    job_max_attempts: int = 3
+    worker_heartbeat_ttl_seconds: int = 30
 
     postgres_user: str = "app"
     postgres_password: str = "app"
