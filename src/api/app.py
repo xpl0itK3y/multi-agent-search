@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from typing import List, Dict, Any
+from typing import List
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from src.api.schemas import (
     OptimizeRequest, OptimizeResponse, 
     DecomposeRequest, DecomposeResponse, 
-    SearchTask, TaskUpdate, SearchDepth,
+    SearchTask, TaskUpdate, SearchDepth, TaskStatus,
     ResearchRequest, ResearchResponse, ResearchRecord, ResearchStatus
 )
 from src.agents.optimizer import PromptOptimizerAgent
@@ -28,6 +29,15 @@ try:
 except Exception as e:
     print(f"Warning: Failed to initialize agents: {e}")
 
+
+def require_agent(agent, agent_name: str):
+    if agent is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{agent_name} is unavailable. Check service configuration.",
+        )
+    return agent
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -45,25 +55,31 @@ def run_search_task(task_id: str, depth: SearchDepth):
 @app.post("/v1/optimize", response_model=OptimizeResponse)
 async def optimize_prompt(request: OptimizeRequest):
     try:
-        optimized = agent_optimizer.run(request.prompt)
+        optimizer = require_agent(agent_optimizer, "Prompt optimizer")
+        optimized = optimizer.run(request.prompt)
         return OptimizeResponse(optimized_prompt=optimized)
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/decompose", response_model=DecomposeResponse)
 async def decompose_prompt(request: DecomposeRequest, background_tasks: BackgroundTasks):
     try:
-        tasks_raw = agent_orchestrator.run_decompose(request.prompt, request.depth)
+        orchestrator = require_agent(agent_orchestrator, "Orchestrator")
+        tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
         
         registered_tasks = []
         for task_dict in tasks_raw:
             task = task_manager.add_task(task_dict)
             registered_tasks.append(task)
-            # Start background search for each task
-            background_tasks.add_task(run_search_task, task.id, request.depth)
+            if task.status == TaskStatus.PENDING and task.queries:
+                background_tasks.add_task(run_search_task, task.id, request.depth)
             
         return DecomposeResponse(tasks=registered_tasks, depth=request.depth)
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/tasks", response_model=List[SearchTask])
@@ -87,8 +103,9 @@ async def update_task(task_id: str, update: TaskUpdate):
 @app.post("/v1/research", response_model=ResearchResponse)
 async def start_research(request: ResearchRequest, background_tasks: BackgroundTasks):
     try:
+        orchestrator = require_agent(agent_orchestrator, "Orchestrator")
         # 1. Decompose
-        tasks_raw = agent_orchestrator.run_decompose(request.prompt, request.depth)
+        tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
         
         # 2. Register Research and Tasks
         # We need task IDs first to link them to research, but tasks need research_id.
@@ -108,7 +125,8 @@ async def start_research(request: ResearchRequest, background_tasks: BackgroundT
         
         # 3. Start Search Bots
         for task in registered_tasks:
-            background_tasks.add_task(run_search_task, task.id, request.depth)
+            if task.status == TaskStatus.PENDING and task.queries:
+                background_tasks.add_task(run_search_task, task.id, request.depth)
             
         return ResearchResponse(
             research_id=research.id,
@@ -116,6 +134,8 @@ async def start_research(request: ResearchRequest, background_tasks: BackgroundT
             message=f"Research started with {len(registered_tasks)} tasks."
         )
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
@@ -145,9 +165,10 @@ async def get_research_status(research_id: str):
             # Run AnalyzerAgent sync or async? For now, sync is okay for the getter, but background is better.
             # To avoid blocking the GET request too long, we can do it here if it's fast enough, 
             # but ideally it should be a background task too. Let's do it sync for simplicity of MVP.
+            analyzer = require_agent(agent_analyzer, "Analyzer")
             task_manager.update_research_status(research_id, ResearchStatus.ANALYZING)
             try:
-                report = agent_analyzer.run_analysis(research.prompt, tasks)
+                report = analyzer.run_analysis(research.prompt, tasks)
                 task_manager.update_research_status(research_id, ResearchStatus.COMPLETED, report)
             except Exception as e:
                 task_manager.update_research_status(research_id, ResearchStatus.FAILED, f"Analysis failed: {str(e)}")

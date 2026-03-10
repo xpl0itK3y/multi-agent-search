@@ -1,8 +1,9 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 class Settings(BaseSettings):
-    deepseek_api_key: str
+    deepseek_api_key: Optional[str] = None
     deepseek_model: str = "deepseek-chat"
     
     app_name: str = "Prompt Optimizer API"

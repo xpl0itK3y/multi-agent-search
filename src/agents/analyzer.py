@@ -1,6 +1,6 @@
 import logging
 import json
-from typing import List, Dict, Any
+from typing import List
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchTask
 
@@ -59,11 +59,10 @@ class AnalyzerAgent(BaseAgent):
 
         user_prompt = f"Please analyze this data and generate the final report:\n\n{json.dumps(input_data, ensure_ascii=False)}"
 
-        messages = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
-        ]
-
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
-        result = self.llm.generate(messages, temperature=0.3)
+        result = self.llm.generate(
+            system_prompt=self.SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.3,
+        )
         return result
