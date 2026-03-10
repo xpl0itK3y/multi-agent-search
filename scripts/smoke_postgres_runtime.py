@@ -118,12 +118,12 @@ def run_migrations(env: dict[str, str]) -> None:
     )
 
 
-def seed_task() -> tuple[str, str]:
+def seed_task() -> tuple[str, str, str]:
     os.environ.setdefault("TASK_STORE_BACKEND", "postgres")
     os.environ.setdefault("POSTGRES_HOST", "localhost")
     os.environ.setdefault("POSTGRES_PORT", "5433")
 
-    from src.api.schemas import ResearchRequest, SearchDepth, TaskStatus
+    from src.api.schemas import ResearchRequest, SearchDepth, SearchJobStatus, TaskStatus
     from src.repositories import create_task_store
 
     store = create_task_store()
@@ -141,7 +141,9 @@ def seed_task() -> tuple[str, str]:
             "status": TaskStatus.PENDING,
         }
     )
-    return research.id, task_id
+    search_job = store.add_search_task_job(task_id, SearchDepth.EASY.value)
+    store.update_search_task_job(search_job.id, SearchJobStatus.COMPLETED)
+    return research.id, task_id, search_job.id
 
 
 def verify_db_rows(research_id: str, task_id: str) -> None:
@@ -199,13 +201,18 @@ def main() -> int:
 
     try:
         wait_for_health()
-        research_id, task_id = seed_task()
+        research_id, task_id, seeded_search_job_id = seed_task()
 
         tasks = http_json("GET", "/v1/tasks")
         assert any(task["id"] == task_id for task in tasks), tasks
 
         task = http_json("GET", f"/v1/tasks/{task_id}")
         assert task["status"] == "pending", task
+
+        search_job = http_json("GET", f"/v1/tasks/{task_id}/search-job")
+        assert search_job["status"] == "completed", search_job
+        assert search_job["task_id"] == task_id, search_job
+        assert search_job["id"] == seeded_search_job_id, search_job
 
         research = http_json("GET", f"/v1/research/{research_id}")
         assert research["status"] == "processing", research
@@ -246,6 +253,8 @@ def main() -> int:
             "completed",
         )
         assert processed_job["status"] == "completed", processed_job
+        completed_search_job = http_json("GET", f"/v1/search-jobs/{search_job['id']}")
+        assert completed_search_job["status"] == "completed", completed_search_job
         completed = wait_for_research_status(research_id, "completed")
         assert completed["final_report"], completed
 

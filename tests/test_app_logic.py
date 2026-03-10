@@ -344,6 +344,25 @@ def test_process_search_task_job_marks_job_completed(mocker):
     run_search_task.assert_called_once_with("task-1", SearchDepth.MEDIUM)
 
 
+def test_get_latest_search_task_job_returns_persisted_job():
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    job = task_store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    service = ResearchService(task_store=task_store)
+
+    fetched = service.get_latest_search_task_job("task-1")
+
+    assert fetched is not None
+    assert fetched.id == job.id
+
+
 def test_queue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
