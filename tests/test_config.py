@@ -28,3 +28,9 @@ def test_settings_uses_explicit_database_url():
         settings.resolved_database_url
         == "postgresql+psycopg://custom:custom@localhost:5432/custom_db"
     )
+
+
+def test_settings_defaults_to_postgres_task_store():
+    settings = Settings(_env_file=None)
+
+    assert settings.task_store_backend == "postgres"
