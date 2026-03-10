@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: multi-agent-search-api
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     env_file:
@@ -22,6 +24,8 @@ services:
       dockerfile: Dockerfile
     container_name: multi-agent-search-worker
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     env_file:
@@ -49,6 +53,22 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: multi-agent-search-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
 
 volumes:
   postgres_data:
