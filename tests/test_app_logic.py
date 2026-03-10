@@ -2,7 +2,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus
+from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -83,6 +83,27 @@ def test_decompose_does_not_schedule_failed_tasks(mocker):
     assert len(response.tasks) == 1
     assert response.tasks[0].status == TaskStatus.FAILED
     assert background_tasks.tasks == []
+
+
+def test_decompose_persists_search_job_for_pending_task(mocker):
+    orchestrator = mocker.Mock()
+    orchestrator.run_decompose.return_value = [
+        {
+            "id": "task-1",
+            "description": "good task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    ]
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store, orchestrator=orchestrator)
+
+    response = service.decompose_prompt("test", SearchDepth.HARD, BackgroundTasks())
+
+    assert response.tasks[0].status == TaskStatus.PENDING
+    job = task_store.get_latest_search_task_job("task-1")
+    assert job is not None
+    assert job.depth == SearchDepth.HARD
 
 
 def test_start_research_persists_task_ids_in_task_store(mocker):
@@ -300,6 +321,27 @@ def test_get_research_finalize_job_returns_persisted_job(mocker):
     assert fetched is not None
     assert fetched.id == job.id
     assert fetched.research_id == research.id
+
+
+def test_process_search_task_job_marks_job_completed(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    job = task_store.add_search_task_job("task-1", SearchDepth.MEDIUM.value)
+    service = ResearchService(task_store=task_store)
+    run_search_task = mocker.patch.object(service, "run_search_task")
+
+    processed = service.process_search_task_job(job.id)
+
+    assert processed is not None
+    assert processed.status == SearchJobStatus.COMPLETED
+    run_search_task.assert_called_once_with("task-1", SearchDepth.MEDIUM)
 
 
 def test_queue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):

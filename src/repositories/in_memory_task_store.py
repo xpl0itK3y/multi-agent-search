@@ -111,9 +111,9 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
-    def add_search_task_job(self, task_id: str) -> SearchTaskJob:
+    def add_search_task_job(self, task_id: str, depth: str) -> SearchTaskJob:
         job_id = str(uuid.uuid4())
-        job = SearchTaskJob(id=job_id, task_id=task_id)
+        job = SearchTaskJob(id=job_id, task_id=task_id, depth=depth)
         self.search_jobs[job_id] = job
         return job
 

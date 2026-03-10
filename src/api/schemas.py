@@ -97,6 +97,7 @@ class ResearchFinalizeJob(BaseModel):
 class SearchTaskJob(BaseModel):
     id: str
     task_id: str
+    depth: SearchDepth
     status: SearchJobStatus = SearchJobStatus.PENDING
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

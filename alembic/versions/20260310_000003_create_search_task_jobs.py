@@ -20,6 +20,7 @@ def upgrade() -> None:
         "search_task_jobs",
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("task_id", sa.String(length=36), nullable=False),
+        sa.Column("depth", sa.String(length=16), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),

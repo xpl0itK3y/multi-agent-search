@@ -120,6 +120,7 @@ class SearchTaskJobORM(Base):
         nullable=False,
         index=True,
     )
+    depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
