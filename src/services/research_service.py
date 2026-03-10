@@ -12,6 +12,8 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchStatus,
     ResearchFinalizeJob,
+    SearchJobStatus,
+    SearchTaskJob,
     SearchDepth,
     SearchTask,
     TaskUpdate,
@@ -68,7 +70,7 @@ class ResearchService:
             task = self.task_store.add_task(task_dict)
             registered_tasks.append(task)
             if task.status == TaskStatus.PENDING and task.queries:
-                background_tasks.add_task(self.run_search_task, task.id, depth)
+                self.task_store.add_search_task_job(task.id, depth.value)
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
@@ -94,7 +96,7 @@ class ResearchService:
 
         for task in registered_tasks:
             if task.status == TaskStatus.PENDING and task.queries:
-                background_tasks.add_task(self.run_search_task, task.id, request.depth)
+                self.task_store.add_search_task_job(task.id, request.depth.value)
 
         return ResearchResponse(
             research_id=research.id,
@@ -203,6 +205,9 @@ class ResearchService:
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)
 
+    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        return self.task_store.get_search_task_job(job_id)
+
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)
         if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
@@ -220,3 +225,30 @@ class ResearchService:
         limit = source_limit_map.get(depth, 5)
         agent = SearchAgent(task_store=self.task_store, max_sources=limit)
         agent.run_task(task_id)
+
+    def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        job = self.task_store.get_search_task_job(job_id)
+        if job is None:
+            return None
+
+        task = self.task_store.get_task(job.task_id)
+        if task is None:
+            return self.task_store.update_search_task_job(
+                job_id,
+                SearchJobStatus.FAILED,
+                "Task not found",
+            )
+
+        self.task_store.update_search_task_job(job_id, SearchJobStatus.RUNNING)
+        try:
+            self.run_search_task(task.id, job.depth)
+            return self.task_store.update_search_task_job(
+                job_id,
+                SearchJobStatus.COMPLETED,
+            )
+        except Exception as exc:
+            return self.task_store.update_search_task_job(
+                job_id,
+                SearchJobStatus.FAILED,
+                str(exc),
+            )

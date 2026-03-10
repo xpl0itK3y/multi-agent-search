@@ -18,8 +18,9 @@ def test_in_memory_store_tracks_search_jobs():
         }
     )
 
-    job = store.add_search_task_job("task-1")
+    job = store.add_search_task_job("task-1", SearchDepth.EASY.value)
     assert job.task_id == "task-1"
+    assert job.depth == SearchDepth.EASY
     assert job.status == SearchJobStatus.PENDING
 
     pending = store.get_pending_search_task_jobs()

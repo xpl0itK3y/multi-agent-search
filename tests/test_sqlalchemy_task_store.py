@@ -127,8 +127,9 @@ def test_sqlalchemy_task_store_persists_search_jobs():
     )
     task = store.get_tasks_by_research(research.id)[0]
 
-    job = store.add_search_task_job(task.id)
+    job = store.add_search_task_job(task.id, SearchDepth.HARD.value)
     assert job.status == SearchJobStatus.PENDING
+    assert job.depth == SearchDepth.HARD
 
     pending = store.get_pending_search_task_jobs()
     assert [item.id for item in pending] == [job.id]

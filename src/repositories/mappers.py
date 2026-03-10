@@ -79,6 +79,7 @@ def search_task_job_orm_to_schema(job: SearchTaskJobORM) -> SearchTaskJob:
     return SearchTaskJob(
         id=job.id,
         task_id=job.task_id,
+        depth=job.depth,
         status=SearchJobStatus(job.status),
         error=job.error,
         created_at=job.created_at,

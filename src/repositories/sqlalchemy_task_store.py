@@ -181,10 +181,11 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
-    def add_search_task_job(self, task_id: str) -> SearchTaskJob:
+    def add_search_task_job(self, task_id: str, depth: str) -> SearchTaskJob:
         job = SearchTaskJobORM(
             id=str(uuid.uuid4()),
             task_id=task_id,
+            depth=depth,
             status=SearchJobStatus.PENDING.value,
         )
         with self.session_scope() as session:
