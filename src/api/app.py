@@ -1,6 +1,7 @@
 from typing import List
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from src.api.dependencies import get_research_service
 from src.api.schemas import (
     DecomposeRequest,
     DecomposeResponse,
@@ -14,7 +15,6 @@ from src.api.schemas import (
 )
 from src.bootstrap import lifespan
 from src.config import settings
-from src.services import ResearchService
 
 
 def create_app() -> FastAPI:
@@ -22,10 +22,6 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
-
-def get_research_service(request: Request) -> ResearchService:
-    return request.app.state.research_service
 
 @app.get("/health")
 def health_check():
