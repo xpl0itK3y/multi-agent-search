@@ -104,7 +104,7 @@ def run_finalize_worker_once(env: dict[str, str]) -> int:
     marker = "processed="
     if marker not in completed.stdout:
         raise RuntimeError(f"Unexpected worker output: {completed.stdout}")
-    return int(completed.stdout.strip().split(marker, maxsplit=1)[1])
+    return int(completed.stdout.strip().rsplit(marker, maxsplit=1)[1])
 
 
 def run_migrations(env: dict[str, str]) -> None:
