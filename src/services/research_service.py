@@ -107,7 +107,7 @@ class ResearchService:
 
         return research
 
-    def finalize_research(self, research_id: str) -> ResearchRecord:
+    def _get_research_for_finalization(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
@@ -131,24 +131,55 @@ class ResearchService:
                 ResearchStatus.FAILED,
                 "All tasks failed.",
             )
-        else:
-            analyzer = self.require_agent(self.analyzer, "Analyzer")
-            self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
-            try:
-                report = analyzer.run_analysis(research.prompt, tasks)
-                self.task_store.update_research_status(
-                    research_id,
-                    ResearchStatus.COMPLETED,
-                    report,
-                )
-            except Exception as exc:
-                self.task_store.update_research_status(
-                    research_id,
-                    ResearchStatus.FAILED,
-                    f"Analysis failed: {str(exc)}",
-                )
+            return self.task_store.get_research(research_id)
+
+        return research
+
+    def complete_research_finalization(self, research_id: str) -> ResearchRecord:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        analyzer = self.require_agent(self.analyzer, "Analyzer")
+
+        try:
+            report = analyzer.run_analysis(research.prompt, tasks)
+            self.task_store.update_research_status(
+                research_id,
+                ResearchStatus.COMPLETED,
+                report,
+            )
+        except Exception as exc:
+            self.task_store.update_research_status(
+                research_id,
+                ResearchStatus.FAILED,
+                f"Analysis failed: {str(exc)}",
+            )
 
         return self.task_store.get_research(research_id)
+
+    def queue_research_finalization(
+        self,
+        research_id: str,
+        background_tasks: BackgroundTasks,
+    ) -> ResearchRecord:
+        research = self._get_research_for_finalization(research_id)
+        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+            return research
+
+        self.require_agent(self.analyzer, "Analyzer")
+        self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
+        background_tasks.add_task(self.complete_research_finalization, research_id)
+        return self.task_store.get_research(research_id)
+
+    def finalize_research(self, research_id: str) -> ResearchRecord:
+        research = self._get_research_for_finalization(research_id)
+        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+            return research
+
+        self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
+        return self.complete_research_finalization(research_id)
 
     def run_search_task(self, task_id: str, depth: SearchDepth):
         source_limit_map = {

@@ -192,6 +192,60 @@ def test_finalize_research_runs_analysis_when_tasks_are_complete(mocker):
     analyzer.run_analysis.assert_called_once()
 
 
+def test_queue_research_finalization_marks_research_analyzing(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    background_tasks = BackgroundTasks()
+
+    queued = service.queue_research_finalization(research.id, background_tasks)
+
+    assert queued.status == ResearchStatus.ANALYZING
+    assert len(background_tasks.tasks) == 1
+    analyzer.run_analysis.assert_not_called()
+
+
+def test_queue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "failed task",
+            "queries": ["query"],
+            "status": TaskStatus.FAILED,
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    background_tasks = BackgroundTasks()
+
+    finalized = service.queue_research_finalization(research.id, background_tasks)
+
+    assert finalized.status == ResearchStatus.FAILED
+    assert finalized.final_report == "All tasks failed."
+    assert background_tasks.tasks == []
+    analyzer.run_analysis.assert_not_called()
+
+
 def test_finalize_research_rejects_incomplete_tasks():
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
