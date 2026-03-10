@@ -1,0 +1,139 @@
+from fastapi import BackgroundTasks, HTTPException
+
+from src.agents.analyzer import AnalyzerAgent
+from src.agents.optimizer import PromptOptimizerAgent
+from src.agents.orchestrator import OrchestratorAgent
+from src.agents.search import SearchAgent
+from src.api.schemas import (
+    DecomposeResponse,
+    ResearchRecord,
+    ResearchRequest,
+    ResearchResponse,
+    ResearchStatus,
+    SearchDepth,
+    SearchTask,
+    TaskStatus,
+)
+from src.core.task_manager import TaskManager
+
+
+class ResearchService:
+    def __init__(
+        self,
+        task_manager: TaskManager,
+        optimizer: PromptOptimizerAgent | None = None,
+        orchestrator: OrchestratorAgent | None = None,
+        analyzer: AnalyzerAgent | None = None,
+    ):
+        self.task_manager = task_manager
+        self.optimizer = optimizer
+        self.orchestrator = orchestrator
+        self.analyzer = analyzer
+
+    def require_agent(self, agent, agent_name: str):
+        if agent is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{agent_name} is unavailable. Check service configuration.",
+            )
+        return agent
+
+    def optimize_prompt(self, prompt: str) -> str:
+        optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
+        return optimizer.run(prompt)
+
+    def decompose_prompt(
+        self,
+        prompt: str,
+        depth: SearchDepth,
+        background_tasks: BackgroundTasks,
+    ) -> DecomposeResponse:
+        orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
+        tasks_raw = orchestrator.run_decompose(prompt, depth)
+
+        registered_tasks = []
+        for task_dict in tasks_raw:
+            task = self.task_manager.add_task(task_dict)
+            registered_tasks.append(task)
+            if task.status == TaskStatus.PENDING and task.queries:
+                background_tasks.add_task(self.run_search_task, task.id, depth)
+
+        return DecomposeResponse(tasks=registered_tasks, depth=depth)
+
+    def start_research(
+        self,
+        request: ResearchRequest,
+        background_tasks: BackgroundTasks,
+    ) -> ResearchResponse:
+        orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
+        tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
+
+        task_ids = []
+        registered_tasks = []
+        research = self.task_manager.add_research(request, task_ids=[])
+
+        for task_dict in tasks_raw:
+            task_dict["research_id"] = research.id
+            task = self.task_manager.add_task(task_dict)
+            registered_tasks.append(task)
+            task_ids.append(task.id)
+
+        research.task_ids = task_ids
+
+        for task in registered_tasks:
+            if task.status == TaskStatus.PENDING and task.queries:
+                background_tasks.add_task(self.run_search_task, task.id, request.depth)
+
+        return ResearchResponse(
+            research_id=research.id,
+            status="success",
+            message=f"Research started with {len(registered_tasks)} tasks.",
+        )
+
+    def get_research_status(self, research_id: str) -> ResearchRecord:
+        research = self.task_manager.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        if research.status in [ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+            return research
+
+        tasks = self.task_manager.get_tasks_by_research(research_id)
+        all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
+        any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
+
+        if all_done:
+            if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
+                self.task_manager.update_research_status(
+                    research_id,
+                    ResearchStatus.FAILED,
+                    "All tasks failed.",
+                )
+            else:
+                analyzer = self.require_agent(self.analyzer, "Analyzer")
+                self.task_manager.update_research_status(research_id, ResearchStatus.ANALYZING)
+                try:
+                    report = analyzer.run_analysis(research.prompt, tasks)
+                    self.task_manager.update_research_status(
+                        research_id,
+                        ResearchStatus.COMPLETED,
+                        report,
+                    )
+                except Exception as exc:
+                    self.task_manager.update_research_status(
+                        research_id,
+                        ResearchStatus.FAILED,
+                        f"Analysis failed: {str(exc)}",
+                    )
+
+        return self.task_manager.get_research(research_id)
+
+    def run_search_task(self, task_id: str, depth: SearchDepth):
+        source_limit_map = {
+            SearchDepth.EASY: 5,
+            SearchDepth.MEDIUM: 12,
+            SearchDepth.HARD: 20,
+        }
+        limit = source_limit_map.get(depth, 5)
+        agent = SearchAgent(max_sources=limit)
+        agent.run_task(task_id)

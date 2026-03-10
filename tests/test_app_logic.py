@@ -1,12 +1,11 @@
-import asyncio
-
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.app import decompose_prompt
-from src.api.schemas import DecomposeRequest, SearchDepth, SearchTask, TaskStatus
+from src.api.schemas import SearchDepth, SearchTask, TaskStatus
+from src.core.task_manager import TaskManager
 from src.core.llm import LLMProvider
+from src.services.research_service import ResearchService
 
 
 class RecordingLLM(LLMProvider):
@@ -26,14 +25,13 @@ class RecordingLLM(LLMProvider):
 
 
 def test_decompose_requires_initialized_orchestrator(mocker):
-    mocker.patch("src.api.app.agent_orchestrator", None)
+    service = ResearchService(task_manager=TaskManager(), orchestrator=None)
 
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(
-            decompose_prompt(
-                DecomposeRequest(prompt="test", depth=SearchDepth.EASY),
-                BackgroundTasks(),
-            )
+        service.decompose_prompt(
+            "test",
+            SearchDepth.EASY,
+            BackgroundTasks(),
         )
 
     assert exc_info.value.status_code == 503
@@ -61,3 +59,27 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
+
+
+def test_decompose_does_not_schedule_failed_tasks(mocker):
+    orchestrator = mocker.Mock()
+    orchestrator.run_decompose.return_value = [
+        {
+            "id": "task-1",
+            "description": "bad task",
+            "queries": ["query"],
+            "status": TaskStatus.FAILED,
+        }
+    ]
+    service = ResearchService(task_manager=TaskManager(), orchestrator=orchestrator)
+    background_tasks = BackgroundTasks()
+
+    response = service.decompose_prompt(
+        "test",
+        SearchDepth.EASY,
+        background_tasks,
+    )
+
+    assert len(response.tasks) == 1
+    assert response.tasks[0].status == TaskStatus.FAILED
+    assert background_tasks.tasks == []
