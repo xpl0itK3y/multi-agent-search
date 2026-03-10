@@ -68,11 +68,10 @@ def test_research_endpoints(client, mocker):
     assert response_get.json()["status"] == ResearchStatus.PROCESSING
     
     # Update task to completed
-    from src.core.task_manager import task_manager
     from src.api.schemas import TaskUpdate
-    tasks = task_manager.get_tasks_by_research(research_id)
+    tasks = client.app.state.research_service.task_manager.get_tasks_by_research(research_id)
     assert len(tasks) == 1
-    task_manager.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
+    client.app.state.research_service.task_manager.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
     
     # Mock analyzer
     mock_analysis = mocker.patch("src.api.app.agent_analyzer.run_analysis")
@@ -87,10 +86,11 @@ def test_research_endpoints(client, mocker):
 def test_search_agent_integration(mocker):
     # Тестируем SearchAgent отдельно с моками провайдеров
     from src.agents.search import SearchAgent
-    from src.core.task_manager import task_manager
+    from src.repositories import InMemoryTaskStore
     
+    task_store = InMemoryTaskStore()
     task_id = "test-agent-id"
-    task_manager.add_task({
+    task_store.add_task({
         "id": task_id,
         "description": "test",
         "queries": ["query"],
@@ -103,10 +103,10 @@ def test_search_agent_integration(mocker):
     mock_extract = mocker.patch("src.providers.search.ContentExtractor.extract_content")
     mock_extract.return_value = "Full page content"
     
-    agent = SearchAgent(max_sources=1)
+    agent = SearchAgent(task_store=task_store, max_sources=1)
     agent.run_task(task_id)
     
-    final_task = task_manager.get_task(task_id)
+    final_task = task_store.get_task(task_id)
     assert final_task.status == "completed"
     assert final_task.result[0]["content"] == "Full page content"
     assert "Search completed" in final_task.logs[-1]
