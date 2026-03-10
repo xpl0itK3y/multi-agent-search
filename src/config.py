@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_name: str = "Prompt Optimizer API"
     debug: bool = False
     task_store_backend: str = "postgres"
+    allow_memory_task_store: bool = False
 
     postgres_user: str = "app"
     postgres_password: str = "app"

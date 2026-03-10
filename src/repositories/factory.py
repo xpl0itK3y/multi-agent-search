@@ -9,6 +9,10 @@ def create_task_store() -> TaskStore:
     backend = settings.task_store_backend.lower()
 
     if backend == "memory":
+        if not settings.allow_memory_task_store and not settings.debug:
+            raise ValueError(
+                "Memory task store is disabled. Enable allow_memory_task_store or debug mode."
+            )
         return InMemoryTaskStore()
 
     if backend == "postgres":
