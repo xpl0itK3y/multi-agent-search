@@ -1,13 +1,22 @@
 from datetime import datetime, timezone
 import uuid
 
-from src.api.schemas import ResearchRecord, ResearchRequest, ResearchStatus, SearchTask, TaskUpdate
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchFinalizeJob,
+    ResearchRecord,
+    ResearchRequest,
+    ResearchStatus,
+    SearchTask,
+    TaskUpdate,
+)
 
 
 class InMemoryTaskStore:
     def __init__(self):
         self.tasks: dict[str, SearchTask] = {}
         self.researches: dict[str, ResearchRecord] = {}
+        self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
 
     def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
         research_id = str(uuid.uuid4())
@@ -54,6 +63,37 @@ class InMemoryTaskStore:
         research.task_ids = task_ids
         research.updated_at = datetime.now(timezone.utc)
         return research
+
+    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+        job_id = str(uuid.uuid4())
+        job = ResearchFinalizeJob(id=job_id, research_id=research_id)
+        self.finalize_jobs[job_id] = job
+        return job
+
+    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        return self.finalize_jobs.get(job_id)
+
+    def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        return [
+            job
+            for job in self.finalize_jobs.values()
+            if job.status == FinalizeJobStatus.PENDING
+        ]
+
+    def update_research_finalize_job(
+        self,
+        job_id: str,
+        status: FinalizeJobStatus,
+        error: str | None = None,
+    ) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.status = status
+        job.error = error
+        job.updated_at = datetime.now(timezone.utc)
+        return job
 
     def get_task(self, task_id: str) -> SearchTask | None:
         return self.tasks.get(task_id)

@@ -20,6 +20,13 @@ class ResearchStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+
+class FinalizeJobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class OptimizeRequest(BaseModel):
     prompt: str = Field(..., description="The original user prompt to optimize", min_length=1)
 
@@ -69,3 +76,12 @@ class ResearchResponse(BaseModel):
     research_id: str
     status: str
     message: str
+
+
+class ResearchFinalizeJob(BaseModel):
+    id: str
+    research_id: str
+    status: FinalizeJobStatus = FinalizeJobStatus.PENDING
+    error: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

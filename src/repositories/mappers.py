@@ -1,5 +1,12 @@
-from src.api.schemas import ResearchRecord, ResearchStatus, SearchTask, TaskStatus
-from src.db.models import ResearchORM, SearchResultORM, SearchTaskORM
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchFinalizeJob,
+    ResearchRecord,
+    ResearchStatus,
+    SearchTask,
+    TaskStatus,
+)
+from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchResultORM, SearchTaskORM
 
 
 def research_orm_to_record(research: ResearchORM) -> ResearchRecord:
@@ -47,3 +54,14 @@ def search_result_dicts_to_orm(task_id: str, results: list[dict]) -> list[Search
         )
         for result in results
     ]
+
+
+def research_finalize_job_orm_to_schema(job: ResearchFinalizeJobORM) -> ResearchFinalizeJob:
+    return ResearchFinalizeJob(
+        id=job.id,
+        research_id=job.research_id,
+        status=FinalizeJobStatus(job.status),
+        error=job.error,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )

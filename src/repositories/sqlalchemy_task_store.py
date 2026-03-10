@@ -6,9 +6,18 @@ from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from src.api.schemas import ResearchRecord, ResearchRequest, ResearchStatus, SearchTask, TaskUpdate
-from src.db.models import ResearchORM, SearchTaskORM
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchFinalizeJob,
+    ResearchRecord,
+    ResearchRequest,
+    ResearchStatus,
+    SearchTask,
+    TaskUpdate,
+)
+from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchTaskORM
 from src.repositories.mappers import (
+    research_finalize_job_orm_to_schema,
     research_orm_to_record,
     search_result_dicts_to_orm,
     search_task_orm_to_schema,
@@ -106,6 +115,53 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(research)
             return research_orm_to_record(research)
+
+    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+        job = ResearchFinalizeJobORM(
+            id=str(uuid.uuid4()),
+            research_id=research_id,
+            status=FinalizeJobStatus.PENDING.value,
+        )
+        with self.session_scope() as session:
+            session.add(job)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
+
+    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            job = session.get(ResearchFinalizeJobORM, job_id)
+            if job is None:
+                return None
+            return research_finalize_job_orm_to_schema(job)
+
+    def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.PENDING.value)
+                .order_by(ResearchFinalizeJobORM.created_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [research_finalize_job_orm_to_schema(job) for job in jobs]
+
+    def update_research_finalize_job(
+        self,
+        job_id: str,
+        status: FinalizeJobStatus,
+        error: str | None = None,
+    ) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            job = session.get(ResearchFinalizeJobORM, job_id)
+            if job is None:
+                return None
+
+            job.status = status.value
+            job.error = error
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
 
     def get_task(self, task_id: str) -> SearchTask | None:
         with self.session_scope() as session:
