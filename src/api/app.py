@@ -49,7 +49,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+def create_app() -> FastAPI:
+    return FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+
+
+app = create_app()
 
 
 def get_research_service(request: Request) -> ResearchService:
