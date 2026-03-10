@@ -12,11 +12,18 @@ if str(ROOT) not in sys.path:
 
 def run_once() -> int:
     from src.bootstrap import create_research_service
-    from src.workers import FinalizeWorker
+    from src.workers import FinalizeWorker, SearchWorker
 
-    worker = FinalizeWorker(create_research_service())
-    processed = worker.run_once()
-    print(f"finalize-worker: processed={processed}")
+    research_service = create_research_service()
+    search_processed = SearchWorker(research_service).run_once()
+    finalize_processed = FinalizeWorker(research_service).run_once()
+    processed = search_processed + finalize_processed
+    print(
+        "job-worker: "
+        f"search_processed={search_processed} "
+        f"finalize_processed={finalize_processed} "
+        f"processed={processed}"
+    )
     return processed
 
 
