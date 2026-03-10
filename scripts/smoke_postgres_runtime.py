@@ -1,11 +1,12 @@
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -13,10 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 APP_PORT = int(os.environ.get("SMOKE_APP_PORT", "18021"))
-BASE_URL = f"http://127.0.0.1:{APP_PORT}"
+BASE_URL = ""
 
 
-def http_json(method: str, path: str, payload: dict | None = None) -> dict | list:
+def get_base_url() -> str:
+    return BASE_URL
+
+
+def pick_app_port() -> int:
+    configured_port = os.environ.get("SMOKE_APP_PORT")
+    if configured_port:
+        return int(configured_port)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def http_request(method: str, path: str, payload: dict | None = None) -> tuple[int, dict | list]:
     data = None
     headers = {}
     if payload is not None:
@@ -24,13 +39,23 @@ def http_json(method: str, path: str, payload: dict | None = None) -> dict | lis
         headers["Content-Type"] = "application/json"
 
     request = Request(
-        url=f"{BASE_URL}{path}",
+        url=f"{get_base_url()}{path}",
         data=data,
         headers=headers,
         method=method,
     )
-    with urlopen(request, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
+def http_json(method: str, path: str, payload: dict | None = None) -> dict | list:
+    status_code, body = http_request(method, path, payload)
+    if status_code >= 400:
+        raise RuntimeError(f"{method} {path} returned {status_code}: {body}")
+    return body
 
 
 def wait_for_health() -> None:
@@ -70,7 +95,7 @@ def seed_task() -> tuple[str, str]:
     return research.id, task_id
 
 
-def verify_db_row(task_id: str) -> None:
+def verify_db_rows(research_id: str, task_id: str) -> None:
     from sqlalchemy import create_engine, text
 
     database_url = os.environ.get(
@@ -79,19 +104,29 @@ def verify_db_row(task_id: str) -> None:
     )
     engine = create_engine(database_url, pool_pre_ping=True)
     with engine.connect() as connection:
-        row = connection.execute(
+        task_row = connection.execute(
             text("select status, logs from search_tasks where id = :task_id"),
             {"task_id": task_id},
         ).one()
-    assert row.status == "completed", row
-    assert "patched via smoke script" in row.logs
+        research_row = connection.execute(
+            text("select status, final_report from researches where id = :research_id"),
+            {"research_id": research_id},
+        ).one()
+    assert task_row.status == "failed", task_row
+    assert "patched via smoke script" in task_row.logs
+    assert research_row.status == "failed", research_row
+    assert research_row.final_report == "All tasks failed.", research_row
 
 
 def main() -> int:
+    global BASE_URL
+
     env = os.environ.copy()
     env.setdefault("TASK_STORE_BACKEND", "postgres")
     env.setdefault("POSTGRES_HOST", "localhost")
     env.setdefault("POSTGRES_PORT", "5433")
+    app_port = pick_app_port()
+    BASE_URL = f"http://127.0.0.1:{app_port}"
 
     server = subprocess.Popen(
         [
@@ -102,7 +137,7 @@ def main() -> int:
             "--host",
             "127.0.0.1",
             "--port",
-            str(APP_PORT),
+            str(app_port),
         ],
         cwd=ROOT,
         env=env,
@@ -113,7 +148,7 @@ def main() -> int:
 
     try:
         wait_for_health()
-        _, task_id = seed_task()
+        research_id, task_id = seed_task()
 
         tasks = http_json("GET", "/v1/tasks")
         assert any(task["id"] == task_id for task in tasks), tasks
@@ -121,11 +156,14 @@ def main() -> int:
         task = http_json("GET", f"/v1/tasks/{task_id}")
         assert task["status"] == "pending", task
 
+        research = http_json("GET", f"/v1/research/{research_id}")
+        assert research["status"] == "processing", research
+
         updated = http_json(
             "PATCH",
             f"/v1/tasks/{task_id}",
             {
-                "status": "completed",
+                "status": "failed",
                 "result": [
                     {
                         "url": "https://smoke.example",
@@ -136,9 +174,18 @@ def main() -> int:
                 "log": "patched via smoke script",
             },
         )
-        assert updated["status"] == "completed", updated
+        assert updated["status"] == "failed", updated
         assert updated["result"][0]["url"] == "https://smoke.example", updated
-        verify_db_row(task_id)
+
+        finalize = http_json("POST", f"/v1/research/{research_id}/finalize")
+        assert finalize["status"] == "failed", finalize
+        assert finalize["final_report"] == "All tasks failed.", finalize
+
+        read_only_status = http_json("GET", f"/v1/research/{research_id}")
+        assert read_only_status["status"] == "failed", read_only_status
+        assert read_only_status["final_report"] == "All tasks failed.", read_only_status
+
+        verify_db_rows(research_id, task_id)
         print("smoke-postgres-runtime: ok")
         return 0
     finally:
