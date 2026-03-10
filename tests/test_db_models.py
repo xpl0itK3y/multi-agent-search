@@ -9,4 +9,5 @@ def test_db_metadata_contains_core_tables():
         "search_tasks",
         "search_results",
         "research_finalize_jobs",
+        "search_task_jobs",
     } <= table_names
