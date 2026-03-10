@@ -40,6 +40,7 @@ research_service = ResearchService(
     orchestrator=agent_orchestrator,
     analyzer=agent_analyzer,
 )
+app.state.research_service = research_service
 
 @app.get("/health")
 def health_check():

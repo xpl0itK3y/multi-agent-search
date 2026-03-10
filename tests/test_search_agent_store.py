@@ -1,10 +1,10 @@
 from src.agents.search import SearchAgent
-from src.core.task_manager import TaskManager
 from src.api.schemas import TaskStatus
+from src.repositories import InMemoryTaskStore
 
 
 def test_search_agent_updates_through_injected_task_store(mocker):
-    task_store = TaskManager()
+    task_store = InMemoryTaskStore()
     task_store.add_task(
         {
             "id": "task-1",
