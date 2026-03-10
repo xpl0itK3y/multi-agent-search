@@ -6,10 +6,12 @@ class FinalizeWorker:
         self.research_service = research_service
 
     def run_once(self) -> int:
-        jobs = self.research_service.task_store.get_pending_research_finalize_jobs()
         processed = 0
 
-        for job in jobs:
+        while True:
+            job = self.research_service.task_store.claim_next_research_finalize_job()
+            if job is None:
+                break
             self.research_service.process_finalize_job(job.id)
             processed += 1
 

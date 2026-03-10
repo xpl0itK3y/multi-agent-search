@@ -96,6 +96,23 @@ class InMemoryTaskStore:
             if job.status == FinalizeJobStatus.PENDING
         ]
 
+    def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None:
+        pending_jobs = sorted(
+            (
+                job
+                for job in self.finalize_jobs.values()
+                if job.status == FinalizeJobStatus.PENDING
+            ),
+            key=lambda item: item.created_at,
+        )
+        if not pending_jobs:
+            return None
+
+        job = pending_jobs[0]
+        job.status = FinalizeJobStatus.RUNNING
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
     def update_research_finalize_job(
         self,
         job_id: str,
@@ -136,6 +153,23 @@ class InMemoryTaskStore:
             for job in self.search_jobs.values()
             if job.status == SearchJobStatus.PENDING
         ]
+
+    def claim_next_search_task_job(self) -> SearchTaskJob | None:
+        pending_jobs = sorted(
+            (
+                job
+                for job in self.search_jobs.values()
+                if job.status == SearchJobStatus.PENDING
+            ),
+            key=lambda item: item.created_at,
+        )
+        if not pending_jobs:
+            return None
+
+        job = pending_jobs[0]
+        job.status = SearchJobStatus.RUNNING
+        job.updated_at = datetime.now(timezone.utc)
+        return job
 
     def update_search_task_job(
         self,

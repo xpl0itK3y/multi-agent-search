@@ -1,4 +1,4 @@
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.optimizer import PromptOptimizerAgent
@@ -60,7 +60,6 @@ class ResearchService:
         self,
         prompt: str,
         depth: SearchDepth,
-        background_tasks: BackgroundTasks,
     ) -> DecomposeResponse:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
         tasks_raw = orchestrator.run_decompose(prompt, depth)
@@ -77,7 +76,6 @@ class ResearchService:
     def start_research(
         self,
         request: ResearchRequest,
-        background_tasks: BackgroundTasks,
     ) -> ResearchResponse:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
         tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
@@ -173,22 +171,11 @@ class ResearchService:
         job = self.task_store.add_research_finalize_job(research_id)
         return self.task_store.get_research(research_id), job
 
-    def queue_research_finalization(
-        self,
-        research_id: str,
-        background_tasks: BackgroundTasks,
-    ) -> ResearchRecord:
-        research, job = self.enqueue_research_finalization(research_id)
-        if job is not None:
-            background_tasks.add_task(self.process_finalize_job, job.id)
-        return research
-
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.task_store.get_research_finalize_job(job_id)
         if job is None:
             return None
 
-        self.task_store.update_research_finalize_job(job_id, FinalizeJobStatus.RUNNING)
         try:
             self.complete_research_finalization(job.research_id)
             return self.task_store.update_research_finalize_job(
@@ -242,7 +229,6 @@ class ResearchService:
                 "Task not found",
             )
 
-        self.task_store.update_search_task_job(job_id, SearchJobStatus.RUNNING)
         try:
             self.run_search_task(task.id, job.depth)
             return self.task_store.update_search_task_job(

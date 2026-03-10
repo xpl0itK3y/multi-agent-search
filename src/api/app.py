@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from src.api.dependencies import get_research_service
 from src.api.schemas import (
     DecomposeRequest,
@@ -41,12 +41,11 @@ async def optimize_prompt(request: Request, payload: OptimizeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/v1/decompose", response_model=DecomposeResponse)
-async def decompose_prompt(request: Request, payload: DecomposeRequest, background_tasks: BackgroundTasks):
+async def decompose_prompt(request: Request, payload: DecomposeRequest):
     try:
         return get_research_service(request).decompose_prompt(
             payload.prompt,
             payload.depth,
-            background_tasks,
         )
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -88,9 +87,9 @@ async def get_search_job(job_id: str, request: Request):
     return job
 
 @app.post("/v1/research", response_model=ResearchResponse)
-async def start_research(request: Request, payload: ResearchRequest, background_tasks: BackgroundTasks):
+async def start_research(request: Request, payload: ResearchRequest):
     try:
-        return get_research_service(request).start_research(payload, background_tasks)
+        return get_research_service(request).start_research(payload)
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e

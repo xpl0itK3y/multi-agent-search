@@ -6,10 +6,12 @@ class SearchWorker:
         self.research_service = research_service
 
     def run_once(self) -> int:
-        jobs = self.research_service.task_store.get_pending_search_task_jobs()
         processed = 0
 
-        for job in jobs:
+        while True:
+            job = self.research_service.task_store.claim_next_search_task_job()
+            if job is None:
+                break
             self.research_service.process_search_task_job(job.id)
             processed += 1
 

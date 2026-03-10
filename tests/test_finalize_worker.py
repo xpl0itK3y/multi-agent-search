@@ -33,3 +33,4 @@ def test_finalize_worker_processes_pending_jobs(mocker):
     assert processed_count == 1
     assert task_store.get_research(research.id).status == ResearchStatus.COMPLETED
     assert task_store.get_research(research.id).final_report == "worker report"
+    assert task_store.get_research_finalize_job(job.id).status.value == "completed"
