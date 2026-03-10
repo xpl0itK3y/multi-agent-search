@@ -19,12 +19,12 @@ from src.repositories.protocols import TaskStore
 class ResearchService:
     def __init__(
         self,
-        task_manager: TaskStore,
+        task_store: TaskStore,
         optimizer: PromptOptimizerAgent | None = None,
         orchestrator: OrchestratorAgent | None = None,
         analyzer: AnalyzerAgent | None = None,
     ):
-        self.task_manager = task_manager
+        self.task_store = task_store
         self.optimizer = optimizer
         self.orchestrator = orchestrator
         self.analyzer = analyzer
@@ -52,7 +52,7 @@ class ResearchService:
 
         registered_tasks = []
         for task_dict in tasks_raw:
-            task = self.task_manager.add_task(task_dict)
+            task = self.task_store.add_task(task_dict)
             registered_tasks.append(task)
             if task.status == TaskStatus.PENDING and task.queries:
                 background_tasks.add_task(self.run_search_task, task.id, depth)
@@ -69,11 +69,11 @@ class ResearchService:
 
         task_ids = []
         registered_tasks = []
-        research = self.task_manager.add_research(request, task_ids=[])
+        research = self.task_store.add_research(request, task_ids=[])
 
         for task_dict in tasks_raw:
             task_dict["research_id"] = research.id
-            task = self.task_manager.add_task(task_dict)
+            task = self.task_store.add_task(task_dict)
             registered_tasks.append(task)
             task_ids.append(task.id)
 
@@ -90,42 +90,42 @@ class ResearchService:
         )
 
     def get_research_status(self, research_id: str) -> ResearchRecord:
-        research = self.task_manager.get_research(research_id)
+        research = self.task_store.get_research(research_id)
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
 
         if research.status in [ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
             return research
 
-        tasks = self.task_manager.get_tasks_by_research(research_id)
+        tasks = self.task_store.get_tasks_by_research(research_id)
         all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
         any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
         if all_done:
             if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
-                self.task_manager.update_research_status(
+                self.task_store.update_research_status(
                     research_id,
                     ResearchStatus.FAILED,
                     "All tasks failed.",
                 )
             else:
                 analyzer = self.require_agent(self.analyzer, "Analyzer")
-                self.task_manager.update_research_status(research_id, ResearchStatus.ANALYZING)
+                self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
                 try:
                     report = analyzer.run_analysis(research.prompt, tasks)
-                    self.task_manager.update_research_status(
+                    self.task_store.update_research_status(
                         research_id,
                         ResearchStatus.COMPLETED,
                         report,
                     )
                 except Exception as exc:
-                    self.task_manager.update_research_status(
+                    self.task_store.update_research_status(
                         research_id,
                         ResearchStatus.FAILED,
                         f"Analysis failed: {str(exc)}",
                     )
 
-        return self.task_manager.get_research(research_id)
+        return self.task_store.get_research(research_id)
 
     def run_search_task(self, task_id: str, depth: SearchDepth):
         source_limit_map = {
@@ -134,5 +134,5 @@ class ResearchService:
             SearchDepth.HARD: 20,
         }
         limit = source_limit_map.get(depth, 5)
-        agent = SearchAgent(task_store=self.task_manager, max_sources=limit)
+        agent = SearchAgent(task_store=self.task_store, max_sources=limit)
         agent.run_task(task_id)

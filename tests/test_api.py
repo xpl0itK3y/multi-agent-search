@@ -69,9 +69,9 @@ def test_research_endpoints(client, mocker):
     
     # Update task to completed
     from src.api.schemas import TaskUpdate
-    tasks = client.app.state.research_service.task_manager.get_tasks_by_research(research_id)
+    tasks = client.app.state.research_service.task_store.get_tasks_by_research(research_id)
     assert len(tasks) == 1
-    client.app.state.research_service.task_manager.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
+    client.app.state.research_service.task_store.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
     
     # Mock analyzer
     mock_analysis = mocker.patch("src.api.app.agent_analyzer.run_analysis")

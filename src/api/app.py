@@ -36,7 +36,7 @@ def create_research_service() -> ResearchService:
         print(f"Warning: Failed to initialize agents: {exc}")
 
     return ResearchService(
-        task_manager=create_task_store(),
+        task_store=create_task_store(),
         optimizer=agent_optimizer,
         orchestrator=agent_orchestrator,
         analyzer=agent_analyzer,
@@ -84,18 +84,18 @@ async def decompose_prompt(request: Request, payload: DecomposeRequest, backgrou
 
 @app.get("/v1/tasks", response_model=List[SearchTask])
 async def list_tasks(request: Request):
-    return get_research_service(request).task_manager.get_all_tasks()
+    return get_research_service(request).task_store.get_all_tasks()
 
 @app.get("/v1/tasks/{task_id}", response_model=SearchTask)
 async def get_task(task_id: str, request: Request):
-    task = get_research_service(request).task_manager.get_task(task_id)
+    task = get_research_service(request).task_store.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
 async def update_task(task_id: str, update: TaskUpdate, request: Request):
-    task = get_research_service(request).task_manager.update_task(task_id, update)
+    task = get_research_service(request).task_store.update_task(task_id, update)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
