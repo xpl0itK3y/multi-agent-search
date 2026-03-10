@@ -7,6 +7,7 @@ from src.api.schemas import (
     DecomposeResponse,
     OptimizeRequest,
     OptimizeResponse,
+    QueueMetrics,
     ResearchFinalizeJob,
     ResearchFinalizeResponse,
     ResearchRecord,
@@ -15,6 +16,7 @@ from src.api.schemas import (
     SearchTaskJob,
     SearchTask,
     TaskUpdate,
+    WorkerHeartbeat,
 )
 from src.bootstrap import lifespan
 from src.config import settings
@@ -29,6 +31,19 @@ app = create_app()
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/health/queues", response_model=QueueMetrics)
+async def queue_health(request: Request):
+    return get_research_service(request).get_queue_metrics()
+
+
+@app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat)
+async def worker_health(worker_name: str, request: Request):
+    heartbeat = get_research_service(request).get_worker_heartbeat(worker_name)
+    if not heartbeat:
+        raise HTTPException(status_code=404, detail="Worker heartbeat not found")
+    return heartbeat
 
 @app.post("/v1/optimize", response_model=OptimizeResponse)
 async def optimize_prompt(request: Request, payload: OptimizeRequest):

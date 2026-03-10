@@ -50,3 +50,28 @@ def test_in_memory_store_claims_next_search_job():
     assert claimed is not None
     assert claimed.id == first.id
     assert claimed.status == SearchJobStatus.RUNNING
+
+
+def test_in_memory_store_requeues_then_dead_letters_search_job():
+    store = InMemoryTaskStore()
+    store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+    job = store.add_search_task_job("task-1", SearchDepth.EASY.value, max_attempts=2)
+
+    store.claim_next_search_task_job()
+    retried = store.record_search_task_job_failure(job.id, "boom-1")
+    assert retried is not None
+    assert retried.status == SearchJobStatus.PENDING
+    assert retried.attempt_count == 1
+
+    store.claim_next_search_task_job()
+    dead_lettered = store.record_search_task_job_failure(job.id, "boom-2")
+    assert dead_lettered is not None
+    assert dead_lettered.status == SearchJobStatus.DEAD_LETTER
+    assert dead_lettered.error == "boom-2"

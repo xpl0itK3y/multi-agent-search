@@ -39,3 +39,24 @@ def test_in_memory_store_claims_next_finalize_job():
     assert claimed is not None
     assert claimed.id == first.id
     assert claimed.status == FinalizeJobStatus.RUNNING
+
+
+def test_in_memory_store_requeues_then_dead_letters_finalize_job():
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    job = store.add_research_finalize_job(research.id, max_attempts=2)
+
+    store.claim_next_research_finalize_job()
+    retried = store.record_research_finalize_job_failure(job.id, "boom-1")
+    assert retried is not None
+    assert retried.status == FinalizeJobStatus.PENDING
+    assert retried.attempt_count == 1
+
+    store.claim_next_research_finalize_job()
+    dead_lettered = store.record_research_finalize_job_failure(job.id, "boom-2")
+    assert dead_lettered is not None
+    assert dead_lettered.status == FinalizeJobStatus.DEAD_LETTER
+    assert dead_lettered.error == "boom-2"

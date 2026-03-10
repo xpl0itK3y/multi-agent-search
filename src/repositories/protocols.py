@@ -2,9 +2,11 @@ from typing import Protocol
 
 from src.api.schemas import (
     FinalizeJobStatus,
+    QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,
+    WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
@@ -31,7 +33,11 @@ class TaskStore(Protocol):
         task_ids: list[str],
     ) -> ResearchRecord | None: ...
 
-    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob: ...
+    def add_research_finalize_job(
+        self,
+        research_id: str,
+        max_attempts: int = 3,
+    ) -> ResearchFinalizeJob: ...
 
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
@@ -51,7 +57,18 @@ class TaskStore(Protocol):
         error: str | None = None,
     ) -> ResearchFinalizeJob | None: ...
 
-    def add_search_task_job(self, task_id: str, depth: str) -> SearchTaskJob: ...
+    def record_research_finalize_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> ResearchFinalizeJob | None: ...
+
+    def add_search_task_job(
+        self,
+        task_id: str,
+        depth: str,
+        max_attempts: int = 3,
+    ) -> SearchTaskJob: ...
 
     def get_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
 
@@ -67,6 +84,24 @@ class TaskStore(Protocol):
         status: SearchJobStatus,
         error: str | None = None,
     ) -> SearchTaskJob | None: ...
+
+    def record_search_task_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> SearchTaskJob | None: ...
+
+    def upsert_worker_heartbeat(
+        self,
+        worker_name: str,
+        processed_jobs: int,
+        status: str,
+        last_error: str | None = None,
+    ) -> WorkerHeartbeat: ...
+
+    def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None: ...
+
+    def get_queue_metrics(self) -> QueueMetrics: ...
 
     def add_task(self, task_data: dict) -> SearchTask: ...
 

@@ -3,27 +3,36 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.schemas import (
     FinalizeJobStatus,
+    QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,
+    WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
     SearchTask,
     TaskUpdate,
 )
-from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchTaskJobORM, SearchTaskORM
+from src.db.models import (
+    ResearchFinalizeJobORM,
+    ResearchORM,
+    SearchTaskJobORM,
+    SearchTaskORM,
+    WorkerHeartbeatORM,
+)
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
     search_task_job_orm_to_schema,
     search_result_dicts_to_orm,
     search_task_orm_to_schema,
+    worker_heartbeat_orm_to_schema,
 )
 
 
@@ -119,10 +128,16 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
-    def add_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+    def add_research_finalize_job(
+        self,
+        research_id: str,
+        max_attempts: int = 3,
+    ) -> ResearchFinalizeJob:
         job = ResearchFinalizeJobORM(
             id=str(uuid.uuid4()),
             research_id=research_id,
+            attempt_count=0,
+            max_attempts=max_attempts,
             status=FinalizeJobStatus.PENDING.value,
         )
         with self.session_scope() as session:
@@ -177,6 +192,7 @@ class SQLAlchemyTaskStore:
                 return None
 
             job.status = FinalizeJobStatus.RUNNING.value
+            job.attempt_count += 1
             job.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(job)
@@ -200,11 +216,39 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
-    def add_search_task_job(self, task_id: str, depth: str) -> SearchTaskJob:
+    def record_research_finalize_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            job = session.get(ResearchFinalizeJobORM, job_id)
+            if job is None:
+                return None
+
+            job.error = error
+            job.status = (
+                FinalizeJobStatus.DEAD_LETTER.value
+                if job.attempt_count >= job.max_attempts
+                else FinalizeJobStatus.PENDING.value
+            )
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
+
+    def add_search_task_job(
+        self,
+        task_id: str,
+        depth: str,
+        max_attempts: int = 3,
+    ) -> SearchTaskJob:
         job = SearchTaskJobORM(
             id=str(uuid.uuid4()),
             task_id=task_id,
             depth=depth,
+            attempt_count=0,
+            max_attempts=max_attempts,
             status=SearchJobStatus.PENDING.value,
         )
         with self.session_scope() as session:
@@ -256,6 +300,7 @@ class SQLAlchemyTaskStore:
                 return None
 
             job.status = SearchJobStatus.RUNNING.value
+            job.attempt_count += 1
             job.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(job)
@@ -278,6 +323,70 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(job)
             return search_task_job_orm_to_schema(job)
+
+    def record_search_task_job_failure(
+        self,
+        job_id: str,
+        error: str,
+    ) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            job = session.get(SearchTaskJobORM, job_id)
+            if job is None:
+                return None
+
+            job.error = error
+            job.status = (
+                SearchJobStatus.DEAD_LETTER.value
+                if job.attempt_count >= job.max_attempts
+                else SearchJobStatus.PENDING.value
+            )
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
+
+    def upsert_worker_heartbeat(
+        self,
+        worker_name: str,
+        processed_jobs: int,
+        status: str,
+        last_error: str | None = None,
+    ) -> WorkerHeartbeat:
+        with self.session_scope() as session:
+            heartbeat = session.get(WorkerHeartbeatORM, worker_name)
+            if heartbeat is None:
+                heartbeat = WorkerHeartbeatORM(worker_name=worker_name)
+                session.add(heartbeat)
+
+            heartbeat.processed_jobs = processed_jobs
+            heartbeat.status = status
+            heartbeat.last_error = last_error
+            heartbeat.last_seen_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(heartbeat)
+            return worker_heartbeat_orm_to_schema(heartbeat)
+
+    def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
+        with self.session_scope() as session:
+            heartbeat = session.get(WorkerHeartbeatORM, worker_name)
+            if heartbeat is None:
+                return None
+            return worker_heartbeat_orm_to_schema(heartbeat)
+
+    def get_queue_metrics(self) -> QueueMetrics:
+        with self.session_scope() as session:
+            def count_for(model, status_value: str) -> int:
+                statement = select(func.count()).select_from(model).where(model.status == status_value)
+                return session.execute(statement).scalar_one()
+
+            return QueueMetrics(
+                pending_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.PENDING.value),
+                running_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.RUNNING.value),
+                dead_letter_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.DEAD_LETTER.value),
+                pending_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.PENDING.value),
+                running_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.RUNNING.value),
+                dead_letter_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.DEAD_LETTER.value),
+            )
 
     def get_task(self, task_id: str) -> SearchTask | None:
         with self.session_scope() as session:
