@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 APP_PORT = int(os.environ.get("SMOKE_APP_PORT", "18021"))
+SMOKE_REPORT = "smoke final report"
 BASE_URL = ""
 
 
@@ -69,6 +70,17 @@ def wait_for_health() -> None:
     raise RuntimeError("API did not become healthy in time")
 
 
+def wait_for_research_status(research_id: str, expected_status: str) -> dict:
+    for _ in range(40):
+        research = http_json("GET", f"/v1/research/{research_id}")
+        if research["status"] == expected_status:
+            return research
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Research {research_id} did not reach status {expected_status!r} in time"
+    )
+
+
 def seed_task() -> tuple[str, str]:
     os.environ.setdefault("TASK_STORE_BACKEND", "postgres")
     os.environ.setdefault("POSTGRES_HOST", "localhost")
@@ -112,10 +124,10 @@ def verify_db_rows(research_id: str, task_id: str) -> None:
             text("select status, final_report from researches where id = :research_id"),
             {"research_id": research_id},
         ).one()
-    assert task_row.status == "failed", task_row
+    assert task_row.status == "completed", task_row
     assert "patched via smoke script" in task_row.logs
-    assert research_row.status == "failed", research_row
-    assert research_row.final_report == "All tasks failed.", research_row
+    assert research_row.status == "completed", research_row
+    assert research_row.final_report == SMOKE_REPORT, research_row
 
 
 def main() -> int:
@@ -125,6 +137,7 @@ def main() -> int:
     env.setdefault("TASK_STORE_BACKEND", "postgres")
     env.setdefault("POSTGRES_HOST", "localhost")
     env.setdefault("POSTGRES_PORT", "5433")
+    env.setdefault("SMOKE_ANALYZER_REPORT", SMOKE_REPORT)
     app_port = pick_app_port()
     BASE_URL = f"http://127.0.0.1:{app_port}"
 
@@ -163,7 +176,7 @@ def main() -> int:
             "PATCH",
             f"/v1/tasks/{task_id}",
             {
-                "status": "failed",
+                "status": "completed",
                 "result": [
                     {
                         "url": "https://smoke.example",
@@ -174,16 +187,15 @@ def main() -> int:
                 "log": "patched via smoke script",
             },
         )
-        assert updated["status"] == "failed", updated
+        assert updated["status"] == "completed", updated
         assert updated["result"][0]["url"] == "https://smoke.example", updated
 
         finalize = http_json("POST", f"/v1/research/{research_id}/finalize")
-        assert finalize["status"] == "failed", finalize
-        assert finalize["final_report"] == "All tasks failed.", finalize
+        assert finalize["status"] == "analyzing", finalize
+        assert finalize["final_report"] is None, finalize
 
-        read_only_status = http_json("GET", f"/v1/research/{research_id}")
-        assert read_only_status["status"] == "failed", read_only_status
-        assert read_only_status["final_report"] == "All tasks failed.", read_only_status
+        completed = wait_for_research_status(research_id, "completed")
+        assert completed["final_report"] == SMOKE_REPORT, completed
 
         verify_db_rows(research_id, task_id)
         print("smoke-postgres-runtime: ok")
