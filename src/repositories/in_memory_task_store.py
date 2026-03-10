@@ -4,6 +4,8 @@ import uuid
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchFinalizeJob,
+    SearchJobStatus,
+    SearchTaskJob,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
@@ -17,6 +19,7 @@ class InMemoryTaskStore:
         self.tasks: dict[str, SearchTask] = {}
         self.researches: dict[str, ResearchRecord] = {}
         self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
+        self.search_jobs: dict[str, SearchTaskJob] = {}
 
     def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
         research_id = str(uuid.uuid4())
@@ -100,6 +103,47 @@ class InMemoryTaskStore:
         error: str | None = None,
     ) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.status = status
+        job.error = error
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def add_search_task_job(self, task_id: str) -> SearchTaskJob:
+        job_id = str(uuid.uuid4())
+        job = SearchTaskJob(id=job_id, task_id=task_id)
+        self.search_jobs[job_id] = job
+        return job
+
+    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        return self.search_jobs.get(job_id)
+
+    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
+        matching_jobs = [
+            job
+            for job in self.search_jobs.values()
+            if job.task_id == task_id
+        ]
+        if not matching_jobs:
+            return None
+        return max(matching_jobs, key=lambda item: item.created_at)
+
+    def get_pending_search_task_jobs(self) -> list[SearchTaskJob]:
+        return [
+            job
+            for job in self.search_jobs.values()
+            if job.status == SearchJobStatus.PENDING
+        ]
+
+    def update_search_task_job(
+        self,
+        job_id: str,
+        status: SearchJobStatus,
+        error: str | None = None,
+    ) -> SearchTaskJob | None:
+        job = self.search_jobs.get(job_id)
         if job is None:
             return None
 

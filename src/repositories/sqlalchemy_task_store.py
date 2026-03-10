@@ -9,16 +9,19 @@ from sqlalchemy.orm import Session, selectinload
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchFinalizeJob,
+    SearchJobStatus,
+    SearchTaskJob,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
     SearchTask,
     TaskUpdate,
 )
-from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchTaskORM
+from src.db.models import ResearchFinalizeJobORM, ResearchORM, SearchTaskJobORM, SearchTaskORM
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
+    search_task_job_orm_to_schema,
     search_result_dicts_to_orm,
     search_task_orm_to_schema,
 )
@@ -177,6 +180,65 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
+
+    def add_search_task_job(self, task_id: str) -> SearchTaskJob:
+        job = SearchTaskJobORM(
+            id=str(uuid.uuid4()),
+            task_id=task_id,
+            status=SearchJobStatus.PENDING.value,
+        )
+        with self.session_scope() as session:
+            session.add(job)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
+
+    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            job = session.get(SearchTaskJobORM, job_id)
+            if job is None:
+                return None
+            return search_task_job_orm_to_schema(job)
+
+    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.task_id == task_id)
+                .order_by(SearchTaskJobORM.created_at.desc())
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+            return search_task_job_orm_to_schema(job)
+
+    def get_pending_search_task_jobs(self) -> list[SearchTaskJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.PENDING.value)
+                .order_by(SearchTaskJobORM.created_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [search_task_job_orm_to_schema(job) for job in jobs]
+
+    def update_search_task_job(
+        self,
+        job_id: str,
+        status: SearchJobStatus,
+        error: str | None = None,
+    ) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            job = session.get(SearchTaskJobORM, job_id)
+            if job is None:
+                return None
+
+            job.status = status.value
+            job.error = error
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
 
     def get_task(self, task_id: str) -> SearchTask | None:
         with self.session_scope() as session:
