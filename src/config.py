@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     debug: bool = False
     task_store_backend: str = "postgres"
     allow_memory_task_store: bool = False
+    smoke_analyzer_report: Optional[str] = None
 
     postgres_user: str = "app"
     postgres_password: str = "app"
