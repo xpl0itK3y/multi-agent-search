@@ -135,3 +135,8 @@ class QueueMetrics(BaseModel):
 class JobRecoveryResponse(BaseModel):
     recovered_job_ids: List[str] = Field(default_factory=list)
     recovered_count: int = 0
+
+
+class JobCleanupResponse(BaseModel):
+    deleted_job_ids: List[str] = Field(default_factory=list)
+    deleted_count: int = 0

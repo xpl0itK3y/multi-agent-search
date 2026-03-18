@@ -218,6 +218,101 @@ async def test_recover_stale_finalize_jobs_endpoint(client):
     assert response.json()["recovered_job_ids"] == [job.id]
 
 
+@pytest.mark.anyio
+async def test_list_running_and_dead_letter_search_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-list-search",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    running = app_service.task_store.add_search_task_job("task-list-search", SearchDepth.EASY.value)
+    dead = app_service.task_store.add_search_task_job("task-list-search", SearchDepth.EASY.value)
+    running.status = SearchJobStatus.RUNNING
+    dead.status = SearchJobStatus.DEAD_LETTER
+
+    running_response = await client.get("/v1/search-jobs?status=running")
+    dead_response = await client.get("/v1/search-jobs?status=dead_letter")
+
+    assert running_response.status_code == 200
+    assert dead_response.status_code == 200
+    assert [job["id"] for job in running_response.json()] == [running.id]
+    assert [job["id"] for job in dead_response.json()] == [dead.id]
+
+
+@pytest.mark.anyio
+async def test_list_running_and_dead_letter_finalize_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    research = app_service.task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    running = app_service.task_store.add_research_finalize_job(research.id)
+    dead = app_service.task_store.add_research_finalize_job(research.id)
+    running.status = FinalizeJobStatus.RUNNING
+    dead.status = FinalizeJobStatus.DEAD_LETTER
+
+    running_response = await client.get("/v1/research/finalize-jobs?status=running")
+    dead_response = await client.get("/v1/research/finalize-jobs?status=dead_letter")
+
+    assert running_response.status_code == 200
+    assert dead_response.status_code == 200
+    assert [job["id"] for job in running_response.json()] == [running.id]
+    assert [job["id"] for job in dead_response.json()] == [dead.id]
+
+
+@pytest.mark.anyio
+async def test_list_jobs_endpoint_rejects_unsupported_status(client):
+    search_response = await client.get("/v1/search-jobs?status=pending")
+    finalize_response = await client.get("/v1/research/finalize-jobs?status=pending")
+
+    assert search_response.status_code == 422
+    assert finalize_response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_cleanup_search_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-clean-search",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    job = app_service.task_store.add_search_task_job("task-clean-search", SearchDepth.EASY.value)
+    job.status = SearchJobStatus.COMPLETED
+    job.updated_at = job.updated_at.replace(year=2020)
+
+    response = await client.post("/v1/search-jobs/cleanup")
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 1
+    assert response.json()["deleted_job_ids"] == [job.id]
+
+
+@pytest.mark.anyio
+async def test_cleanup_finalize_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    research = app_service.task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    job = app_service.task_store.add_research_finalize_job(research.id)
+    job.status = FinalizeJobStatus.DEAD_LETTER
+    job.updated_at = job.updated_at.replace(year=2020)
+
+    response = await client.post("/v1/research/finalize-jobs/cleanup")
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 1
+    assert response.json()["deleted_job_ids"] == [job.id]
+
+
 def test_search_agent_integration(mocker):
     from src.agents.search import SearchAgent
 

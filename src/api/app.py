@@ -5,6 +5,7 @@ from src.api.dependencies import get_research_service
 from src.api.schemas import (
     DecomposeRequest,
     DecomposeResponse,
+    JobCleanupResponse,
     JobRecoveryResponse,
     OptimizeRequest,
     OptimizeResponse,
@@ -99,6 +100,15 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
+    @app.get("/v1/search-jobs", response_model=List[SearchTaskJob])
+    async def list_search_jobs(status: str, request: Request):
+        service = get_research_service(request)
+        if status == "running":
+            return service.list_running_search_task_jobs()
+        if status == "dead_letter":
+            return service.list_dead_letter_search_task_jobs()
+        raise HTTPException(status_code=422, detail="Unsupported search job status filter")
+
     @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob)
     async def requeue_search_job(job_id: str, request: Request):
         return get_research_service(request).requeue_search_task_job(job_id)
@@ -106,6 +116,10 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse)
     async def recover_stale_search_jobs(request: Request):
         return get_research_service(request).recover_stale_search_task_jobs()
+
+    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse)
+    async def cleanup_search_jobs(request: Request):
+        return get_research_service(request).cleanup_old_search_task_jobs()
 
     @app.post("/v1/research", response_model=ResearchResponse)
     async def start_research(request: Request, payload: ResearchRequest):
@@ -116,17 +130,14 @@ def register_routes(app: FastAPI) -> None:
                 raise e
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
-    async def get_research_status(research_id: str, request: Request):
-        return get_research_service(request).get_research_status(research_id)
-
-    @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
-    async def finalize_research(research_id: str, request: Request):
-        research, job = get_research_service(request).enqueue_research_finalization(research_id)
-        return ResearchFinalizeResponse(
-            research=research,
-            finalize_job_id=job.id if job else None,
-        )
+    @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob])
+    async def list_finalize_jobs(status: str, request: Request):
+        service = get_research_service(request)
+        if status == "running":
+            return service.list_running_research_finalize_jobs()
+        if status == "dead_letter":
+            return service.list_dead_letter_research_finalize_jobs()
+        raise HTTPException(status_code=422, detail="Unsupported finalize job status filter")
 
     @app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob)
     async def get_finalize_job(job_id: str, request: Request):
@@ -142,6 +153,22 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse)
     async def recover_stale_finalize_jobs(request: Request):
         return get_research_service(request).recover_stale_research_finalize_jobs()
+
+    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse)
+    async def cleanup_finalize_jobs(request: Request):
+        return get_research_service(request).cleanup_old_research_finalize_jobs()
+
+    @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
+    async def get_research_status(research_id: str, request: Request):
+        return get_research_service(request).get_research_status(research_id)
+
+    @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
+    async def finalize_research(research_id: str, request: Request):
+        research, job = get_research_service(request).enqueue_research_finalization(research_id)
+        return ResearchFinalizeResponse(
+            research=research,
+            finalize_job_id=job.id if job else None,
+        )
 
 
 app = create_app()

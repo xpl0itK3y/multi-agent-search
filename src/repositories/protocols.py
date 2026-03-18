@@ -49,6 +49,10 @@ class TaskStore(Protocol):
 
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]: ...
 
+    def get_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]: ...
+
+    def get_dead_letter_research_finalize_jobs(self) -> list[ResearchFinalizeJob]: ...
+
     def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None: ...
 
     def update_research_finalize_job(
@@ -71,6 +75,11 @@ class TaskStore(Protocol):
         stale_before: datetime,
     ) -> list[ResearchFinalizeJob]: ...
 
+    def cleanup_old_research_finalize_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]: ...
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -83,6 +92,10 @@ class TaskStore(Protocol):
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None: ...
 
     def get_pending_search_task_jobs(self) -> list[SearchTaskJob]: ...
+
+    def get_running_search_task_jobs(self) -> list[SearchTaskJob]: ...
+
+    def get_dead_letter_search_task_jobs(self) -> list[SearchTaskJob]: ...
 
     def claim_next_search_task_job(self) -> SearchTaskJob | None: ...
 
@@ -105,6 +118,11 @@ class TaskStore(Protocol):
         self,
         stale_before: datetime,
     ) -> list[SearchTaskJob]: ...
+
+    def cleanup_old_search_task_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]: ...
 
     def upsert_worker_heartbeat(
         self,

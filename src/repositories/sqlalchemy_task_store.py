@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.schemas import (
@@ -178,6 +178,26 @@ class SQLAlchemyTaskStore:
             jobs = session.execute(statement).scalars().all()
             return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
+    def get_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value)
+                .order_by(ResearchFinalizeJobORM.updated_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [research_finalize_job_orm_to_schema(job) for job in jobs]
+
+    def get_dead_letter_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.DEAD_LETTER.value)
+                .order_by(ResearchFinalizeJobORM.updated_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [research_finalize_job_orm_to_schema(job) for job in jobs]
+
     def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
             statement = (
@@ -271,6 +291,26 @@ class SQLAlchemyTaskStore:
             session.flush()
             return [research_finalize_job_orm_to_schema(job) for job in recovered]
 
+    def cleanup_old_research_finalize_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM.id)
+                .where(ResearchFinalizeJobORM.status.in_(
+                    [FinalizeJobStatus.COMPLETED.value, FinalizeJobStatus.DEAD_LETTER.value]
+                ))
+                .where(ResearchFinalizeJobORM.updated_at < older_than)
+            )
+            job_ids = list(session.execute(statement).scalars().all())
+            if not job_ids:
+                return []
+            session.execute(
+                delete(ResearchFinalizeJobORM).where(ResearchFinalizeJobORM.id.in_(job_ids))
+            )
+            return job_ids
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -316,6 +356,26 @@ class SQLAlchemyTaskStore:
                 select(SearchTaskJobORM)
                 .where(SearchTaskJobORM.status == SearchJobStatus.PENDING.value)
                 .order_by(SearchTaskJobORM.created_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [search_task_job_orm_to_schema(job) for job in jobs]
+
+    def get_running_search_task_jobs(self) -> list[SearchTaskJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.RUNNING.value)
+                .order_by(SearchTaskJobORM.updated_at.asc())
+            )
+            jobs = session.execute(statement).scalars().all()
+            return [search_task_job_orm_to_schema(job) for job in jobs]
+
+    def get_dead_letter_search_task_jobs(self) -> list[SearchTaskJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.DEAD_LETTER.value)
+                .order_by(SearchTaskJobORM.updated_at.asc())
             )
             jobs = session.execute(statement).scalars().all()
             return [search_task_job_orm_to_schema(job) for job in jobs]
@@ -412,6 +472,26 @@ class SQLAlchemyTaskStore:
                 recovered.append(job)
             session.flush()
             return [search_task_job_orm_to_schema(job) for job in recovered]
+
+    def cleanup_old_search_task_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM.id)
+                .where(SearchTaskJobORM.status.in_(
+                    [SearchJobStatus.COMPLETED.value, SearchJobStatus.DEAD_LETTER.value]
+                ))
+                .where(SearchTaskJobORM.updated_at < older_than)
+            )
+            job_ids = list(session.execute(statement).scalars().all())
+            if not job_ids:
+                return []
+            session.execute(
+                delete(SearchTaskJobORM).where(SearchTaskJobORM.id.in_(job_ids))
+            )
+            return job_ids
 
     def upsert_worker_heartbeat(
         self,

@@ -79,3 +79,18 @@ def test_in_memory_store_manually_requeues_dead_letter_finalize_job():
     assert requeued.status == FinalizeJobStatus.PENDING
     assert requeued.attempt_count == 0
     assert requeued.error is None
+
+
+def test_in_memory_store_lists_running_and_dead_letter_finalize_jobs():
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    running = store.add_research_finalize_job(research.id)
+    dead = store.add_research_finalize_job(research.id)
+    running.status = FinalizeJobStatus.RUNNING
+    dead.status = FinalizeJobStatus.DEAD_LETTER
+
+    assert [job.id for job in store.get_running_research_finalize_jobs()] == [running.id]
+    assert [job.id for job in store.get_dead_letter_research_finalize_jobs()] == [dead.id]
