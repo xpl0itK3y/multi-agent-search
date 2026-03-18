@@ -2,12 +2,25 @@ import logging
 import json
 import re
 from typing import List
+from urllib.parse import urlparse
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchTask
 
 logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
+    TRUSTED_DOMAIN_EXACT_MATCHES = {
+        "developer.mozilla.org",
+        "docs.python.org",
+        "openai.com",
+        "platform.openai.com",
+        "wikipedia.org",
+    }
+    TRUSTED_DOMAIN_SUFFIXES = (
+        ".gov",
+        ".edu",
+        ".readthedocs.io",
+    )
     
     SYSTEM_PROMPT = """
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
@@ -44,12 +57,25 @@ class AnalyzerAgent(BaseAgent):
         normalized_content = self._normalize_text(content).lower()
         return f"{normalized_title}|{normalized_content[:250]}"
 
-    def _score_source(self, title: str, content: str) -> int:
+    def _trusted_domain_score(self, url: str) -> int:
+        domain = urlparse(url).netloc.lower().removeprefix("www.")
+        if not domain:
+            return 0
+        if domain in self.TRUSTED_DOMAIN_EXACT_MATCHES:
+            return 200
+        if any(domain.endswith(suffix) for suffix in self.TRUSTED_DOMAIN_SUFFIXES):
+            return 150
+        if domain.endswith(".github.io"):
+            return 40
+        return 0
+
+    def _score_source(self, url: str, title: str, content: str) -> int:
         normalized_title = self._normalize_text(title)
         normalized_content = self._normalize_text(content)
         score = len(normalized_content)
         if normalized_title:
             score += 100
+        score += self._trusted_domain_score(url)
         if "failed to extract content" in normalized_content.lower():
             score -= 5000
         return score
@@ -81,9 +107,14 @@ class AnalyzerAgent(BaseAgent):
         for candidate in aggregated_candidates:
             existing = best_by_url.get(candidate["url"])
             if existing is None or self._score_source(
+                candidate.get("url") or "",
                 candidate.get("title") or "",
                 candidate.get("content") or "",
-            ) > self._score_source(existing.get("title") or "", existing.get("content") or ""):
+            ) > self._score_source(
+                existing.get("url") or "",
+                existing.get("title") or "",
+                existing.get("content") or "",
+            ):
                 best_by_url[candidate["url"]] = candidate
 
         best_by_fingerprint: dict[str, tuple[int, dict]] = {}
@@ -92,14 +123,22 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("title") or "",
                 candidate.get("content") or "",
             )
-            score = self._score_source(candidate.get("title") or "", candidate.get("content") or "")
+            score = self._score_source(
+                candidate.get("url") or "",
+                candidate.get("title") or "",
+                candidate.get("content") or "",
+            )
             existing = best_by_fingerprint.get(fingerprint)
             if existing is None or score > existing[0]:
                 best_by_fingerprint[fingerprint] = (score, candidate)
 
         ranked_candidates = sorted(
             (item for _, item in best_by_fingerprint.values()),
-            key=lambda item: self._score_source(item.get("title") or "", item.get("content") or ""),
+            key=lambda item: self._score_source(
+                item.get("url") or "",
+                item.get("title") or "",
+                item.get("content") or "",
+            ),
             reverse=True,
         )
         selected_candidates = ranked_candidates[:20]

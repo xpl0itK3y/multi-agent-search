@@ -11,6 +11,19 @@ logger = logging.getLogger(__name__)
 
 
 class SearchAgent:
+    TRUSTED_DOMAIN_EXACT_MATCHES = {
+        "developer.mozilla.org",
+        "docs.python.org",
+        "openai.com",
+        "platform.openai.com",
+        "wikipedia.org",
+    }
+    TRUSTED_DOMAIN_SUFFIXES = (
+        ".gov",
+        ".edu",
+        ".readthedocs.io",
+    )
+
     def __init__(self, task_store: TaskStore, max_sources: int = 5):
         self.task_store = task_store
         self.search_provider = SearchProvider(max_results=max_sources)
@@ -28,6 +41,20 @@ class SearchAgent:
         content_prefix = normalized_content[:200]
         return f"{normalized_title}|{content_prefix}"
 
+    def _trusted_domain_score(self, domain: str) -> int:
+        if not domain:
+            return 0
+
+        normalized_domain = domain.removeprefix("www.")
+
+        if normalized_domain in self.TRUSTED_DOMAIN_EXACT_MATCHES:
+            return 200
+        if any(normalized_domain.endswith(suffix) for suffix in self.TRUSTED_DOMAIN_SUFFIXES):
+            return 150
+        if normalized_domain.endswith(".github.io"):
+            return 40
+        return 0
+
     def _score_result(self, url: str, title: str, content: str) -> int:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
@@ -41,6 +68,7 @@ class SearchAgent:
             score += 25
         if domain and domain.startswith("www."):
             score += 5
+        score += self._trusted_domain_score(domain)
         if "failed to extract content" in normalized_content.lower():
             score -= 5000
         return score
