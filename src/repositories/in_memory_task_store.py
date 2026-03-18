@@ -154,6 +154,30 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.status = FinalizeJobStatus.PENDING
+        job.attempt_count = 0
+        job.error = None
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def recover_stale_research_finalize_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[ResearchFinalizeJob]:
+        recovered_jobs = []
+        for job in self.finalize_jobs.values():
+            if job.status == FinalizeJobStatus.RUNNING and job.updated_at < stale_before:
+                job.status = FinalizeJobStatus.PENDING
+                job.error = None
+                job.updated_at = datetime.now(timezone.utc)
+                recovered_jobs.append(job)
+        return recovered_jobs
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -235,6 +259,30 @@ class InMemoryTaskStore:
         )
         job.updated_at = datetime.now(timezone.utc)
         return job
+
+    def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        job = self.search_jobs.get(job_id)
+        if job is None:
+            return None
+
+        job.status = SearchJobStatus.PENDING
+        job.attempt_count = 0
+        job.error = None
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def recover_stale_search_task_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[SearchTaskJob]:
+        recovered_jobs = []
+        for job in self.search_jobs.values():
+            if job.status == SearchJobStatus.RUNNING and job.updated_at < stale_before:
+                job.status = SearchJobStatus.PENDING
+                job.error = None
+                job.updated_at = datetime.now(timezone.utc)
+                recovered_jobs.append(job)
+        return recovered_jobs
 
     def upsert_worker_heartbeat(
         self,

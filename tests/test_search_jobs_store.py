@@ -75,3 +75,26 @@ def test_in_memory_store_requeues_then_dead_letters_search_job():
     assert dead_lettered is not None
     assert dead_lettered.status == SearchJobStatus.DEAD_LETTER
     assert dead_lettered.error == "boom-2"
+
+
+def test_in_memory_store_manually_requeues_dead_letter_search_job():
+    store = InMemoryTaskStore()
+    store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+    job = store.add_search_task_job("task-1", SearchDepth.EASY.value, max_attempts=1)
+
+    store.claim_next_search_task_job()
+    store.record_search_task_job_failure(job.id, "boom")
+
+    requeued = store.requeue_search_task_job(job.id)
+
+    assert requeued is not None
+    assert requeued.status == SearchJobStatus.PENDING
+    assert requeued.attempt_count == 0
+    assert requeued.error is None

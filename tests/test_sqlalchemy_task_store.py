@@ -1,8 +1,5 @@
 import uuid
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchRequest,
@@ -12,26 +9,15 @@ from src.api.schemas import (
     TaskStatus,
     TaskUpdate,
 )
-from src.config import settings
 from src.repositories import SQLAlchemyTaskStore
 
 
-def _truncate_tables(session_factory):
-    with session_factory() as session:
-        session.execute(
-            text(
-                "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches "
-                "RESTART IDENTITY CASCADE"
-            )
-        )
-        session.commit()
+import pytest
 
 
-def test_sqlalchemy_task_store_persists_research_and_tasks():
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    store = SQLAlchemyTaskStore(session_factory)
-    _truncate_tables(session_factory)
+@pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     research = store.add_research(
         ResearchRequest(prompt="research topic", depth=SearchDepth.MEDIUM),
@@ -80,11 +66,9 @@ def test_sqlalchemy_task_store_persists_research_and_tasks():
     assert len(fetched_tasks) == 1
 
 
-def test_sqlalchemy_task_store_persists_finalize_jobs():
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    store = SQLAlchemyTaskStore(session_factory)
-    _truncate_tables(session_factory)
+@pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_finalize_jobs(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     research = store.add_research(
         ResearchRequest(prompt="research topic", depth=SearchDepth.EASY),
@@ -106,11 +90,9 @@ def test_sqlalchemy_task_store_persists_finalize_jobs():
     assert store.get_pending_research_finalize_jobs() == []
 
 
-def test_sqlalchemy_task_store_persists_search_jobs():
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    store = SQLAlchemyTaskStore(session_factory)
-    _truncate_tables(session_factory)
+@pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_search_jobs(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     research = store.add_research(
         ResearchRequest(prompt="research topic", depth=SearchDepth.EASY),

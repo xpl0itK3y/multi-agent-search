@@ -1,112 +1,247 @@
+import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-def test_health_check(client):
-    response = client.get("/health")
+from src.api.app import create_app
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchRequest,
+    ResearchStatus,
+    SearchDepth,
+    SearchJobStatus,
+    TaskStatus,
+    TaskUpdate,
+)
+from src.repositories import InMemoryTaskStore
+from src.services import ResearchService
+
+
+class StubOptimizer:
+    def run(self, prompt: str) -> str:
+        return f"optimized::{prompt}"
+
+
+class StubOrchestrator:
+    def __init__(self, tasks=None):
+        self.tasks = tasks or [
+            {
+                "id": "task-1",
+                "description": "Search for X",
+                "queries": ["query X"],
+                "status": TaskStatus.PENDING,
+            }
+        ]
+
+    def run_decompose(self, prompt: str, depth: SearchDepth):
+        return [dict(task) for task in self.tasks]
+
+
+class StubAnalyzer:
+    def __init__(self, report: str = "Final structured report"):
+        self.report = report
+
+    def run_analysis(self, prompt: str, tasks):
+        return self.report
+
+
+@pytest.fixture
+async def client():
+    app = create_app()
+    service = ResearchService(
+        task_store=InMemoryTaskStore(),
+        optimizer=StubOptimizer(),
+        orchestrator=StubOrchestrator(),
+        analyzer=StubAnalyzer(),
+    )
+
+    async with app.router.lifespan_context(app):
+        app.state.research_service = service
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as test_client:
+            yield test_client
+
+
+@pytest.mark.anyio
+async def test_health_check(client):
+    response = await client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-def test_optimize_endpoint(client, mocker):
-    # Мокаем работу агента внутри приложения
-    mock_run = mocker.patch("src.api.app.agent_optimizer.run")
-    mock_run.return_value = "Optimized version"
-    
-    payload = {"prompt": "raw input"}
-    response = client.post("/v1/optimize", json=payload)
-    
+
+@pytest.mark.anyio
+async def test_optimize_endpoint(client):
+    response = await client.post("/v1/optimize", json={"prompt": "raw input"})
+
     assert response.status_code == 200
-    assert response.json()["optimized_prompt"] == "Optimized version"
+    assert response.json()["optimized_prompt"] == "optimized::raw input"
     assert response.json()["status"] == "success"
 
-def test_optimize_invalid_payload(client):
-    # Тест на пустой промпт
-    response = client.post("/v1/optimize", json={"prompt": ""})
-    assert response.status_code == 422 # Validation error
 
-def test_decompose_endpoint(client, mocker):
-    # Мокаем работу оркестратора
-    mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
-    mock_decompose.return_value = [
-        {"id": "test-id", "description": "Search for X", "queries": ["query X"], "status": "pending"},
-    ]
-    
-    # Мокаем фоновую задачу
-    mock_bg = mocker.patch("src.api.app.run_search_task")
-    
-    payload = {"prompt": "test query", "depth": "easy"}
-    response = client.post("/v1/decompose", json=payload)
-    
-    assert response.status_code == 200
-    assert len(response.json()["tasks"]) == 1
-    # Проверяем, что фоновая задача была запланирована
-    mock_bg.assert_called_once()
+@pytest.mark.anyio
+async def test_optimize_invalid_payload(client):
+    response = await client.post("/v1/optimize", json={"prompt": ""})
+    assert response.status_code == 422
 
-def test_research_endpoints(client, mocker):
-    from src.api.schemas import ResearchStatus
-    # Mock orchestrator
-    mock_decompose = mocker.patch("src.api.app.agent_orchestrator.run_decompose")
-    mock_decompose.return_value = [
-        {"id": "task-1", "description": "Search for X", "queries": ["query X"], "status": "pending"},
-    ]
-    
-    mock_bg = mocker.patch("src.api.app.run_search_task")
-    
-    # Start research
-    payload = {"prompt": "test research", "depth": "easy"}
-    response = client.post("/v1/research", json=payload)
-    
+
+@pytest.mark.anyio
+async def test_decompose_endpoint_creates_search_job(client):
+    response = await client.post("/v1/decompose", json={"prompt": "test query", "depth": "easy"})
+
     assert response.status_code == 200
-    res_data = response.json()
-    assert "research_id" in res_data
-    assert res_data["status"] == "success"
-    
-    research_id = res_data["research_id"]
-    
-    # Get research status (tasks pending)
-    response_get = client.get(f"/v1/research/{research_id}")
-    assert response_get.status_code == 200
-    assert response_get.json()["status"] == ResearchStatus.PROCESSING
-    
-    # Update task to completed
-    from src.api.schemas import TaskUpdate
-    tasks = client.app.state.research_service.task_store.get_tasks_by_research(research_id)
+    tasks = response.json()["tasks"]
     assert len(tasks) == 1
-    client.app.state.research_service.task_store.update_task(tasks[0].id, TaskUpdate(status="completed", result=[{"content": "data", "url": "http://a.com"}], log="done"))
-    
-    # Mock analyzer
-    mock_analysis = mocker.patch("src.api.app.agent_analyzer.run_analysis")
-    mock_analysis.return_value = "Final structured report"
-    
-    # Get research status again, this should trigger analysis
-    response_get2 = client.get(f"/v1/research/{research_id}")
-    assert response_get2.status_code == 200
-    assert response_get2.json()["status"] == ResearchStatus.COMPLETED
-    assert response_get2.json()["final_report"] == "Final structured report"
+    assert tasks[0]["id"] == "task-1"
+
+    search_job_response = await client.get("/v1/tasks/task-1/search-job")
+    assert search_job_response.status_code == 200
+    assert search_job_response.json()["task_id"] == "task-1"
+    assert search_job_response.json()["status"] == SearchJobStatus.PENDING
+
+
+@pytest.mark.anyio
+async def test_research_finalize_flow(client):
+    response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
+
+    assert response.status_code == 200
+    research_id = response.json()["research_id"]
+
+    app_service = client._transport.app.state.research_service
+    tasks = app_service.task_store.get_tasks_by_research(research_id)
+    assert len(tasks) == 1
+
+    app_service.task_store.update_task(
+        tasks[0].id,
+        TaskUpdate(
+            status=TaskStatus.COMPLETED,
+            result=[{"content": "data", "url": "http://a.com", "title": "A"}],
+            log="done",
+        ),
+    )
+
+    finalize_response = await client.post(f"/v1/research/{research_id}/finalize")
+    assert finalize_response.status_code == 200
+    finalize_payload = finalize_response.json()
+    assert finalize_payload["research"]["status"] == ResearchStatus.ANALYZING
+    assert finalize_payload["finalize_job_id"] is not None
+
+    job_id = finalize_payload["finalize_job_id"]
+    app_service.process_finalize_job(job_id)
+
+    research_response = await client.get(f"/v1/research/{research_id}")
+    assert research_response.status_code == 200
+    assert research_response.json()["status"] == ResearchStatus.COMPLETED
+    assert research_response.json()["final_report"] == "Final structured report"
+
+    finalize_job_response = await client.get(f"/v1/research/finalize-jobs/{job_id}")
+    assert finalize_job_response.status_code == 200
+    assert finalize_job_response.json()["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_requeue_search_job_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-dead",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.FAILED,
+        }
+    )
+    job = app_service.task_store.add_search_task_job("task-dead", SearchDepth.EASY.value, max_attempts=1)
+    app_service.task_store.claim_next_search_task_job()
+    app_service.task_store.record_search_task_job_failure(job.id, "boom")
+
+    response = await client.post(f"/v1/search-jobs/{job.id}/requeue")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert response.json()["attempt_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_requeue_finalize_job_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    research = app_service.task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    app_service.task_store.update_research_status(research.id, ResearchStatus.FAILED, "analysis failed")
+    job = app_service.task_store.add_research_finalize_job(research.id, max_attempts=1)
+    app_service.task_store.claim_next_research_finalize_job()
+    app_service.task_store.record_research_finalize_job_failure(job.id, "boom")
+
+    response = await client.post(f"/v1/research/finalize-jobs/{job.id}/requeue")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert response.json()["attempt_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_recover_stale_search_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-stale",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.RUNNING,
+        }
+    )
+    job = app_service.task_store.add_search_task_job("task-stale", SearchDepth.EASY.value)
+    job.status = SearchJobStatus.RUNNING
+    job.updated_at = job.updated_at.replace(year=2020)
+
+    response = await client.post("/v1/search-jobs/recover-stale")
+
+    assert response.status_code == 200
+    assert response.json()["recovered_count"] == 1
+    assert response.json()["recovered_job_ids"] == [job.id]
+
+
+@pytest.mark.anyio
+async def test_recover_stale_finalize_jobs_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    research = app_service.task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    app_service.task_store.update_research_status(research.id, ResearchStatus.ANALYZING)
+    job = app_service.task_store.add_research_finalize_job(research.id)
+    job.status = FinalizeJobStatus.RUNNING
+    job.updated_at = job.updated_at.replace(year=2020)
+
+    response = await client.post("/v1/research/finalize-jobs/recover-stale")
+
+    assert response.status_code == 200
+    assert response.json()["recovered_count"] == 1
+    assert response.json()["recovered_job_ids"] == [job.id]
+
 
 def test_search_agent_integration(mocker):
-    # Тестируем SearchAgent отдельно с моками провайдеров
     from src.agents.search import SearchAgent
-    from src.repositories import InMemoryTaskStore
-    
+
     task_store = InMemoryTaskStore()
     task_id = "test-agent-id"
-    task_store.add_task({
-        "id": task_id,
-        "description": "test",
-        "queries": ["query"],
-        "status": "pending"
-    })
-    
+    task_store.add_task(
+        {
+            "id": task_id,
+            "description": "test",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+
     mock_search = mocker.patch("src.providers.search.SearchProvider.search")
     mock_search.return_value = [{"url": "http://example.com", "title": "Example"}]
-    
+
     mock_extract = mocker.patch("src.providers.search.ContentExtractor.extract_content")
     mock_extract.return_value = "Full page content"
-    
+
     agent = SearchAgent(task_store=task_store, max_sources=1)
     agent.run_task(task_id)
-    
+
     final_task = task_store.get_task(task_id)
-    assert final_task.status == "completed"
+    assert final_task.status == TaskStatus.COMPLETED
     assert final_task.result[0]["content"] == "Full page content"
     assert "Search completed" in final_task.logs[-1]

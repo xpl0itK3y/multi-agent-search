@@ -237,6 +237,40 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
+    def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            job = session.get(ResearchFinalizeJobORM, job_id)
+            if job is None:
+                return None
+
+            job.status = FinalizeJobStatus.PENDING.value
+            job.attempt_count = 0
+            job.error = None
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
+
+    def recover_stale_research_finalize_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[ResearchFinalizeJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value)
+                .where(ResearchFinalizeJobORM.updated_at < stale_before)
+            )
+            jobs = session.execute(statement).scalars().all()
+            recovered = []
+            for job in jobs:
+                job.status = FinalizeJobStatus.PENDING.value
+                job.error = None
+                job.updated_at = datetime.now(timezone.utc)
+                recovered.append(job)
+            session.flush()
+            return [research_finalize_job_orm_to_schema(job) for job in recovered]
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -344,6 +378,40 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(job)
             return search_task_job_orm_to_schema(job)
+
+    def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            job = session.get(SearchTaskJobORM, job_id)
+            if job is None:
+                return None
+
+            job.status = SearchJobStatus.PENDING.value
+            job.attempt_count = 0
+            job.error = None
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
+
+    def recover_stale_search_task_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[SearchTaskJob]:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.RUNNING.value)
+                .where(SearchTaskJobORM.updated_at < stale_before)
+            )
+            jobs = session.execute(statement).scalars().all()
+            recovered = []
+            for job in jobs:
+                job.status = SearchJobStatus.PENDING.value
+                job.error = None
+                job.updated_at = datetime.now(timezone.utc)
+                recovered.append(job)
+            session.flush()
+            return [search_task_job_orm_to_schema(job) for job in recovered]
 
     def upsert_worker_heartbeat(
         self,

@@ -47,3 +47,5 @@ def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
 
     assert settings.job_max_attempts == 3
     assert settings.worker_heartbeat_ttl_seconds == 30
+    assert settings.search_job_timeout_seconds == 300
+    assert settings.finalize_job_timeout_seconds == 300
