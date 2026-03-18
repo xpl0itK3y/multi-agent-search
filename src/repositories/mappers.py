@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from src.api.schemas import (
     FinalizeJobStatus,
     QueueMetrics,
@@ -18,6 +20,32 @@ from src.db.models import (
     SearchTaskORM,
     WorkerHeartbeatORM,
 )
+
+
+def enrich_search_result_dict(result: dict) -> dict:
+    url = result.get("url", "")
+    title = result.get("title")
+    content = result.get("content")
+    parsed = urlparse(url)
+    normalized_content = (content or "").strip()
+
+    snippet = result.get("snippet")
+    if not snippet and normalized_content:
+        snippet = normalized_content[:240]
+
+    extraction_status = result.get("extraction_status")
+    if not extraction_status:
+        extraction_status = "failed" if "failed to extract content" in normalized_content.lower() else "success"
+
+    return {
+        "url": url,
+        "title": title,
+        "content": content,
+        "domain": parsed.netloc.lower() or None,
+        "content_length": len(normalized_content),
+        "snippet": snippet or None,
+        "extraction_status": extraction_status,
+    }
 
 
 def research_orm_to_record(research: ResearchORM) -> ResearchRecord:
@@ -43,11 +71,13 @@ def search_task_orm_to_schema(task: SearchTaskORM) -> SearchTask:
         created_at=task.created_at,
         updated_at=task.updated_at,
         result=[
-            {
-                "url": result.url,
-                "title": result.title,
-                "content": result.content,
-            }
+            enrich_search_result_dict(
+                {
+                    "url": result.url,
+                    "title": result.title,
+                    "content": result.content,
+                }
+            )
             for result in task.results
         ]
         or None,
