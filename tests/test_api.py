@@ -68,6 +68,40 @@ async def test_health_check(client):
 
 
 @pytest.mark.anyio
+async def test_run_queue_maintenance_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-maint",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.RUNNING,
+        }
+    )
+    stale_search = app_service.task_store.add_search_task_job("task-maint", SearchDepth.EASY.value)
+    stale_search.status = SearchJobStatus.RUNNING
+    stale_search.updated_at = stale_search.updated_at.replace(year=2020)
+
+    research = app_service.task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    app_service.task_store.update_research_status(research.id, ResearchStatus.ANALYZING)
+    stale_finalize = app_service.task_store.add_research_finalize_job(research.id)
+    stale_finalize.status = FinalizeJobStatus.RUNNING
+    stale_finalize.updated_at = stale_finalize.updated_at.replace(year=2020)
+
+    response = await client.post("/health/queues/maintenance")
+
+    assert response.status_code == 200
+    assert response.json()["recovered_count"] == 2
+    assert response.json()["deleted_count"] == 0
+    assert response.json()["total_count"] == 2
+    assert response.json()["recovered_search_job_ids"] == [stale_search.id]
+    assert response.json()["recovered_finalize_job_ids"] == [stale_finalize.id]
+
+
+@pytest.mark.anyio
 async def test_optimize_endpoint(client):
     response = await client.post("/v1/optimize", json={"prompt": "raw input"})
 

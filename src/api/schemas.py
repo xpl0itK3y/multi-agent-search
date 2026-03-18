@@ -140,3 +140,13 @@ class JobRecoveryResponse(BaseModel):
 class JobCleanupResponse(BaseModel):
     deleted_job_ids: List[str] = Field(default_factory=list)
     deleted_count: int = 0
+
+
+class QueueMaintenanceResponse(BaseModel):
+    recovered_search_job_ids: List[str] = Field(default_factory=list)
+    recovered_finalize_job_ids: List[str] = Field(default_factory=list)
+    deleted_search_job_ids: List[str] = Field(default_factory=list)
+    deleted_finalize_job_ids: List[str] = Field(default_factory=list)
+    recovered_count: int = 0
+    deleted_count: int = 0
+    total_count: int = 0
