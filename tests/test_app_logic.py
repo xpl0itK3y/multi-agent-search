@@ -60,6 +60,10 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    assert parsed["gathered_data"][0]["source_id"] == "S1"
+    assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
 
 
 def test_analyzer_agent_filters_failed_and_duplicate_sources():
@@ -89,6 +93,7 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered) == 1
+    assert gathered[0]["source_id"] == "S1"
     assert gathered[0]["url"] == "https://example.com/a"
 
 
@@ -119,6 +124,8 @@ def test_analyzer_agent_limits_prepared_source_count():
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered) == 20
+    assert gathered[0]["source_id"] == "S1"
+    assert gathered[-1]["source_id"] == "S20"
 
 
 def test_decompose_does_not_schedule_failed_tasks(mocker):
