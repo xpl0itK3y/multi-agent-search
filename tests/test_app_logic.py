@@ -128,6 +128,42 @@ def test_analyzer_agent_limits_prepared_source_count():
     assert gathered[-1]["source_id"] == "S20"
 
 
+def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://generic-blog.example/python",
+                        "title": "Python Tutorial",
+                        "content": "Useful Python tutorial body " * 80,
+                    },
+                    {
+                        "url": "https://docs.python.org/3/tutorial/",
+                        "title": "Python Tutorial",
+                        "content": "Useful Python tutorial body " * 80,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert len(gathered) == 1
+    assert gathered[0]["url"] == "https://docs.python.org/3/tutorial/"
+    assert gathered[0]["source_id"] == "S1"
+
+
 def test_analyzer_agent_post_processes_sources_heading():
     llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
     agent = AnalyzerAgent(llm)
