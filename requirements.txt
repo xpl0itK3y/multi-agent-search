@@ -11,3 +11,4 @@ trafilatura
 pytest
 pytest-mock
 httpx
+streamlit
