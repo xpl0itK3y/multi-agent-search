@@ -55,7 +55,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
         ],
     )
 
-    assert result == "report"
+    assert result == "report\n\n## Sources"
     assert len(llm.calls) == 1
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
@@ -87,7 +87,7 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
         ],
     )
 
-    assert result == "report"
+    assert result == "report\n\n## Sources"
     assert len(llm.calls) == 1
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
     parsed = json.loads(payload)
@@ -126,6 +126,47 @@ def test_analyzer_agent_limits_prepared_source_count():
     assert len(gathered) == 20
     assert gathered[0]["source_id"] == "S1"
     assert gathered[-1]["source_id"] == "S20"
+
+
+def test_analyzer_agent_post_processes_sources_heading():
+    llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert "## Sources" in result
+    assert "Sources:" not in result
+
+
+def test_analyzer_agent_adds_sources_heading_when_missing():
+    llm = RecordingLLM(response="Introduction\n\nConclusion")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert result.endswith("## Sources")
 
 
 def test_decompose_does_not_schedule_failed_tasks(mocker):

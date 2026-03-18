@@ -111,6 +111,19 @@ class AnalyzerAgent(BaseAgent):
             for index, candidate in enumerate(selected_candidates, start=1)
         ]
 
+    def _post_process_report(self, report: str) -> str:
+        normalized = report.replace("\r\n", "\n").strip()
+        normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+        normalized = re.sub(r"(?m)^[ \t]+$", "", normalized)
+
+        if re.search(r"(?im)^sources:\s*$", normalized):
+            normalized = re.sub(r"(?im)^sources:\s*$", "## Sources", normalized)
+        elif re.search(r"(?im)^#*\s*sources\s*$", normalized) is None:
+            normalized = f"{normalized}\n\n## Sources"
+
+        normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+        return normalized
+
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(tasks)
 
@@ -127,4 +140,4 @@ class AnalyzerAgent(BaseAgent):
             user_prompt=user_prompt,
             temperature=0.3,
         )
-        return result
+        return self._post_process_report(result)
