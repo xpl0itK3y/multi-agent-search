@@ -22,6 +22,57 @@ from src.db.models import (
 )
 
 
+TRUSTED_DOMAIN_EXACT_MATCHES = {
+    "developer.mozilla.org",
+    "docs.python.org",
+    "openai.com",
+    "platform.openai.com",
+    "wikipedia.org",
+}
+TRUSTED_DOMAIN_SUFFIXES = (
+    ".gov",
+    ".edu",
+    ".readthedocs.io",
+)
+
+
+def _score_domain_quality(domain: str | None) -> int:
+    if not domain:
+        return 0
+
+    normalized_domain = domain.removeprefix("www.")
+    if normalized_domain in TRUSTED_DOMAIN_EXACT_MATCHES:
+        return 2
+    if any(normalized_domain.endswith(suffix) for suffix in TRUSTED_DOMAIN_SUFFIXES):
+        return 2
+    if normalized_domain.endswith(".github.io"):
+        return 1
+    return 0
+
+
+def _infer_source_quality(
+    domain: str | None,
+    content_length: int,
+    extraction_status: str,
+) -> str:
+    if extraction_status != "success":
+        return "low"
+
+    quality_score = 0
+    if content_length >= 1200:
+        quality_score += 2
+    elif content_length >= 300:
+        quality_score += 1
+
+    quality_score += _score_domain_quality(domain)
+
+    if quality_score >= 3:
+        return "high"
+    if quality_score >= 1:
+        return "medium"
+    return "low"
+
+
 def enrich_search_result_dict(result: dict) -> dict:
     url = result.get("url", "")
     title = result.get("title")
@@ -37,14 +88,18 @@ def enrich_search_result_dict(result: dict) -> dict:
     if not extraction_status:
         extraction_status = "failed" if "failed to extract content" in normalized_content.lower() else "success"
 
+    domain = parsed.netloc.lower() or None
+    content_length = len(normalized_content)
+
     return {
         "url": url,
         "title": title,
         "content": content,
-        "domain": parsed.netloc.lower() or None,
-        "content_length": len(normalized_content),
+        "domain": domain,
+        "content_length": content_length,
         "snippet": snippet or None,
         "extraction_status": extraction_status,
+        "source_quality": _infer_source_quality(domain, content_length, extraction_status),
     }
 
 

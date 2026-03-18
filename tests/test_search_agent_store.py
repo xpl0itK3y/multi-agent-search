@@ -14,8 +14,11 @@ def test_search_agent_updates_through_injected_task_store(mocker):
         }
     )
 
-    mocker.patch("src.providers.search.SearchProvider.search", return_value=[{"url": "http://example.com", "title": "Example"}])
-    mocker.patch("src.providers.search.ContentExtractor.extract_content", return_value="Full page content")
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[{"url": "https://docs.python.org/3/tutorial/", "title": "Example"}],
+    )
+    mocker.patch("src.providers.search.ContentExtractor.extract_content", return_value="Full page content " * 120)
 
     agent = SearchAgent(task_store=task_store, max_sources=1)
     agent.run_task("task-1")
@@ -23,10 +26,11 @@ def test_search_agent_updates_through_injected_task_store(mocker):
     final_task = task_store.get_task("task-1")
     assert final_task is not None
     assert final_task.status == TaskStatus.COMPLETED
-    assert final_task.result[0]["content"] == "Full page content"
-    assert final_task.result[0]["domain"] == "example.com"
-    assert final_task.result[0]["content_length"] == len("Full page content")
+    assert final_task.result[0]["content"] == ("Full page content " * 120).strip()
+    assert final_task.result[0]["domain"] == "docs.python.org"
+    assert final_task.result[0]["content_length"] == len(("Full page content " * 120).strip())
     assert final_task.result[0]["extraction_status"] == "success"
+    assert final_task.result[0]["source_quality"] == "high"
     assert "Search completed" in final_task.logs[-1]
 
 
