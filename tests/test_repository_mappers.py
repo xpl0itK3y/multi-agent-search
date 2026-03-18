@@ -63,6 +63,7 @@ def test_search_task_orm_to_schema_maps_results_and_logs():
             "content_length": 4,
             "snippet": "Body",
             "extraction_status": "success",
+            "source_quality": "low",
         }
     ]
 
@@ -91,3 +92,18 @@ def test_enrich_search_result_dict_adds_derived_metadata():
     assert enriched["content_length"] == 9
     assert enriched["snippet"] == "Body text"
     assert enriched["extraction_status"] == "success"
+    assert enriched["source_quality"] == "low"
+
+
+def test_enrich_search_result_dict_marks_trusted_long_sources_as_high_quality():
+    enriched = enrich_search_result_dict(
+        {
+            "url": "https://docs.python.org/3/tutorial/",
+            "title": "Python Tutorial",
+            "content": "Body text " * 200,
+        }
+    )
+
+    assert enriched["domain"] == "docs.python.org"
+    assert enriched["extraction_status"] == "success"
+    assert enriched["source_quality"] == "high"
