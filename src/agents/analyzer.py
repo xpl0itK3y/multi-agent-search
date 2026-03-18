@@ -26,7 +26,7 @@ class AnalyzerAgent(BaseAgent):
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
 
     INPUT:
-    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'source_id', 'url', 'title', and 'content' (raw text from the page).
+    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'source_id', 'url', 'domain', 'source_quality', 'title', and 'content' (raw text from the page).
 
     YOUR TASK:
     1. Read all the provided content. 
@@ -37,6 +37,7 @@ class AnalyzerAgent(BaseAgent):
     6. Include an "Introduction", "Key Findings / Main Sections", and a "Conclusion".
     7. Use inline source references like [S1], [S2] when you make factual claims.
     8. Include a "Sources" list at the end with the source IDs and URLs you actually used.
+    9. Prefer higher-quality and more authoritative sources when sources conflict, but do not ignore useful unique evidence from medium-quality sources.
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
@@ -98,6 +99,8 @@ class AnalyzerAgent(BaseAgent):
                     {
                         "task_description": task.description,
                         "url": url,
+                        "domain": res.get("domain") or urlparse(url).netloc.lower() or None,
+                        "source_quality": res.get("source_quality") or "low",
                         "title": title or None,
                         "content": truncated_text,
                     }

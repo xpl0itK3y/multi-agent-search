@@ -41,6 +41,8 @@ This starts:
 
 The API will be available at `http://localhost:8000`.
 
+If you run the optional Streamlit UI, it will be available at `http://localhost:8501`.
+
 Stop everything:
 
 ```bash
@@ -86,6 +88,12 @@ uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 
 ```bash
 python scripts/run_finalize_worker.py
+```
+
+6. Optional: start the Streamlit UI:
+
+```bash
+streamlit run src/ui/streamlit_app.py
 ```
 
 Run the worker once:

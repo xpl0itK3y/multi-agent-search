@@ -63,7 +63,10 @@ def test_analyzer_agent_uses_llm_provider_contract():
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
     parsed = json.loads(payload)
     assert parsed["gathered_data"][0]["source_id"] == "S1"
+    assert parsed["gathered_data"][0]["domain"] == "example.com"
+    assert parsed["gathered_data"][0]["source_quality"] == "low"
     assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
+    assert "Prefer higher-quality and more authoritative sources when sources conflict" in agent.SYSTEM_PROMPT
 
 
 def test_analyzer_agent_filters_failed_and_duplicate_sources():
@@ -162,6 +165,38 @@ def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
     assert len(gathered) == 1
     assert gathered[0]["url"] == "https://docs.python.org/3/tutorial/"
     assert gathered[0]["source_id"] == "S1"
+
+
+def test_analyzer_agent_preserves_source_quality_metadata_in_payload():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://docs.python.org/3/tutorial/",
+                        "domain": "docs.python.org",
+                        "source_quality": "high",
+                        "title": "Python Tutorial",
+                        "content": "Useful Python tutorial body " * 50,
+                    }
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert gathered[0]["domain"] == "docs.python.org"
+    assert gathered[0]["source_quality"] == "high"
 
 
 def test_analyzer_agent_post_processes_sources_heading():
