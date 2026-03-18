@@ -19,14 +19,14 @@ def test_job_worker_updates_heartbeat_when_idle():
 def test_job_worker_counts_recovered_jobs_as_work(mocker):
     task_store = InMemoryTaskStore()
     service = ResearchService(task_store=task_store)
-    mocker.patch("src.workers.job_worker.MaintenanceWorker.run_once", return_value=2)
+    mocker.patch("src.workers.job_worker.MaintenanceWorker.run_once", return_value=4)
     mocker.patch("src.workers.job_worker.SearchWorker.run_once", return_value=0)
     mocker.patch("src.workers.job_worker.FinalizeWorker.run_once", return_value=0)
 
     processed = JobWorker(service, worker_name="job-worker").run_once()
 
     heartbeat = task_store.get_worker_heartbeat("job-worker")
-    assert processed == 2
+    assert processed == 4
     assert heartbeat is not None
     assert heartbeat.status == "busy"
-    assert heartbeat.processed_jobs == 2
+    assert heartbeat.processed_jobs == 4

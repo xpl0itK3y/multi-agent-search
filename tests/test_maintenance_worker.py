@@ -49,11 +49,48 @@ def test_maintenance_worker_recovers_stale_search_and_finalize_jobs(monkeypatch)
     assert task_store.get_research(research.id).status == ResearchStatus.ANALYZING
 
 
+def test_maintenance_worker_cleans_up_old_completed_and_dead_letter_jobs(monkeypatch):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    old_search = task_store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    old_search.status = SearchJobStatus.COMPLETED
+    old_search.updated_at = datetime.now(timezone.utc) - timedelta(days=2)
+
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    old_finalize = task_store.add_research_finalize_job(research.id)
+    old_finalize.status = FinalizeJobStatus.DEAD_LETTER
+    old_finalize.updated_at = datetime.now(timezone.utc) - timedelta(days=2)
+
+    service = ResearchService(task_store=task_store)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_retention_seconds", 3600)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_retention_seconds", 3600)
+
+    processed_count = MaintenanceWorker(service).run_once()
+
+    assert processed_count == 2
+    assert task_store.get_search_task_job(old_search.id) is None
+    assert task_store.get_research_finalize_job(old_finalize.id) is None
+
+
 def test_maintenance_worker_is_idle_when_nothing_is_stale(monkeypatch):
     task_store = InMemoryTaskStore()
     service = ResearchService(task_store=task_store)
     monkeypatch.setattr("src.services.research_service.settings.search_job_timeout_seconds", 60)
     monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_retention_seconds", 3600)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_retention_seconds", 3600)
 
     recovered_count = MaintenanceWorker(service).run_once()
 
