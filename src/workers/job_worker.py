@@ -1,5 +1,6 @@
 from src.services import ResearchService
 from src.workers.finalize_worker import FinalizeWorker
+from src.workers.maintenance_worker import MaintenanceWorker
 from src.workers.search_worker import SearchWorker
 
 
@@ -11,9 +12,10 @@ class JobWorker:
     def run_once(self) -> int:
         last_error = None
         try:
+            maintenance_recovered = MaintenanceWorker(self.research_service).run_once()
             search_processed = SearchWorker(self.research_service).run_once()
             finalize_processed = FinalizeWorker(self.research_service).run_once()
-            processed = search_processed + finalize_processed
+            processed = maintenance_recovered + search_processed + finalize_processed
             status = "busy" if processed else "idle"
         except Exception as exc:
             processed = 0

@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
@@ -7,6 +9,7 @@ from src.agents.search import SearchAgent
 from src.api.schemas import (
     DecomposeResponse,
     FinalizeJobStatus,
+    JobRecoveryResponse,
     QueueMetrics,
     ResearchRecord,
     ResearchRequest,
@@ -190,8 +193,65 @@ class ResearchService:
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)
 
+    def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob:
+        job = self.task_store.get_research_finalize_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Finalize job not found")
+        if job.status != FinalizeJobStatus.DEAD_LETTER:
+            raise HTTPException(status_code=409, detail="Only dead-letter finalize jobs can be requeued")
+
+        self.require_agent(self.analyzer, "Analyzer")
+        self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
+        requeued = self.task_store.requeue_research_finalize_job(job_id)
+        if requeued is None:
+            raise HTTPException(status_code=404, detail="Finalize job not found")
+        return requeued
+
+    def recover_stale_research_finalize_jobs(self) -> JobRecoveryResponse:
+        stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.finalize_job_timeout_seconds)
+        recovered_jobs = self.task_store.recover_stale_research_finalize_jobs(stale_before)
+        for job in recovered_jobs:
+            self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
+        return JobRecoveryResponse(
+            recovered_job_ids=[job.id for job in recovered_jobs],
+            recovered_count=len(recovered_jobs),
+        )
+
     def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         return self.task_store.get_search_task_job(job_id)
+
+    def requeue_search_task_job(self, job_id: str) -> SearchTaskJob:
+        job = self.task_store.get_search_task_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Search job not found")
+        if job.status != SearchJobStatus.DEAD_LETTER:
+            raise HTTPException(status_code=409, detail="Only dead-letter search jobs can be requeued")
+
+        task = self.task_store.get_task(job.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        self.task_store.update_task(
+            task.id,
+            TaskUpdate(status=TaskStatus.PENDING, log="Search job manually requeued"),
+        )
+        requeued = self.task_store.requeue_search_task_job(job_id)
+        if requeued is None:
+            raise HTTPException(status_code=404, detail="Search job not found")
+        return requeued
+
+    def recover_stale_search_task_jobs(self) -> JobRecoveryResponse:
+        stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.search_job_timeout_seconds)
+        recovered_jobs = self.task_store.recover_stale_search_task_jobs(stale_before)
+        for job in recovered_jobs:
+            self.task_store.update_task(
+                job.task_id,
+                TaskUpdate(status=TaskStatus.PENDING, log="Recovered stale running search job"),
+            )
+        return JobRecoveryResponse(
+            recovered_job_ids=[job.id for job in recovered_jobs],
+            recovered_count=len(recovered_jobs),
+        )
 
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
         return self.task_store.get_latest_search_task_job(task_id)

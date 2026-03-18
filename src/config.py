@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     smoke_analyzer_report: Optional[str] = None
     job_max_attempts: int = 3
     worker_heartbeat_ttl_seconds: int = 30
+    search_job_timeout_seconds: int = 300
+    finalize_job_timeout_seconds: int = 300
 
     postgres_user: str = "app"
     postgres_password: str = "app"

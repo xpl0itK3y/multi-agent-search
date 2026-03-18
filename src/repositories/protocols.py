@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 
 from src.api.schemas import (
@@ -63,6 +64,13 @@ class TaskStore(Protocol):
         error: str,
     ) -> ResearchFinalizeJob | None: ...
 
+    def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
+
+    def recover_stale_research_finalize_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[ResearchFinalizeJob]: ...
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -90,6 +98,13 @@ class TaskStore(Protocol):
         job_id: str,
         error: str,
     ) -> SearchTaskJob | None: ...
+
+    def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
+
+    def recover_stale_search_task_jobs(
+        self,
+        stale_before: datetime,
+    ) -> list[SearchTaskJob]: ...
 
     def upsert_worker_heartbeat(
         self,

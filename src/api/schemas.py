@@ -130,3 +130,8 @@ class QueueMetrics(BaseModel):
     pending_finalize_jobs: int = 0
     running_finalize_jobs: int = 0
     dead_letter_finalize_jobs: int = 0
+
+
+class JobRecoveryResponse(BaseModel):
+    recovered_job_ids: List[str] = Field(default_factory=list)
+    recovered_count: int = 0

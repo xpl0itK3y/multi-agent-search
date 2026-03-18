@@ -1,6 +1,4 @@
-from fastapi import BackgroundTasks
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+import pytest
 
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus, TaskUpdate
 from src.repositories import SQLAlchemyTaskStore
@@ -32,19 +30,9 @@ class StubAnalyzer:
         return "postgres final report"
 
 
-def _truncate_tables(session_factory):
-    with session_factory() as session:
-        session.execute(text("TRUNCATE TABLE search_results, search_tasks, researches RESTART IDENTITY CASCADE"))
-        session.commit()
-
-
-def test_research_service_full_postgres_lifecycle():
-    from src.config import settings
-
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    store = SQLAlchemyTaskStore(session_factory)
-    _truncate_tables(session_factory)
+@pytest.mark.postgres
+def test_research_service_full_postgres_lifecycle(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     service = ResearchService(
         task_store=store,
@@ -54,7 +42,6 @@ def test_research_service_full_postgres_lifecycle():
 
     response = service.start_research(
         ResearchRequest(prompt="postgres lifecycle", depth=SearchDepth.EASY),
-        BackgroundTasks(),
     )
 
     tasks = store.get_tasks_by_research(response.research_id)
