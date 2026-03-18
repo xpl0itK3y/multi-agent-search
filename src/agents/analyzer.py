@@ -13,7 +13,7 @@ class AnalyzerAgent(BaseAgent):
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
 
     INPUT:
-    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'url', 'title', and 'content' (raw text from the page).
+    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'source_id', 'url', 'title', and 'content' (raw text from the page).
 
     YOUR TASK:
     1. Read all the provided content. 
@@ -22,7 +22,8 @@ class AnalyzerAgent(BaseAgent):
     4. Write a detailed, structured final report in Markdown.
     5. The report MUST be written in the SAME LANGUAGE as the user's original prompt (if the prompt is in Spanish, write in Spanish; if Russian, in Russian, etc.).
     6. Include an "Introduction", "Key Findings / Main Sections", and a "Conclusion".
-    7. Include a "Sources" list at the end with the URLs you actually used.
+    7. Use inline source references like [S1], [S2] when you make factual claims.
+    8. Include a "Sources" list at the end with the source IDs and URLs you actually used.
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
@@ -101,7 +102,14 @@ class AnalyzerAgent(BaseAgent):
             key=lambda item: self._score_source(item.get("title") or "", item.get("content") or ""),
             reverse=True,
         )
-        return ranked_candidates[:20]
+        selected_candidates = ranked_candidates[:20]
+        return [
+            {
+                "source_id": f"S{index}",
+                **candidate,
+            }
+            for index, candidate in enumerate(selected_candidates, start=1)
+        ]
 
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(tasks)
