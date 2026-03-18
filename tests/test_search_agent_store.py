@@ -24,6 +24,9 @@ def test_search_agent_updates_through_injected_task_store(mocker):
     assert final_task is not None
     assert final_task.status == TaskStatus.COMPLETED
     assert final_task.result[0]["content"] == "Full page content"
+    assert final_task.result[0]["domain"] == "example.com"
+    assert final_task.result[0]["content_length"] == len("Full page content")
+    assert final_task.result[0]["extraction_status"] == "success"
     assert "Search completed" in final_task.logs[-1]
 
 
@@ -93,4 +96,6 @@ def test_search_agent_prefers_extracted_content_over_failed_extract(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert len(final_task.result) == 1
     assert final_task.result[0]["url"] == "https://good.example"
+    assert final_task.result[0]["domain"] == "good.example"
+    assert final_task.result[0]["extraction_status"] == "success"
     assert "Useful extracted content" in final_task.result[0]["content"]

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from src.db.models import ResearchORM, SearchResultORM, SearchTaskORM
 from src.repositories.mappers import (
+    enrich_search_result_dict,
     research_orm_to_record,
     search_result_dicts_to_orm,
     search_task_orm_to_schema,
@@ -58,6 +59,10 @@ def test_search_task_orm_to_schema_maps_results_and_logs():
             "url": "https://example.com",
             "title": "Example",
             "content": "Body",
+            "domain": "example.com",
+            "content_length": 4,
+            "snippet": "Body",
+            "extraction_status": "success",
         }
     ]
 
@@ -71,3 +76,18 @@ def test_search_result_dicts_to_orm_builds_rows():
     assert len(rows) == 1
     assert rows[0].task_id == "task-1"
     assert rows[0].url == "https://example.com"
+
+
+def test_enrich_search_result_dict_adds_derived_metadata():
+    enriched = enrich_search_result_dict(
+        {
+            "url": "https://example.com/path",
+            "title": "Example",
+            "content": "Body text",
+        }
+    )
+
+    assert enriched["domain"] == "example.com"
+    assert enriched["content_length"] == 9
+    assert enriched["snippet"] == "Body text"
+    assert enriched["extraction_status"] == "success"

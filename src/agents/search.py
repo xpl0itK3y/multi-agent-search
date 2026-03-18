@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from src.providers.search import SearchProvider, ContentExtractor
 from src.api.schemas import TaskStatus, TaskUpdate
 from src.repositories.protocols import TaskStore
+from src.repositories.mappers import enrich_search_result_dict
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class SearchAgent:
             score = self._score_result(url, title, content)
 
             normalized_result = {
+                **result,
                 "url": url,
                 "title": title or None,
                 "content": content,
@@ -105,17 +107,28 @@ class SearchAgent:
                         content = self.extractor.extract_content(url)
 
                         if content:
-                            all_results.append({
-                                "url": url,
-                                "title": res.get("title"),
-                                "content": content[:10000],  # Limit content size to avoid huge payloads.
-                            })
+                            all_results.append(
+                                enrich_search_result_dict(
+                                    {
+                                        "url": url,
+                                        "title": res.get("title"),
+                                        "content": content[:10000],  # Limit content size to avoid huge payloads.
+                                        "snippet": res.get("snippet"),
+                                    }
+                                )
+                            )
                         else:
-                            all_results.append({
-                                "url": url,
-                                "title": res.get("title"),
-                                "content": "Failed to extract content",
-                            })
+                            all_results.append(
+                                enrich_search_result_dict(
+                                    {
+                                        "url": url,
+                                        "title": res.get("title"),
+                                        "content": "Failed to extract content",
+                                        "snippet": res.get("snippet"),
+                                        "extraction_status": "failed",
+                                    }
+                                )
+                            )
 
             selected_results = self._select_best_results(all_results)
 
