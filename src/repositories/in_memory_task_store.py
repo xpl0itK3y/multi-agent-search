@@ -103,6 +103,20 @@ class InMemoryTaskStore:
             if job.status == FinalizeJobStatus.PENDING
         ]
 
+    def get_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        return [
+            job
+            for job in self.finalize_jobs.values()
+            if job.status == FinalizeJobStatus.RUNNING
+        ]
+
+    def get_dead_letter_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        return [
+            job
+            for job in self.finalize_jobs.values()
+            if job.status == FinalizeJobStatus.DEAD_LETTER
+        ]
+
     def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None:
         pending_jobs = sorted(
             (
@@ -178,6 +192,17 @@ class InMemoryTaskStore:
                 recovered_jobs.append(job)
         return recovered_jobs
 
+    def cleanup_old_research_finalize_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]:
+        deleted_ids = []
+        for job_id, job in list(self.finalize_jobs.items()):
+            if job.status in (FinalizeJobStatus.COMPLETED, FinalizeJobStatus.DEAD_LETTER) and job.updated_at < older_than:
+                deleted_ids.append(job_id)
+                del self.finalize_jobs[job_id]
+        return deleted_ids
+
     def add_search_task_job(
         self,
         task_id: str,
@@ -207,6 +232,20 @@ class InMemoryTaskStore:
             job
             for job in self.search_jobs.values()
             if job.status == SearchJobStatus.PENDING
+        ]
+
+    def get_running_search_task_jobs(self) -> list[SearchTaskJob]:
+        return [
+            job
+            for job in self.search_jobs.values()
+            if job.status == SearchJobStatus.RUNNING
+        ]
+
+    def get_dead_letter_search_task_jobs(self) -> list[SearchTaskJob]:
+        return [
+            job
+            for job in self.search_jobs.values()
+            if job.status == SearchJobStatus.DEAD_LETTER
         ]
 
     def claim_next_search_task_job(self) -> SearchTaskJob | None:
@@ -283,6 +322,17 @@ class InMemoryTaskStore:
                 job.updated_at = datetime.now(timezone.utc)
                 recovered_jobs.append(job)
         return recovered_jobs
+
+    def cleanup_old_search_task_jobs(
+        self,
+        older_than: datetime,
+    ) -> list[str]:
+        deleted_ids = []
+        for job_id, job in list(self.search_jobs.items()):
+            if job.status in (SearchJobStatus.COMPLETED, SearchJobStatus.DEAD_LETTER) and job.updated_at < older_than:
+                deleted_ids.append(job_id)
+                del self.search_jobs[job_id]
+        return deleted_ids
 
     def upsert_worker_heartbeat(
         self,

@@ -7,6 +7,7 @@ from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.search import SearchAgent
 from src.api.schemas import (
+    JobCleanupResponse,
     DecomposeResponse,
     FinalizeJobStatus,
     JobRecoveryResponse,
@@ -193,6 +194,12 @@ class ResearchService:
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)
 
+    def list_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        return self.task_store.get_running_research_finalize_jobs()
+
+    def list_dead_letter_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
+        return self.task_store.get_dead_letter_research_finalize_jobs()
+
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob:
         job = self.task_store.get_research_finalize_job(job_id)
         if job is None:
@@ -217,8 +224,22 @@ class ResearchService:
             recovered_count=len(recovered_jobs),
         )
 
+    def cleanup_old_research_finalize_jobs(self) -> JobCleanupResponse:
+        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.finalize_job_retention_seconds)
+        deleted_ids = self.task_store.cleanup_old_research_finalize_jobs(older_than)
+        return JobCleanupResponse(
+            deleted_job_ids=deleted_ids,
+            deleted_count=len(deleted_ids),
+        )
+
     def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         return self.task_store.get_search_task_job(job_id)
+
+    def list_running_search_task_jobs(self) -> list[SearchTaskJob]:
+        return self.task_store.get_running_search_task_jobs()
+
+    def list_dead_letter_search_task_jobs(self) -> list[SearchTaskJob]:
+        return self.task_store.get_dead_letter_search_task_jobs()
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob:
         job = self.task_store.get_search_task_job(job_id)
@@ -251,6 +272,14 @@ class ResearchService:
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],
             recovered_count=len(recovered_jobs),
+        )
+
+    def cleanup_old_search_task_jobs(self) -> JobCleanupResponse:
+        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.search_job_retention_seconds)
+        deleted_ids = self.task_store.cleanup_old_search_task_jobs(older_than)
+        return JobCleanupResponse(
+            deleted_job_ids=deleted_ids,
+            deleted_count=len(deleted_ids),
         )
 
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:

@@ -98,3 +98,22 @@ def test_in_memory_store_manually_requeues_dead_letter_search_job():
     assert requeued.status == SearchJobStatus.PENDING
     assert requeued.attempt_count == 0
     assert requeued.error is None
+
+
+def test_in_memory_store_lists_running_and_dead_letter_search_jobs():
+    store = InMemoryTaskStore()
+    store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+    running = store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    dead = store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    running.status = SearchJobStatus.RUNNING
+    dead.status = SearchJobStatus.DEAD_LETTER
+
+    assert [job.id for job in store.get_running_search_task_jobs()] == [running.id]
+    assert [job.id for job in store.get_dead_letter_search_task_jobs()] == [dead.id]
