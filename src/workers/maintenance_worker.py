@@ -6,13 +6,5 @@ class MaintenanceWorker:
         self.research_service = research_service
 
     def run_once(self) -> int:
-        search_recovery = self.research_service.recover_stale_search_task_jobs()
-        finalize_recovery = self.research_service.recover_stale_research_finalize_jobs()
-        search_cleanup = self.research_service.cleanup_old_search_task_jobs()
-        finalize_cleanup = self.research_service.cleanup_old_research_finalize_jobs()
-        return (
-            search_recovery.recovered_count
-            + finalize_recovery.recovered_count
-            + search_cleanup.deleted_count
-            + finalize_cleanup.deleted_count
-        )
+        result = self.research_service.run_queue_maintenance()
+        return result.total_count

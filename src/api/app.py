@@ -10,6 +10,7 @@ from src.api.schemas import (
     OptimizeRequest,
     OptimizeResponse,
     QueueMetrics,
+    QueueMaintenanceResponse,
     ResearchFinalizeJob,
     ResearchFinalizeResponse,
     ResearchRecord,
@@ -38,6 +39,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/health/queues", response_model=QueueMetrics)
     async def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
+
+    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse)
+    async def run_queue_maintenance(request: Request):
+        return get_research_service(request).run_queue_maintenance()
 
     @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat)
     async def worker_health(worker_name: str, request: Request):

@@ -12,6 +12,7 @@ from src.api.schemas import (
     FinalizeJobStatus,
     JobRecoveryResponse,
     QueueMetrics,
+    QueueMaintenanceResponse,
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
@@ -280,6 +281,25 @@ class ResearchService:
         return JobCleanupResponse(
             deleted_job_ids=deleted_ids,
             deleted_count=len(deleted_ids),
+        )
+
+    def run_queue_maintenance(self) -> QueueMaintenanceResponse:
+        search_recovery = self.recover_stale_search_task_jobs()
+        finalize_recovery = self.recover_stale_research_finalize_jobs()
+        search_cleanup = self.cleanup_old_search_task_jobs()
+        finalize_cleanup = self.cleanup_old_research_finalize_jobs()
+
+        recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count
+        deleted_count = search_cleanup.deleted_count + finalize_cleanup.deleted_count
+
+        return QueueMaintenanceResponse(
+            recovered_search_job_ids=search_recovery.recovered_job_ids,
+            recovered_finalize_job_ids=finalize_recovery.recovered_job_ids,
+            deleted_search_job_ids=search_cleanup.deleted_job_ids,
+            deleted_finalize_job_ids=finalize_cleanup.deleted_job_ids,
+            recovered_count=recovered_count,
+            deleted_count=deleted_count,
+            total_count=recovered_count + deleted_count,
         )
 
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
