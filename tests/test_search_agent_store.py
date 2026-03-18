@@ -25,3 +25,72 @@ def test_search_agent_updates_through_injected_task_store(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert final_task.result[0]["content"] == "Full page content"
     assert "Search completed" in final_task.logs[-1]
+
+
+def test_search_agent_deduplicates_near_duplicate_content(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://a.example/article", "title": "Example Article"},
+            {"url": "https://b.example/article", "title": "Example Article"},
+        ],
+    )
+    mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=[
+            "Same core content " * 30,
+            "Same core content " * 30,
+        ],
+    )
+
+    agent = SearchAgent(task_store=task_store, max_sources=5)
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert len(final_task.result) == 1
+
+
+def test_search_agent_prefers_extracted_content_over_failed_extract(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "http://failed.example", "title": "Weak Source"},
+            {"url": "https://good.example", "title": "Strong Source"},
+        ],
+    )
+    mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=[None, "Useful extracted content " * 20],
+    )
+
+    agent = SearchAgent(task_store=task_store, max_sources=1)
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert len(final_task.result) == 1
+    assert final_task.result[0]["url"] == "https://good.example"
+    assert "Useful extracted content" in final_task.result[0]["content"]

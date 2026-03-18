@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi import HTTPException
 
@@ -58,6 +60,65 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
+
+
+def test_analyzer_agent_filters_failed_and_duplicate_sources():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {"url": "https://example.com/a", "title": "Example", "content": "Useful body " * 40},
+                    {"url": "https://example.com/b", "title": "Example", "content": "Useful body " * 40},
+                    {"url": "https://example.com/c", "title": "Bad", "content": "Failed to extract content"},
+                ],
+            )
+        ],
+    )
+
+    assert result == "report"
+    assert len(llm.calls) == 1
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert len(gathered) == 1
+    assert gathered[0]["url"] == "https://example.com/a"
+
+
+def test_analyzer_agent_limits_prepared_source_count():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    tasks = [
+        SearchTask(
+            id="task-1",
+            description="desc",
+            queries=["query"],
+            status=TaskStatus.COMPLETED,
+            result=[
+                {
+                    "url": f"https://example.com/{index}",
+                    "title": f"Title {index}",
+                    "content": f"Body {index} " * 100,
+                }
+                for index in range(30)
+            ],
+        )
+    ]
+
+    agent.run_analysis("original prompt", tasks)
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert len(gathered) == 20
 
 
 def test_decompose_does_not_schedule_failed_tasks(mocker):

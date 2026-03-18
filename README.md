@@ -122,6 +122,64 @@ Check worker heartbeat:
 curl http://localhost:8000/health/workers/job-worker
 ```
 
+## Queue Admin
+
+List running search jobs:
+
+```bash
+curl "http://localhost:8000/v1/search-jobs?status=running"
+```
+
+List dead-letter search jobs:
+
+```bash
+curl "http://localhost:8000/v1/search-jobs?status=dead_letter"
+```
+
+List running finalize jobs:
+
+```bash
+curl "http://localhost:8000/v1/research/finalize-jobs?status=running"
+```
+
+List dead-letter finalize jobs:
+
+```bash
+curl "http://localhost:8000/v1/research/finalize-jobs?status=dead_letter"
+```
+
+Requeue a dead-letter search job:
+
+```bash
+curl -X POST "http://localhost:8000/v1/search-jobs/<job_id>/requeue"
+```
+
+Requeue a dead-letter finalize job:
+
+```bash
+curl -X POST "http://localhost:8000/v1/research/finalize-jobs/<job_id>/requeue"
+```
+
+Recover stale running jobs:
+
+```bash
+curl -X POST "http://localhost:8000/v1/search-jobs/recover-stale"
+curl -X POST "http://localhost:8000/v1/research/finalize-jobs/recover-stale"
+```
+
+Clean up old completed and dead-letter jobs:
+
+```bash
+curl -X POST "http://localhost:8000/v1/search-jobs/cleanup"
+curl -X POST "http://localhost:8000/v1/research/finalize-jobs/cleanup"
+```
+
+Run full queue maintenance manually:
+
+```bash
+curl -X POST "http://localhost:8000/health/queues/maintenance"
+```
+
 ## Tests
 
 Fast tests:
