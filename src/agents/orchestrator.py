@@ -3,6 +3,7 @@ import uuid
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchDepth, TaskStatus
 from src.observability import maybe_traceable
+from src.search_depth_profiles import get_depth_profile
 
 class OrchestratorAgent(BaseAgent):
     
@@ -49,12 +50,7 @@ class OrchestratorAgent(BaseAgent):
 
     @maybe_traceable(name="orchestrator_decompose", run_type="llm")
     def run_decompose(self, prompt: str, depth: SearchDepth) -> list:
-        depth_map = {
-            SearchDepth.EASY: 2,
-            SearchDepth.MEDIUM: 4,
-            SearchDepth.HARD: 6
-        }
-        task_count = depth_map.get(depth, 2)
+        task_count = get_depth_profile(depth)["task_count"]
         
         custom_system_prompt = self.SYSTEM_PROMPT + f"\n    Generate EXACTLY {task_count} search tasks."
         

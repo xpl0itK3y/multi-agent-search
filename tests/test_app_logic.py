@@ -8,6 +8,7 @@ from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, Search
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
+from src.search_depth_profiles import get_depth_profile
 
 
 class RecordingLLM(LLMProvider):
@@ -728,6 +729,33 @@ def test_process_search_task_job_marks_job_completed(mocker):
     assert processed is not None
     assert processed.status == SearchJobStatus.COMPLETED
     run_search_task.assert_called_once_with("task-1", SearchDepth.MEDIUM)
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected_limit"),
+    [
+        (SearchDepth.EASY, 5),
+        (SearchDepth.MEDIUM, 12),
+        (SearchDepth.HARD, 20),
+    ],
+)
+def test_run_search_task_uses_depth_profile_source_limit(mocker, depth, expected_limit):
+    service = ResearchService(task_store=InMemoryTaskStore())
+    run_task = mocker.patch("src.agents.search.SearchAgent.run_task")
+    init = mocker.patch("src.services.research_service.SearchAgent.__init__", return_value=None)
+
+    service.run_search_task("task-1", depth)
+
+    init.assert_called_once_with(task_store=service.task_store, max_sources=expected_limit)
+    run_task.assert_called_once_with("task-1")
+
+
+def test_depth_profiles_keep_medium_as_default_balanced_mode():
+    profile = get_depth_profile(SearchDepth.MEDIUM)
+
+    assert profile["label"] == "Balanced"
+    assert profile["task_count"] == 4
+    assert profile["source_limit"] == 12
 
 
 def test_process_finalize_job_marks_missing_job_as_none():

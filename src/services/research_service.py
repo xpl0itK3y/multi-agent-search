@@ -29,6 +29,7 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.repositories.protocols import TaskStore
+from src.search_depth_profiles import get_depth_profile
 
 logger = logging.getLogger(__name__)
 
@@ -354,12 +355,7 @@ class ResearchService:
         return self.complete_research_finalization(research_id)
 
     def run_search_task(self, task_id: str, depth: SearchDepth):
-        source_limit_map = {
-            SearchDepth.EASY: 5,
-            SearchDepth.MEDIUM: 12,
-            SearchDepth.HARD: 20,
-        }
-        limit = source_limit_map.get(depth, 5)
+        limit = get_depth_profile(depth)["source_limit"]
         agent = SearchAgent(task_store=self.task_store, max_sources=limit)
         agent.run_task(task_id)
 

@@ -6,6 +6,8 @@ from typing import Any
 import httpx
 import streamlit as st
 import streamlit.components.v1 as components
+from src.api.schemas import SearchDepth
+from src.search_depth_profiles import SEARCH_DEPTH_PROFILES, get_depth_profile
 
 
 API_BASE_URL = os.getenv("STREAMLIT_API_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -236,7 +238,20 @@ def _render_create_research() -> None:
             height=140,
             placeholder="Compare the latest battery storage trends, costs, and deployment constraints.",
         )
-        depth = st.selectbox("Depth", options=["easy", "medium", "hard"], index=1)
+        depth_options = [SearchDepth.EASY.value, SearchDepth.MEDIUM.value, SearchDepth.HARD.value]
+        depth = st.selectbox(
+            "Search Level",
+            options=depth_options,
+            index=1,
+            format_func=lambda value: (
+                f"{SEARCH_DEPTH_PROFILES[SearchDepth(value)]['label']} ({value})"
+            ),
+        )
+        profile = get_depth_profile(SearchDepth(depth))
+        st.caption(
+            f"{profile['description']} "
+            f"About {profile['task_count']} search tasks and up to {profile['source_limit']} sources per task."
+        )
         submitted = st.form_submit_button("Launch Research", use_container_width=True)
 
     if not submitted:
@@ -442,6 +457,8 @@ def _render_research_details() -> None:
     if not research:
         return
 
+    depth_profile = get_depth_profile(SearchDepth(research["depth"]))
+
     top_left, top_right = st.columns([2, 1], gap="large")
     with top_left:
         st.markdown(
@@ -462,7 +479,9 @@ def _render_research_details() -> None:
                 <div class="mas-accent">Research Status</div>
                 <div>{_status_badge(research['status'])}</div>
                 <div class="mas-kv">Depth: {escape(research['depth'])}</div>
+                <div class="mas-kv">Profile: {escape(depth_profile['label'])}</div>
                 <div class="mas-kv">Tasks: {len(research.get('task_ids', []))}</div>
+                <div class="mas-kv">Target search breadth: about {depth_profile['task_count']} tasks, up to {depth_profile['source_limit']} sources per task</div>
             </div>
             """,
             unsafe_allow_html=True,
