@@ -367,6 +367,62 @@ def test_analyzer_agent_keeps_stronger_sources_while_dropping_speculative_noise(
     assert gathered[0]["url"] == "https://www.comptia.org/en-us/blog/top-tech-trends-to-watch-in-2026/"
 
 
+def test_analyzer_agent_prefers_premium_consumer_tech_sources_over_weak_mobile_listicles():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Лучшие смартфоны за 2026 год какой лучше купить?",
+        [
+            SearchTask(
+                id="task-1",
+                description="Сравни лучшие смартфоны 2026 года",
+                queries=["лучшие смартфоны 2026"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://www.gsmarena.com/best_phones_buyers_guide-review-2036.php",
+                        "domain": "www.gsmarena.com",
+                        "source_quality": "medium",
+                        "title": "Best phones buyer's guide",
+                        "content": "Our tested review compares battery life, cameras, chipsets, and real-world performance across flagship phones. " * 20,
+                    },
+                    {
+                        "url": "https://www.tomsguide.com/phones/best-phones",
+                        "domain": "www.tomsguide.com",
+                        "source_quality": "high",
+                        "title": "The best phones tested and reviewed",
+                        "content": "Editors tested the top phones and compared cameras, displays, and battery life across flagship models. " * 20,
+                    },
+                    {
+                        "url": "https://www.gizbot.com/mobile/features/best-smartphones-you-can-buy-right-now-2026-0001.html",
+                        "domain": "www.gizbot.com",
+                        "source_quality": "low",
+                        "title": "Best smartphones you can buy right now in 2026",
+                        "content": "This buying guide lists the best smartphones for every budget and highlights rumored launch expectations. " * 8,
+                    },
+                    {
+                        "url": "https://www.timesnownews.com/technology-science/best-smartphones-to-buy-in-2026-article-123456",
+                        "domain": "www.timesnownews.com",
+                        "source_quality": "low",
+                        "title": "Best smartphones to buy in 2026",
+                        "content": "This buyers guide covers the best phones to buy and what to expect from upcoming models this year. " * 8,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    urls = [item["url"] for item in gathered]
+    assert "https://www.gsmarena.com/best_phones_buyers_guide-review-2036.php" in urls
+    assert "https://www.tomsguide.com/phones/best-phones" in urls
+    assert "https://www.gizbot.com/mobile/features/best-smartphones-you-can-buy-right-now-2026-0001.html" not in urls
+    assert "https://www.timesnownews.com/technology-science/best-smartphones-to-buy-in-2026-article-123456" not in urls
+
+
 def test_analyzer_agent_post_processes_sources_heading():
     llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
     agent = AnalyzerAgent(llm)
@@ -945,21 +1001,33 @@ def test_process_search_task_job_marks_job_completed(mocker):
 
 
 @pytest.mark.parametrize(
-    ("depth", "expected_limit"),
+    ("depth", "expected_limit", "expected_results_per_query", "expected_candidate_urls"),
     [
-        (SearchDepth.EASY, 5),
-        (SearchDepth.MEDIUM, 12),
-        (SearchDepth.HARD, 20),
+        (SearchDepth.EASY, 5, 8, 12),
+        (SearchDepth.MEDIUM, 12, 12, 24),
+        (SearchDepth.HARD, 20, 16, 36),
     ],
 )
-def test_run_search_task_uses_depth_profile_source_limit(mocker, depth, expected_limit):
+def test_run_search_task_uses_depth_profile_source_limit(
+    mocker,
+    depth,
+    expected_limit,
+    expected_results_per_query,
+    expected_candidate_urls,
+):
     service = ResearchService(task_store=InMemoryTaskStore())
     run_task = mocker.patch("src.agents.search.SearchAgent.run_task")
     init = mocker.patch("src.services.research_service.SearchAgent.__init__", return_value=None)
 
     service.run_search_task("task-1", depth)
 
-    init.assert_called_once_with(task_store=service.task_store, max_sources=expected_limit)
+    init.assert_called_once_with(
+        task_store=service.task_store,
+        max_sources=expected_limit,
+        search_results_per_query=expected_results_per_query,
+        max_candidate_urls=expected_candidate_urls,
+        extraction_concurrency=1,
+    )
     run_task.assert_called_once_with("task-1")
 
 

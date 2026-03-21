@@ -100,6 +100,153 @@ class AnalyzerAgent(BaseAgent):
         "what to expect",
         "predictions for",
     }
+    CONSUMER_TECH_QUERY_TOKENS = {
+        "smartphone",
+        "smartphones",
+        "phone",
+        "phones",
+        "iphone",
+        "android",
+        "flagship",
+        "flagships",
+        "camera phone",
+        "galaxy",
+        "pixel",
+        "oneplus",
+        "xiaomi",
+        "oppo",
+        "honor",
+        "foldable",
+        "chipset",
+        "benchmark",
+        "смартфон",
+        "смартфоны",
+        "смартфонов",
+        "телефон",
+        "телефоны",
+        "телефонов",
+        "айфон",
+        "флагман",
+        "флагманы",
+    }
+    CONSUMER_TECH_PREMIUM_DOMAIN_EXACT_MATCHES = {
+        "gsmarena.com",
+        "dxomark.com",
+        "pcmag.com",
+        "cnet.com",
+        "techradar.com",
+        "techadvisor.com",
+        "notebookcheck.net",
+        "androidauthority.com",
+        "tomsguide.com",
+        "theverge.com",
+        "apple.com",
+        "samsung.com",
+        "news.samsung.com",
+        "blog.google",
+        "store.google.com",
+        "google.com",
+        "oneplus.com",
+        "mi.com",
+        "xiaomi.com",
+        "oppo.com",
+        "honor.com",
+    }
+    CONSUMER_TECH_SECONDARY_DOMAIN_EXACT_MATCHES = {
+        "gizmochina.com",
+        "gadgets360.com",
+        "stuff.tv",
+        "independent.co.uk",
+    }
+    CONSUMER_TECH_WEAK_DOMAIN_EXACT_MATCHES = {
+        "gizbot.com",
+        "timesnownews.com",
+        "vertu.com",
+        "axis-intelligence.com",
+        "gadgetph.com",
+        "asumetech.com",
+        "techspecs.info",
+        "techindeep.com",
+        "technicalforum.org",
+        "macprices.net",
+        "nyongesasande.com",
+        "brandvm.com",
+        "mobileradar.com",
+        "techtimes.com",
+        "dialoguepakistan.com",
+        "techarc.net",
+        "wirefly.com",
+        "news.wirefly.com",
+        "techrankup.com",
+        "asymco.com",
+        "futureinsights.com",
+        "rank1one.com",
+        "gistoftheday.com",
+        "cashkr.com",
+        "theconsumers.guide",
+        "techoble.com",
+        "rave-tech.com",
+        "couponscurry.com",
+    }
+    CONSUMER_TECH_WEAK_DOMAIN_SUBSTRINGS = (
+        "buyersguide",
+        "buyers-guide",
+        "rankings-guide",
+        "best-phones",
+        "best-smartphones",
+        "top-smartphones",
+        "top-phones",
+        "smartphone-rankings",
+        "consumers.guide",
+        "futureinsights",
+        "rank1one",
+        "gistoftheday",
+    )
+    CONSUMER_TECH_STRONG_EDITORIAL_TOKENS = (
+        "review",
+        "reviews",
+        "tested",
+        "benchmark",
+        "benchmarks",
+        "camera test",
+        "hands-on",
+        "comparison",
+        "battery life",
+        "performance test",
+        "editor's choice",
+        "lab test",
+        "official",
+        "launch",
+    )
+    CONSUMER_TECH_GENERIC_LISTICLE_TOKENS = (
+        "best phones",
+        "best smartphones",
+        "top phones",
+        "top smartphones",
+        "buyers guide",
+        "buying guide",
+        "most anticipated",
+        "best camera phone",
+        "best camera phones",
+        "best gaming phones",
+        "phone buying guide",
+        "smartphone buying guide",
+        "smartphone rankings",
+        "performance ranking",
+        "top flagship phones",
+    )
+    CONSUMER_TECH_WEAK_SIGNAL_TOKENS = (
+        "rumor",
+        "rumors",
+        "rumour",
+        "rumoured",
+        "expected to launch",
+        "launch date",
+        "price in",
+        "upcoming",
+        "what to expect",
+        "predictions for",
+    )
     
     SYSTEM_PROMPT = """
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
@@ -212,7 +359,64 @@ class AnalyzerAgent(BaseAgent):
             score += 45
         return score
 
-    def _should_exclude_source(self, url: str, title: str, content: str, source_quality: str | None = None) -> bool:
+    def _is_consumer_tech_context(self, prompt: str, tasks: List[SearchTask]) -> bool:
+        haystack_parts = [self._normalize_text(prompt).lower()]
+        for task in tasks:
+            haystack_parts.append(self._normalize_text(task.description).lower())
+            haystack_parts.extend(self._normalize_text(query).lower() for query in task.queries or [])
+        haystack = " ".join(part for part in haystack_parts if part)
+        return any(token in haystack for token in self.CONSUMER_TECH_QUERY_TOKENS)
+
+    def _consumer_tech_domain_adjustment(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        source_quality: str | None = None,
+    ) -> int:
+        normalized_domain = urlparse(url).netloc.lower().removeprefix("www.")
+        normalized_title = self._normalize_text(title).lower()
+        normalized_content = self._normalize_text(content).lower()
+        normalized_url = (url or "").lower()
+        score = 0
+
+        has_strong_editorial_signal = any(
+            token in normalized_title or token in normalized_content[:500] or token in normalized_url
+            for token in self.CONSUMER_TECH_STRONG_EDITORIAL_TOKENS
+        )
+
+        if normalized_domain in self.CONSUMER_TECH_PREMIUM_DOMAIN_EXACT_MATCHES:
+            score += 220
+        if normalized_domain in self.CONSUMER_TECH_SECONDARY_DOMAIN_EXACT_MATCHES:
+            score += 60
+        if normalized_domain in self.CONSUMER_TECH_WEAK_DOMAIN_EXACT_MATCHES:
+            score -= 180
+        if any(token in normalized_domain for token in self.CONSUMER_TECH_WEAK_DOMAIN_SUBSTRINGS):
+            score -= 120
+
+        if any(token in normalized_title for token in self.CONSUMER_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
+            score -= 140
+        if any(token in normalized_content[:450] for token in self.CONSUMER_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
+            score -= 80
+        if any(token in normalized_title for token in self.CONSUMER_TECH_WEAK_SIGNAL_TOKENS):
+            score -= 95
+        if any(token in normalized_content[:500] for token in self.CONSUMER_TECH_WEAK_SIGNAL_TOKENS):
+            score -= 70
+        if any(token in normalized_url for token in ("rumor", "rumours", "rumors", "launch-date", "price-in", "upcoming")):
+            score -= 75
+        if source_quality == "low" and not has_strong_editorial_signal:
+            score -= 40
+
+        return score
+
+    def _should_exclude_source(
+        self,
+        url: str,
+        title: str,
+        content: str,
+        source_quality: str | None = None,
+        is_consumer_tech_context: bool = False,
+    ) -> bool:
         penalty = self._speculative_penalty(url, title, content, source_quality)
         trusted_score = self._trusted_domain_score(url)
         if source_quality == "low" and penalty >= 160 and trusted_score <= 0:
@@ -220,6 +424,12 @@ class AnalyzerAgent(BaseAgent):
         normalized_content = self._normalize_text(content).lower()
         if source_quality == "low" and len(normalized_content) < 220 and penalty >= 80:
             return True
+        if is_consumer_tech_context:
+            consumer_score = self._consumer_tech_domain_adjustment(url, title, content, source_quality)
+            if consumer_score <= -180 and trusted_score <= 0 and source_quality != "high":
+                return True
+            if consumer_score <= -120 and source_quality == "low" and len(normalized_content) < 1200:
+                return True
         return False
 
     def _compact_source_content(self, content: str) -> str:
@@ -248,7 +458,8 @@ class AnalyzerAgent(BaseAgent):
 
         return normalized[: self.MAX_SOURCE_CONTENT_CHARS].rstrip() + " ..."
 
-    def _prepare_aggregated_data(self, tasks: List[SearchTask]) -> list[dict]:
+    def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask]) -> list[dict]:
+        is_consumer_tech_context = self._is_consumer_tech_context(prompt, tasks)
         aggregated_candidates = []
         for task in tasks:
             if task.status != "completed" or not task.result:
@@ -261,7 +472,13 @@ class AnalyzerAgent(BaseAgent):
                 if not url or not content or "failed to extract content" in content.lower():
                     continue
                 source_quality = res.get("source_quality") or "low"
-                if self._should_exclude_source(url, title, content, source_quality):
+                if self._should_exclude_source(
+                    url,
+                    title,
+                    content,
+                    source_quality,
+                    is_consumer_tech_context=is_consumer_tech_context,
+                ):
                     continue
 
                 aggregated_candidates.append(
@@ -278,17 +495,37 @@ class AnalyzerAgent(BaseAgent):
         best_by_url: dict[str, dict] = {}
         for candidate in aggregated_candidates:
             existing = best_by_url.get(candidate["url"])
-            if existing is None or self._score_source(
+            candidate_score = self._score_source(
                 candidate.get("url") or "",
                 candidate.get("title") or "",
                 candidate.get("content") or "",
                 candidate.get("source_quality"),
-            ) > self._score_source(
-                existing.get("url") or "",
-                existing.get("title") or "",
-                existing.get("content") or "",
-                existing.get("source_quality"),
-            ):
+            )
+            if is_consumer_tech_context:
+                candidate_score += self._consumer_tech_domain_adjustment(
+                    candidate.get("url") or "",
+                    candidate.get("title") or "",
+                    candidate.get("content") or "",
+                    candidate.get("source_quality"),
+                )
+
+            existing_score = None
+            if existing is not None:
+                existing_score = self._score_source(
+                    existing.get("url") or "",
+                    existing.get("title") or "",
+                    existing.get("content") or "",
+                    existing.get("source_quality"),
+                )
+                if is_consumer_tech_context:
+                    existing_score += self._consumer_tech_domain_adjustment(
+                        existing.get("url") or "",
+                        existing.get("title") or "",
+                        existing.get("content") or "",
+                        existing.get("source_quality"),
+                    )
+
+            if existing is None or candidate_score > (existing_score or 0):
                 best_by_url[candidate["url"]] = candidate
 
         best_by_fingerprint: dict[str, tuple[int, dict]] = {}
@@ -303,6 +540,13 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("content") or "",
                 candidate.get("source_quality"),
             )
+            if is_consumer_tech_context:
+                score += self._consumer_tech_domain_adjustment(
+                    candidate.get("url") or "",
+                    candidate.get("title") or "",
+                    candidate.get("content") or "",
+                    candidate.get("source_quality"),
+                )
             existing = best_by_fingerprint.get(fingerprint)
             if existing is None or score > existing[0]:
                 best_by_fingerprint[fingerprint] = (score, candidate)
@@ -314,6 +558,15 @@ class AnalyzerAgent(BaseAgent):
                 item.get("title") or "",
                 item.get("content") or "",
                 item.get("source_quality"),
+            ) + (
+                self._consumer_tech_domain_adjustment(
+                    item.get("url") or "",
+                    item.get("title") or "",
+                    item.get("content") or "",
+                    item.get("source_quality"),
+                )
+                if is_consumer_tech_context
+                else 0
             ),
             reverse=True,
         )
@@ -583,7 +836,7 @@ class AnalyzerAgent(BaseAgent):
 
     @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
-        aggregated_data = self._prepare_aggregated_data(tasks)
+        aggregated_data = self._prepare_aggregated_data(prompt, tasks)
         conflicts = self._detect_conflicts(aggregated_data)
         prompt_language = self._detect_language(prompt)
 
