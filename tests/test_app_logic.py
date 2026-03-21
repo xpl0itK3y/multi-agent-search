@@ -292,6 +292,81 @@ def test_analyzer_agent_preserves_source_quality_metadata_in_payload():
     assert gathered[0]["source_quality"] == "high"
 
 
+def test_analyzer_agent_excludes_low_quality_speculative_sources_from_payload():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "What is new in IT in 2026?",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://thetechandgadgetreviews.com/innovative-gadgets-coming/",
+                        "domain": "thetechandgadgetreviews.com",
+                        "source_quality": "low",
+                        "title": "Innovative Gadgets Coming Soon in 2026",
+                        "content": (
+                            "These predictions for 2026 describe gadgets that may arrive soon and what to expect "
+                            "from future devices. Rumored features could reshape the market."
+                        ),
+                    }
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    assert parsed["gathered_data"] == []
+
+
+def test_analyzer_agent_keeps_stronger_sources_while_dropping_speculative_noise():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "What is new in IT in 2026?",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://thetechandgadgetreviews.com/innovative-gadgets-coming/",
+                        "domain": "thetechandgadgetreviews.com",
+                        "source_quality": "low",
+                        "title": "Innovative Gadgets Coming Soon in 2026",
+                        "content": (
+                            "These predictions for 2026 describe gadgets that may arrive soon and what to expect "
+                            "from future devices. Rumored features could reshape the market."
+                        ),
+                    },
+                    {
+                        "url": "https://www.comptia.org/en-us/blog/top-tech-trends-to-watch-in-2026/",
+                        "domain": "www.comptia.org",
+                        "source_quality": "high",
+                        "title": "Top Tech Trends to Watch in 2026",
+                        "content": "Industry report covering AI infrastructure, security, cloud, and enterprise adoption " * 40,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert len(gathered) == 1
+    assert gathered[0]["url"] == "https://www.comptia.org/en-us/blog/top-tech-trends-to-watch-in-2026/"
+
+
 def test_analyzer_agent_post_processes_sources_heading():
     llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
     agent = AnalyzerAgent(llm)

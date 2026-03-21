@@ -67,6 +67,38 @@ class AnalyzerAgent(BaseAgent):
         "facebook.com",
         "x.com",
         "twitter.com",
+        "eventify.io",
+    }
+    LOW_VALUE_DOMAIN_SUBSTRINGS = (
+        "bookmark",
+        "newsnviews",
+        "techandgadgetreviews",
+        "techspymagazine",
+    )
+    SPECULATIVE_TITLE_TOKENS = {
+        "predictions",
+        "prediction",
+        "coming soon",
+        "coming in",
+        "coming to",
+        "future of",
+        "trends to watch",
+        "what to expect",
+        "gadgets coming",
+        "best gadgets",
+        "breakthrough technologies",
+    }
+    SPECULATIVE_CONTENT_TOKENS = {
+        "expected to",
+        "may",
+        "might",
+        "could",
+        "rumored",
+        "rumoured",
+        "is likely to",
+        "are likely to",
+        "what to expect",
+        "predictions for",
     }
     
     SYSTEM_PROMPT = """
@@ -88,6 +120,8 @@ class AnalyzerAgent(BaseAgent):
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
+    - Present speculative predictions or gadget rumors as established facts.
+    - Give equal weight to weak hype posts when stronger primary or expert sources exist.
     - Output any internal reasoning, just the final markdown report.
     """
 
@@ -123,6 +157,8 @@ class AnalyzerAgent(BaseAgent):
             return 0
         if domain in self.LOW_VALUE_DOMAIN_EXACT_MATCHES:
             return 120
+        if any(token in domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
+            return 90
         return 0
 
     def _source_quality_score(self, source_quality: str | None) -> int:
@@ -157,7 +193,34 @@ class AnalyzerAgent(BaseAgent):
         score -= self._low_value_domain_penalty(url)
         if "failed to extract content" in normalized_content.lower():
             score -= 5000
+        score -= self._speculative_penalty(url, title, content, source_quality)
         return score
+
+    def _speculative_penalty(self, url: str, title: str, content: str, source_quality: str | None = None) -> int:
+        normalized_title = self._normalize_text(title).lower()
+        normalized_content = self._normalize_text(content).lower()
+        normalized_url = (url or "").lower()
+        score = 0
+        if any(token in normalized_title for token in self.SPECULATIVE_TITLE_TOKENS):
+            score += 130
+        if any(token in normalized_url for token in ("prediction", "predictions", "gadgets", "coming", "future")):
+            score += 35
+        content_window = normalized_content[:700]
+        speculative_hits = sum(1 for token in self.SPECULATIVE_CONTENT_TOKENS if token in content_window)
+        score += speculative_hits * 15
+        if source_quality == "low":
+            score += 45
+        return score
+
+    def _should_exclude_source(self, url: str, title: str, content: str, source_quality: str | None = None) -> bool:
+        penalty = self._speculative_penalty(url, title, content, source_quality)
+        trusted_score = self._trusted_domain_score(url)
+        if source_quality == "low" and penalty >= 160 and trusted_score <= 0:
+            return True
+        normalized_content = self._normalize_text(content).lower()
+        if source_quality == "low" and len(normalized_content) < 220 and penalty >= 80:
+            return True
+        return False
 
     def _compact_source_content(self, content: str) -> str:
         normalized = self._normalize_text(content)
@@ -197,13 +260,16 @@ class AnalyzerAgent(BaseAgent):
                 url = res.get("url")
                 if not url or not content or "failed to extract content" in content.lower():
                     continue
+                source_quality = res.get("source_quality") or "low"
+                if self._should_exclude_source(url, title, content, source_quality):
+                    continue
 
                 aggregated_candidates.append(
                     {
                         "task_description": task.description,
                         "url": url,
                         "domain": res.get("domain") or urlparse(url).netloc.lower() or None,
-                        "source_quality": res.get("source_quality") or "low",
+                        "source_quality": source_quality,
                         "title": title or None,
                         "content": self._compact_source_content(content),
                     }
@@ -315,6 +381,8 @@ class AnalyzerAgent(BaseAgent):
         return (
             "Please analyze this data and generate the final report. "
             f"{instruction} "
+            "Prefer concrete reported developments over speculative future-looking claims. "
+            "If a source is mostly predictive, label it as a forecast rather than a confirmed development. "
             "If sources disagree, add a section titled 'Conflicts And Uncertainties' and cite the competing evidence.\n\n"
             f"{json.dumps(input_data, ensure_ascii=False)}"
         )
