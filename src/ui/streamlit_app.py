@@ -130,6 +130,14 @@ def _truncate(value: str | None, limit: int = 220) -> str:
     return f"{compact[:limit - 3]}..."
 
 
+def _task_source_count(task: dict) -> int:
+    return len(task.get("result") or [])
+
+
+def _research_source_count(tasks: list[dict]) -> int:
+    return sum(_task_source_count(task) for task in tasks)
+
+
 def _safe_api_call(method, *args, ignore_status_codes: set[int] | None = None, **kwargs) -> Any | None:
     ignore_status_codes = ignore_status_codes or set()
     try:
@@ -404,6 +412,7 @@ def _render_task(task: dict, index: int) -> None:
     with st.expander(f"{index}. {task['description']}", expanded=index == 1):
         st.markdown(status_line, unsafe_allow_html=True)
         st.caption(f"Task ID: {task['id']}")
+        st.caption(f"Collected sources: {_task_source_count(task)}")
 
         if search_job:
             st.caption(
@@ -503,6 +512,16 @@ def _render_research_details() -> None:
         task = _safe_api_call(_api_get, f"/v1/tasks/{task_id}")
         if task:
             tasks.append(task)
+
+    completed_tasks = sum(1 for task in tasks if task["status"] == "completed")
+    total_sources = _research_source_count(tasks)
+    average_sources = round(total_sources / len(tasks), 1) if tasks else 0.0
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Task Slots", len(research.get("task_ids", [])))
+    summary_cols[1].metric("Completed Tasks", completed_tasks)
+    summary_cols[2].metric("Collected Sources", total_sources)
+    summary_cols[3].metric("Avg Sources / Task", average_sources)
 
     st.subheader("Task Pipeline")
     if not tasks:
