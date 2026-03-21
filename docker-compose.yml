@@ -1,3 +1,20 @@
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    db:
+      condition: service_healthy
+  env_file:
+    - .env
+  environment:
+    POSTGRES_HOST: db
+    POSTGRES_PORT: 5432
+  command: ["python", "scripts/run_finalize_worker.py"]
+  restart: unless-stopped
+
 services:
   api:
     build:
@@ -44,22 +61,28 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *worker-base
     container_name: multi-agent-search-worker
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
-    command: ["python", "scripts/run_finalize_worker.py"]
-    restart: unless-stopped
+      WORKER_NAME: job-worker
+
+  worker_2:
+    <<: *worker-base
+    profiles: ["parallel"]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      WORKER_NAME: job-worker-2
+
+  worker_3:
+    <<: *worker-base
+    profiles: ["parallel"]
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      WORKER_NAME: job-worker-3
 
   db:
     image: postgres:16-alpine
