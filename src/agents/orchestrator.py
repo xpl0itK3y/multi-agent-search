@@ -5,6 +5,7 @@ from src.core.agent import BaseAgent
 from src.api.schemas import SearchDepth, TaskStatus
 from src.observability import maybe_traceable
 from src.search_depth_profiles import get_depth_profile
+from src.source_quality_policy import combined_topics
 
 class OrchestratorAgent(BaseAgent):
     LANGUAGE_HINTS = {
@@ -101,6 +102,63 @@ class OrchestratorAgent(BaseAgent):
             return description_text
         return self._fallback_description(prompt, index, target_language)
 
+    def _dedupe_queries(self, queries: list[str]) -> list[str]:
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for query in queries:
+            normalized = self._normalize_text(query)
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(normalized)
+        return deduped
+
+    def _shape_docs_queries(self, prompt: str, description: str, queries: list[str]) -> list[str]:
+        description_text = self._normalize_text(description).lower()
+        prompt_text = self._normalize_text(prompt).lower()
+        normalized_queries = self._dedupe_queries(queries)
+
+        mentions_fastapi = "fastapi" in description_text or "fastapi" in prompt_text
+        mentions_flask = "flask" in description_text or "flask" in prompt_text
+
+        doc_queries: list[str] = []
+        if mentions_fastapi:
+            if any(token in description_text for token in ("производ", "performance", "async", "асинх", "feature", "возможност", "function", "функц")):
+                doc_queries.append("FastAPI official documentation async reference")
+            else:
+                doc_queries.append("FastAPI official documentation REST API reference")
+        if mentions_flask:
+            if any(token in description_text for token in ("extension", "extensions", "расширен", "feature", "возможност", "function", "функц")):
+                doc_queries.append("Flask official documentation extensions reference")
+            else:
+                doc_queries.append("Flask official documentation REST API patterns")
+
+        if mentions_fastapi and mentions_flask:
+            if any(token in description_text for token in ("сравнен", "compare", "comparison", "performance", "выбор", "choose")):
+                doc_queries.append("FastAPI vs Flask official documentation comparison")
+
+        comparison_queries = [
+            query for query in normalized_queries
+            if any(token in query.lower() for token in ("vs", "comparison", "compare", "benchmark", "performance"))
+        ]
+        neutral_queries = [
+            query for query in normalized_queries
+            if query not in comparison_queries
+        ]
+
+        shaped = self._dedupe_queries(doc_queries + comparison_queries[:1] + neutral_queries)
+        return shaped[:3] if shaped else normalized_queries[:3]
+
+    def _normalize_queries(self, prompt: str, description: str, queries: list[str]) -> list[str]:
+        topics = combined_topics(prompt, description, " ".join(queries or []))
+        normalized_queries = self._dedupe_queries(queries)
+        if "docs_programming" in topics:
+            return self._shape_docs_queries(prompt, description, normalized_queries)
+        return normalized_queries[:3]
+
     @maybe_traceable(name="orchestrator_decompose", run_type="llm")
     def run_decompose(self, prompt: str, depth: SearchDepth) -> list:
         task_count = get_depth_profile(depth)["task_count"]
@@ -131,7 +189,11 @@ class OrchestratorAgent(BaseAgent):
                         prompt,
                         index,
                     ),
-                    "queries": item.get("queries", []),
+                    "queries": self._normalize_queries(
+                        prompt,
+                        item.get("description", ""),
+                        item.get("queries", []),
+                    ),
                     "status": TaskStatus.PENDING
                 })
             return enriched_tasks
