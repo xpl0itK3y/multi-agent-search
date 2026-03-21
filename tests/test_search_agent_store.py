@@ -211,3 +211,38 @@ def test_search_agent_downranks_low_value_social_domains(mocker):
     assert final_task is not None
     assert final_task.result[0]["url"] == "https://docs.python.org/3/library/asyncio.html"
     assert final_task.result[0]["domain"] == "docs.python.org"
+
+
+def test_search_agent_skips_low_value_results_before_extraction(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.tiktok.com/discover/tech-2026", "title": "Discover tech 2026"},
+            {"url": "https://docs.python.org/3/tutorial/", "title": "Python Tutorial"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        return_value="Official documentation content " * 30,
+    )
+
+    agent = SearchAgent(task_store=task_store, max_sources=2)
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert len(final_task.result) == 1
+    assert final_task.result[0]["url"] == "https://docs.python.org/3/tutorial/"
+    assert extract_mock.call_count == 1
+    assert any("Skipped low-value result" in entry for entry in final_task.logs)

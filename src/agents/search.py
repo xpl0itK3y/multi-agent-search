@@ -32,7 +32,32 @@ class SearchAgent:
         "www.facebook.com",
         "x.com",
         "twitter.com",
+        "tiktok.com",
+        "www.tiktok.com",
+        "vk.com",
+        "www.vk.com",
+        "medium.com",
+        "www.medium.com",
+        "behance.net",
+        "www.behance.net",
     }
+    LOW_VALUE_DOMAIN_SUBSTRINGS = (
+        "bookmark",
+        "trendhunter",
+        "grokipedia",
+        "outmaxshop",
+    )
+    LOW_SIGNAL_TITLE_TOKENS = (
+        "discover",
+        "gallery",
+        "pinterest",
+        "tiktok",
+        "forum",
+        "youth development forum",
+        "travel trends",
+        "fashion trends",
+        "aesthetic clinics",
+    )
 
     def __init__(self, task_store: TaskStore, max_sources: int = 5):
         self.task_store = task_store
@@ -71,7 +96,28 @@ class SearchAgent:
         normalized_domain = domain.removeprefix("www.")
         if normalized_domain in self.LOW_VALUE_DOMAIN_EXACT_MATCHES:
             return 120
+        if any(token in normalized_domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
+            return 90
         return 0
+
+    def _should_skip_search_result(self, url: str, title: str | None) -> bool:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        normalized_domain = domain.removeprefix("www.")
+        normalized_title = self._normalize_text(title).lower()
+        normalized_url = (url or "").lower()
+
+        if not normalized_domain:
+            return True
+        if normalized_domain in {item.removeprefix("www.") for item in self.LOW_VALUE_DOMAIN_EXACT_MATCHES}:
+            return True
+        if any(token in normalized_domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
+            return True
+        if any(token in normalized_url for token in ("/discover/", "/video/", "/gallery/", "/wall-", "/pin/")):
+            return True
+        if normalized_title and any(token in normalized_title for token in self.LOW_SIGNAL_TITLE_TOKENS):
+            return True
+        return False
 
     def _authority_hint_score(self, url: str, title: str, content: str, source_quality: str | None) -> int:
         normalized_title = self._normalize_text(title).lower()
@@ -171,6 +217,12 @@ class SearchAgent:
                 for res in search_results:
                     url = res.get("url")
                     if url and url not in unique_urls:
+                        if self._should_skip_search_result(url, res.get("title")):
+                            self.task_store.update_task(
+                                task_id,
+                                TaskUpdate(log=f"Skipped low-value result: {url}"),
+                            )
+                            continue
                         unique_urls.add(url)
 
                         self.task_store.update_task(
