@@ -58,6 +58,30 @@ class SearchTask(BaseModel):
     result: Optional[List[Dict[str, Any]]] = None
     logs: List[str] = Field(default_factory=list)
 
+
+class SearchSourcePreview(BaseModel):
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    source_quality: Optional[str] = None
+    extraction_status: Optional[str] = None
+    snippet: Optional[str] = None
+
+
+class SearchTaskSummary(BaseModel):
+    id: str
+    research_id: Optional[str] = None
+    description: str
+    queries: List[str]
+    status: TaskStatus = TaskStatus.PENDING
+    created_at: datetime
+    updated_at: datetime
+    result_count: int = 0
+    log_count: int = 0
+    recent_logs: List[str] = Field(default_factory=list)
+    source_preview: List[SearchSourcePreview] = Field(default_factory=list)
+    latest_search_job: Optional["SearchTaskJob"] = None
+
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     result: Optional[List[Dict[str, Any]]] = None
@@ -79,6 +103,33 @@ class ResearchRecord(BaseModel):
     task_ids: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    final_report: Optional[str] = None
+
+
+class ResearchSummary(BaseModel):
+    id: str
+    prompt: str
+    depth: SearchDepth
+    status: ResearchStatus = ResearchStatus.PROCESSING
+    task_ids: List[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    has_final_report: bool = False
+    task_count: int = 0
+    completed_tasks: int = 0
+    pending_tasks: int = 0
+    running_tasks: int = 0
+    failed_tasks: int = 0
+    collected_sources: int = 0
+    avg_sources_per_task: float = 0.0
+    finalize_ready: bool = False
+    latest_finalize_job: Optional["ResearchFinalizeJob"] = None
+    tasks: List[SearchTaskSummary] = Field(default_factory=list)
+
+
+class ResearchReportResponse(BaseModel):
+    research_id: str
+    status: ResearchStatus
     final_report: Optional[str] = None
 
 class ResearchResponse(BaseModel):
@@ -150,3 +201,7 @@ class QueueMaintenanceResponse(BaseModel):
     recovered_count: int = 0
     deleted_count: int = 0
     total_count: int = 0
+
+
+SearchTaskSummary.model_rebuild()
+ResearchSummary.model_rebuild()

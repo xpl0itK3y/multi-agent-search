@@ -17,10 +17,14 @@ from src.api.schemas import (
     ResearchRecord,
     ResearchRequest,
     ResearchResponse,
+    ResearchReportResponse,
+    ResearchSummary,
     ResearchStatus,
     ResearchFinalizeJob,
     SearchJobStatus,
+    SearchSourcePreview,
     SearchTaskJob,
+    SearchTaskSummary,
     SearchDepth,
     SearchTask,
     TaskUpdate,
@@ -35,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 
 class ResearchService:
+    TASK_SUMMARY_LOG_LIMIT = 6
+    TASK_SUMMARY_SOURCE_LIMIT = 4
+
     def __init__(
         self,
         task_store: TaskStore,
@@ -127,6 +134,88 @@ class ResearchService:
             raise HTTPException(status_code=404, detail="Research not found")
 
         return research
+
+    def get_task_summary(self, task_id: str) -> SearchTaskSummary:
+        task = self.task_store.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return self._build_task_summary(task)
+
+    def get_research_summary(self, research_id: str) -> ResearchSummary:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        task_summaries = [self._build_task_summary(task) for task in tasks]
+        completed_tasks = sum(1 for task in tasks if task.status == TaskStatus.COMPLETED)
+        pending_tasks = sum(1 for task in tasks if task.status == TaskStatus.PENDING)
+        running_tasks = sum(1 for task in tasks if task.status == TaskStatus.RUNNING)
+        failed_tasks = sum(1 for task in tasks if task.status == TaskStatus.FAILED)
+        collected_sources = sum(len(task.result or []) for task in tasks)
+        task_count = len(tasks)
+        avg_sources_per_task = round(collected_sources / task_count, 1) if task_count else 0.0
+        finalize_ready = task_count > 0 and pending_tasks == 0 and running_tasks == 0
+
+        return ResearchSummary(
+            id=research.id,
+            prompt=research.prompt,
+            depth=research.depth,
+            status=research.status,
+            task_ids=research.task_ids,
+            created_at=research.created_at,
+            updated_at=research.updated_at,
+            has_final_report=bool(research.final_report),
+            task_count=task_count,
+            completed_tasks=completed_tasks,
+            pending_tasks=pending_tasks,
+            running_tasks=running_tasks,
+            failed_tasks=failed_tasks,
+            collected_sources=collected_sources,
+            avg_sources_per_task=avg_sources_per_task,
+            finalize_ready=finalize_ready,
+            latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
+            tasks=task_summaries,
+        )
+
+    def get_research_report(self, research_id: str) -> ResearchReportResponse:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        return ResearchReportResponse(
+            research_id=research.id,
+            status=research.status,
+            final_report=research.final_report,
+        )
+
+    def _build_task_summary(self, task: SearchTask) -> SearchTaskSummary:
+        results = task.result or []
+        preview = [
+            SearchSourcePreview(
+                url=result.get("url", ""),
+                title=result.get("title"),
+                domain=result.get("domain"),
+                source_quality=result.get("source_quality"),
+                extraction_status=result.get("extraction_status"),
+                snippet=(result.get("snippet") or result.get("content") or "")[:280] or None,
+            )
+            for result in results[: self.TASK_SUMMARY_SOURCE_LIMIT]
+            if result.get("url")
+        ]
+        return SearchTaskSummary(
+            id=task.id,
+            research_id=task.research_id,
+            description=task.description,
+            queries=task.queries,
+            status=task.status,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            result_count=len(results),
+            log_count=len(task.logs or []),
+            recent_logs=(task.logs or [])[-self.TASK_SUMMARY_LOG_LIMIT :],
+            source_preview=preview,
+            latest_search_job=self.task_store.get_latest_search_task_job(task.id),
+        )
 
     def _get_research_for_finalization(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)

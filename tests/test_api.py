@@ -132,6 +132,48 @@ async def test_decompose_endpoint_creates_search_job(client):
 
 
 @pytest.mark.anyio
+async def test_task_summary_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Search for X",
+            "queries": ["query X"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    app_service.task_store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    app_service.task_store.update_task(
+        "task-1",
+        TaskUpdate(
+            status=TaskStatus.COMPLETED,
+            result=[
+                {
+                    "url": "https://docs.python.org/3/tutorial/",
+                    "title": "Python Tutorial",
+                    "domain": "docs.python.org",
+                    "source_quality": "high",
+                    "extraction_status": "success",
+                    "content": "A" * 500,
+                }
+            ],
+            log="task complete",
+        ),
+    )
+
+    response = await client.get("/v1/tasks/task-1/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "task-1"
+    assert payload["result_count"] == 1
+    assert payload["log_count"] >= 1
+    assert len(payload["source_preview"]) == 1
+    assert payload["source_preview"][0]["domain"] == "docs.python.org"
+    assert payload["latest_search_job"]["task_id"] == "task-1"
+
+
+@pytest.mark.anyio
 async def test_research_finalize_flow(client):
     response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
 
@@ -172,6 +214,52 @@ async def test_research_finalize_flow(client):
     latest_finalize_job_response = await client.get(f"/v1/research/{research_id}/finalize-job")
     assert latest_finalize_job_response.status_code == 200
     assert latest_finalize_job_response.json()["id"] == job_id
+
+
+@pytest.mark.anyio
+async def test_research_summary_endpoint(client):
+    response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
+    research_id = response.json()["research_id"]
+
+    app_service = client._transport.app.state.research_service
+    tasks = app_service.task_store.get_tasks_by_research(research_id)
+    app_service.task_store.update_task(
+        tasks[0].id,
+        TaskUpdate(
+            status=TaskStatus.COMPLETED,
+            result=[{"url": "https://a.com", "title": "A", "domain": "a.com", "content": "hello"}],
+            log="done",
+        ),
+    )
+
+    summary_response = await client.get(f"/v1/research/{research_id}/summary")
+
+    assert summary_response.status_code == 200
+    payload = summary_response.json()
+    assert payload["id"] == research_id
+    assert payload["task_count"] == 1
+    assert payload["completed_tasks"] == 1
+    assert payload["collected_sources"] == 1
+    assert payload["finalize_ready"] is True
+    assert payload["has_final_report"] is False
+    assert len(payload["tasks"]) == 1
+    assert payload["tasks"][0]["result_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_research_report_endpoint(client):
+    response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
+    research_id = response.json()["research_id"]
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.update_research_status(research_id, ResearchStatus.COMPLETED, "Final report body")
+
+    report_response = await client.get(f"/v1/research/{research_id}/report")
+
+    assert report_response.status_code == 200
+    payload = report_response.json()
+    assert payload["research_id"] == research_id
+    assert payload["status"] == ResearchStatus.COMPLETED
+    assert payload["final_report"] == "Final report body"
 
 
 @pytest.mark.anyio
