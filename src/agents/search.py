@@ -46,6 +46,14 @@ class SearchAgent:
         "www.gsmarena.com",
         "dxomark.com",
         "www.dxomark.com",
+        "pcmag.com",
+        "www.pcmag.com",
+        "cnet.com",
+        "www.cnet.com",
+        "techradar.com",
+        "www.techradar.com",
+        "techadvisor.com",
+        "www.techadvisor.com",
         "notebookcheck.net",
         "www.notebookcheck.net",
         "androidauthority.com",
@@ -110,6 +118,22 @@ class SearchAgent:
         "www.techrankup.com",
         "asymco.com",
         "www.asymco.com",
+        "futureinsights.com",
+        "www.futureinsights.com",
+        "rank1one.com",
+        "www.rank1one.com",
+        "gistoftheday.com",
+        "www.gistoftheday.com",
+        "cashkr.com",
+        "www.cashkr.com",
+        "theconsumers.guide",
+        "www.theconsumers.guide",
+        "techoble.com",
+        "www.techoble.com",
+        "rave-tech.com",
+        "www.rave-tech.com",
+        "couponscurry.com",
+        "www.couponscurry.com",
     }
     MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS = (
         "buyersguide",
@@ -119,6 +143,10 @@ class SearchAgent:
         "best-phones",
         "best-smartphones",
         "smartphone-rankings",
+        "consumers.guide",
+        "futureinsights",
+        "rank1one",
+        "gistoftheday",
     )
     MOBILE_TECH_GENERIC_LISTICLE_TOKENS = (
         "best phones",
@@ -149,6 +177,8 @@ class SearchAgent:
         "launch",
         "vs",
         "comparison",
+        "lab test",
+        "editor's choice",
     )
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
@@ -365,9 +395,9 @@ class SearchAgent:
         if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
             score -= 120
 
-        if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/smartphones/")):
+        if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/smartphones/", "/picks/the-best-phones", "/tech/mobile/", "/article/724318/", "/best-picks/best-phones")):
             score += 50
-        if any(token in normalized_title for token in ("hands-on", "review", "camera test", "benchmark", "official", "launch")):
+        if any(token in normalized_title for token in ("hands-on", "review", "camera test", "benchmark", "official", "launch", "tested", "editor's choice")):
             score += 70
         if any(token in normalized_title for token in ("buyers guide", "buying guide", "top phones", "best smartphones", "most anticipated", "smartphone rankings", "performance ranking")):
             score -= 80
