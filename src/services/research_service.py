@@ -343,6 +343,20 @@ class ResearchService:
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
         return self.task_store.get_worker_heartbeat(worker_name)
 
+    def touch_worker_heartbeat(
+        self,
+        worker_name: str,
+        processed_jobs: int,
+        status: str,
+        last_error: str | None = None,
+    ) -> WorkerHeartbeat:
+        return self.task_store.upsert_worker_heartbeat(
+            worker_name,
+            processed_jobs,
+            status,
+            last_error,
+        )
+
     def get_queue_metrics(self) -> QueueMetrics:
         return self.task_store.get_queue_metrics()
 

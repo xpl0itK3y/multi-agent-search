@@ -13,8 +13,8 @@ class JobWorker:
         last_error = None
         try:
             maintenance_recovered = MaintenanceWorker(self.research_service).run_once()
-            search_processed = SearchWorker(self.research_service).run_once()
-            finalize_processed = FinalizeWorker(self.research_service).run_once()
+            search_processed = SearchWorker(self.research_service, worker_name=self.worker_name).run_once()
+            finalize_processed = FinalizeWorker(self.research_service, worker_name=self.worker_name).run_once()
             processed = maintenance_recovered + search_processed + finalize_processed
             status = "busy" if processed else "idle"
         except Exception as exc:
