@@ -176,4 +176,38 @@ def test_search_agent_boosts_gov_domains_over_generic_sites(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert len(final_task.result) == 1
     assert final_task.result[0]["url"] == "https://travel.state.gov/content/travel/en/traveladvisories.html"
-    assert final_task.result[0]["domain"] == "travel.state.gov"
+
+
+def test_search_agent_downranks_low_value_social_domains(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.linkedin.com/posts/example", "title": "API Guide"},
+            {"url": "https://docs.python.org/3/library/asyncio.html", "title": "Asyncio API Reference"},
+        ],
+    )
+    mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=[
+            "API guide content " * 60,
+            "Official documentation and API reference content " * 40,
+        ],
+    )
+
+    agent = SearchAgent(task_store=task_store, max_sources=1)
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.result[0]["url"] == "https://docs.python.org/3/library/asyncio.html"
+    assert final_task.result[0]["domain"] == "docs.python.org"

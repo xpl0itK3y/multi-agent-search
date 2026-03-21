@@ -222,6 +222,44 @@ def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
     assert gathered[0]["source_id"] == "S1"
 
 
+def test_analyzer_agent_prefers_high_quality_reference_sources_over_social_results():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://www.linkedin.com/posts/example",
+                        "domain": "www.linkedin.com",
+                        "source_quality": "medium",
+                        "title": "API Guide",
+                        "content": "General API guide content " * 80,
+                    },
+                    {
+                        "url": "https://docs.python.org/3/library/asyncio.html",
+                        "domain": "docs.python.org",
+                        "source_quality": "high",
+                        "title": "Asyncio API Reference",
+                        "content": "Official documentation and API reference content " * 50,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert gathered[0]["url"] == "https://docs.python.org/3/library/asyncio.html"
+
+
 def test_analyzer_agent_preserves_source_quality_metadata_in_payload():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)

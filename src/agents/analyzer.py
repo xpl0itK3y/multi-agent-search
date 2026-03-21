@@ -61,6 +61,13 @@ class AnalyzerAgent(BaseAgent):
         ".edu",
         ".readthedocs.io",
     )
+    LOW_VALUE_DOMAIN_EXACT_MATCHES = {
+        "linkedin.com",
+        "pinterest.com",
+        "facebook.com",
+        "x.com",
+        "twitter.com",
+    }
     
     SYSTEM_PROMPT = """
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
@@ -110,13 +117,44 @@ class AnalyzerAgent(BaseAgent):
             return 40
         return 0
 
-    def _score_source(self, url: str, title: str, content: str) -> int:
+    def _low_value_domain_penalty(self, url: str) -> int:
+        domain = urlparse(url).netloc.lower().removeprefix("www.")
+        if not domain:
+            return 0
+        if domain in self.LOW_VALUE_DOMAIN_EXACT_MATCHES:
+            return 120
+        return 0
+
+    def _source_quality_score(self, source_quality: str | None) -> int:
+        if source_quality == "high":
+            return 180
+        if source_quality == "medium":
+            return 60
+        return 0
+
+    def _authority_hint_score(self, url: str, title: str, content: str) -> int:
+        normalized_title = self._normalize_text(title).lower()
+        normalized_content = self._normalize_text(content).lower()
+        normalized_url = (url or "").lower()
+        score = 0
+        if any(token in normalized_url for token in ("/docs", "/documentation", "/reference", "/api")):
+            score += 120
+        if any(token in normalized_title for token in ("documentation", "docs", "reference", "api", "guide", "manual")):
+            score += 80
+        if any(token in normalized_content[:600] for token in ("official documentation", "api reference", "reference guide")):
+            score += 60
+        return score
+
+    def _score_source(self, url: str, title: str, content: str, source_quality: str | None = None) -> int:
         normalized_title = self._normalize_text(title)
         normalized_content = self._normalize_text(content)
         score = len(normalized_content)
         if normalized_title:
             score += 100
         score += self._trusted_domain_score(url)
+        score += self._source_quality_score(source_quality)
+        score += self._authority_hint_score(url, title, content)
+        score -= self._low_value_domain_penalty(url)
         if "failed to extract content" in normalized_content.lower():
             score -= 5000
         return score
@@ -178,10 +216,12 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("url") or "",
                 candidate.get("title") or "",
                 candidate.get("content") or "",
+                candidate.get("source_quality"),
             ) > self._score_source(
                 existing.get("url") or "",
                 existing.get("title") or "",
                 existing.get("content") or "",
+                existing.get("source_quality"),
             ):
                 best_by_url[candidate["url"]] = candidate
 
@@ -195,6 +235,7 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("url") or "",
                 candidate.get("title") or "",
                 candidate.get("content") or "",
+                candidate.get("source_quality"),
             )
             existing = best_by_fingerprint.get(fingerprint)
             if existing is None or score > existing[0]:
@@ -206,6 +247,7 @@ class AnalyzerAgent(BaseAgent):
                 item.get("url") or "",
                 item.get("title") or "",
                 item.get("content") or "",
+                item.get("source_quality"),
             ),
             reverse=True,
         )
