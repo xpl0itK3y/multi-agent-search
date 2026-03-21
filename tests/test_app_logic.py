@@ -269,6 +269,53 @@ def test_analyzer_agent_prefers_programming_docs_over_generic_tutorial_sites():
     assert "https://www.geeksforgeeks.org/top-python-frameworks/" not in urls
 
 
+def test_analyzer_agent_penalizes_agency_comparison_blogs_for_programming_queries():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Сравни FastAPI и Flask для небольшого REST API",
+        [
+            SearchTask(
+                id="task-1",
+                description="Сравнение FastAPI и Flask",
+                queries=["fastapi vs flask api documentation"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://fastapi.tiangolo.com/async/",
+                        "domain": "fastapi.tiangolo.com",
+                        "source_quality": "high",
+                        "title": "Concurrency and async / await - FastAPI",
+                        "content": "Official documentation and reference guide for FastAPI async support, concurrency, and production behavior. " * 15,
+                    },
+                    {
+                        "url": "https://flask.palletsprojects.com/en/stable/extensions/",
+                        "domain": "flask.palletsprojects.com",
+                        "source_quality": "high",
+                        "title": "Flask Extensions",
+                        "content": "Official Flask documentation covering extensions and application structure for REST APIs. " * 15,
+                    },
+                    {
+                        "url": "https://www.amplework.com/blog/fastapi-vs-flask-ai-web-framework-comparison/",
+                        "domain": "www.amplework.com",
+                        "source_quality": "medium",
+                        "title": "FastAPI vs Flask: Which Framework Is Best for AI Web Apps?",
+                        "content": "This comparison blog discusses which framework to choose and key differences for AI web apps. " * 12,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    urls = [item["url"] for item in parsed["gathered_data"]]
+    assert "https://fastapi.tiangolo.com/async/" in urls
+    assert "https://flask.palletsprojects.com/en/stable/extensions/" in urls
+    assert "https://www.amplework.com/blog/fastapi-vs-flask-ai-web-framework-comparison/" not in urls
+
+
 def test_analyzer_agent_prefers_high_quality_reference_sources_over_social_results():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)

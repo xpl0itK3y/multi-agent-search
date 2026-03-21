@@ -186,6 +186,46 @@ def test_search_agent_prefers_programming_docs_over_framework_listicles(mocker):
     assert "https://www.tutorialspoint.com/fastapi/index.htm" not in extracted_urls
 
 
+def test_search_agent_penalizes_agency_and_generic_comparison_blogs_for_docs_queries(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Сравни FastAPI и Flask для REST API",
+            "queries": ["FastAPI vs Flask REST API documentation"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://fastapi.tiangolo.com/async/", "title": "Concurrency and async / await - FastAPI"},
+            {"url": "https://flask.palletsprojects.com/en/stable/extensions/", "title": "Flask Extensions"},
+            {"url": "https://www.amplework.com/blog/fastapi-vs-flask-ai-web-framework-comparison/", "title": "FastAPI vs Flask: Which Framework Is Best for AI Web Apps?"},
+            {"url": "https://www.marketingscoop.com/tech/fastapi-vs-flask-a-python-experts-in-depth-comparison/", "title": "FastAPI vs Flask - A Python Expert's In-Depth Comparison"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://fastapi.tiangolo.com/async/" in extracted_urls
+    assert "https://flask.palletsprojects.com/en/stable/extensions/" in extracted_urls
+    assert "https://www.amplework.com/blog/fastapi-vs-flask-ai-web-framework-comparison/" not in extracted_urls
+    assert "https://www.marketingscoop.com/tech/fastapi-vs-flask-a-python-experts-in-depth-comparison/" not in extracted_urls
+
+
 def test_search_agent_boosts_gov_domains_over_generic_sites(mocker):
     task_store = InMemoryTaskStore()
     task_store.add_task(
