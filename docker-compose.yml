@@ -18,6 +18,31 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: multi-agent-search-ui
+    depends_on:
+      api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      STREAMLIT_API_BASE_URL: http://api:8000
+      STREAMLIT_WORKER_NAME: job-worker
+    command:
+      [
+        "streamlit",
+        "run",
+        "src/ui/streamlit_app.py",
+        "--server.address=0.0.0.0",
+        "--server.port=8501",
+      ]
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
   worker:
     build:
       context: .
