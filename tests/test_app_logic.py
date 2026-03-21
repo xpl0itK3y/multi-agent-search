@@ -26,6 +26,22 @@ class RecordingLLM(LLMProvider):
         return self.response
 
 
+class SequentialLLM(LLMProvider):
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.calls = []
+
+    def generate(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        return self.responses.pop(0)
+
+
 def test_decompose_requires_initialized_orchestrator(mocker):
     service = ResearchService(task_store=InMemoryTaskStore(), orchestrator=None)
 
@@ -238,6 +254,62 @@ def test_analyzer_agent_adds_sources_heading_when_missing():
     )
 
     assert result.endswith("## Sources")
+
+
+def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
+    llm = RecordingLLM(
+        response=(
+            "Introduction [S1] [S9]\n\n"
+            "## Sources\n"
+            "- [S1] https://wrong.example\n"
+            "- [S9] https://wrong.example/two"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert "[S9]" not in result
+    assert "https://wrong.example" not in result
+    assert "## Sources\n- [S1] https://example.com" in result
+
+
+def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
+    llm = SequentialLLM(
+        responses=[
+            "## Introduction\nThis report compares APIs. [S1]\n\n## Sources\n- [S1] https://example.com",
+            "## Введение\nЭтот отчет сравнивает API. [S1]\n\n## Sources\n- [S1] https://example.com",
+        ]
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Сравни FastAPI и Flask для небольших API",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert len(llm.calls) == 2
+    assert "wrong language" in llm.calls[1]["user_prompt"]
+    assert "## Введение" in result
 
 
 def test_decompose_does_not_schedule_failed_tasks(mocker):
