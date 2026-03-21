@@ -309,6 +309,10 @@ DOCS_PROGRAMMING_POLICY = TopicPolicy(
         "official",
         "extensions",
         "async / await",
+        "reference documentation",
+        "api docs",
+        "user guide",
+        "extension registry",
     ),
     weak_signal_tokens=(
         "top frameworks",
@@ -320,6 +324,10 @@ DOCS_PROGRAMMING_POLICY = TopicPolicy(
         "best for ai web apps",
         "showdown",
         "key differences and use cases",
+        "why developers choose",
+        "key differences",
+        "use cases",
+        "pros and cons",
     ),
     generic_listicle_tokens=(
         "best python frameworks",
@@ -333,6 +341,9 @@ DOCS_PROGRAMMING_POLICY = TopicPolicy(
         "flask vs fastapi",
         "python framework showdown",
         "key differences, performance, and use cases",
+        "which framework is best",
+        "framework comparison for modern python apis",
+        "in-depth comparison",
     ),
 )
 
