@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     finalize_job_timeout_seconds: int = 300
     search_job_retention_seconds: int = 86400
     finalize_job_retention_seconds: int = 86400
-    search_extraction_concurrency: int = 4
+    search_extraction_concurrency: int = 1
 
     postgres_user: str = "app"
     postgres_password: str = "app"
