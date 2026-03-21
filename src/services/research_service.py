@@ -195,6 +195,9 @@ class ResearchService:
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)
 
+    def get_latest_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob | None:
+        return self.task_store.get_latest_research_finalize_job(research_id)
+
     def list_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         return self.task_store.get_running_research_finalize_jobs()
 

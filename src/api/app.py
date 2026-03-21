@@ -151,6 +151,13 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job
 
+    @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob)
+    async def get_latest_finalize_job(research_id: str, request: Request):
+        job = get_research_service(request).get_latest_research_finalize_job(research_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Finalize job not found")
+        return job
+
     @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob)
     async def requeue_finalize_job(job_id: str, request: Request):
         return get_research_service(request).requeue_research_finalize_job(job_id)

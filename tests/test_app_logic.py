@@ -496,6 +496,22 @@ def test_get_research_finalize_job_returns_persisted_job(mocker):
 
     assert fetched is not None
     assert fetched.id == job.id
+
+
+def test_get_latest_research_finalize_job_returns_most_recent_job():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    older = task_store.add_research_finalize_job(research.id)
+    newer = task_store.add_research_finalize_job(research.id)
+
+    fetched = ResearchService(task_store=task_store).get_latest_research_finalize_job(research.id)
+
+    assert fetched is not None
+    assert fetched.id == newer.id
+    assert fetched.id != older.id
     assert fetched.research_id == research.id
 
 
