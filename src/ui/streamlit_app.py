@@ -5,7 +5,6 @@ from typing import Any
 
 import httpx
 import streamlit as st
-import streamlit.components.v1 as components
 from src.api.schemas import SearchDepth
 from src.search_depth_profiles import SEARCH_DEPTH_PROFILES, get_depth_profile
 
@@ -559,20 +558,32 @@ def _sync_query_params() -> None:
 
 
 def _render_auto_refresh() -> None:
-    if not st.session_state.get("auto_refresh_enabled"):
-        return
+    return
 
-    interval_seconds = max(int(st.session_state.get("auto_refresh_seconds", 10)), 3)
-    components.html(
-        f"""
-        <script>
-        window.setTimeout(function() {{
-            window.parent.location.reload();
-        }}, {interval_seconds * 1000});
-        </script>
-        """,
-        height=0,
-    )
+
+def _get_live_refresh_interval() -> int | None:
+    selected_research_id = st.session_state.get("selected_research_id", "").strip()
+    if selected_research_id:
+        return 5
+    if st.session_state.get("auto_refresh_enabled"):
+        return max(int(st.session_state.get("auto_refresh_seconds", 10)), 3)
+    return None
+
+
+def _render_live_queue_fragment(run_every: int | None) -> None:
+    @st.fragment(run_every=run_every)
+    def _fragment() -> None:
+        _render_queue_overview()
+
+    _fragment()
+
+
+def _render_live_research_fragment(run_every: int | None) -> None:
+    @st.fragment(run_every=run_every)
+    def _fragment() -> None:
+        _render_research_details()
+
+    _fragment()
 
 
 def _render_header() -> None:
@@ -1007,14 +1018,15 @@ def main() -> None:
     _render_auto_refresh()
     _render_header()
     _render_sidebar()
+    live_refresh_interval = _get_live_refresh_interval()
 
     left, right = st.columns([1.05, 1.35], gap="large")
     with left:
         _render_create_research()
         st.divider()
-        _render_queue_overview()
+        _render_live_queue_fragment(live_refresh_interval)
     with right:
-        _render_research_details()
+        _render_live_research_fragment(live_refresh_interval)
 
 
 if __name__ == "__main__":
