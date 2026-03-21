@@ -6,6 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
     deepseek_model: str = "deepseek-chat"
+    langsmith_tracing: bool = False
+    langsmith_api_key: Optional[str] = None
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_project: Optional[str] = None
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False

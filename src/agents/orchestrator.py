@@ -2,6 +2,7 @@ import json
 import uuid
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchDepth, TaskStatus
+from src.observability import maybe_traceable
 
 class OrchestratorAgent(BaseAgent):
     
@@ -46,6 +47,7 @@ class OrchestratorAgent(BaseAgent):
                         - If the query is in mixed languages → detect the dominant language and use it for descriptions
                     """
 
+    @maybe_traceable(name="orchestrator_decompose", run_type="llm")
     def run_decompose(self, prompt: str, depth: SearchDepth) -> list:
         depth_map = {
             SearchDepth.EASY: 2,

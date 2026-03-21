@@ -5,6 +5,7 @@ from typing import List
 from urllib.parse import urlparse
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchTask
+from src.observability import maybe_traceable
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +407,7 @@ class AnalyzerAgent(BaseAgent):
             temperature=0.3,
         )
 
+    @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(tasks)
         conflicts = self._detect_conflicts(aggregated_data)
