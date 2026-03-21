@@ -23,6 +23,16 @@ class SearchAgent:
         ".edu",
         ".readthedocs.io",
     )
+    LOW_VALUE_DOMAIN_EXACT_MATCHES = {
+        "linkedin.com",
+        "www.linkedin.com",
+        "pinterest.com",
+        "www.pinterest.com",
+        "facebook.com",
+        "www.facebook.com",
+        "x.com",
+        "twitter.com",
+    }
 
     def __init__(self, task_store: TaskStore, max_sources: int = 5):
         self.task_store = task_store
@@ -55,7 +65,34 @@ class SearchAgent:
             return 40
         return 0
 
-    def _score_result(self, url: str, title: str, content: str) -> int:
+    def _low_value_domain_penalty(self, domain: str) -> int:
+        if not domain:
+            return 0
+        normalized_domain = domain.removeprefix("www.")
+        if normalized_domain in self.LOW_VALUE_DOMAIN_EXACT_MATCHES:
+            return 120
+        return 0
+
+    def _authority_hint_score(self, url: str, title: str, content: str, source_quality: str | None) -> int:
+        normalized_title = self._normalize_text(title).lower()
+        normalized_content = self._normalize_text(content).lower()
+        normalized_url = (url or "").lower()
+        score = 0
+
+        if source_quality == "high":
+            score += 180
+        elif source_quality == "medium":
+            score += 60
+
+        if any(token in normalized_url for token in ("/docs", "/documentation", "/reference", "/api")):
+            score += 120
+        if any(token in normalized_title for token in ("documentation", "docs", "reference", "api", "guide", "manual")):
+            score += 80
+        if any(token in normalized_content[:600] for token in ("official documentation", "api reference", "reference guide")):
+            score += 60
+        return score
+
+    def _score_result(self, url: str, title: str, content: str, source_quality: str | None = None) -> int:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         normalized_title = self._normalize_text(title)
@@ -69,6 +106,8 @@ class SearchAgent:
         if domain and domain.startswith("www."):
             score += 5
         score += self._trusted_domain_score(domain)
+        score += self._authority_hint_score(url, title, content, source_quality)
+        score -= self._low_value_domain_penalty(domain)
         if "failed to extract content" in normalized_content.lower():
             score -= 5000
         return score
@@ -80,8 +119,9 @@ class SearchAgent:
             title = self._normalize_text(result.get("title"))
             content = self._normalize_text(result.get("content"))
             url = result.get("url", "")
+            source_quality = result.get("source_quality")
             fingerprint = self._content_fingerprint(title, content)
-            score = self._score_result(url, title, content)
+            score = self._score_result(url, title, content, source_quality)
 
             normalized_result = {
                 **result,
@@ -96,7 +136,12 @@ class SearchAgent:
 
         ranked_results = sorted(
             (item for _, item in deduped_by_fingerprint.values()),
-            key=lambda item: self._score_result(item["url"], item.get("title") or "", item.get("content") or ""),
+            key=lambda item: self._score_result(
+                item["url"],
+                item.get("title") or "",
+                item.get("content") or "",
+                item.get("source_quality"),
+            ),
             reverse=True,
         )
         return ranked_results[: self.max_sources]
