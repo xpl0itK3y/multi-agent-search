@@ -382,6 +382,70 @@ def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
     assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
 
 
+def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
+    llm = RecordingLLM(response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Compare Django and FastAPI in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "content": "In 2026 Django remains a dependable choice for teams building server-rendered applications with strong conventions.",
+                    },
+                    {
+                        "url": "https://example.com/b",
+                        "title": "B",
+                        "content": "In 2025 FastAPI is a modern async-first framework for API-first services with strong typing and clear contracts.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    assert "## Conflicts And Uncertainties" not in result
+
+
+def test_analyzer_agent_requires_more_than_generic_overlap_for_numeric_conflict():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Compare systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "content": "Framework overview for Python teams in production mentions 2026 planning guidance and migration paths.",
+                    },
+                    {
+                        "url": "https://example.com/b",
+                        "title": "B",
+                        "content": "Framework overview for Python teams in production mentions 2025 planning guidance and adoption paths.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    assert parsed["detected_conflicts"] == []
+
+
 def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
     llm = RecordingLLM(response="Plain body without headings or inline citations.")
     agent = AnalyzerAgent(llm)
