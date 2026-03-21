@@ -10,6 +10,8 @@ from src.observability import maybe_traceable
 logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
+    MAX_ANALYZER_SOURCES = 12
+    MAX_SOURCE_CONTENT_CHARS = 1600
     CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
     SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
     SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
@@ -119,6 +121,32 @@ class AnalyzerAgent(BaseAgent):
             score -= 5000
         return score
 
+    def _compact_source_content(self, content: str) -> str:
+        normalized = self._normalize_text(content)
+        if len(normalized) <= self.MAX_SOURCE_CONTENT_CHARS:
+            return normalized
+
+        sentences = self.SENTENCE_PATTERN.split(normalized)
+        compact_parts: list[str] = []
+        current_length = 0
+        for sentence in sentences:
+            cleaned = self._normalize_text(sentence)
+            if not cleaned:
+                continue
+            next_length = current_length + len(cleaned) + (1 if compact_parts else 0)
+            if next_length > self.MAX_SOURCE_CONTENT_CHARS:
+                break
+            compact_parts.append(cleaned)
+            current_length = next_length
+
+        if compact_parts:
+            compact = " ".join(compact_parts)
+            if len(compact) < len(normalized):
+                return compact.rstrip() + " ..."
+            return compact
+
+        return normalized[: self.MAX_SOURCE_CONTENT_CHARS].rstrip() + " ..."
+
     def _prepare_aggregated_data(self, tasks: List[SearchTask]) -> list[dict]:
         aggregated_candidates = []
         for task in tasks:
@@ -132,7 +160,6 @@ class AnalyzerAgent(BaseAgent):
                 if not url or not content or "failed to extract content" in content.lower():
                     continue
 
-                truncated_text = content[:3000] + "..." if len(content) > 3000 else content
                 aggregated_candidates.append(
                     {
                         "task_description": task.description,
@@ -140,7 +167,7 @@ class AnalyzerAgent(BaseAgent):
                         "domain": res.get("domain") or urlparse(url).netloc.lower() or None,
                         "source_quality": res.get("source_quality") or "low",
                         "title": title or None,
-                        "content": truncated_text,
+                        "content": self._compact_source_content(content),
                     }
                 )
 
@@ -182,7 +209,7 @@ class AnalyzerAgent(BaseAgent):
             ),
             reverse=True,
         )
-        selected_candidates = ranked_candidates[:20]
+        selected_candidates = ranked_candidates[: self.MAX_ANALYZER_SOURCES]
         return [
             {
                 "source_id": f"S{index}",
