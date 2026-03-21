@@ -169,6 +169,10 @@ async def test_research_finalize_flow(client):
     assert finalize_job_response.status_code == 200
     assert finalize_job_response.json()["status"] == "completed"
 
+    latest_finalize_job_response = await client.get(f"/v1/research/{research_id}/finalize-job")
+    assert latest_finalize_job_response.status_code == 200
+    assert latest_finalize_job_response.json()["id"] == job_id
+
 
 @pytest.mark.anyio
 async def test_requeue_search_job_endpoint(client):
