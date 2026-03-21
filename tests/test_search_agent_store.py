@@ -522,3 +522,43 @@ def test_search_agent_skips_mobile_ranking_spam_domains(mocker):
     assert "https://www.dxomark.com/smartphones/" in extracted_urls
     assert "https://news.wirefly.com/2013/12/16/official-smartphone-rankings-week-93" not in extracted_urls
     assert "https://www.techrankup.com/en/smartphones-performance-ranking/geekbench-6/" not in extracted_urls
+
+
+def test_search_agent_prefers_mainstream_editorial_mobile_sites_over_consumer_listicles(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Лучшие смартфоны 2026",
+            "queries": ["best smartphones 2026"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.pcmag.com/picks/the-best-phones", "title": "The Best Phones"},
+            {"url": "https://www.cnet.com/tech/mobile/comparing-the-2026-phone-lineups-from-apple-samsung-google-and-everyone-else/", "title": "Comparing the 2026 phone lineups"},
+            {"url": "https://www.futureinsights.com/best-smartphones-2026-comparison/", "title": "Best Smartphones 2026 comparison"},
+            {"url": "https://rank1one.com/top-10-smartphones-2026/", "title": "Top 10 smartphones 2026"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://www.pcmag.com/picks/the-best-phones" in extracted_urls
+    assert "https://www.cnet.com/tech/mobile/comparing-the-2026-phone-lineups-from-apple-samsung-google-and-everyone-else/" in extracted_urls
+    assert "https://www.futureinsights.com/best-smartphones-2026-comparison/" not in extracted_urls
+    assert "https://rank1one.com/top-10-smartphones-2026/" not in extracted_urls
