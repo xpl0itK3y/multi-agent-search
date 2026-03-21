@@ -9,6 +9,13 @@ from src.api.schemas import SearchTask
 logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
+    CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
+    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
+    LANGUAGE_HINTS = {
+        "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
+        "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
+        "en": {"the", "and", "for", "with", "that", "from", "this", "into", "small"},
+    }
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
         "docs.python.org",
@@ -166,20 +173,112 @@ class AnalyzerAgent(BaseAgent):
         normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
         return normalized
 
+    def _detect_language(self, text: str) -> str:
+        normalized = self._normalize_text(text).lower()
+        if not normalized:
+            return "unknown"
+
+        cyrillic_count = sum(1 for char in normalized if "а" <= char <= "я" or char == "ё")
+        latin_count = sum(1 for char in normalized if "a" <= char <= "z")
+        if cyrillic_count >= 6 and cyrillic_count >= latin_count / 3:
+            return "ru"
+
+        tokens = re.findall(r"[a-záéíóúñü]+", normalized)
+        if not tokens:
+            return "unknown"
+
+        scores = {
+            language: sum(1 for token in tokens if token in hints)
+            for language, hints in self.LANGUAGE_HINTS.items()
+        }
+        best_language = max(scores, key=scores.get)
+        if scores[best_language] <= 0:
+            return "en" if latin_count else "unknown"
+        return best_language
+
+    def _language_instruction(self, language: str) -> str:
+        if language == "ru":
+            return "Write the full report in Russian."
+        if language == "es":
+            return "Write the full report in Spanish."
+        if language == "en":
+            return "Write the full report in English."
+        return "Write the full report in the same language as the original prompt."
+
+    def _build_user_prompt(self, input_data: dict, language: str, retry: bool = False) -> str:
+        instruction = self._language_instruction(language)
+        if retry:
+            instruction = (
+                f"{instruction} Your previous answer used the wrong language. "
+                "Rewrite the report fully in the requested language and keep factual citations."
+            )
+        return (
+            f"Please analyze this data and generate the final report. {instruction}\n\n"
+            f"{json.dumps(input_data, ensure_ascii=False)}"
+        )
+
+    def _extract_used_source_ids(self, report_body: str) -> list[str]:
+        ordered_ids: list[str] = []
+        for match in self.CITATION_PATTERN.finditer(report_body):
+            source_id = f"S{match.group(1)}"
+            if source_id not in ordered_ids:
+                ordered_ids.append(source_id)
+        return ordered_ids
+
+    def _sanitize_citations(self, report: str, valid_source_ids: set[str]) -> str:
+        def replace(match: re.Match[str]) -> str:
+            source_id = f"S{match.group(1)}"
+            return match.group(0) if source_id in valid_source_ids else ""
+
+        sanitized = self.CITATION_PATTERN.sub(replace, report)
+        sanitized = re.sub(r"\[(?:,\s*)+\]", "", sanitized)
+        sanitized = re.sub(r"\s{2,}", " ", sanitized)
+        sanitized = re.sub(r"\s+([,.;:])", r"\1", sanitized)
+        return sanitized
+
+    def _rebuild_sources_section(self, report: str, aggregated_data: list[dict]) -> str:
+        without_sources = self.SOURCE_HEADING_PATTERN.sub("", report).strip()
+        valid_sources = {item["source_id"]: item for item in aggregated_data}
+        sanitized = self._sanitize_citations(without_sources, set(valid_sources))
+        used_source_ids = self._extract_used_source_ids(sanitized)
+
+        lines = ["## Sources"]
+        for source_id in used_source_ids:
+            source = valid_sources.get(source_id)
+            if source is None:
+                continue
+            lines.append(f"- [{source_id}] {source['url']}")
+
+        return f"{sanitized.strip()}\n\n" + "\n".join(lines)
+
+    def _generate_report(self, input_data: dict, language: str, retry: bool = False) -> str:
+        user_prompt = self._build_user_prompt(input_data, language, retry=retry)
+        return self.llm.generate(
+            system_prompt=self.SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.3,
+        )
+
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(tasks)
+        prompt_language = self._detect_language(prompt)
 
         input_data = {
             "original_prompt": prompt,
             "gathered_data": aggregated_data
         }
 
-        user_prompt = f"Please analyze this data and generate the final report:\n\n{json.dumps(input_data, ensure_ascii=False)}"
-
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
-        result = self.llm.generate(
-            system_prompt=self.SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            temperature=0.3,
-        )
-        return self._post_process_report(result)
+        result = self._generate_report(input_data, prompt_language)
+        if prompt_language != "unknown":
+            report_language = self._detect_language(result)
+            if report_language not in {prompt_language, "unknown"}:
+                logger.warning(
+                    "AnalyzerAgent detected language mismatch. prompt=%s report=%s. Retrying once.",
+                    prompt_language,
+                    report_language,
+                )
+                result = self._generate_report(input_data, prompt_language, retry=True)
+
+        normalized = self._post_process_report(result)
+        return self._rebuild_sources_section(normalized, aggregated_data)
