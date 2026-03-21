@@ -51,3 +51,18 @@ def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
     assert settings.finalize_job_timeout_seconds == 300
     assert settings.search_job_retention_seconds == 86400
     assert settings.finalize_job_retention_seconds == 86400
+
+
+def test_settings_supports_optional_langsmith_flags():
+    settings = Settings(
+        _env_file=None,
+        langsmith_tracing=True,
+        langsmith_api_key="test-key",
+        langsmith_endpoint="https://api.smith.langchain.com",
+        langsmith_project="mas-dev",
+    )
+
+    assert settings.langsmith_tracing is True
+    assert settings.langsmith_api_key == "test-key"
+    assert settings.langsmith_endpoint == "https://api.smith.langchain.com"
+    assert settings.langsmith_project == "mas-dev"

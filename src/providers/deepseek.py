@@ -2,6 +2,7 @@ import os
 from openai import OpenAI
 from src.core.llm import LLMProvider
 from src.config import settings
+from src.observability import maybe_wrap_openai_client
 
 class DeepSeekProvider(LLMProvider):
     
@@ -12,10 +13,10 @@ class DeepSeekProvider(LLMProvider):
         if not self.api_key:
             raise ValueError("DEEPSEEK_API_KEY is not set")
         
-        self.client = OpenAI(
+        self.client = maybe_wrap_openai_client(OpenAI(
             api_key=self.api_key,
             base_url="https://api.deepseek.com"
-        )
+        ))
 
     def generate(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
         response = self.client.chat.completions.create(

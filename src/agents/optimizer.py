@@ -1,4 +1,5 @@
 from src.core.agent import BaseAgent
+from src.observability import maybe_traceable
 
 class PromptOptimizerAgent(BaseAgent):
     
@@ -30,6 +31,7 @@ class PromptOptimizerAgent(BaseAgent):
                         - Preserve the intent and domain of the original request — do not change what the user is asking for.
                     """
 
+    @maybe_traceable(name="prompt_optimizer_run", run_type="llm")
     def run(self, input_data: str) -> str:
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
