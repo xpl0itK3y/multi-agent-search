@@ -71,7 +71,8 @@ def test_analyzer_agent_uses_llm_provider_contract():
         ],
     )
 
-    assert result == "report\n\n## Sources"
+    assert result.endswith("## Sources")
+    assert "## Report Notes" in result
     assert len(llm.calls) == 1
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
@@ -106,7 +107,8 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
         ],
     )
 
-    assert result == "report\n\n## Sources"
+    assert result.endswith("## Sources")
+    assert "## Report Notes" in result
     assert len(llm.calls) == 1
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
     parsed = json.loads(payload)
@@ -377,6 +379,59 @@ def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
     parsed = json.loads(payload)
     assert parsed["detected_conflicts"]
     assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
+
+
+def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
+    llm = RecordingLLM(response="Plain body without headings or inline citations.")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Compare systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert "## Report Notes" in result
+    assert "missing a clear introduction heading" in result
+    assert "missing a clear conclusion heading" in result
+    assert "does not cite any sources inline" in result
+    assert "fewer than two usable sources" in result
+
+
+def test_analyzer_agent_does_not_add_report_notes_for_well_formed_report():
+    llm = RecordingLLM(
+        response=(
+            "## Introduction\nReport intro [S1] [S2]\n\n"
+            "## Conclusion\nReport outro [S1].\n\n"
+            "## Sources\n- [S1] https://wrong.example\n- [S2] https://wrong.example/two"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Compare systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {"url": "https://example.com/1", "title": "Example 1", "content": "Body one"},
+                    {"url": "https://example.com/2", "title": "Example 2", "content": "Body two"},
+                ],
+            )
+        ],
+    )
+
+    assert "## Report Notes" not in result
 
 
 def test_decompose_does_not_schedule_failed_tasks(mocker):

@@ -13,6 +13,9 @@ class AnalyzerAgent(BaseAgent):
     SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
     SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
     CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+Conflicts And Uncertainties\s*$")
+    REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+Report Notes\s*$")
+    INTRODUCTION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Introduction|Введение)\s*$")
+    CONCLUSION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conclusion|Заключение)\s*$")
     LANGUAGE_HINTS = {
         "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
         "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
@@ -245,7 +248,7 @@ class AnalyzerAgent(BaseAgent):
 
         sanitized = self.CITATION_PATTERN.sub(replace, report)
         sanitized = re.sub(r"\[(?:,\s*)+\]", "", sanitized)
-        sanitized = re.sub(r"\s{2,}", " ", sanitized)
+        sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
         sanitized = re.sub(r"\s+([,.;:])", r"\1", sanitized)
         return sanitized
 
@@ -363,6 +366,38 @@ class AnalyzerAgent(BaseAgent):
             return f"{report[:conclusion_match.start()].rstrip()}\n\n{insertion}\n\n{report[conclusion_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{insertion}"
 
+    def _report_quality_notes(self, report: str, aggregated_data: list[dict]) -> list[str]:
+        notes: list[str] = []
+        normalized = report.lower()
+        used_source_ids = self._extract_used_source_ids(report)
+
+        if not self.INTRODUCTION_HEADING_PATTERN.search(report):
+            notes.append("The report is missing a clear introduction heading.")
+        if not self.CONCLUSION_HEADING_PATTERN.search(report):
+            notes.append("The report is missing a clear conclusion heading.")
+        if not used_source_ids:
+            notes.append("The report does not cite any sources inline.")
+        if not aggregated_data:
+            notes.append("No usable extracted sources were available for analysis.")
+        elif len(aggregated_data) < 2:
+            notes.append("The report is based on fewer than two usable sources.")
+        elif len(used_source_ids) < min(2, len(aggregated_data)):
+            notes.append("Only a small subset of the available sources is cited in the final report.")
+        if "## sources" in normalized and report.strip().endswith("## Sources"):
+            notes.append("The sources section is present but no cited sources were included under it.")
+
+        return notes
+
+    def _inject_report_notes(self, report: str, notes: list[str]) -> str:
+        if not notes or self.REPORT_NOTES_HEADING_PATTERN.search(report):
+            return report
+
+        section = "## Report Notes\n" + "\n".join(f"- {note}" for note in notes)
+        sources_match = re.search(r"(?im)^##\s+Sources\s*$", report)
+        if sources_match:
+            return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
+        return f"{report.strip()}\n\n{section}"
+
     def _generate_report(self, input_data: dict, language: str, retry: bool = False) -> str:
         user_prompt = self._build_user_prompt(input_data, language, retry=retry)
         return self.llm.generate(
@@ -396,4 +431,6 @@ class AnalyzerAgent(BaseAgent):
 
         normalized = self._post_process_report(result)
         with_conflicts = self._inject_conflicts_section(normalized, conflicts)
-        return self._rebuild_sources_section(with_conflicts, aggregated_data)
+        rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
+        notes = self._report_quality_notes(rebuilt, aggregated_data)
+        return self._inject_report_notes(rebuilt, notes)
