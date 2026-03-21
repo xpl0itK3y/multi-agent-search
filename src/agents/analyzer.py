@@ -10,12 +10,23 @@ logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
     CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
+    SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
     SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
+    CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+Conflicts And Uncertainties\s*$")
     LANGUAGE_HINTS = {
         "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
         "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
         "en": {"the", "and", "for", "with", "that", "from", "this", "into", "small"},
     }
+    STOPWORDS = {
+        "the", "and", "for", "with", "that", "this", "from", "into", "their", "there", "about",
+        "have", "has", "had", "were", "was", "will", "would", "could", "should", "than", "then",
+        "into", "over", "under", "using", "used", "uses", "also", "only", "more", "most", "less",
+        "very", "some", "many", "much", "when", "where", "while", "which", "what", "your", "they",
+        "them", "being", "been", "because", "through", "each", "same", "such", "make", "made",
+        "like", "just", "than", "small", "api", "apis", "framework", "frameworks",
+    }
+    NEGATION_TOKENS = {"no", "not", "never", "without", "lack", "lacks", "cannot", "can't", "doesn't", "don't"}
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
         "docs.python.org",
@@ -213,7 +224,9 @@ class AnalyzerAgent(BaseAgent):
                 "Rewrite the report fully in the requested language and keep factual citations."
             )
         return (
-            f"Please analyze this data and generate the final report. {instruction}\n\n"
+            "Please analyze this data and generate the final report. "
+            f"{instruction} "
+            "If sources disagree, add a section titled 'Conflicts And Uncertainties' and cite the competing evidence.\n\n"
             f"{json.dumps(input_data, ensure_ascii=False)}"
         )
 
@@ -251,6 +264,105 @@ class AnalyzerAgent(BaseAgent):
 
         return f"{sanitized.strip()}\n\n" + "\n".join(lines)
 
+    def _extract_candidate_claims(self, aggregated_data: list[dict]) -> list[dict]:
+        claims: list[dict] = []
+        for source in aggregated_data:
+            content = source.get("content") or ""
+            for sentence in self.SENTENCE_PATTERN.split(content):
+                normalized_sentence = self._normalize_text(sentence)
+                if len(normalized_sentence) < 50 or len(normalized_sentence) > 260:
+                    continue
+
+                lowered = normalized_sentence.lower()
+                tokens = [
+                    token for token in re.findall(r"[a-z0-9]+", lowered)
+                    if len(token) >= 4 and token not in self.STOPWORDS
+                ]
+                unique_tokens: list[str] = []
+                for token in tokens:
+                    if token not in unique_tokens:
+                        unique_tokens.append(token)
+
+                if len(unique_tokens) < 2:
+                    continue
+
+                numbers = tuple(re.findall(r"\b\d+(?:\.\d+)?\b", lowered))
+                has_negation = any(token in lowered for token in self.NEGATION_TOKENS)
+                claims.append(
+                    {
+                        "source_id": source["source_id"],
+                        "sentence": normalized_sentence,
+                        "tokens": unique_tokens[:6],
+                        "numbers": numbers,
+                        "has_negation": has_negation,
+                    }
+                )
+        return claims
+
+    def _claims_overlap(self, left: dict, right: dict) -> bool:
+        shared_tokens = set(left["tokens"]) & set(right["tokens"])
+        return len(shared_tokens) >= 2
+
+    def _claims_conflict(self, left: dict, right: dict) -> bool:
+        if left["source_id"] == right["source_id"]:
+            return False
+        if not self._claims_overlap(left, right):
+            return False
+        if left["has_negation"] != right["has_negation"]:
+            return True
+
+        left_numbers = set(left["numbers"])
+        right_numbers = set(right["numbers"])
+        if left_numbers and right_numbers and left_numbers != right_numbers:
+            return True
+        return False
+
+    def _detect_conflicts(self, aggregated_data: list[dict]) -> list[dict]:
+        claims = self._extract_candidate_claims(aggregated_data)
+        conflicts: list[dict] = []
+        seen_pairs: set[tuple[str, str]] = set()
+
+        for index, left in enumerate(claims):
+            for right in claims[index + 1:]:
+                if not self._claims_conflict(left, right):
+                    continue
+
+                pair_key = tuple(sorted((left["source_id"], right["source_id"])))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
+                shared_tokens = sorted(set(left["tokens"]) & set(right["tokens"]))
+                conflicts.append(
+                    {
+                        "topic": ", ".join(shared_tokens[:3]) or "source disagreement",
+                        "source_ids": [left["source_id"], right["source_id"]],
+                        "sentences": [left["sentence"], right["sentence"]],
+                    }
+                )
+                if len(conflicts) >= 3:
+                    return conflicts
+        return conflicts
+
+    def _inject_conflicts_section(self, report: str, conflicts: list[dict]) -> str:
+        if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
+            return report
+
+        lines = ["## Conflicts And Uncertainties"]
+        for conflict in conflicts:
+            left_source, right_source = conflict["source_ids"]
+            left_sentence, right_sentence = conflict["sentences"]
+            lines.append(
+                f"- On {conflict['topic']}, {left_source} and {right_source} provide conflicting evidence: "
+                f'"{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
+            )
+
+        insertion = "\n".join(lines)
+        conclusion_match = re.search(r"(?im)^##\s+Conclusion\s*$", report)
+        if conclusion_match:
+            return f"{report[:conclusion_match.start()].rstrip()}\n\n{insertion}\n\n{report[conclusion_match.start():].lstrip()}"
+        return f"{report.strip()}\n\n{insertion}"
+
     def _generate_report(self, input_data: dict, language: str, retry: bool = False) -> str:
         user_prompt = self._build_user_prompt(input_data, language, retry=retry)
         return self.llm.generate(
@@ -261,11 +373,13 @@ class AnalyzerAgent(BaseAgent):
 
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(tasks)
+        conflicts = self._detect_conflicts(aggregated_data)
         prompt_language = self._detect_language(prompt)
 
         input_data = {
             "original_prompt": prompt,
-            "gathered_data": aggregated_data
+            "gathered_data": aggregated_data,
+            "detected_conflicts": conflicts,
         }
 
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
@@ -281,4 +395,5 @@ class AnalyzerAgent(BaseAgent):
                 result = self._generate_report(input_data, prompt_language, retry=True)
 
         normalized = self._post_process_report(result)
-        return self._rebuild_sources_section(normalized, aggregated_data)
+        with_conflicts = self._inject_conflicts_section(normalized, conflicts)
+        return self._rebuild_sources_section(with_conflicts, aggregated_data)

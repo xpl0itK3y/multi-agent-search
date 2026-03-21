@@ -312,6 +312,73 @@ def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
     assert "## Введение" in result
 
 
+def test_analyzer_agent_detects_conflicts_from_overlapping_claims():
+    llm = RecordingLLM(response="## Introduction\nComparison body. [S1] [S2]\n\n## Conclusion\nDone.")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Compare two systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "content": "Framework X supports async handlers in production and handles 1000 requests per second reliably.",
+                    },
+                    {
+                        "url": "https://example.com/b",
+                        "title": "B",
+                        "content": "Framework X does not support async handlers in production and handles 300 requests per second reliably.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    assert "## Conflicts And Uncertainties" in result
+    assert "[S1]" in result
+    assert "[S2]" in result
+
+
+def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Compare two systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "content": "Platform Y has 99 percent uptime in production and supports async jobs.",
+                    },
+                    {
+                        "url": "https://example.com/b",
+                        "title": "B",
+                        "content": "Platform Y has 92 percent uptime in production and supports async jobs.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    assert parsed["detected_conflicts"]
+    assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
+
+
 def test_decompose_does_not_schedule_failed_tasks(mocker):
     orchestrator = mocker.Mock()
     orchestrator.run_decompose.return_value = [
