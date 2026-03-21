@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchTask
 from src.observability import maybe_traceable
+from src.source_quality_policy import TOPIC_POLICIES, combined_topics
 
 logger = logging.getLogger(__name__)
 
@@ -359,52 +360,53 @@ class AnalyzerAgent(BaseAgent):
             score += 45
         return score
 
-    def _is_consumer_tech_context(self, prompt: str, tasks: List[SearchTask]) -> bool:
-        haystack_parts = [self._normalize_text(prompt).lower()]
+    def _detect_topics(self, prompt: str, tasks: List[SearchTask]) -> set[str]:
+        haystack_parts = [self._normalize_text(prompt)]
         for task in tasks:
-            haystack_parts.append(self._normalize_text(task.description).lower())
-            haystack_parts.extend(self._normalize_text(query).lower() for query in task.queries or [])
-        haystack = " ".join(part for part in haystack_parts if part)
-        return any(token in haystack for token in self.CONSUMER_TECH_QUERY_TOKENS)
+            haystack_parts.append(self._normalize_text(task.description))
+            haystack_parts.extend(self._normalize_text(query) for query in task.queries or [])
+        return combined_topics(*haystack_parts)
 
-    def _consumer_tech_domain_adjustment(
+    def _topic_domain_adjustment(
         self,
         url: str,
         title: str,
         content: str,
         source_quality: str | None = None,
+        topics: set[str] | None = None,
     ) -> int:
         normalized_domain = urlparse(url).netloc.lower().removeprefix("www.")
         normalized_title = self._normalize_text(title).lower()
         normalized_content = self._normalize_text(content).lower()
         normalized_url = (url or "").lower()
+        topics = topics or set()
         score = 0
 
-        has_strong_editorial_signal = any(
-            token in normalized_title or token in normalized_content[:500] or token in normalized_url
-            for token in self.CONSUMER_TECH_STRONG_EDITORIAL_TOKENS
-        )
-
-        if normalized_domain in self.CONSUMER_TECH_PREMIUM_DOMAIN_EXACT_MATCHES:
-            score += 220
-        if normalized_domain in self.CONSUMER_TECH_SECONDARY_DOMAIN_EXACT_MATCHES:
-            score += 60
-        if normalized_domain in self.CONSUMER_TECH_WEAK_DOMAIN_EXACT_MATCHES:
-            score -= 180
-        if any(token in normalized_domain for token in self.CONSUMER_TECH_WEAK_DOMAIN_SUBSTRINGS):
-            score -= 120
-
-        if any(token in normalized_title for token in self.CONSUMER_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
-            score -= 140
-        if any(token in normalized_content[:450] for token in self.CONSUMER_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
-            score -= 80
-        if any(token in normalized_title for token in self.CONSUMER_TECH_WEAK_SIGNAL_TOKENS):
-            score -= 95
-        if any(token in normalized_content[:500] for token in self.CONSUMER_TECH_WEAK_SIGNAL_TOKENS):
-            score -= 70
+        for topic_name in topics:
+            policy = TOPIC_POLICIES[topic_name]
+            has_strong_editorial_signal = any(
+                token in normalized_title or token in normalized_content[:500] or token in normalized_url
+                for token in policy.strong_editorial_tokens
+            )
+            if normalized_domain in policy.premium_domains:
+                score += 220
+            if normalized_domain in policy.secondary_domains:
+                score += 60
+            if normalized_domain in policy.weak_domains:
+                score -= 180
+            if any(token in normalized_domain for token in policy.weak_domain_substrings):
+                score -= 120
+            if any(token in normalized_title for token in policy.generic_listicle_tokens) and not has_strong_editorial_signal:
+                score -= 140
+            if any(token in normalized_content[:450] for token in policy.generic_listicle_tokens) and not has_strong_editorial_signal:
+                score -= 80
+            if any(token in normalized_title for token in policy.weak_signal_tokens):
+                score -= 95
+            if any(token in normalized_content[:500] for token in policy.weak_signal_tokens):
+                score -= 70
         if any(token in normalized_url for token in ("rumor", "rumours", "rumors", "launch-date", "price-in", "upcoming")):
             score -= 75
-        if source_quality == "low" and not has_strong_editorial_signal:
+        if source_quality == "low":
             score -= 40
 
         return score
@@ -415,8 +417,9 @@ class AnalyzerAgent(BaseAgent):
         title: str,
         content: str,
         source_quality: str | None = None,
-        is_consumer_tech_context: bool = False,
+        topics: set[str] | None = None,
     ) -> bool:
+        topics = topics or set()
         penalty = self._speculative_penalty(url, title, content, source_quality)
         trusted_score = self._trusted_domain_score(url)
         if source_quality == "low" and penalty >= 160 and trusted_score <= 0:
@@ -424,11 +427,11 @@ class AnalyzerAgent(BaseAgent):
         normalized_content = self._normalize_text(content).lower()
         if source_quality == "low" and len(normalized_content) < 220 and penalty >= 80:
             return True
-        if is_consumer_tech_context:
-            consumer_score = self._consumer_tech_domain_adjustment(url, title, content, source_quality)
-            if consumer_score <= -180 and trusted_score <= 0 and source_quality != "high":
+        if topics:
+            topic_score = self._topic_domain_adjustment(url, title, content, source_quality, topics=topics)
+            if topic_score <= -180 and trusted_score <= 0 and source_quality != "high":
                 return True
-            if consumer_score <= -120 and source_quality == "low" and len(normalized_content) < 1200:
+            if topic_score <= -120 and source_quality == "low" and len(normalized_content) < 1200:
                 return True
         return False
 
@@ -459,7 +462,7 @@ class AnalyzerAgent(BaseAgent):
         return normalized[: self.MAX_SOURCE_CONTENT_CHARS].rstrip() + " ..."
 
     def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask]) -> list[dict]:
-        is_consumer_tech_context = self._is_consumer_tech_context(prompt, tasks)
+        topics = self._detect_topics(prompt, tasks)
         aggregated_candidates = []
         for task in tasks:
             if task.status != "completed" or not task.result:
@@ -477,7 +480,7 @@ class AnalyzerAgent(BaseAgent):
                     title,
                     content,
                     source_quality,
-                    is_consumer_tech_context=is_consumer_tech_context,
+                    topics=topics,
                 ):
                     continue
 
@@ -501,12 +504,13 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("content") or "",
                 candidate.get("source_quality"),
             )
-            if is_consumer_tech_context:
-                candidate_score += self._consumer_tech_domain_adjustment(
+            if topics:
+                candidate_score += self._topic_domain_adjustment(
                     candidate.get("url") or "",
                     candidate.get("title") or "",
                     candidate.get("content") or "",
                     candidate.get("source_quality"),
+                    topics=topics,
                 )
 
             existing_score = None
@@ -517,12 +521,13 @@ class AnalyzerAgent(BaseAgent):
                     existing.get("content") or "",
                     existing.get("source_quality"),
                 )
-                if is_consumer_tech_context:
-                    existing_score += self._consumer_tech_domain_adjustment(
+                if topics:
+                    existing_score += self._topic_domain_adjustment(
                         existing.get("url") or "",
                         existing.get("title") or "",
                         existing.get("content") or "",
                         existing.get("source_quality"),
+                        topics=topics,
                     )
 
             if existing is None or candidate_score > (existing_score or 0):
@@ -540,12 +545,13 @@ class AnalyzerAgent(BaseAgent):
                 candidate.get("content") or "",
                 candidate.get("source_quality"),
             )
-            if is_consumer_tech_context:
-                score += self._consumer_tech_domain_adjustment(
+            if topics:
+                score += self._topic_domain_adjustment(
                     candidate.get("url") or "",
                     candidate.get("title") or "",
                     candidate.get("content") or "",
                     candidate.get("source_quality"),
+                    topics=topics,
                 )
             existing = best_by_fingerprint.get(fingerprint)
             if existing is None or score > existing[0]:
@@ -559,13 +565,14 @@ class AnalyzerAgent(BaseAgent):
                 item.get("content") or "",
                 item.get("source_quality"),
             ) + (
-                self._consumer_tech_domain_adjustment(
+                self._topic_domain_adjustment(
                     item.get("url") or "",
                     item.get("title") or "",
                     item.get("content") or "",
                     item.get("source_quality"),
+                    topics=topics,
                 )
-                if is_consumer_tech_context
+                if topics
                 else 0
             ),
             reverse=True,

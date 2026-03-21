@@ -7,6 +7,7 @@ from src.providers.search import SearchProvider, ContentExtractor
 from src.api.schemas import TaskStatus, TaskUpdate
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict
+from src.source_quality_policy import TOPIC_POLICIES, combined_topics
 
 logger = logging.getLogger(__name__)
 
@@ -322,13 +323,12 @@ class SearchAgent:
         content_prefix = normalized_content[:200]
         return f"{normalized_title}|{content_prefix}"
 
-    def _is_mobile_tech_query(self, task) -> bool:
+    def _detect_topics(self, task) -> set[str]:
         haystack_parts = [
-            self._normalize_text(getattr(task, "description", None)).lower(),
-            " ".join(self._normalize_text(query).lower() for query in getattr(task, "queries", []) or []),
+            self._normalize_text(getattr(task, "description", None)),
+            " ".join(self._normalize_text(query) for query in getattr(task, "queries", []) or []),
         ]
-        haystack = " ".join(part for part in haystack_parts if part)
-        return any(token in haystack for token in self.MOBILE_TECH_QUERY_TOKENS)
+        return combined_topics(*haystack_parts)
 
     def _trusted_domain_score(self, domain: str) -> int:
         if not domain:
@@ -354,12 +354,13 @@ class SearchAgent:
             return 90
         return 0
 
-    def _should_skip_search_result(self, url: str, title: str | None, is_mobile_tech_query: bool = False) -> bool:
+    def _should_skip_search_result(self, url: str, title: str | None, topics: set[str] | None = None) -> bool:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         normalized_domain = domain.removeprefix("www.")
         normalized_title = self._normalize_text(title).lower()
         normalized_url = (url or "").lower()
+        topics = topics or set()
 
         if not normalized_domain:
             return True
@@ -371,10 +372,11 @@ class SearchAgent:
             return True
         if normalized_title and any(token in normalized_title for token in self.LOW_SIGNAL_TITLE_TOKENS):
             return True
-        if is_mobile_tech_query:
-            if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES}:
+        for topic_name in topics:
+            policy = TOPIC_POLICIES[topic_name]
+            if normalized_domain in policy.weak_domains:
                 return True
-            if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
+            if any(token in normalized_domain for token in policy.weak_domain_substrings):
                 return True
         return False
 
@@ -410,46 +412,46 @@ class SearchAgent:
             score -= 20
         return score
 
-    def _mobile_tech_domain_adjustment(self, url: str, title: str | None, snippet: str | None) -> int:
+    def _topic_domain_adjustment(self, url: str, title: str | None, snippet: str | None, topics: set[str] | None = None) -> int:
         parsed = urlparse(url)
         normalized_domain = parsed.netloc.lower().removeprefix("www.")
         normalized_title = self._normalize_text(title).lower()
         normalized_snippet = self._normalize_text(snippet).lower()
         normalized_url = (url or "").lower()
+        topics = topics or set()
         score = 0
-        has_strong_editorial_signal = any(
-            token in normalized_title or token in normalized_snippet or token in normalized_url
-            for token in self.MOBILE_TECH_STRONG_EDITORIAL_TOKENS
-        )
+        for topic_name in topics:
+            policy = TOPIC_POLICIES[topic_name]
+            has_strong_editorial_signal = any(
+                token in normalized_title or token in normalized_snippet or token in normalized_url
+                for token in policy.strong_editorial_tokens
+            )
+            if normalized_domain in policy.premium_domains:
+                score += 220
+            if normalized_domain in policy.secondary_domains:
+                score += 70
+            if normalized_domain in policy.weak_domains:
+                score -= 220
+            if any(token in normalized_domain for token in policy.weak_domain_substrings):
+                score -= 120
+            if any(token in normalized_title for token in policy.strong_editorial_tokens):
+                score += 70
+            if any(token in normalized_snippet for token in policy.strong_editorial_tokens):
+                score += 35
+            if any(token in normalized_title for token in policy.weak_signal_tokens):
+                score -= 90
+            if any(token in normalized_snippet for token in policy.weak_signal_tokens):
+                score -= 60
+            if any(token in normalized_title for token in policy.generic_listicle_tokens) and not has_strong_editorial_signal:
+                score -= 140
+            if any(token in normalized_snippet for token in policy.generic_listicle_tokens) and not has_strong_editorial_signal:
+                score -= 70
 
-        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_STRONG_DOMAIN_EXACT_MATCHES}:
-            score += 220
-        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_SECONDARY_DOMAIN_EXACT_MATCHES}:
-            score += 70
-        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES}:
-            score -= 220
-        if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
-            score -= 120
-
-        if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/smartphones/", "/picks/the-best-phones", "/tech/mobile/", "/article/724318/", "/best-picks/best-phones")):
+        if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/docs", "/documentation", "/reference", "/api")):
             score += 50
-        if any(token in normalized_title for token in ("hands-on", "review", "camera test", "benchmark", "official", "launch", "tested", "editor's choice")):
-            score += 70
-        if any(token in normalized_title for token in ("buyers guide", "buying guide", "top phones", "best smartphones", "most anticipated", "smartphone rankings", "performance ranking")):
-            score -= 80
-        if any(token in normalized_snippet for token in ("rumored", "predicted", "expected to launch", "what to expect")):
-            score -= 55
-        if any(token in normalized_title for token in self.MOBILE_TECH_WEAK_SIGNAL_TOKENS):
-            score -= 90
-        if any(token in normalized_snippet for token in self.MOBILE_TECH_WEAK_SIGNAL_TOKENS):
-            score -= 60
-        if any(token in normalized_url for token in ("rumor", "rumours", "rumors", "launch-date", "price-in", "upcoming")):
+        if any(token in normalized_url for token in ("rumor", "rumours", "rumors", "launch-date", "price-in", "upcoming", "ranking")):
             score -= 70
-        if any(token in normalized_title for token in self.MOBILE_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
-            score -= 140
-        if any(token in normalized_url for token in ("best-phones", "best-smartphones", "top-smartphones", "top-phones", "rankings", "ranking")) and not has_strong_editorial_signal:
-            score -= 110
-        if "for every budget" in normalized_snippet and not has_strong_editorial_signal:
+        if "for every budget" in normalized_snippet:
             score -= 70
         return score
 
@@ -543,7 +545,7 @@ class SearchAgent:
         all_results = []
         unique_urls = set()
         candidate_results: list[dict] = []
-        is_mobile_tech_query = self._is_mobile_tech_query(task)
+        topics = self._detect_topics(task)
 
         try:
             for query in task.queries:
@@ -553,7 +555,7 @@ class SearchAgent:
                 for res in search_results:
                     url = res.get("url")
                     if url and url not in unique_urls:
-                        if self._should_skip_search_result(url, res.get("title"), is_mobile_tech_query=is_mobile_tech_query):
+                        if self._should_skip_search_result(url, res.get("title"), topics=topics):
                             self.task_store.update_task(
                                 task_id,
                                 TaskUpdate(log=f"Skipped low-value result: {url}"),
@@ -570,14 +572,11 @@ class SearchAgent:
                                     res.get("title"),
                                     res.get("snippet"),
                                 )
-                                + (
-                                    self._mobile_tech_domain_adjustment(
-                                        url,
-                                        res.get("title"),
-                                        res.get("snippet"),
-                                    )
-                                    if is_mobile_tech_query
-                                    else 0
+                                + self._topic_domain_adjustment(
+                                    url,
+                                    res.get("title"),
+                                    res.get("snippet"),
+                                    topics=topics,
                                 ),
                             }
                         )

@@ -222,6 +222,53 @@ def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
     assert gathered[0]["source_id"] == "S1"
 
 
+def test_analyzer_agent_prefers_programming_docs_over_generic_tutorial_sites():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Сравни документацию FastAPI и общие python API guides",
+        [
+            SearchTask(
+                id="task-1",
+                description="Документация FastAPI и Python API",
+                queries=["fastapi api documentation"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://fastapi.tiangolo.com/",
+                        "domain": "fastapi.tiangolo.com",
+                        "source_quality": "high",
+                        "title": "FastAPI Documentation",
+                        "content": "Official documentation and API reference for FastAPI with tutorials and reference guide content. " * 20,
+                    },
+                    {
+                        "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP",
+                        "domain": "developer.mozilla.org",
+                        "source_quality": "high",
+                        "title": "MDN HTTP documentation",
+                        "content": "Official HTTP docs and reference guide used by developers in production systems. " * 20,
+                    },
+                    {
+                        "url": "https://www.geeksforgeeks.org/top-python-frameworks/",
+                        "domain": "www.geeksforgeeks.org",
+                        "source_quality": "medium",
+                        "title": "Top Python frameworks",
+                        "content": "This comparison blog lists popular frameworks and opinions about which framework to choose. " * 12,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    urls = [item["url"] for item in parsed["gathered_data"]]
+    assert "https://fastapi.tiangolo.com/" in urls
+    assert "https://developer.mozilla.org/en-US/docs/Web/HTTP" in urls
+    assert "https://www.geeksforgeeks.org/top-python-frameworks/" not in urls
+
+
 def test_analyzer_agent_prefers_high_quality_reference_sources_over_social_results():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)
@@ -365,6 +412,53 @@ def test_analyzer_agent_keeps_stronger_sources_while_dropping_speculative_noise(
     gathered = parsed["gathered_data"]
     assert len(gathered) == 1
     assert gathered[0]["url"] == "https://www.comptia.org/en-us/blog/top-tech-trends-to-watch-in-2026/"
+
+
+def test_analyzer_agent_prefers_reported_news_and_official_announcements_over_trend_roundups():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Последние новости ИИ и крупные анонсы за сегодня",
+        [
+            SearchTask(
+                id="task-1",
+                description="Новости ИИ и официальные анонсы",
+                queries=["latest ai news today"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://www.reuters.com/technology/example-story/",
+                        "domain": "www.reuters.com",
+                        "source_quality": "high",
+                        "title": "Reuters reports new AI launch",
+                        "content": "Reuters reported the launch and cited company statements and market reactions. " * 18,
+                    },
+                    {
+                        "url": "https://openai.com/index/example-announcement/",
+                        "domain": "openai.com",
+                        "source_quality": "high",
+                        "title": "OpenAI announcement",
+                        "content": "Official announcement describing the product release and deployment details. " * 18,
+                    },
+                    {
+                        "url": "https://futureinsights.com/trends-to-watch-in-ai-2026/",
+                        "domain": "futureinsights.com",
+                        "source_quality": "low",
+                        "title": "AI trends to watch in 2026",
+                        "content": "This article describes predictions for the AI market and what to expect in the future. " * 10,
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    urls = [item["url"] for item in parsed["gathered_data"]]
+    assert "https://www.reuters.com/technology/example-story/" in urls
+    assert "https://openai.com/index/example-announcement/" in urls
+    assert "https://futureinsights.com/trends-to-watch-in-ai-2026/" not in urls
 
 
 def test_analyzer_agent_prefers_premium_consumer_tech_sources_over_weak_mobile_listicles():

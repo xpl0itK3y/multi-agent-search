@@ -146,6 +146,46 @@ def test_search_agent_boosts_trusted_domains_when_quality_is_similar(mocker):
     assert final_task.result[0]["domain"] == "docs.python.org"
 
 
+def test_search_agent_prefers_programming_docs_over_framework_listicles(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Сравни документацию и API для FastAPI",
+            "queries": ["fastapi api documentation"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://fastapi.tiangolo.com/", "title": "FastAPI Documentation"},
+            {"url": "https://developer.mozilla.org/en-US/docs/Web/HTTP", "title": "MDN HTTP documentation"},
+            {"url": "https://www.geeksforgeeks.org/top-python-frameworks/", "title": "Top Python frameworks"},
+            {"url": "https://www.tutorialspoint.com/fastapi/index.htm", "title": "FastAPI Tutorial"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://fastapi.tiangolo.com/" in extracted_urls
+    assert "https://developer.mozilla.org/en-US/docs/Web/HTTP" in extracted_urls
+    assert "https://www.geeksforgeeks.org/top-python-frameworks/" not in extracted_urls
+    assert "https://www.tutorialspoint.com/fastapi/index.htm" not in extracted_urls
+
+
 def test_search_agent_boosts_gov_domains_over_generic_sites(mocker):
     task_store = InMemoryTaskStore()
     task_store.add_task(
@@ -180,6 +220,46 @@ def test_search_agent_boosts_gov_domains_over_generic_sites(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert len(final_task.result) == 1
     assert final_task.result[0]["url"] == "https://travel.state.gov/content/travel/en/traveladvisories.html"
+
+
+def test_search_agent_prefers_reported_news_sources_over_trend_roundups(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Последние новости ИИ и крупные анонсы",
+            "queries": ["latest ai news today"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.reuters.com/technology/example-story/", "title": "Reuters reports new AI launch"},
+            {"url": "https://openai.com/index/example-announcement/", "title": "OpenAI announcement"},
+            {"url": "https://www.analyticsinsight.net/tech-news/top-10-emerging-technologies-in-2026", "title": "Top 10 emerging technologies in 2026"},
+            {"url": "https://futureinsights.com/trends-to-watch-in-ai-2026/", "title": "AI trends to watch in 2026"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://www.reuters.com/technology/example-story/" in extracted_urls
+    assert "https://openai.com/index/example-announcement/" in extracted_urls
+    assert "https://www.analyticsinsight.net/tech-news/top-10-emerging-technologies-in-2026" not in extracted_urls
+    assert "https://futureinsights.com/trends-to-watch-in-ai-2026/" not in extracted_urls
 
 
 def test_search_agent_downranks_low_value_social_domains(mocker):
