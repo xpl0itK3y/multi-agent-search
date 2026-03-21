@@ -30,6 +30,22 @@ class AnalyzerAgent(BaseAgent):
         "them", "being", "been", "because", "through", "each", "same", "such", "make", "made",
         "like", "just", "than", "small", "api", "apis", "framework", "frameworks",
     }
+    CONFLICT_GENERIC_TOKENS = {
+        "django",
+        "fastapi",
+        "flask",
+        "python",
+        "backend",
+        "production",
+        "system",
+        "systems",
+        "platform",
+        "platforms",
+        "supports",
+        "support",
+        "comparison",
+        "compare",
+    }
     NEGATION_TOKENS = {"no", "not", "never", "without", "lack", "lacks", "cannot", "can't", "doesn't", "don't"}
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
@@ -290,7 +306,11 @@ class AnalyzerAgent(BaseAgent):
                 if len(unique_tokens) < 2:
                     continue
 
-                numbers = tuple(re.findall(r"\b\d+(?:\.\d+)?\b", lowered))
+                numbers = tuple(
+                    number
+                    for number in re.findall(r"\b\d+(?:\.\d+)?\b", lowered)
+                    if not self._is_likely_year(number)
+                )
                 has_negation = any(token in lowered for token in self.NEGATION_TOKENS)
                 claims.append(
                     {
@@ -303,21 +323,38 @@ class AnalyzerAgent(BaseAgent):
                 )
         return claims
 
+    def _is_likely_year(self, value: str) -> bool:
+        if "." in value:
+            return False
+        try:
+            number = int(value)
+        except ValueError:
+            return False
+        return 1900 <= number <= 2100
+
+    def _informative_shared_tokens(self, left: dict, right: dict) -> set[str]:
+        return {
+            token
+            for token in set(left["tokens"]) & set(right["tokens"])
+            if token not in self.CONFLICT_GENERIC_TOKENS
+        }
+
     def _claims_overlap(self, left: dict, right: dict) -> bool:
-        shared_tokens = set(left["tokens"]) & set(right["tokens"])
+        shared_tokens = self._informative_shared_tokens(left, right)
         return len(shared_tokens) >= 2
 
     def _claims_conflict(self, left: dict, right: dict) -> bool:
         if left["source_id"] == right["source_id"]:
             return False
-        if not self._claims_overlap(left, right):
+        shared_tokens = self._informative_shared_tokens(left, right)
+        if len(shared_tokens) < 2:
             return False
         if left["has_negation"] != right["has_negation"]:
             return True
 
         left_numbers = set(left["numbers"])
         right_numbers = set(right["numbers"])
-        if left_numbers and right_numbers and left_numbers != right_numbers:
+        if left_numbers and right_numbers and left_numbers != right_numbers and len(shared_tokens) >= 3:
             return True
         return False
 
@@ -336,7 +373,7 @@ class AnalyzerAgent(BaseAgent):
                     continue
                 seen_pairs.add(pair_key)
 
-                shared_tokens = sorted(set(left["tokens"]) & set(right["tokens"]))
+                shared_tokens = sorted(self._informative_shared_tokens(left, right))
                 conflicts.append(
                     {
                         "topic": ", ".join(shared_tokens[:3]) or "source disagreement",
