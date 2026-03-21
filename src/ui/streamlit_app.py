@@ -129,6 +129,7 @@ TRANSLATIONS = {
         "yes": "Yes",
         "no": "No",
         "disable_finalize_reason": "Finalize is blocked until all tasks are in `completed` or `failed` state.",
+        "showing_sources_preview": "Showing {shown} of {total} sources",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -245,6 +246,7 @@ TRANSLATIONS = {
         "yes": "Да",
         "no": "Нет",
         "disable_finalize_reason": "Finalize заблокирован, пока все задачи не перейдут в `completed` или `failed`.",
+        "showing_sources_preview": "Показано {shown} из {total} источников",
     },
 }
 
@@ -512,6 +514,8 @@ def _truncate(value: str | None, limit: int = 220) -> str:
 
 
 def _task_source_count(task: dict) -> int:
+    if "result_count" in task:
+        return int(task.get("result_count") or 0)
     return len(task.get("result") or [])
 
 
@@ -819,11 +823,7 @@ def _render_source(result: dict, task_id: str, source_index: int) -> None:
 
 
 def _render_task(task: dict, index: int) -> None:
-    search_job = _safe_api_call(
-        _api_get,
-        f"/v1/tasks/{task['id']}/search-job",
-        ignore_status_codes={404},
-    )
+    search_job = task.get("latest_search_job")
     status_line = _status_badge(task["status"])
     if search_job:
         status_line = f"{status_line} {_status_badge(search_job['status'])}"
@@ -849,12 +849,12 @@ def _render_task(task: dict, index: int) -> None:
         st.markdown(f"**{_t('queries')}**")
         st.code("\n".join(task["queries"]) or "-", language="text")
 
-        logs = task.get("logs") or []
+        logs = task.get("recent_logs") or task.get("logs") or []
         if logs:
             st.markdown(f"**{_t('recent_logs')}**")
             st.code("\n".join(logs[-10:]), language="text")
 
-        results = task.get("result") or []
+        results = task.get("source_preview") or task.get("result") or []
         if not results:
             st.info(_t("no_sources_yet"))
             return
@@ -862,14 +862,11 @@ def _render_task(task: dict, index: int) -> None:
         st.markdown(f"**{_t('selected_sources')}**")
         for source_index, result in enumerate(results, start=1):
             _render_source(result, task["id"], source_index)
+        if task.get("result_count", len(results)) > len(results):
+            st.caption(_t("showing_sources_preview", shown=len(results), total=task["result_count"]))
 
 
-def _render_latest_finalize_job(research_id: str) -> None:
-    latest_finalize_job = _safe_api_call(
-        _api_get,
-        f"/v1/research/{research_id}/finalize-job",
-        ignore_status_codes={404},
-    )
+def _render_latest_finalize_job(latest_finalize_job: dict | None) -> None:
     if latest_finalize_job is None:
         st.info(_t("no_finalize_job"))
         return None
@@ -887,7 +884,7 @@ def _render_research_details() -> None:
         st.info(_t("no_research_selected"))
         return
 
-    research = _safe_api_call(_api_get, f"/v1/research/{research_id}")
+    research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary")
     if not research:
         return
 
@@ -921,19 +918,14 @@ def _render_research_details() -> None:
             unsafe_allow_html=True,
         )
 
-    tasks = []
-    for task_id in research.get("task_ids", []):
-        task = _safe_api_call(_api_get, f"/v1/tasks/{task_id}")
-        if task:
-            tasks.append(task)
-
-    completed_tasks = sum(1 for task in tasks if task["status"] == "completed")
-    pending_tasks = sum(1 for task in tasks if task["status"] == "pending")
-    running_tasks = sum(1 for task in tasks if task["status"] == "running")
-    failed_tasks = sum(1 for task in tasks if task["status"] == "failed")
-    finalize_ready = bool(tasks) and (completed_tasks + failed_tasks == len(tasks))
-    total_sources = _research_source_count(tasks)
-    average_sources = round(total_sources / len(tasks), 1) if tasks else 0.0
+    tasks = research.get("tasks") or []
+    completed_tasks = int(research.get("completed_tasks") or 0)
+    pending_tasks = int(research.get("pending_tasks") or 0)
+    running_tasks = int(research.get("running_tasks") or 0)
+    failed_tasks = int(research.get("failed_tasks") or 0)
+    finalize_ready = bool(research.get("finalize_ready"))
+    total_sources = int(research.get("collected_sources") or 0)
+    average_sources = research.get("avg_sources_per_task") or 0.0
 
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button(_t("refresh_research"), use_container_width=True):
@@ -952,7 +944,7 @@ def _render_research_details() -> None:
             st.info(_t("auto_refresh_enabled_finalize"))
             st.rerun()
 
-    latest_finalize_job = _render_latest_finalize_job(research_id)
+    latest_finalize_job = _render_latest_finalize_job(research.get("latest_finalize_job"))
 
     summary_cols = st.columns(5)
     summary_cols[0].metric(_t("task_slots"), len(research.get("task_ids", [])))
@@ -995,7 +987,14 @@ def _render_research_details() -> None:
             _render_task(task, index)
 
     st.subheader(_t("final_report"))
-    final_report = research.get("final_report")
+    if not research.get("has_final_report"):
+        st.info(_t("final_report_not_ready"))
+        return
+
+    report_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/report")
+    if not report_payload:
+        return
+    final_report = report_payload.get("final_report")
     if not final_report:
         st.info(_t("final_report_not_ready"))
         return

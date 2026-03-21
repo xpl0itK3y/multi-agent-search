@@ -14,10 +14,13 @@ from src.api.schemas import (
     ResearchFinalizeJob,
     ResearchFinalizeResponse,
     ResearchRecord,
+    ResearchReportResponse,
     ResearchRequest,
     ResearchResponse,
+    ResearchSummary,
     SearchTaskJob,
     SearchTask,
+    SearchTaskSummary,
     TaskUpdate,
     WorkerHeartbeat,
 )
@@ -83,6 +86,10 @@ def register_routes(app: FastAPI) -> None:
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
+
+    @app.get("/v1/tasks/{task_id}/summary", response_model=SearchTaskSummary)
+    async def get_task_summary(task_id: str, request: Request):
+        return get_research_service(request).get_task_summary(task_id)
 
     @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
     async def update_task(task_id: str, update: TaskUpdate, request: Request):
@@ -173,6 +180,14 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
     async def get_research_status(research_id: str, request: Request):
         return get_research_service(request).get_research_status(research_id)
+
+    @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary)
+    async def get_research_summary(research_id: str, request: Request):
+        return get_research_service(request).get_research_summary(research_id)
+
+    @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse)
+    async def get_research_report(research_id: str, request: Request):
+        return get_research_service(request).get_research_report(research_id)
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
     async def finalize_research(research_id: str, request: Request):
