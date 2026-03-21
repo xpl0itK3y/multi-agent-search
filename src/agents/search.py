@@ -82,6 +82,16 @@ class SearchAgent:
         "honor.com",
         "www.honor.com",
     }
+    MOBILE_TECH_SECONDARY_DOMAIN_EXACT_MATCHES = {
+        "gizmochina.com",
+        "www.gizmochina.com",
+        "gadgets360.com",
+        "www.gadgets360.com",
+        "stuff.tv",
+        "www.stuff.tv",
+        "independent.co.uk",
+        "www.independent.co.uk",
+    }
     MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES = {
         "vertu.com",
         "www.vertu.com",
@@ -134,6 +144,10 @@ class SearchAgent:
         "www.rave-tech.com",
         "couponscurry.com",
         "www.couponscurry.com",
+        "gizbot.com",
+        "www.gizbot.com",
+        "timesnownews.com",
+        "www.timesnownews.com",
     }
     MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS = (
         "buyersguide",
@@ -164,6 +178,12 @@ class SearchAgent:
         "smartphone rankings",
         "rankings revealed",
         "performance ranking",
+        "best camera phones",
+        "best camera phone",
+        "best gaming phones",
+        "phone buying guide",
+        "smartphone buying guide",
+        "top flagship phones",
     )
     MOBILE_TECH_STRONG_EDITORIAL_TOKENS = (
         "tested",
@@ -179,6 +199,20 @@ class SearchAgent:
         "comparison",
         "lab test",
         "editor's choice",
+        "battery life",
+        "camera comparison",
+        "performance test",
+    )
+    MOBILE_TECH_WEAK_SIGNAL_TOKENS = (
+        "rumor",
+        "rumors",
+        "rumour",
+        "rumoured",
+        "expected to launch",
+        "launch date",
+        "price in",
+        "upcoming",
+        "most anticipated",
     )
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
@@ -390,6 +424,8 @@ class SearchAgent:
 
         if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_STRONG_DOMAIN_EXACT_MATCHES}:
             score += 220
+        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_SECONDARY_DOMAIN_EXACT_MATCHES}:
+            score += 70
         if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES}:
             score -= 220
         if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
@@ -403,6 +439,12 @@ class SearchAgent:
             score -= 80
         if any(token in normalized_snippet for token in ("rumored", "predicted", "expected to launch", "what to expect")):
             score -= 55
+        if any(token in normalized_title for token in self.MOBILE_TECH_WEAK_SIGNAL_TOKENS):
+            score -= 90
+        if any(token in normalized_snippet for token in self.MOBILE_TECH_WEAK_SIGNAL_TOKENS):
+            score -= 60
+        if any(token in normalized_url for token in ("rumor", "rumours", "rumors", "launch-date", "price-in", "upcoming")):
+            score -= 70
         if any(token in normalized_title for token in self.MOBILE_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
             score -= 140
         if any(token in normalized_url for token in ("best-phones", "best-smartphones", "top-smartphones", "top-phones", "rankings", "ranking")) and not has_strong_editorial_signal:

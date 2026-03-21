@@ -562,3 +562,43 @@ def test_search_agent_prefers_mainstream_editorial_mobile_sites_over_consumer_li
     assert "https://www.cnet.com/tech/mobile/comparing-the-2026-phone-lineups-from-apple-samsung-google-and-everyone-else/" in extracted_urls
     assert "https://www.futureinsights.com/best-smartphones-2026-comparison/" not in extracted_urls
     assert "https://rank1one.com/top-10-smartphones-2026/" not in extracted_urls
+
+
+def test_search_agent_penalizes_weak_mobile_news_sites_against_premium_editorial(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Топ лучших смартфонов за 2026 год",
+            "queries": ["лучшие смартфоны 2026"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.gsmarena.com/best_phones_buyers_guide-review-2036.php", "title": "Best phones buyer's guide"},
+            {"url": "https://www.tomsguide.com/phones/best-phones", "title": "The best phones tested and reviewed"},
+            {"url": "https://www.gizbot.com/mobile/features/best-smartphones-you-can-buy-right-now-2026-0001.html", "title": "Best smartphones you can buy right now"},
+            {"url": "https://www.timesnownews.com/technology-science/best-smartphones-to-buy-in-2026-article-123456", "title": "Best smartphones to buy in 2026"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://www.gsmarena.com/best_phones_buyers_guide-review-2036.php" in extracted_urls
+    assert "https://www.tomsguide.com/phones/best-phones" in extracted_urls
+    assert "https://www.gizbot.com/mobile/features/best-smartphones-you-can-buy-right-now-2026-0001.html" not in extracted_urls
+    assert "https://www.timesnownews.com/technology-science/best-smartphones-to-buy-in-2026-article-123456" not in extracted_urls
