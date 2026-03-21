@@ -1,5 +1,6 @@
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 from src.providers.search import SearchProvider, ContentExtractor
@@ -59,11 +60,21 @@ class SearchAgent:
         "aesthetic clinics",
     )
 
-    def __init__(self, task_store: TaskStore, max_sources: int = 5):
+    def __init__(
+        self,
+        task_store: TaskStore,
+        max_sources: int = 5,
+        search_results_per_query: int = 8,
+        max_candidate_urls: int = 12,
+        extraction_concurrency: int = 4,
+    ):
         self.task_store = task_store
-        self.search_provider = SearchProvider(max_results=max_sources)
+        self.search_provider = SearchProvider(max_results=search_results_per_query)
         self.extractor = ContentExtractor()
         self.max_sources = max_sources
+        self.search_results_per_query = search_results_per_query
+        self.max_candidate_urls = max_candidate_urls
+        self.extraction_concurrency = max(1, extraction_concurrency)
 
     def _normalize_text(self, value: str | None) -> str:
         if not value:
@@ -208,6 +219,7 @@ class SearchAgent:
 
         all_results = []
         unique_urls = set()
+        candidate_results: list[dict] = []
 
         try:
             for query in task.queries:
@@ -224,36 +236,72 @@ class SearchAgent:
                             )
                             continue
                         unique_urls.add(url)
-
-                        self.task_store.update_task(
-                            task_id,
-                            TaskUpdate(log=f"Extracting content from: {url}"),
+                        candidate_results.append(
+                            {
+                                "url": url,
+                                "title": res.get("title"),
+                                "snippet": res.get("snippet"),
+                            }
                         )
-                        content = self.extractor.extract_content(url)
+                        if len(candidate_results) >= self.max_candidate_urls:
+                            break
+                if len(candidate_results) >= self.max_candidate_urls:
+                    break
 
-                        if content:
-                            all_results.append(
-                                enrich_search_result_dict(
-                                    {
-                                        "url": url,
-                                        "title": res.get("title"),
-                                        "content": content[:10000],  # Limit content size to avoid huge payloads.
-                                        "snippet": res.get("snippet"),
-                                    }
-                                )
+            self.task_store.update_task(
+                task_id,
+                TaskUpdate(
+                    log=(
+                        f"Queued {len(candidate_results)} candidate URLs for extraction "
+                        f"with concurrency {self.extraction_concurrency}"
+                    )
+                ),
+            )
+
+            with ThreadPoolExecutor(max_workers=self.extraction_concurrency) as executor:
+                future_to_candidate = {}
+                for candidate in candidate_results:
+                    url = candidate["url"]
+                    self.task_store.update_task(
+                        task_id,
+                        TaskUpdate(log=f"Extracting content from: {url}"),
+                    )
+                    future_to_candidate[executor.submit(self.extractor.extract_content, url)] = candidate
+
+                for future in as_completed(future_to_candidate):
+                    candidate = future_to_candidate[future]
+                    url = candidate["url"]
+                    title = candidate.get("title")
+                    snippet = candidate.get("snippet")
+                    try:
+                        content = future.result()
+                    except Exception as exc:
+                        logger.error("Error extracting content from %s: %s", url, exc)
+                        content = None
+
+                    if content:
+                        all_results.append(
+                            enrich_search_result_dict(
+                                {
+                                    "url": url,
+                                    "title": title,
+                                    "content": content[:10000],  # Limit content size to avoid huge payloads.
+                                    "snippet": snippet,
+                                }
                             )
-                        else:
-                            all_results.append(
-                                enrich_search_result_dict(
-                                    {
-                                        "url": url,
-                                        "title": res.get("title"),
-                                        "content": "Failed to extract content",
-                                        "snippet": res.get("snippet"),
-                                        "extraction_status": "failed",
-                                    }
-                                )
+                        )
+                    else:
+                        all_results.append(
+                            enrich_search_result_dict(
+                                {
+                                    "url": url,
+                                    "title": title,
+                                    "content": "Failed to extract content",
+                                    "snippet": snippet,
+                                    "extraction_status": "failed",
+                                }
                             )
+                        )
 
             selected_results = self._select_best_results(all_results)
 

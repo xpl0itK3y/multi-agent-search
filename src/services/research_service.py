@@ -369,8 +369,14 @@ class ResearchService:
         return self.complete_research_finalization(research_id)
 
     def run_search_task(self, task_id: str, depth: SearchDepth):
-        limit = get_depth_profile(depth)["source_limit"]
-        agent = SearchAgent(task_store=self.task_store, max_sources=limit)
+        profile = get_depth_profile(depth)
+        agent = SearchAgent(
+            task_store=self.task_store,
+            max_sources=profile["source_limit"],
+            search_results_per_query=profile["search_results_per_query"],
+            max_candidate_urls=profile["max_candidate_urls"],
+            extraction_concurrency=settings.search_extraction_concurrency,
+        )
         agent.run_task(task_id)
 
     def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:

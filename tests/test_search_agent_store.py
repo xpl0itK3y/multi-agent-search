@@ -246,3 +246,43 @@ def test_search_agent_skips_low_value_results_before_extraction(mocker):
     assert final_task.result[0]["url"] == "https://docs.python.org/3/tutorial/"
     assert extract_mock.call_count == 1
     assert any("Skipped low-value result" in entry for entry in final_task.logs)
+
+
+def test_search_agent_limits_candidate_urls_and_uses_parallel_queue(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": f"https://example.com/{index}", "title": f"Result {index}"}
+            for index in range(10)
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=5,
+        search_results_per_query=10,
+        max_candidate_urls=3,
+        extraction_concurrency=2,
+    )
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert extract_mock.call_count == 3
+    assert len(final_task.result) == 3
+    assert any("Queued 3 candidate URLs for extraction with concurrency 2" in entry for entry in final_task.logs)
