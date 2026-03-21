@@ -87,10 +87,14 @@ def test_search_agent_prefers_extracted_content_over_failed_extract(mocker):
             {"url": "https://good.example", "title": "Strong Source"},
         ],
     )
-    mocker.patch(
-        "src.providers.search.ContentExtractor.extract_content",
-        side_effect=[None, "Useful extracted content " * 20],
-    )
+    def extract_content(url: str):
+        if url == "http://failed.example":
+            return None
+        if url == "https://good.example":
+            return "Useful extracted content " * 20
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    mocker.patch("src.providers.search.ContentExtractor.extract_content", side_effect=extract_content)
 
     agent = SearchAgent(task_store=task_store, max_sources=1)
     agent.run_task("task-1")
@@ -286,3 +290,42 @@ def test_search_agent_limits_candidate_urls_and_uses_parallel_queue(mocker):
     assert extract_mock.call_count == 3
     assert len(final_task.result) == 3
     assert any("Queued 3 candidate URLs for extraction with concurrency 2" in entry for entry in final_task.logs)
+
+
+def test_search_agent_prioritizes_stronger_candidates_before_extraction(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://example.com/best-phones-2026", "title": "Best Phones 2026 Buying Guide", "snippet": "Top 10 upcoming phones and predictions."},
+            {"url": "https://www.dxomark.com/smartphones/", "title": "Smartphone Reviews and Benchmarks", "snippet": "Independent camera and battery benchmark reviews."},
+            {"url": "https://www.tomsguide.com/best-picks/best-phones", "title": "Best phones tested", "snippet": "Expert reviews and comparisons from lab testing."},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=5,
+        search_results_per_query=10,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://example.com/best-phones-2026" not in extracted_urls
+    assert "https://www.dxomark.com/smartphones/" in extracted_urls
+    assert "https://www.tomsguide.com/best-picks/best-phones" in extracted_urls
