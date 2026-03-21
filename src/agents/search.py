@@ -17,6 +17,15 @@ class SearchAgent:
         "smartphones",
         "phone",
         "phones",
+        "смартфон",
+        "смартфоны",
+        "смартфонов",
+        "телефон",
+        "телефоны",
+        "телефонов",
+        "айфон",
+        "флагман",
+        "флагманы",
         "android",
         "iphone",
         "flagship",
@@ -78,6 +87,29 @@ class SearchAgent:
         "www.techspecs.info",
         "techindeep.com",
         "www.techindeep.com",
+        "technicalforum.org",
+        "www.technicalforum.org",
+        "macprices.net",
+        "www.macprices.net",
+        "nyongesasande.com",
+        "www.nyongesasande.com",
+        "brandvm.com",
+        "www.brandvm.com",
+        "mobileradar.com",
+        "www.mobileradar.com",
+        "techtimes.com",
+        "www.techtimes.com",
+        "dialoguepakistan.com",
+        "www.dialoguepakistan.com",
+        "techarc.net",
+        "www.techarc.net",
+        "wirefly.com",
+        "www.wirefly.com",
+        "news.wirefly.com",
+        "techrankup.com",
+        "www.techrankup.com",
+        "asymco.com",
+        "www.asymco.com",
     }
     MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS = (
         "buyersguide",
@@ -86,6 +118,37 @@ class SearchAgent:
         "top-phones",
         "best-phones",
         "best-smartphones",
+        "smartphone-rankings",
+    )
+    MOBILE_TECH_GENERIC_LISTICLE_TOKENS = (
+        "best phones",
+        "best smartphones",
+        "top phones",
+        "top smartphones",
+        "best phone",
+        "best smartphone",
+        "top 10 best",
+        "for every budget",
+        "buyers guide",
+        "buying guide",
+        "should you choose",
+        "which should you choose",
+        "smartphone rankings",
+        "rankings revealed",
+        "performance ranking",
+    )
+    MOBILE_TECH_STRONG_EDITORIAL_TOKENS = (
+        "tested",
+        "review",
+        "reviews",
+        "benchmark",
+        "benchmarks",
+        "camera test",
+        "hands-on",
+        "official",
+        "launch",
+        "vs",
+        "comparison",
     )
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
@@ -227,7 +290,7 @@ class SearchAgent:
             return 90
         return 0
 
-    def _should_skip_search_result(self, url: str, title: str | None) -> bool:
+    def _should_skip_search_result(self, url: str, title: str | None, is_mobile_tech_query: bool = False) -> bool:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
         normalized_domain = domain.removeprefix("www.")
@@ -244,6 +307,11 @@ class SearchAgent:
             return True
         if normalized_title and any(token in normalized_title for token in self.LOW_SIGNAL_TITLE_TOKENS):
             return True
+        if is_mobile_tech_query:
+            if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES}:
+                return True
+            if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
+                return True
         return False
 
     def _score_search_candidate(self, url: str, title: str | None, snippet: str | None) -> int:
@@ -285,6 +353,10 @@ class SearchAgent:
         normalized_snippet = self._normalize_text(snippet).lower()
         normalized_url = (url or "").lower()
         score = 0
+        has_strong_editorial_signal = any(
+            token in normalized_title or token in normalized_snippet or token in normalized_url
+            for token in self.MOBILE_TECH_STRONG_EDITORIAL_TOKENS
+        )
 
         if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_STRONG_DOMAIN_EXACT_MATCHES}:
             score += 220
@@ -297,10 +369,16 @@ class SearchAgent:
             score += 50
         if any(token in normalized_title for token in ("hands-on", "review", "camera test", "benchmark", "official", "launch")):
             score += 70
-        if any(token in normalized_title for token in ("buyers guide", "buying guide", "top phones", "best smartphones", "most anticipated")):
+        if any(token in normalized_title for token in ("buyers guide", "buying guide", "top phones", "best smartphones", "most anticipated", "smartphone rankings", "performance ranking")):
             score -= 80
         if any(token in normalized_snippet for token in ("rumored", "predicted", "expected to launch", "what to expect")):
             score -= 55
+        if any(token in normalized_title for token in self.MOBILE_TECH_GENERIC_LISTICLE_TOKENS) and not has_strong_editorial_signal:
+            score -= 140
+        if any(token in normalized_url for token in ("best-phones", "best-smartphones", "top-smartphones", "top-phones", "rankings", "ranking")) and not has_strong_editorial_signal:
+            score -= 110
+        if "for every budget" in normalized_snippet and not has_strong_editorial_signal:
+            score -= 70
         return score
 
     def _authority_hint_score(self, url: str, title: str, content: str, source_quality: str | None) -> int:
@@ -403,7 +481,7 @@ class SearchAgent:
                 for res in search_results:
                     url = res.get("url")
                     if url and url not in unique_urls:
-                        if self._should_skip_search_result(url, res.get("title")):
+                        if self._should_skip_search_result(url, res.get("title"), is_mobile_tech_query=is_mobile_tech_query):
                             self.task_store.update_task(
                                 task_id,
                                 TaskUpdate(log=f"Skipped low-value result: {url}"),
