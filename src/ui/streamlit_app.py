@@ -72,6 +72,9 @@ TRANSLATIONS = {
         "finalize_job_queued": "Finalize job queued: {job_id}",
         "latest_finalize_job": "Latest Finalize Job",
         "no_finalize_job": "No finalize job has been created for this research yet.",
+        "finalize_running": "Finalize is running. The report will appear automatically after refresh.",
+        "finalize_pending": "Finalize is queued and waiting for the worker.",
+        "auto_refresh_enabled_finalize": "Auto refresh enabled while finalize is running.",
         "queue_actions": "Queue Actions",
         "recover_stale_search": "Recover Stale Search",
         "recover_stale_finalize": "Recover Stale Finalize",
@@ -113,6 +116,7 @@ TRANSLATIONS = {
         "connection_error": "Connection error: {error}",
         "worker_live": "Worker is active now.",
         "worker_stale": "Heartbeat looks stale. Long-running jobs may still be processing.",
+        "worker_idle_ok": "Worker is idle.",
         "progress": "Progress",
         "progress_caption": "{completed}/{total} tasks completed",
         "all_tasks_completed": "All search tasks are complete. Finalize can be started.",
@@ -184,6 +188,9 @@ TRANSLATIONS = {
         "finalize_job_queued": "Finalize job поставлена: {job_id}",
         "latest_finalize_job": "Последняя finalize job",
         "no_finalize_job": "Для этого research еще не создавалась finalize job.",
+        "finalize_running": "Finalize выполняется. Отчет появится автоматически после обновления.",
+        "finalize_pending": "Finalize поставлен в очередь и ждет воркер.",
+        "auto_refresh_enabled_finalize": "Автообновление включено на время finalize.",
         "queue_actions": "Действия с очередями",
         "recover_stale_search": "Восстановить stale search",
         "recover_stale_finalize": "Восстановить stale finalize",
@@ -225,6 +232,7 @@ TRANSLATIONS = {
         "connection_error": "Ошибка соединения: {error}",
         "worker_live": "Воркер сейчас активен.",
         "worker_stale": "Heartbeat выглядит устаревшим. Долгие jobs могут все еще выполняться.",
+        "worker_idle_ok": "Воркер сейчас простаивает.",
         "progress": "Прогресс",
         "progress_caption": "Завершено задач: {completed}/{total}",
         "all_tasks_completed": "Все search tasks завершены. Можно запускать finalize.",
@@ -621,10 +629,14 @@ def _render_sidebar() -> None:
     st.sidebar.markdown(_status_badge(heartbeat["status"]), unsafe_allow_html=True)
     st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
-    if _is_recent_timestamp(heartbeat.get("last_seen_at")):
+    heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
+    heartbeat_status = (heartbeat.get("status") or "").strip().lower()
+    if heartbeat_is_recent:
         st.sidebar.success(_t("worker_live"))
-    else:
+    elif heartbeat_status == "busy":
         st.sidebar.warning(_t("worker_stale"))
+    else:
+        st.sidebar.info(_t("worker_idle_ok"))
     if heartbeat.get("last_error"):
         st.sidebar.error(heartbeat["last_error"])
 
@@ -790,7 +802,7 @@ def _render_source(result: dict, task_id: str, source_index: int) -> None:
     st.markdown(f"**{source_index}. {title}**")
     st.caption(metadata)
     if url:
-        st.link_button(_t("open_source"), url, key=f"source-link-{task_id}-{source_index}", use_container_width=False)
+        st.link_button(_t("open_source"), url, use_container_width=False)
     if snippet:
         st.write(_truncate(snippet, 320))
 
@@ -849,10 +861,11 @@ def _render_latest_finalize_job(research_id: str) -> None:
     )
     if latest_finalize_job is None:
         st.info(_t("no_finalize_job"))
-        return
+        return None
 
     st.markdown(f"**{_t('latest_finalize_job')}**")
     _render_job_card(latest_finalize_job, "finalize")
+    return latest_finalize_job
 
 
 def _render_research_details() -> None:
@@ -922,10 +935,13 @@ def _render_research_details() -> None:
     ):
         result = _safe_api_call(_api_post, f"/v1/research/{research_id}/finalize")
         if result:
+            st.session_state["auto_refresh_enabled"] = True
+            st.session_state["auto_refresh_seconds"] = min(int(st.session_state.get("auto_refresh_seconds", 10)), 5)
             st.success(_t("finalize_job_queued", job_id=result.get("finalize_job_id") or _t("already_queued")))
+            st.info(_t("auto_refresh_enabled_finalize"))
             st.rerun()
 
-    _render_latest_finalize_job(research_id)
+    latest_finalize_job = _render_latest_finalize_job(research_id)
 
     summary_cols = st.columns(5)
     summary_cols[0].metric(_t("task_slots"), len(research.get("task_ids", [])))
@@ -952,6 +968,13 @@ def _render_research_details() -> None:
         st.success(_t("all_tasks_completed"))
     elif tasks:
         st.info(_t("finalize_waiting"))
+
+    latest_finalize_status = (latest_finalize_job or {}).get("status")
+    research_status = (research.get("status") or "").strip().lower()
+    if latest_finalize_status == "running" or research_status == "analyzing":
+        st.warning(_t("finalize_running"))
+    elif latest_finalize_status == "pending":
+        st.info(_t("finalize_pending"))
 
     st.subheader(_t("task_pipeline"))
     if not tasks:
