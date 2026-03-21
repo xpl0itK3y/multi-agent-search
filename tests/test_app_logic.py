@@ -145,9 +145,45 @@ def test_analyzer_agent_limits_prepared_source_count():
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
-    assert len(gathered) == 20
+    assert len(gathered) == 12
     assert gathered[0]["source_id"] == "S1"
-    assert gathered[-1]["source_id"] == "S20"
+    assert gathered[-1]["source_id"] == "S12"
+
+
+def test_analyzer_agent_compacts_source_content_before_prompt_payload():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+    long_content = (
+        "Sentence one explains the framework architecture in detail. "
+        "Sentence two explains request validation and response modeling clearly. "
+        "Sentence three explains operational tradeoffs for production services. "
+        "Sentence four explains async support and performance characteristics. "
+    ) * 30
+
+    agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/long",
+                        "title": "Long source",
+                        "content": long_content,
+                    }
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    assert len(gathered[0]["content"]) <= 1605
+    assert gathered[0]["content"].endswith(" ...")
 
 
 def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
