@@ -59,6 +59,39 @@ class SearchAgent:
         "fashion trends",
         "aesthetic clinics",
     )
+    LOW_SIGNAL_URL_TOKENS = (
+        "bing.com/aclick",
+        "news.google.com",
+        "amazon.com/s",
+        "yandex.",
+        "/shopping/",
+        "/discover/",
+        "/video/",
+        "/gallery/",
+        "/pin/",
+    )
+    LOW_SIGNAL_RESULT_TOKENS = (
+        "best",
+        "top 10",
+        "top ten",
+        "buying guide",
+        "rankings guide",
+        "most anticipated",
+        "predictions",
+        "upcoming",
+        "expected",
+    )
+    STRONG_RESULT_TOKENS = (
+        "review",
+        "reviews",
+        "benchmark",
+        "benchmarks",
+        "specs",
+        "comparison",
+        "tested",
+        "official",
+        "press release",
+    )
 
     def __init__(
         self,
@@ -124,11 +157,43 @@ class SearchAgent:
             return True
         if any(token in normalized_domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
             return True
-        if any(token in normalized_url for token in ("/discover/", "/video/", "/gallery/", "/wall-", "/pin/")):
+        if any(token in normalized_url for token in self.LOW_SIGNAL_URL_TOKENS) or "/wall-" in normalized_url:
             return True
         if normalized_title and any(token in normalized_title for token in self.LOW_SIGNAL_TITLE_TOKENS):
             return True
         return False
+
+    def _score_search_candidate(self, url: str, title: str | None, snippet: str | None) -> int:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        normalized_title = self._normalize_text(title).lower()
+        normalized_snippet = self._normalize_text(snippet).lower()
+        normalized_url = (url or "").lower()
+
+        score = 0
+        if parsed.scheme == "https":
+            score += 25
+        score += self._trusted_domain_score(domain)
+        score -= self._low_value_domain_penalty(domain)
+
+        if normalized_title:
+            score += 40
+        if normalized_snippet:
+            score += min(len(normalized_snippet), 240)
+
+        if any(token in normalized_title for token in self.STRONG_RESULT_TOKENS):
+            score += 60
+        if any(token in normalized_snippet for token in self.STRONG_RESULT_TOKENS):
+            score += 40
+        if any(token in normalized_title for token in self.LOW_SIGNAL_RESULT_TOKENS):
+            score -= 45
+        if any(token in normalized_snippet for token in self.LOW_SIGNAL_RESULT_TOKENS):
+            score -= 25
+        if any(token in normalized_url for token in ("benchmark", "benchmarks", "review", "reviews", "compare")):
+            score += 25
+        if any(token in normalized_url for token in ("best-", "top-", "upcoming", "predictions")):
+            score -= 20
+        return score
 
     def _authority_hint_score(self, url: str, title: str, content: str, source_quality: str | None) -> int:
         normalized_title = self._normalize_text(title).lower()
@@ -241,12 +306,16 @@ class SearchAgent:
                                 "url": url,
                                 "title": res.get("title"),
                                 "snippet": res.get("snippet"),
+                                "score": self._score_search_candidate(
+                                    url,
+                                    res.get("title"),
+                                    res.get("snippet"),
+                                ),
                             }
                         )
-                        if len(candidate_results) >= self.max_candidate_urls:
-                            break
-                if len(candidate_results) >= self.max_candidate_urls:
-                    break
+
+            candidate_results.sort(key=lambda item: item["score"], reverse=True)
+            candidate_results = candidate_results[: self.max_candidate_urls]
 
             self.task_store.update_task(
                 task_id,
