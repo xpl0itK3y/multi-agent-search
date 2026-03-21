@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -28,6 +29,8 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.repositories.protocols import TaskStore
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchService:
@@ -104,6 +107,13 @@ class ResearchService:
             if task.status == TaskStatus.PENDING and task.queries:
                 self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
 
+        logger.info(
+            "research_started research_id=%s task_count=%s depth=%s",
+            research.id,
+            len(registered_tasks),
+            request.depth.value,
+        )
+
         return ResearchResponse(
             research_id=research.id,
             status="success",
@@ -158,6 +168,7 @@ class ResearchService:
             ResearchStatus.COMPLETED,
             report,
         )
+        logger.info("research_finalize_completed research_id=%s", research_id)
 
         return self.task_store.get_research(research_id)
 
@@ -169,6 +180,7 @@ class ResearchService:
         self.require_agent(self.analyzer, "Analyzer")
         self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
         job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+        logger.info("research_finalize_enqueued research_id=%s finalize_job_id=%s", research_id, job.id)
         return self.task_store.get_research(research_id), job
 
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
@@ -177,19 +189,30 @@ class ResearchService:
             return None
 
         try:
+            logger.info("finalize_job_processing job_id=%s research_id=%s", job.id, job.research_id)
             self.complete_research_finalization(job.research_id)
-            return self.task_store.update_research_finalize_job(
+            completed_job = self.task_store.update_research_finalize_job(
                 job_id,
                 FinalizeJobStatus.COMPLETED,
             )
+            logger.info("finalize_job_completed job_id=%s research_id=%s", job.id, job.research_id)
+            return completed_job
         except Exception as exc:
             failed_job = self.task_store.record_research_finalize_job_failure(job_id, str(exc))
+            logger.warning(
+                "finalize_job_failed job_id=%s research_id=%s error=%s next_status=%s",
+                job.id,
+                job.research_id,
+                str(exc),
+                failed_job.status.value if failed_job else "missing",
+            )
             if failed_job and failed_job.status == FinalizeJobStatus.DEAD_LETTER:
                 self.task_store.update_research_status(
                     job.research_id,
                     ResearchStatus.FAILED,
                     f"Analysis failed: {str(exc)}",
                 )
+                logger.error("finalize_job_dead_letter job_id=%s research_id=%s", job.id, job.research_id)
             return failed_job
 
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
@@ -216,6 +239,7 @@ class ResearchService:
         requeued = self.task_store.requeue_research_finalize_job(job_id)
         if requeued is None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
+        logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)
         return requeued
 
     def recover_stale_research_finalize_jobs(self) -> JobRecoveryResponse:
@@ -223,6 +247,7 @@ class ResearchService:
         recovered_jobs = self.task_store.recover_stale_research_finalize_jobs(stale_before)
         for job in recovered_jobs:
             self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
+            logger.warning("finalize_job_recovered job_id=%s research_id=%s", job.id, job.research_id)
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],
             recovered_count=len(recovered_jobs),
@@ -231,6 +256,8 @@ class ResearchService:
     def cleanup_old_research_finalize_jobs(self) -> JobCleanupResponse:
         older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.finalize_job_retention_seconds)
         deleted_ids = self.task_store.cleanup_old_research_finalize_jobs(older_than)
+        if deleted_ids:
+            logger.info("finalize_jobs_cleaned deleted_count=%s", len(deleted_ids))
         return JobCleanupResponse(
             deleted_job_ids=deleted_ids,
             deleted_count=len(deleted_ids),
@@ -263,6 +290,7 @@ class ResearchService:
         requeued = self.task_store.requeue_search_task_job(job_id)
         if requeued is None:
             raise HTTPException(status_code=404, detail="Search job not found")
+        logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)
         return requeued
 
     def recover_stale_search_task_jobs(self) -> JobRecoveryResponse:
@@ -273,6 +301,7 @@ class ResearchService:
                 job.task_id,
                 TaskUpdate(status=TaskStatus.PENDING, log="Recovered stale running search job"),
             )
+            logger.warning("search_job_recovered job_id=%s task_id=%s", job.id, job.task_id)
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],
             recovered_count=len(recovered_jobs),
@@ -281,6 +310,8 @@ class ResearchService:
     def cleanup_old_search_task_jobs(self) -> JobCleanupResponse:
         older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.search_job_retention_seconds)
         deleted_ids = self.task_store.cleanup_old_search_task_jobs(older_than)
+        if deleted_ids:
+            logger.info("search_jobs_cleaned deleted_count=%s", len(deleted_ids))
         return JobCleanupResponse(
             deleted_job_ids=deleted_ids,
             deleted_count=len(deleted_ids),
@@ -339,6 +370,7 @@ class ResearchService:
 
         task = self.task_store.get_task(job.task_id)
         if task is None:
+            logger.error("search_job_task_missing job_id=%s task_id=%s", job_id, job.task_id)
             return self.task_store.update_search_task_job(
                 job_id,
                 SearchJobStatus.FAILED,
@@ -346,12 +378,19 @@ class ResearchService:
             )
 
         try:
+            logger.info("search_job_processing job_id=%s task_id=%s depth=%s", job.id, task.id, job.depth.value)
             self.run_search_task(task.id, job.depth)
             task = self.task_store.get_task(task.id)
             if task is not None and task.status == TaskStatus.FAILED:
                 failed_job = self.task_store.record_search_task_job_failure(
                     job_id,
                     task.logs[-1] if task.logs else "Search task failed",
+                )
+                logger.warning(
+                    "search_job_failed job_id=%s task_id=%s next_status=%s",
+                    job.id,
+                    task.id,
+                    failed_job.status.value if failed_job else "missing",
                 )
                 if failed_job and failed_job.status == SearchJobStatus.PENDING:
                     self.task_store.update_task(
@@ -361,11 +400,23 @@ class ResearchService:
                             log="Search job scheduled for retry",
                         ),
                     )
+                    logger.info("search_job_retry_scheduled job_id=%s task_id=%s", job.id, task.id)
+                if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
+                    logger.error("search_job_dead_letter job_id=%s task_id=%s", job.id, task.id)
                 return failed_job
 
-            return self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
+            completed_job = self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
+            logger.info("search_job_completed job_id=%s task_id=%s", job.id, task.id)
+            return completed_job
         except Exception as exc:
             failed_job = self.task_store.record_search_task_job_failure(job_id, str(exc))
+            logger.warning(
+                "search_job_exception job_id=%s task_id=%s error=%s next_status=%s",
+                job.id,
+                task.id,
+                str(exc),
+                failed_job.status.value if failed_job else "missing",
+            )
             if failed_job and failed_job.status == SearchJobStatus.PENDING:
                 self.task_store.update_task(
                     task.id,
@@ -374,4 +425,7 @@ class ResearchService:
                         log="Search job scheduled for retry",
                     ),
                 )
+                logger.info("search_job_retry_scheduled job_id=%s task_id=%s", job.id, task.id)
+            if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
+                logger.error("search_job_dead_letter job_id=%s task_id=%s", job.id, task.id)
             return failed_job
