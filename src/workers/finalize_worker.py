@@ -1,4 +1,8 @@
+import logging
+
 from src.services import ResearchService
+
+logger = logging.getLogger(__name__)
 
 
 class FinalizeWorker:
@@ -12,6 +16,7 @@ class FinalizeWorker:
             job = self.research_service.task_store.claim_next_research_finalize_job()
             if job is None:
                 break
+            logger.info("finalize_job_claimed job_id=%s research_id=%s", job.id, job.research_id)
             self.research_service.process_finalize_job(job.id)
             processed += 1
 
