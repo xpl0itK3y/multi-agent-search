@@ -446,6 +446,15 @@ class SearchAgent:
                 score -= 140
             if any(token in normalized_snippet for token in policy.generic_listicle_tokens) and not has_strong_editorial_signal:
                 score -= 70
+            if topic_name == "docs_programming":
+                if any(token in normalized_url for token in ("/docs", "/documentation", "/reference", "/manual", "/api", "/extensions", "/async", "/tutorial/")):
+                    score += 110
+                if any(token in normalized_title for token in ("documentation", "reference", "api", "extensions", "async / await", "user guide")):
+                    score += 90
+                if any(token in normalized_title for token in ("comparison", "versus", "vs", "showdown", "which framework is best", "in-depth comparison")) and not has_strong_editorial_signal:
+                    score -= 120
+                if any(token in normalized_snippet for token in ("use cases", "pros and cons", "which one to choose", "key differences")) and not has_strong_editorial_signal:
+                    score -= 70
 
         if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/docs", "/documentation", "/reference", "/api")):
             score += 50
