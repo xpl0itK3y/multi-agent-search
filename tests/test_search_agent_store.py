@@ -329,3 +329,79 @@ def test_search_agent_prioritizes_stronger_candidates_before_extraction(mocker):
     assert "https://example.com/best-phones-2026" not in extracted_urls
     assert "https://www.dxomark.com/smartphones/" in extracted_urls
     assert "https://www.tomsguide.com/best-picks/best-phones" in extracted_urls
+
+
+def test_search_agent_boosts_mobile_tech_authority_domains(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Лучшие смартфоны 2026",
+            "queries": ["best smartphones 2026"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://www.dxomark.com/smartphones/", "title": "Smartphone Reviews and Benchmarks"},
+            {"url": "https://www.gsmarena.com/", "title": "GSMArena.com - mobile phone reviews"},
+            {"url": "https://random-blog.example/phones-2026", "title": "Phones 2026 comparison"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://www.dxomark.com/smartphones/" in extracted_urls
+    assert "https://www.gsmarena.com/" in extracted_urls
+    assert "https://random-blog.example/phones-2026" not in extracted_urls
+
+
+def test_search_agent_penalizes_weak_mobile_prediction_domains(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "Топ лучших смартфонов 2026 года",
+            "queries": ["top smartphones 2026"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://vertu.com/guides/top-10-best-smartphones-of-2026-your-global-buyers-guide/", "title": "Top 10 Best Smartphones of 2026"},
+            {"url": "https://www.gsmarena.com/samsung_galaxy_s26_ultra-review-9999.php", "title": "Samsung Galaxy S26 Ultra review"},
+            {"url": "https://www.tomsguide.com/phones/best-phones", "title": "Best phones tested"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url}",
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        max_candidate_urls=2,
+        extraction_concurrency=1,
+    )
+    agent.run_task("task-1")
+
+    extracted_urls = [call.args[0] for call in extract_mock.call_args_list]
+    assert "https://vertu.com/guides/top-10-best-smartphones-of-2026-your-global-buyers-guide/" not in extracted_urls
+    assert "https://www.gsmarena.com/samsung_galaxy_s26_ultra-review-9999.php" in extracted_urls
+    assert "https://www.tomsguide.com/phones/best-phones" in extracted_urls

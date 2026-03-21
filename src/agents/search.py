@@ -12,6 +12,81 @@ logger = logging.getLogger(__name__)
 
 
 class SearchAgent:
+    MOBILE_TECH_QUERY_TOKENS = (
+        "smartphone",
+        "smartphones",
+        "phone",
+        "phones",
+        "android",
+        "iphone",
+        "flagship",
+        "camera phone",
+        "mobile",
+        "galaxy",
+        "pixel",
+        "oneplus",
+        "xiaomi",
+        "oppo",
+        "honor",
+        "foldable",
+        "chipset",
+        "benchmark",
+    )
+    MOBILE_TECH_STRONG_DOMAIN_EXACT_MATCHES = {
+        "gsmarena.com",
+        "www.gsmarena.com",
+        "dxomark.com",
+        "www.dxomark.com",
+        "notebookcheck.net",
+        "www.notebookcheck.net",
+        "androidauthority.com",
+        "www.androidauthority.com",
+        "tomsguide.com",
+        "www.tomsguide.com",
+        "theverge.com",
+        "www.theverge.com",
+        "apple.com",
+        "www.apple.com",
+        "news.samsung.com",
+        "samsung.com",
+        "www.samsung.com",
+        "blog.google",
+        "store.google.com",
+        "google.com",
+        "www.google.com",
+        "oneplus.com",
+        "www.oneplus.com",
+        "mi.com",
+        "www.mi.com",
+        "xiaomi.com",
+        "www.xiaomi.com",
+        "oppo.com",
+        "www.oppo.com",
+        "honor.com",
+        "www.honor.com",
+    }
+    MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES = {
+        "vertu.com",
+        "www.vertu.com",
+        "axis-intelligence.com",
+        "www.axis-intelligence.com",
+        "gadgetph.com",
+        "www.gadgetph.com",
+        "asumetech.com",
+        "www.asumetech.com",
+        "techspecs.info",
+        "www.techspecs.info",
+        "techindeep.com",
+        "www.techindeep.com",
+    }
+    MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS = (
+        "buyersguide",
+        "buyers-guide",
+        "rankings-guide",
+        "top-phones",
+        "best-phones",
+        "best-smartphones",
+    )
     TRUSTED_DOMAIN_EXACT_MATCHES = {
         "developer.mozilla.org",
         "docs.python.org",
@@ -120,6 +195,14 @@ class SearchAgent:
         content_prefix = normalized_content[:200]
         return f"{normalized_title}|{content_prefix}"
 
+    def _is_mobile_tech_query(self, task) -> bool:
+        haystack_parts = [
+            self._normalize_text(getattr(task, "description", None)).lower(),
+            " ".join(self._normalize_text(query).lower() for query in getattr(task, "queries", []) or []),
+        ]
+        haystack = " ".join(part for part in haystack_parts if part)
+        return any(token in haystack for token in self.MOBILE_TECH_QUERY_TOKENS)
+
     def _trusted_domain_score(self, domain: str) -> int:
         if not domain:
             return 0
@@ -193,6 +276,31 @@ class SearchAgent:
             score += 25
         if any(token in normalized_url for token in ("best-", "top-", "upcoming", "predictions")):
             score -= 20
+        return score
+
+    def _mobile_tech_domain_adjustment(self, url: str, title: str | None, snippet: str | None) -> int:
+        parsed = urlparse(url)
+        normalized_domain = parsed.netloc.lower().removeprefix("www.")
+        normalized_title = self._normalize_text(title).lower()
+        normalized_snippet = self._normalize_text(snippet).lower()
+        normalized_url = (url or "").lower()
+        score = 0
+
+        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_STRONG_DOMAIN_EXACT_MATCHES}:
+            score += 220
+        if normalized_domain in {item.removeprefix("www.") for item in self.MOBILE_TECH_WEAK_DOMAIN_EXACT_MATCHES}:
+            score -= 220
+        if any(token in normalized_domain for token in self.MOBILE_TECH_WEAK_DOMAIN_SUBSTRINGS):
+            score -= 120
+
+        if any(token in normalized_url for token in ("/newsroom/", "/press/", "/launch", "/events/", "/smartphones/")):
+            score += 50
+        if any(token in normalized_title for token in ("hands-on", "review", "camera test", "benchmark", "official", "launch")):
+            score += 70
+        if any(token in normalized_title for token in ("buyers guide", "buying guide", "top phones", "best smartphones", "most anticipated")):
+            score -= 80
+        if any(token in normalized_snippet for token in ("rumored", "predicted", "expected to launch", "what to expect")):
+            score -= 55
         return score
 
     def _authority_hint_score(self, url: str, title: str, content: str, source_quality: str | None) -> int:
@@ -285,6 +393,7 @@ class SearchAgent:
         all_results = []
         unique_urls = set()
         candidate_results: list[dict] = []
+        is_mobile_tech_query = self._is_mobile_tech_query(task)
 
         try:
             for query in task.queries:
@@ -310,6 +419,15 @@ class SearchAgent:
                                     url,
                                     res.get("title"),
                                     res.get("snippet"),
+                                )
+                                + (
+                                    self._mobile_tech_domain_adjustment(
+                                        url,
+                                        res.get("title"),
+                                        res.get("snippet"),
+                                    )
+                                    if is_mobile_tech_query
+                                    else 0
                                 ),
                             }
                         )
