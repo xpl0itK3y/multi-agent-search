@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from src.providers.search import SearchProvider, ContentExtractor
 from src.api.schemas import TaskStatus, TaskUpdate
+from src.core import rust_accel
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics
@@ -313,15 +314,10 @@ class SearchAgent:
         self.extraction_concurrency = max(1, extraction_concurrency)
 
     def _normalize_text(self, value: str | None) -> str:
-        if not value:
-            return ""
-        return re.sub(r"\s+", " ", value).strip()
+        return rust_accel.normalize_text(value)
 
     def _content_fingerprint(self, title: str, content: str) -> str:
-        normalized_title = self._normalize_text(title).lower()
-        normalized_content = self._normalize_text(content).lower()
-        content_prefix = normalized_content[:200]
-        return f"{normalized_title}|{content_prefix}"
+        return rust_accel.content_fingerprint(title, content, 200)
 
     def _detect_topics(self, task) -> set[str]:
         haystack_parts = [
