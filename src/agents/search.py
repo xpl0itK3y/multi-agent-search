@@ -532,8 +532,7 @@ class SearchAgent:
         )
 
         all_results = []
-        unique_urls = set()
-        candidate_results: list[dict] = []
+        raw_candidates: list[dict] = []
         topics = self._detect_topics(task)
 
         try:
@@ -543,34 +542,33 @@ class SearchAgent:
 
                 for res in search_results:
                     url = res.get("url")
-                    if url and url not in unique_urls:
-                        if self._should_skip_search_result(url, res.get("title"), topics=topics):
-                            self.task_store.update_task(
-                                task_id,
-                                TaskUpdate(log=f"Skipped low-value result: {url}"),
-                            )
-                            continue
-                        unique_urls.add(url)
-                        candidate_results.append(
-                            {
-                                "url": url,
-                                "title": res.get("title"),
-                                "snippet": res.get("snippet"),
-                                "score": self._score_search_candidate(
-                                    url,
-                                    res.get("title"),
-                                    res.get("snippet"),
-                                )
-                                + self._topic_domain_adjustment(
-                                    url,
-                                    res.get("title"),
-                                    res.get("snippet"),
-                                    topics=topics,
-                                ),
-                            }
-                        )
+                    if not url:
+                        continue
+                    raw_candidates.append(
+                        {
+                            "url": url,
+                            "title": res.get("title"),
+                            "snippet": res.get("snippet"),
+                        }
+                    )
 
-            candidate_results = rust_accel.select_top_candidates(candidate_results, self.max_candidate_urls)
+            candidate_results = rust_accel.score_search_candidates(
+                raw_candidates,
+                topics=topics,
+                limit=self.max_candidate_urls,
+            )
+            selected_urls = {candidate["url"] for candidate in candidate_results}
+            logged_skipped_urls: set[str] = set()
+            for candidate in raw_candidates:
+                url = candidate["url"]
+                if url in selected_urls or url in logged_skipped_urls:
+                    continue
+                if self._should_skip_search_result(url, candidate.get("title"), topics=topics):
+                    logged_skipped_urls.add(url)
+                    self.task_store.update_task(
+                        task_id,
+                        TaskUpdate(log=f"Skipped low-value result: {url}"),
+                    )
 
             self.task_store.update_task(
                 task_id,

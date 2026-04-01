@@ -797,6 +797,40 @@ def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
     assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
 
 
+def test_analyzer_agent_passes_evidence_groups_into_prompt_payload():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "Compare two systems in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "content": "Redis cluster failover replication throughput remains stable in production and offers clear deployment guidance for enterprise teams.",
+                    },
+                    {
+                        "url": "https://example.com/b",
+                        "title": "B",
+                        "content": "Redis cluster failover replication throughput remains stable in production and includes deployment guidance for enterprise teams with examples.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    assert parsed["evidence_groups"]
+    assert parsed["evidence_groups"][0]["source_ids"] == ["S1", "S2"]
+
+
 def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
     llm = RecordingLLM(response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)

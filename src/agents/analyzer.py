@@ -460,14 +460,6 @@ class AnalyzerAgent(BaseAgent):
                 if not url or not content or "failed to extract content" in content.lower():
                     continue
                 source_quality = res.get("source_quality") or "low"
-                if self._should_exclude_source(
-                    url,
-                    title,
-                    content,
-                    source_quality,
-                    topics=topics,
-                ):
-                    continue
 
                 aggregated_candidates.append(
                     {
@@ -480,123 +472,13 @@ class AnalyzerAgent(BaseAgent):
                     }
                 )
 
-        best_by_url: dict[str, dict] = {}
-        for candidate in aggregated_candidates:
-            existing = best_by_url.get(candidate["url"])
-            candidate_score = self._score_source(
-                candidate.get("url") or "",
-                candidate.get("title") or "",
-                candidate.get("content") or "",
-                candidate.get("source_quality"),
-            )
-            if topics:
-                candidate_score += self._topic_domain_adjustment(
-                    candidate.get("url") or "",
-                    candidate.get("title") or "",
-                    candidate.get("content") or "",
-                    candidate.get("source_quality"),
-                    topics=topics,
-                )
-
-            existing_score = None
-            if existing is not None:
-                existing_score = self._score_source(
-                    existing.get("url") or "",
-                    existing.get("title") or "",
-                    existing.get("content") or "",
-                    existing.get("source_quality"),
-                )
-                if topics:
-                    existing_score += self._topic_domain_adjustment(
-                        existing.get("url") or "",
-                        existing.get("title") or "",
-                        existing.get("content") or "",
-                        existing.get("source_quality"),
-                        topics=topics,
-                    )
-
-            if existing is None or candidate_score > (existing_score or 0):
-                best_by_url[candidate["url"]] = candidate
-
-        best_by_fingerprint: dict[str, tuple[int, dict]] = {}
-        for candidate in best_by_url.values():
-            fingerprint = self._content_fingerprint(
-                candidate.get("title") or "",
-                candidate.get("content") or "",
-            )
-            score = self._score_source(
-                candidate.get("url") or "",
-                candidate.get("title") or "",
-                candidate.get("content") or "",
-                candidate.get("source_quality"),
-            )
-            if topics:
-                score += self._topic_domain_adjustment(
-                    candidate.get("url") or "",
-                    candidate.get("title") or "",
-                    candidate.get("content") or "",
-                    candidate.get("source_quality"),
-                    topics=topics,
-                )
-            existing = best_by_fingerprint.get(fingerprint)
-            if existing is None or score > existing[0]:
-                best_by_fingerprint[fingerprint] = (score, candidate)
-
-        ranked_candidates: list[dict] = []
-        for _, item in best_by_fingerprint.values():
-            score = self._score_source(
-                item.get("url") or "",
-                item.get("title") or "",
-                item.get("content") or "",
-                item.get("source_quality"),
-            )
-            if topics:
-                score += self._topic_domain_adjustment(
-                    item.get("url") or "",
-                    item.get("title") or "",
-                    item.get("content") or "",
-                    item.get("source_quality"),
-                    topics=topics,
-                )
-            ranked_candidates.append({**item, "_score": score})
-
-        ranked_candidates.sort(key=lambda item: item["_score"], reverse=True)
-
-        selected_candidates: list[dict] = []
-        domain_counts: dict[str, int] = {}
-        task_counts: dict[str, int] = {}
-        for candidate in ranked_candidates:
-            domain = (candidate.get("domain") or "").lower()
-            task_description = candidate.get("task_description") or ""
-            is_strong_source = candidate.get("source_quality") == "high"
-
-            if domain and domain_counts.get(domain, 0) >= self.MAX_SOURCES_PER_DOMAIN and not is_strong_source:
-                continue
-            if task_description and task_counts.get(task_description, 0) >= self.MAX_SOURCES_PER_TASK and not is_strong_source:
-                continue
-
-            selected_candidates.append(candidate)
-            if domain:
-                domain_counts[domain] = domain_counts.get(domain, 0) + 1
-            if task_description:
-                task_counts[task_description] = task_counts.get(task_description, 0) + 1
-
-            if len(selected_candidates) >= self.MAX_ANALYZER_SOURCES:
-                break
-
-        unique_domains = {
-            (candidate.get("domain") or "").lower()
-            for candidate in ranked_candidates
-            if candidate.get("domain")
-        }
-        if len(unique_domains) <= 1 and len(selected_candidates) < self.MAX_ANALYZER_SOURCES:
-            selected_urls = {candidate["url"] for candidate in selected_candidates}
-            for candidate in ranked_candidates:
-                if candidate["url"] in selected_urls:
-                    continue
-                selected_candidates.append(candidate)
-                if len(selected_candidates) >= self.MAX_ANALYZER_SOURCES:
-                    break
+        selected_candidates = rust_accel.select_analyzer_sources(
+            aggregated_candidates,
+            topics=topics,
+            max_sources=self.MAX_ANALYZER_SOURCES,
+            max_sources_per_domain=self.MAX_SOURCES_PER_DOMAIN,
+            max_sources_per_task=self.MAX_SOURCES_PER_TASK,
+        )
 
         return [
             {
@@ -605,6 +487,15 @@ class AnalyzerAgent(BaseAgent):
             }
             for index, candidate in enumerate(selected_candidates, start=1)
         ]
+
+    def _extract_evidence_groups(self, aggregated_data: list[dict]) -> list[dict]:
+        return rust_accel.extract_evidence_groups(
+            aggregated_data=aggregated_data,
+            stopwords=self.STOPWORDS,
+            generic_tokens=self.CONFLICT_GENERIC_TOKENS,
+            negation_tokens=self.NEGATION_TOKENS,
+            max_groups=5,
+        )
 
     def _post_process_report(self, report: str) -> str:
         normalized = report.replace("\r\n", "\n").strip()
@@ -662,6 +553,7 @@ class AnalyzerAgent(BaseAgent):
             "Please analyze this data and generate the final report. "
             f"{instruction} "
             "Prefer concrete reported developments over speculative future-looking claims. "
+            "Use evidence_groups to identify where multiple sources reinforce the same point. "
             "If a source is mostly predictive, label it as a forecast rather than a confirmed development. "
             "If sources disagree, add a section titled 'Conflicts And Uncertainties' and cite the competing evidence.\n\n"
             f"{json.dumps(input_data, ensure_ascii=False)}"
@@ -889,12 +781,14 @@ class AnalyzerAgent(BaseAgent):
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
         aggregated_data = self._prepare_aggregated_data(prompt, tasks)
         conflicts = self._detect_conflicts(aggregated_data)
+        evidence_groups = self._extract_evidence_groups(aggregated_data)
         prompt_language = self._detect_language(prompt)
 
         input_data = {
             "original_prompt": prompt,
             "gathered_data": aggregated_data,
             "detected_conflicts": conflicts,
+            "evidence_groups": evidence_groups,
         }
 
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
