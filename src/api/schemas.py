@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -177,6 +177,28 @@ class ExtractionMetrics(BaseModel):
     total_extract_ms: float = 0.0
     total_post_process_ms: float = 0.0
     total_total_ms: float = 0.0
+    success_rate_percent: float = 0.0
+    avg_download_ms: float = 0.0
+    avg_extract_ms: float = 0.0
+    avg_post_process_ms: float = 0.0
+    avg_total_ms: float = 0.0
+
+    @model_validator(mode="after")
+    def populate_derived_fields(self):
+        attempts = max(self.attempts, 0)
+        if attempts > 0:
+            self.success_rate_percent = round((self.success_count / attempts) * 100, 1)
+            self.avg_download_ms = round(self.total_download_ms / attempts, 2)
+            self.avg_extract_ms = round(self.total_extract_ms / attempts, 2)
+            self.avg_post_process_ms = round(self.total_post_process_ms / attempts, 2)
+            self.avg_total_ms = round(self.total_total_ms / attempts, 2)
+        else:
+            self.success_rate_percent = 0.0
+            self.avg_download_ms = 0.0
+            self.avg_extract_ms = 0.0
+            self.avg_post_process_ms = 0.0
+            self.avg_total_ms = 0.0
+        return self
 
 
 class WorkerHeartbeat(BaseModel):

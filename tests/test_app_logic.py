@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus
+from src.api.schemas import ExtractionMetrics
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -1382,6 +1383,24 @@ def test_get_queue_metrics_aggregates_extraction_metrics_from_worker_heartbeats(
     assert metrics.extraction_metrics.success_count == 5
     assert metrics.extraction_metrics.failure_count == 1
     assert metrics.extraction_metrics.empty_count == 1
+    assert metrics.extraction_metrics.success_rate_percent == 71.4
+
+
+def test_extraction_metrics_derives_rates_and_averages():
+    metrics = ExtractionMetrics(
+        attempts=4,
+        success_count=3,
+        total_download_ms=40,
+        total_extract_ms=20,
+        total_post_process_ms=8,
+        total_total_ms=68,
+    )
+
+    assert metrics.success_rate_percent == 75.0
+    assert metrics.avg_download_ms == 10.0
+    assert metrics.avg_extract_ms == 5.0
+    assert metrics.avg_post_process_ms == 2.0
+    assert metrics.avg_total_ms == 17.0
 
 
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
