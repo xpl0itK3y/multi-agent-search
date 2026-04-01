@@ -106,6 +106,25 @@ async def test_run_queue_maintenance_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_queue_health_includes_extraction_metrics(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        extraction_metrics={"attempts": 5, "success_count": 4, "failure_count": 1},
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["extraction_metrics"]["attempts"] == 5
+    assert payload["extraction_metrics"]["success_count"] == 4
+    assert payload["extraction_metrics"]["failure_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_optimize_endpoint(client):
     response = await client.post("/v1/optimize", json={"prompt": "raw input"})
 

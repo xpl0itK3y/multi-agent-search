@@ -1340,6 +1340,7 @@ def test_get_queue_metrics_reports_dead_letter_counts():
 
     assert metrics.dead_letter_search_jobs == 1
     assert metrics.dead_letter_finalize_jobs == 1
+    assert metrics.extraction_metrics.attempts == 0
 
 
 def test_get_worker_heartbeat_returns_latest_value():
@@ -1358,6 +1359,29 @@ def test_get_worker_heartbeat_returns_latest_value():
     assert heartbeat.processed_jobs == 2
     assert heartbeat.extraction_metrics.attempts == 3
     assert heartbeat.extraction_metrics.success_count == 2
+
+
+def test_get_queue_metrics_aggregates_extraction_metrics_from_worker_heartbeats():
+    task_store = InMemoryTaskStore()
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        extraction_metrics={"attempts": 3, "success_count": 2, "failure_count": 1},
+    )
+    task_store.upsert_worker_heartbeat(
+        "job-worker-2",
+        processed_jobs=1,
+        status="busy",
+        extraction_metrics={"attempts": 4, "success_count": 3, "empty_count": 1},
+    )
+
+    metrics = ResearchService(task_store=task_store).get_queue_metrics()
+
+    assert metrics.extraction_metrics.attempts == 7
+    assert metrics.extraction_metrics.success_count == 5
+    assert metrics.extraction_metrics.failure_count == 1
+    assert metrics.extraction_metrics.empty_count == 1
 
 
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):

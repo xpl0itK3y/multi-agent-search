@@ -195,6 +195,7 @@ class QueueMetrics(BaseModel):
     pending_finalize_jobs: int = 0
     running_finalize_jobs: int = 0
     dead_letter_finalize_jobs: int = 0
+    extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
 
 
 class JobRecoveryResponse(BaseModel):
