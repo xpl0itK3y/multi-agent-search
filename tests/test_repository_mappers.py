@@ -107,3 +107,25 @@ def test_enrich_search_result_dict_marks_trusted_long_sources_as_high_quality():
     assert enriched["domain"] == "docs.python.org"
     assert enriched["extraction_status"] == "success"
     assert enriched["source_quality"] == "high"
+
+
+def test_enrich_search_result_dict_cleans_duplicate_boilerplate_and_builds_snippet():
+    enriched = enrich_search_result_dict(
+        {
+            "url": "https://example.com/path",
+            "title": "Example",
+            "content": (
+                "Privacy Policy\n"
+                "Useful first paragraph with product details and deployment notes.\n"
+                "Useful first paragraph with product details and deployment notes.\n"
+                "Useful second paragraph with operational guidance and evidence.\n"
+                "Share this article\n"
+            ),
+        }
+    )
+
+    assert "Privacy Policy" not in enriched["content"]
+    assert "Share this article" not in enriched["content"]
+    assert enriched["content"].count("Useful first paragraph") == 1
+    assert enriched["snippet"] is not None
+    assert enriched["snippet"].startswith("Useful first paragraph")

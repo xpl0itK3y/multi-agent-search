@@ -20,6 +20,7 @@ from src.db.models import (
     SearchTaskORM,
     WorkerHeartbeatORM,
 )
+from src.core import rust_accel
 
 
 TRUSTED_DOMAIN_EXACT_MATCHES = {
@@ -78,11 +79,11 @@ def enrich_search_result_dict(result: dict) -> dict:
     title = result.get("title")
     content = result.get("content")
     parsed = urlparse(url)
-    normalized_content = (content or "").strip()
+    normalized_content = rust_accel.clean_extracted_content(content)
 
     snippet = result.get("snippet")
     if not snippet and normalized_content:
-        snippet = normalized_content[:240]
+        snippet = rust_accel.build_snippet(normalized_content, 240)
 
     extraction_status = result.get("extraction_status")
     if not extraction_status:
@@ -94,7 +95,7 @@ def enrich_search_result_dict(result: dict) -> dict:
     return {
         "url": url,
         "title": title,
-        "content": content,
+        "content": normalized_content,
         "domain": domain,
         "content_length": content_length,
         "snippet": snippet or None,
