@@ -10,6 +10,25 @@ struct AggregatedSource {
     content: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ScoredCandidate {
+    url: String,
+    title: Option<String>,
+    snippet: Option<String>,
+    score: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ScoredResult {
+    url: String,
+    title: Option<String>,
+    content: String,
+    source_quality: Option<String>,
+    score: i64,
+    #[serde(flatten)]
+    extra: serde_json::Value,
+}
+
 #[derive(Debug, Serialize)]
 struct ConflictRecord {
     topic: String,
@@ -202,6 +221,40 @@ fn detect_conflicts_impl(
     serde_json::to_string(&conflicts).map_err(|err| err.to_string())
 }
 
+fn select_top_candidates_impl(candidates_json: &str, limit: usize) -> Result<String, String> {
+    let mut candidates: Vec<ScoredCandidate> =
+        serde_json::from_str(candidates_json).map_err(|err| err.to_string())?;
+    candidates.sort_by(|left, right| right.score.cmp(&left.score));
+    let selected = candidates.into_iter().take(limit).collect::<Vec<_>>();
+    serde_json::to_string(&selected).map_err(|err| err.to_string())
+}
+
+fn select_best_results_impl(results_json: &str, limit: usize) -> Result<String, String> {
+    let results: Vec<ScoredResult> =
+        serde_json::from_str(results_json).map_err(|err| err.to_string())?;
+    let mut best_by_fingerprint: Vec<(String, ScoredResult)> = Vec::new();
+
+    for result in results {
+        let title = result.title.clone().unwrap_or_default();
+        let fingerprint = content_fingerprint_impl(&title, &result.content, 200);
+        if let Some((_, existing)) = best_by_fingerprint.iter_mut().find(|(key, _)| key == &fingerprint) {
+            if result.score > existing.score {
+                *existing = result;
+            }
+        } else {
+            best_by_fingerprint.push((fingerprint, result));
+        }
+    }
+
+    let mut deduped = best_by_fingerprint
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect::<Vec<_>>();
+    deduped.sort_by(|left, right| right.score.cmp(&left.score));
+    let selected = deduped.into_iter().take(limit).collect::<Vec<_>>();
+    serde_json::to_string(&selected).map_err(|err| err.to_string())
+}
+
 #[pyfunction]
 fn normalize_text(value: &str) -> String {
     normalize_text_impl(value)
@@ -296,6 +349,16 @@ fn detect_conflicts(
     .map_err(PyValueError::new_err)
 }
 
+#[pyfunction]
+fn select_top_candidates(candidates_json: &str, limit: usize) -> PyResult<String> {
+    select_top_candidates_impl(candidates_json, limit).map_err(PyValueError::new_err)
+}
+
+#[pyfunction]
+fn select_best_results(results_json: &str, limit: usize) -> PyResult<String> {
+    select_best_results_impl(results_json, limit).map_err(PyValueError::new_err)
+}
+
 #[pymodule]
 fn multi_agent_search_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(normalize_text, module)?)?;
@@ -304,6 +367,7 @@ fn multi_agent_search_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> P
     module.add_function(wrap_pyfunction!(extract_used_source_ids, module)?)?;
     module.add_function(wrap_pyfunction!(sanitize_citations, module)?)?;
     module.add_function(wrap_pyfunction!(detect_conflicts, module)?)?;
+    module.add_function(wrap_pyfunction!(select_top_candidates, module)?)?;
+    module.add_function(wrap_pyfunction!(select_best_results, module)?)?;
     Ok(())
 }
-
