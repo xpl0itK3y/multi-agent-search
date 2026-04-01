@@ -340,12 +340,14 @@ class InMemoryTaskStore:
         processed_jobs: int,
         status: str,
         last_error: str | None = None,
+        extraction_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         heartbeat = WorkerHeartbeat(
             worker_name=worker_name,
             processed_jobs=processed_jobs,
             status=status,
             last_error=last_error,
+            extraction_metrics=extraction_metrics or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
         return heartbeat

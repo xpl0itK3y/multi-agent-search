@@ -29,6 +29,9 @@ TRANSLATIONS = {
         "worker": "Worker",
         "no_heartbeat": "No heartbeat found for `{worker_name}`.",
         "processed_jobs": "Processed jobs: {count}",
+        "extraction_attempts": "Extraction attempts: {count}",
+        "extraction_success": "Extraction success: {count}",
+        "extraction_failures": "Extraction failures: {count}",
         "last_seen": "Last seen: {timestamp}",
         "start_research": "Start Research",
         "research_prompt": "Research prompt",
@@ -154,6 +157,9 @@ TRANSLATIONS = {
         "worker": "Воркер",
         "no_heartbeat": "Heartbeat для `{worker_name}` не найден.",
         "processed_jobs": "Обработано задач: {count}",
+        "extraction_attempts": "Попыток extraction: {count}",
+        "extraction_success": "Успешных extraction: {count}",
+        "extraction_failures": "Ошибок extraction: {count}",
         "last_seen": "Последняя активность: {timestamp}",
         "start_research": "Запуск исследования",
         "research_prompt": "Исследовательский запрос",
@@ -659,6 +665,10 @@ def _render_sidebar() -> None:
 
     st.sidebar.markdown(_status_badge(heartbeat["status"]), unsafe_allow_html=True)
     st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
+    extraction_metrics = heartbeat.get("extraction_metrics") or {}
+    st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
+    st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
+    st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
     heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
     heartbeat_status = (heartbeat.get("status") or "").strip().lower()

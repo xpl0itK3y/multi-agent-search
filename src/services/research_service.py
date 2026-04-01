@@ -33,6 +33,7 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.observability import bind_observability_context
+from src.providers.search import get_extraction_metrics_snapshot
 from src.repositories.protocols import TaskStore
 from src.search_depth_profiles import get_depth_profile
 
@@ -440,16 +441,24 @@ class ResearchService:
         processed_jobs: int,
         status: str,
         last_error: str | None = None,
+        extraction_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         return self.task_store.upsert_worker_heartbeat(
             worker_name,
             processed_jobs,
             status,
             last_error,
+            extraction_metrics if extraction_metrics is not None else get_extraction_metrics_snapshot(),
         )
 
     def get_queue_metrics(self) -> QueueMetrics:
         return self.task_store.get_queue_metrics()
+
+    def get_health_status(self) -> dict:
+        return {
+            "status": "ok",
+            "extraction_metrics": get_extraction_metrics_snapshot(),
+        }
 
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)

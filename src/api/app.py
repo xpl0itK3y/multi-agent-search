@@ -52,8 +52,8 @@ def create_app() -> FastAPI:
 
 def register_routes(app: FastAPI) -> None:
     @app.get("/health")
-    async def health_check():
-        return {"status": "ok"}
+    async def health_check(request: Request):
+        return get_research_service(request).get_health_status()
 
     @app.get("/health/queues", response_model=QueueMetrics)
     async def queue_health(request: Request):

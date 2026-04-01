@@ -146,6 +146,7 @@ class WorkerHeartbeatORM(Base):
     processed_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

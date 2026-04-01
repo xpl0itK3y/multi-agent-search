@@ -166,11 +166,25 @@ class ResearchFinalizeResponse(BaseModel):
     finalize_job_id: Optional[str] = None
 
 
+class ExtractionMetrics(BaseModel):
+    attempts: int = 0
+    success_count: int = 0
+    empty_count: int = 0
+    failure_count: int = 0
+    downloaded_bytes: int = 0
+    content_chars: int = 0
+    total_download_ms: float = 0.0
+    total_extract_ms: float = 0.0
+    total_post_process_ms: float = 0.0
+    total_total_ms: float = 0.0
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
     status: str = "idle"
     last_error: Optional[str] = None
+    extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
