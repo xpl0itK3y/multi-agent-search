@@ -985,6 +985,74 @@ fn compact_source_content(content: &str, max_chars: usize) -> String {
 }
 
 #[pyfunction]
+fn clean_extracted_content(content: &str) -> String {
+    let mut lines = Vec::new();
+    let mut seen = HashSet::new();
+    let drop_exact = [
+        "cookie policy",
+        "privacy policy",
+        "terms of service",
+        "all rights reserved",
+        "subscribe",
+        "sign up",
+        "share this article",
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
+
+    for raw_line in content.split(['\r', '\n']) {
+        let cleaned = normalize_text_impl(raw_line);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let lowered = cleaned.to_lowercase();
+        if seen.contains(&cleaned) || drop_exact.contains(lowered.as_str()) {
+            continue;
+        }
+        seen.insert(cleaned.clone());
+        lines.push(cleaned);
+    }
+    lines.join("\n")
+}
+
+#[pyfunction]
+fn build_snippet(content: &str, max_chars: usize) -> String {
+    let normalized = clean_extracted_content(content);
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    let mut snippet_parts = Vec::new();
+    let mut current_length = 0usize;
+    for sentence in split_sentences(&normalized) {
+        let cleaned = normalize_text_impl(&sentence);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let next_length = current_length + cleaned.chars().count() + if snippet_parts.is_empty() { 0 } else { 1 };
+        if next_length > max_chars {
+            break;
+        }
+        snippet_parts.push(cleaned);
+        current_length = next_length;
+    }
+
+    if !snippet_parts.is_empty() {
+        let snippet = snippet_parts.join(" ");
+        if snippet.chars().count() < normalized.chars().count() {
+            return format!("{} ...", snippet.trim_end());
+        }
+        return snippet;
+    }
+
+    let prefix = normalized.chars().take(max_chars).collect::<String>();
+    if normalized.chars().count() > max_chars {
+        return format!("{} ...", prefix.trim_end());
+    }
+    prefix
+}
+
+#[pyfunction]
 fn extract_used_source_ids(report_body: &str) -> Vec<String> {
     let citation_re = Regex::new(r"\[S(\d+)\]").unwrap();
     let mut ordered = Vec::new();
@@ -1079,6 +1147,8 @@ fn extract_evidence_groups(
 fn multi_agent_search_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(normalize_text, module)?)?;
     module.add_function(wrap_pyfunction!(content_fingerprint, module)?)?;
+    module.add_function(wrap_pyfunction!(clean_extracted_content, module)?)?;
+    module.add_function(wrap_pyfunction!(build_snippet, module)?)?;
     module.add_function(wrap_pyfunction!(compact_source_content, module)?)?;
     module.add_function(wrap_pyfunction!(extract_used_source_ids, module)?)?;
     module.add_function(wrap_pyfunction!(sanitize_citations, module)?)?;

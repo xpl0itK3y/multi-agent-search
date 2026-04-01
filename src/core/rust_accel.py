@@ -316,6 +316,69 @@ def compact_source_content(content: str, max_chars: int) -> str:
     return normalized[:max_chars].rstrip() + " ..."
 
 
+def clean_extracted_content(content: str | None) -> str:
+    text = content or ""
+    module = _load_module()
+    if module is not None:
+        native_fn = getattr(module, "clean_extracted_content", None)
+        if native_fn is not None:
+            return native_fn(text)
+
+    lines = []
+    seen: set[str] = set()
+    for raw_line in re.split(r"[\r\n]+", text):
+        cleaned = normalize_text(raw_line)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if cleaned in seen:
+            continue
+        if lowered in {
+            "cookie policy",
+            "privacy policy",
+            "terms of service",
+            "all rights reserved",
+            "subscribe",
+            "sign up",
+            "share this article",
+        }:
+            continue
+        seen.add(cleaned)
+        lines.append(cleaned)
+    return "\n".join(lines)
+
+
+def build_snippet(content: str | None, max_chars: int) -> str | None:
+    text = content or ""
+    module = _load_module()
+    if module is not None:
+        native_fn = getattr(module, "build_snippet", None)
+        if native_fn is not None:
+            return native_fn(text, max_chars) or None
+
+    normalized = clean_extracted_content(text)
+    if not normalized:
+        return None
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    snippet_parts: list[str] = []
+    current_length = 0
+    for sentence in sentences:
+        cleaned = normalize_text(sentence)
+        if not cleaned:
+            continue
+        next_length = current_length + len(cleaned) + (1 if snippet_parts else 0)
+        if next_length > max_chars:
+            break
+        snippet_parts.append(cleaned)
+        current_length = next_length
+    if snippet_parts:
+        snippet = " ".join(snippet_parts)
+        if len(snippet) < len(normalized):
+            return snippet.rstrip() + " ..."
+        return snippet
+    return normalized[:max_chars].rstrip() + (" ..." if len(normalized) > max_chars else "")
+
+
 def extract_used_source_ids(report_body: str) -> list[str]:
     module = _load_module()
     if module is not None:

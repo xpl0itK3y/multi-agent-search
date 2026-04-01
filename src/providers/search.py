@@ -5,6 +5,8 @@ from typing import List, Dict, Optional
 import os
 import sys
 
+from src.core import rust_accel
+
 logger = logging.getLogger(__name__)
 
 # Suppress annoying "Impersonate does not exist" warnings from curl_cffi used by ddgs
@@ -63,7 +65,8 @@ class ContentExtractor:
             downloaded = trafilatura.fetch_url(url)
             if downloaded:
                 result = trafilatura.extract(downloaded, include_comments=False, include_tables=True)
-                return result
+                cleaned = rust_accel.clean_extracted_content(result)
+                return cleaned or None
         except Exception as e:
             logger.error(f"Error extracting content from {url}: {e}")
         return None
