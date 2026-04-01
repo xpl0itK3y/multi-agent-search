@@ -87,6 +87,75 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert "Prefer higher-quality and more authoritative sources when sources conflict" in agent.SYSTEM_PROMPT
 
 
+def test_analyzer_agent_repairs_structured_reports_with_uncited_claims():
+    llm = SequentialLLM(
+        [
+            "## Introduction\nThis paragraph makes a factual claim without citations.\n\n## Conclusion\nAnother factual claim without citations.\n\n## Sources",
+            "## Introduction\nThis paragraph makes a factual claim with support [S1].\n\n## Conclusion\nAnother factual claim with support [S1].\n\n## Sources\n- [S1] https://example.com",
+        ]
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body " * 100}],
+            )
+        ],
+    )
+
+    assert len(llm.calls) == 2
+    assert "[S1]" in result
+    assert "## Sources" in result
+
+
+def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
+    llm = RecordingLLM(response="## Introduction\nSummary [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources")
+    agent = AnalyzerAgent(llm)
+
+    agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": f"https://example.com/{index}",
+                        "domain": "example.com",
+                        "source_quality": "medium",
+                        "title": f"Title {index}",
+                        "content": f"Useful detailed body {index} " * 50,
+                    }
+                    for index in range(5)
+                ]
+                + [
+                    {
+                        "url": "https://docs.python.org/3/tutorial/",
+                        "domain": "docs.python.org",
+                        "source_quality": "high",
+                        "title": "Python Tutorial",
+                        "content": "Useful Python tutorial body " * 80,
+                    }
+                ],
+            )
+        ],
+    )
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    example_sources = [item for item in gathered if item["domain"] == "example.com"]
+    assert len(example_sources) <= 2
+
+
 def test_analyzer_agent_filters_failed_and_duplicate_sources():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)

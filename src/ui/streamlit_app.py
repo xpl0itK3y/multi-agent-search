@@ -42,6 +42,7 @@ TRANSLATIONS = {
         "deep_dive": "Deep Dive",
         "profile_caption": "{description} About {task_count} search tasks and up to {source_limit} sources per task.",
         "queue_overview": "Queue Overview",
+        "queue_backlog": "Queue Backlog",
         "pending_search": "Pending Search",
         "running_search": "Running Search",
         "dead_search": "Dead Search",
@@ -51,6 +52,10 @@ TRANSLATIONS = {
         "research_details": "Research Details",
         "no_research_selected": "Create a research job or paste an existing research ID in the sidebar.",
         "task_pipeline": "Task Pipeline",
+        "task_filter": "Task Filter",
+        "task_filter_placeholder": "Filter tasks by description, query, log, or ID",
+        "task_status_filter": "Task Status Filter",
+        "all_statuses": "All statuses",
         "no_tasks": "No tasks found for this research yet.",
         "final_report": "Final Report",
         "final_report_not_ready": "Final report is not ready yet.",
@@ -86,6 +91,8 @@ TRANSLATIONS = {
         "cleaned_finalize_jobs": "Cleaned finalize jobs",
         "queue_maintenance": "Queue maintenance",
         "operational_view": "Operational View",
+        "job_filter": "Job Filter",
+        "job_filter_placeholder": "Filter by job, task, research, or error text",
         "running_search_jobs": "Running Search Jobs",
         "dead_letter_search_jobs": "Dead-Letter Search Jobs",
         "running_finalize_jobs": "Running Finalize Jobs",
@@ -130,6 +137,7 @@ TRANSLATIONS = {
         "no": "No",
         "disable_finalize_reason": "Finalize is blocked until all tasks are in `completed` or `failed` state.",
         "showing_sources_preview": "Showing {shown} of {total} sources",
+        "requeue_dead_search_job": "Requeue Dead Search Job",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -159,6 +167,7 @@ TRANSLATIONS = {
         "deep_dive": "Глубокий поиск",
         "profile_caption": "{description} Примерно {task_count} search tasks и до {source_limit} источников на задачу.",
         "queue_overview": "Обзор очередей",
+        "queue_backlog": "Общий backlog",
         "pending_search": "Search в ожидании",
         "running_search": "Search в работе",
         "dead_search": "Search в dead-letter",
@@ -168,6 +177,10 @@ TRANSLATIONS = {
         "research_details": "Детали исследования",
         "no_research_selected": "Создай research job или вставь существующий research ID в sidebar.",
         "task_pipeline": "Пайплайн задач",
+        "task_filter": "Фильтр задач",
+        "task_filter_placeholder": "Фильтр по описанию, query, логам или ID",
+        "task_status_filter": "Фильтр статуса задач",
+        "all_statuses": "Все статусы",
         "no_tasks": "Для этого research задачи пока не найдены.",
         "final_report": "Финальный отчет",
         "final_report_not_ready": "Финальный отчет пока не готов.",
@@ -203,6 +216,8 @@ TRANSLATIONS = {
         "cleaned_finalize_jobs": "Очищены finalize jobs",
         "queue_maintenance": "Обслуживание очередей",
         "operational_view": "Операционный режим",
+        "job_filter": "Фильтр jobs",
+        "job_filter_placeholder": "Фильтр по job, task, research или тексту ошибки",
         "running_search_jobs": "Search jobs в работе",
         "dead_letter_search_jobs": "Search jobs в dead-letter",
         "running_finalize_jobs": "Finalize jobs в работе",
@@ -247,6 +262,7 @@ TRANSLATIONS = {
         "no": "Нет",
         "disable_finalize_reason": "Finalize заблокирован, пока все задачи не перейдут в `completed` или `failed`.",
         "showing_sources_preview": "Показано {shown} из {total} источников",
+        "requeue_dead_search_job": "Перепоставить dead search job",
     },
 }
 
@@ -755,11 +771,44 @@ def _render_job_section(title: str, jobs: list[dict], job_kind: str) -> None:
         _render_job_card(job, job_kind)
 
 
+def _filter_jobs(jobs: list[dict], query: str) -> list[dict]:
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return jobs
+
+    filtered_jobs = []
+    for job in jobs:
+        haystack = " ".join(
+            str(value)
+            for value in [
+                job.get("id"),
+                job.get("task_id"),
+                job.get("research_id"),
+                job.get("status"),
+                job.get("error"),
+            ]
+            if value
+        ).lower()
+        if normalized_query in haystack:
+            filtered_jobs.append(job)
+    return filtered_jobs
+
+
 def _render_queue_overview() -> None:
     st.subheader(_t("queue_overview"))
     metrics = _safe_api_call(_api_get, "/health/queues")
     if not metrics:
         return
+
+    queue_backlog = (
+        metrics["pending_search_jobs"]
+        + metrics["running_search_jobs"]
+        + metrics["dead_letter_search_jobs"]
+        + metrics["pending_finalize_jobs"]
+        + metrics["running_finalize_jobs"]
+        + metrics["dead_letter_finalize_jobs"]
+    )
+    st.metric(_t("queue_backlog"), queue_backlog)
 
     top = st.columns(3)
     top[0].metric(_t("pending_search"), metrics["pending_search_jobs"])
@@ -785,10 +834,20 @@ def _render_queue_overview() -> None:
         _run_queue_action(_t("queue_maintenance"), "/health/queues/maintenance")
 
     with st.expander(_t("operational_view"), expanded=False):
+        job_filter = st.text_input(
+            _t("job_filter"),
+            value="",
+            placeholder=_t("job_filter_placeholder"),
+        )
         search_running = _safe_api_call(_api_get, "/v1/search-jobs?status=running") or []
         search_dead = _safe_api_call(_api_get, "/v1/search-jobs?status=dead_letter") or []
         finalize_running = _safe_api_call(_api_get, "/v1/research/finalize-jobs?status=running") or []
         finalize_dead = _safe_api_call(_api_get, "/v1/research/finalize-jobs?status=dead_letter") or []
+
+        search_running = _filter_jobs(search_running, job_filter)
+        search_dead = _filter_jobs(search_dead, job_filter)
+        finalize_running = _filter_jobs(finalize_running, job_filter)
+        finalize_dead = _filter_jobs(finalize_dead, job_filter)
 
         left, right = st.columns(2, gap="large")
         with left:
@@ -845,6 +904,16 @@ def _render_task(task: dict, index: int) -> None:
             )
             if search_job.get("error"):
                 st.warning(search_job["error"])
+            if search_job.get("status") == "dead_letter":
+                if st.button(
+                    _t("requeue_dead_search_job"),
+                    key=f"requeue-dead-search-job-{search_job['id']}",
+                    use_container_width=True,
+                ):
+                    _requeue_job(
+                        f"/v1/search-jobs/{search_job['id']}/requeue",
+                        _t("requeued_job", job_kind="search"),
+                    )
 
         st.markdown(f"**{_t('queries')}**")
         st.code("\n".join(task["queries"]) or "-", language="text")
@@ -983,7 +1052,41 @@ def _render_research_details() -> None:
     if not tasks:
         st.info(_t("no_tasks"))
     else:
-        for index, task in enumerate(tasks, start=1):
+        task_status_options = [_t("all_statuses")] + sorted(
+            {task.get("status", "") for task in tasks if task.get("status")}
+        )
+        filter_left, filter_right = st.columns([1, 1.4])
+        selected_status = filter_left.selectbox(
+            _t("task_status_filter"),
+            options=task_status_options,
+        )
+        task_filter = filter_right.text_input(
+            _t("task_filter"),
+            value="",
+            placeholder=_t("task_filter_placeholder"),
+        ).strip().lower()
+
+        filtered_tasks = []
+        for task in tasks:
+            if selected_status != _t("all_statuses") and task.get("status") != selected_status:
+                continue
+            haystack = " ".join(
+                [
+                    task.get("id") or "",
+                    task.get("description") or "",
+                    " ".join(task.get("queries") or []),
+                    " ".join(task.get("recent_logs") or task.get("logs") or []),
+                ]
+            ).lower()
+            if task_filter and task_filter not in haystack:
+                continue
+            filtered_tasks.append(task)
+
+        if not filtered_tasks:
+            st.info(_t("no_tasks"))
+            return
+
+        for index, task in enumerate(filtered_tasks, start=1):
             _render_task(task, index)
 
     st.subheader(_t("final_report"))

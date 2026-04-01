@@ -1,5 +1,6 @@
 import logging
 
+from src.observability import bind_observability_context
 from src.services import ResearchService
 
 logger = logging.getLogger(__name__)
@@ -17,18 +18,23 @@ class SearchWorker:
             job = self.research_service.task_store.claim_next_search_task_job()
             if job is None:
                 break
-            self.research_service.touch_worker_heartbeat(
-                self.worker_name,
-                processed,
-                "busy",
-            )
-            logger.info("search_job_claimed job_id=%s task_id=%s depth=%s", job.id, job.task_id, job.depth.value)
-            self.research_service.process_search_task_job(job.id)
-            processed += 1
-            self.research_service.touch_worker_heartbeat(
-                self.worker_name,
-                processed,
-                "busy",
-            )
+            with bind_observability_context(
+                worker_name=self.worker_name,
+                job_id=job.id,
+                task_id=job.task_id,
+            ):
+                self.research_service.touch_worker_heartbeat(
+                    self.worker_name,
+                    processed,
+                    "busy",
+                )
+                logger.info("search_job_claimed depth=%s", job.depth.value)
+                self.research_service.process_search_task_job(job.id)
+                processed += 1
+                self.research_service.touch_worker_heartbeat(
+                    self.worker_name,
+                    processed,
+                    "busy",
+                )
 
         return processed
