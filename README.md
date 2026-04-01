@@ -26,6 +26,27 @@ FINALIZE_WORKER_INTERVAL=2.0
 
 See [.env.example](./.env.example) for a full example.
 
+## Native Text Processing Module
+
+The repository now includes an optional Rust-backed text-processing module in `native/text_processing`.
+
+Python keeps a safe fallback path in `src/core/rust_accel.py`, so the app still runs if the native module is not built.
+
+To build the native module into the active virtualenv:
+
+```bash
+venv/bin/python -m pip install maturin
+./scripts/build_native_module.sh
+```
+
+The script uses:
+
+- `cargo`
+- `maturin`
+- `native/text_processing/Cargo.toml`
+
+If the native extension is unavailable, the project automatically falls back to the pure-Python implementation.
+
 ## Run With Docker Compose
 
 ```bash

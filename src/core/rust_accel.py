@@ -211,3 +211,39 @@ def detect_conflicts(
             if len(conflicts) >= max_conflicts:
                 return conflicts
     return conflicts
+
+
+def select_top_candidates(candidates: list[dict], limit: int) -> list[dict]:
+    module = _load_module()
+    if module is not None:
+        return json.loads(module.select_top_candidates(json.dumps(candidates, ensure_ascii=False), limit))
+
+    return sorted(candidates, key=lambda item: item.get("score", 0), reverse=True)[:limit]
+
+
+def select_best_results(results: list[dict], limit: int) -> list[dict]:
+    module = _load_module()
+    if module is not None:
+        return json.loads(module.select_best_results(json.dumps(results, ensure_ascii=False), limit))
+
+    deduped_by_fingerprint: dict[str, tuple[int, dict]] = {}
+    for result in results:
+        title = normalize_text(result.get("title") or "")
+        content = normalize_text(result.get("content") or "")
+        fingerprint = content_fingerprint(title, content, 200)
+        score = int(result.get("score", 0))
+        normalized_result = {
+            **result,
+            "title": title or None,
+            "content": content,
+        }
+        existing = deduped_by_fingerprint.get(fingerprint)
+        if existing is None or score > existing[0]:
+            deduped_by_fingerprint[fingerprint] = (score, normalized_result)
+
+    ranked = sorted(
+        (item for _, item in deduped_by_fingerprint.values()),
+        key=lambda item: item.get("score", 0),
+        reverse=True,
+    )
+    return ranked[:limit]

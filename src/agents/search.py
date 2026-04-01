@@ -500,38 +500,22 @@ class SearchAgent:
         return score
 
     def _select_best_results(self, results: list[dict]) -> list[dict]:
-        deduped_by_fingerprint: dict[str, tuple[int, dict]] = {}
-
+        scored_results = []
         for result in results:
             title = self._normalize_text(result.get("title"))
             content = self._normalize_text(result.get("content"))
             url = result.get("url", "")
             source_quality = result.get("source_quality")
-            fingerprint = self._content_fingerprint(title, content)
-            score = self._score_result(url, title, content, source_quality)
-
-            normalized_result = {
-                **result,
-                "url": url,
-                "title": title or None,
-                "content": content,
-            }
-
-            existing = deduped_by_fingerprint.get(fingerprint)
-            if existing is None or score > existing[0]:
-                deduped_by_fingerprint[fingerprint] = (score, normalized_result)
-
-        ranked_results = sorted(
-            (item for _, item in deduped_by_fingerprint.values()),
-            key=lambda item: self._score_result(
-                item["url"],
-                item.get("title") or "",
-                item.get("content") or "",
-                item.get("source_quality"),
-            ),
-            reverse=True,
-        )
-        return ranked_results[: self.max_sources]
+            scored_results.append(
+                {
+                    **result,
+                    "url": url,
+                    "title": title or None,
+                    "content": content,
+                    "score": self._score_result(url, title, content, source_quality),
+                }
+            )
+        return rust_accel.select_best_results(scored_results, self.max_sources)
 
     def run_task(self, task_id: str):
         """
@@ -586,8 +570,7 @@ class SearchAgent:
                             }
                         )
 
-            candidate_results.sort(key=lambda item: item["score"], reverse=True)
-            candidate_results = candidate_results[: self.max_candidate_urls]
+            candidate_results = rust_accel.select_top_candidates(candidate_results, self.max_candidate_urls)
 
             self.task_store.update_task(
                 task_id,
