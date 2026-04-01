@@ -32,6 +32,8 @@ TRANSLATIONS = {
         "extraction_attempts": "Extraction attempts: {count}",
         "extraction_success": "Extraction success: {count}",
         "extraction_failures": "Extraction failures: {count}",
+        "extraction_success_rate": "Extraction success rate: {value}%",
+        "extraction_avg_total_ms": "Avg extraction total: {value} ms",
         "last_seen": "Last seen: {timestamp}",
         "start_research": "Start Research",
         "research_prompt": "Research prompt",
@@ -49,6 +51,8 @@ TRANSLATIONS = {
         "queue_extraction_attempts": "Extraction Attempts",
         "queue_extraction_success": "Extraction Success",
         "queue_extraction_failures": "Extraction Failures",
+        "queue_extraction_success_rate": "Extraction Success Rate",
+        "queue_extraction_avg_total_ms": "Avg Extraction Total",
         "pending_search": "Pending Search",
         "running_search": "Running Search",
         "dead_search": "Dead Search",
@@ -163,6 +167,8 @@ TRANSLATIONS = {
         "extraction_attempts": "Попыток extraction: {count}",
         "extraction_success": "Успешных extraction: {count}",
         "extraction_failures": "Ошибок extraction: {count}",
+        "extraction_success_rate": "Успешность extraction: {value}%",
+        "extraction_avg_total_ms": "Средний total extraction: {value} мс",
         "last_seen": "Последняя активность: {timestamp}",
         "start_research": "Запуск исследования",
         "research_prompt": "Исследовательский запрос",
@@ -180,6 +186,8 @@ TRANSLATIONS = {
         "queue_extraction_attempts": "Попытки extraction",
         "queue_extraction_success": "Успешный extraction",
         "queue_extraction_failures": "Ошибки extraction",
+        "queue_extraction_success_rate": "Успешность extraction",
+        "queue_extraction_avg_total_ms": "Средний total extraction",
         "pending_search": "Search в ожидании",
         "running_search": "Search в работе",
         "dead_search": "Search в dead-letter",
@@ -675,6 +683,8 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
     st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
     st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
+    st.sidebar.caption(_t("extraction_success_rate", value=extraction_metrics.get("success_rate_percent", 0.0)))
+    st.sidebar.caption(_t("extraction_avg_total_ms", value=extraction_metrics.get("avg_total_ms", 0.0)))
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
     heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
     heartbeat_status = (heartbeat.get("status") or "").strip().lower()
@@ -841,6 +851,9 @@ def _render_queue_overview() -> None:
     extraction_row[0].metric(_t("queue_extraction_attempts"), extraction.get("attempts", 0))
     extraction_row[1].metric(_t("queue_extraction_success"), extraction.get("success_count", 0))
     extraction_row[2].metric(_t("queue_extraction_failures"), extraction.get("failure_count", 0))
+    derived_row = st.columns(2)
+    derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
+    derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
 
     st.markdown(f"**{_t('queue_actions')}**")
     action_rows = [st.columns(2), st.columns(2), st.columns(1)]
