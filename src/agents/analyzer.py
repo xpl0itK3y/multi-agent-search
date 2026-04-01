@@ -4,6 +4,7 @@ import re
 from typing import List
 from urllib.parse import urlparse
 from src.core.agent import BaseAgent
+from src.core import rust_accel
 from src.api.schemas import SearchTask
 from src.observability import maybe_traceable
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics
@@ -280,14 +281,10 @@ class AnalyzerAgent(BaseAgent):
         return ""
 
     def _normalize_text(self, value: str | None) -> str:
-        if not value:
-            return ""
-        return re.sub(r"\s+", " ", value).strip()
+        return rust_accel.normalize_text(value)
 
     def _content_fingerprint(self, title: str, content: str) -> str:
-        normalized_title = self._normalize_text(title).lower()
-        normalized_content = self._normalize_text(content).lower()
-        return f"{normalized_title}|{normalized_content[:250]}"
+        return rust_accel.content_fingerprint(title, content, 250)
 
     def _trusted_domain_score(self, url: str) -> int:
         domain = urlparse(url).netloc.lower().removeprefix("www.")
@@ -447,30 +444,7 @@ class AnalyzerAgent(BaseAgent):
         return False
 
     def _compact_source_content(self, content: str) -> str:
-        normalized = self._normalize_text(content)
-        if len(normalized) <= self.MAX_SOURCE_CONTENT_CHARS:
-            return normalized
-
-        sentences = self.SENTENCE_PATTERN.split(normalized)
-        compact_parts: list[str] = []
-        current_length = 0
-        for sentence in sentences:
-            cleaned = self._normalize_text(sentence)
-            if not cleaned:
-                continue
-            next_length = current_length + len(cleaned) + (1 if compact_parts else 0)
-            if next_length > self.MAX_SOURCE_CONTENT_CHARS:
-                break
-            compact_parts.append(cleaned)
-            current_length = next_length
-
-        if compact_parts:
-            compact = " ".join(compact_parts)
-            if len(compact) < len(normalized):
-                return compact.rstrip() + " ..."
-            return compact
-
-        return normalized[: self.MAX_SOURCE_CONTENT_CHARS].rstrip() + " ..."
+        return rust_accel.compact_source_content(content, self.MAX_SOURCE_CONTENT_CHARS)
 
     def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask]) -> list[dict]:
         topics = self._detect_topics(prompt, tasks)
@@ -694,23 +668,10 @@ class AnalyzerAgent(BaseAgent):
         )
 
     def _extract_used_source_ids(self, report_body: str) -> list[str]:
-        ordered_ids: list[str] = []
-        for match in self.CITATION_PATTERN.finditer(report_body):
-            source_id = f"S{match.group(1)}"
-            if source_id not in ordered_ids:
-                ordered_ids.append(source_id)
-        return ordered_ids
+        return rust_accel.extract_used_source_ids(report_body)
 
     def _sanitize_citations(self, report: str, valid_source_ids: set[str]) -> str:
-        def replace(match: re.Match[str]) -> str:
-            source_id = f"S{match.group(1)}"
-            return match.group(0) if source_id in valid_source_ids else ""
-
-        sanitized = self.CITATION_PATTERN.sub(replace, report)
-        sanitized = re.sub(r"\[(?:,\s*)+\]", "", sanitized)
-        sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
-        sanitized = re.sub(r"\s+([,.;:])", r"\1", sanitized)
-        return sanitized
+        return rust_accel.sanitize_citations(report, valid_source_ids)
 
     def _rebuild_sources_section(self, report: str, aggregated_data: list[dict]) -> str:
         without_sources = self.SOURCE_HEADING_PATTERN.sub("", report).strip()
@@ -857,37 +818,13 @@ class AnalyzerAgent(BaseAgent):
         return False
 
     def _detect_conflicts(self, aggregated_data: list[dict]) -> list[dict]:
-        claims = self._extract_candidate_claims(aggregated_data)
-        conflicts: list[dict] = []
-        seen_pairs: set[tuple[str, str]] = set()
-
-        for index, left in enumerate(claims):
-            for right in claims[index + 1:]:
-                if not self._claims_conflict(left, right):
-                    continue
-
-                pair_key = tuple(sorted((left["source_id"], right["source_id"])))
-                if pair_key in seen_pairs:
-                    continue
-                seen_pairs.add(pair_key)
-
-                shared_tokens = sorted(self._informative_shared_tokens(left, right))
-                reason = "material discrepancy"
-                if left["has_negation"] != right["has_negation"]:
-                    reason = "one source affirms the claim while the other negates it"
-                elif set(left["numbers"]) and set(right["numbers"]) and set(left["numbers"]) != set(right["numbers"]):
-                    reason = "the sources report different concrete figures"
-                conflicts.append(
-                    {
-                        "topic": ", ".join(shared_tokens[:3]) or "source disagreement",
-                        "source_ids": [left["source_id"], right["source_id"]],
-                        "sentences": [left["sentence"], right["sentence"]],
-                        "reason": reason,
-                    }
-                )
-                if len(conflicts) >= 3:
-                    return conflicts
-        return conflicts
+        return rust_accel.detect_conflicts(
+            aggregated_data=aggregated_data,
+            stopwords=self.STOPWORDS,
+            generic_tokens=self.CONFLICT_GENERIC_TOKENS,
+            negation_tokens=self.NEGATION_TOKENS,
+            max_conflicts=3,
+        )
 
     def _inject_conflicts_section(self, report: str, conflicts: list[dict], language: str) -> str:
         if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
