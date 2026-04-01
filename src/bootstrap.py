@@ -6,6 +6,7 @@ from src.agents.analyzer import AnalyzerAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.config import settings
+from src.observability import configure_logging
 from src.providers.deepseek import DeepSeekProvider
 from src.repositories import create_task_store
 from src.services import ResearchService
@@ -20,6 +21,7 @@ class StaticAnalyzerAgent:
 
 
 def create_research_service() -> ResearchService:
+    configure_logging()
     agent_optimizer = None
     agent_orchestrator = None
     agent_analyzer = None

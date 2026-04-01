@@ -1,3 +1,4 @@
+import uuid
 from typing import List
 
 from fastapi import FastAPI, HTTPException, Request
@@ -26,10 +27,25 @@ from src.api.schemas import (
 )
 from src.bootstrap import lifespan
 from src.config import settings
+from src.observability import bind_observability_context
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def correlation_middleware(request: Request, call_next):
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        request.state.request_id = request_id
+        with bind_observability_context(
+            request_id=request_id,
+            method=request.method,
+            path=str(request.url.path),
+        ):
+            response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
     register_routes(app)
     return app
 

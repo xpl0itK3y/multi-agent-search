@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
     MAX_ANALYZER_SOURCES = 12
+    MAX_SOURCES_PER_DOMAIN = 2
+    MAX_SOURCES_PER_TASK = 4
     MAX_SOURCE_CONTENT_CHARS = 1600
     CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
     SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
@@ -566,31 +568,66 @@ class AnalyzerAgent(BaseAgent):
             if existing is None or score > existing[0]:
                 best_by_fingerprint[fingerprint] = (score, candidate)
 
-        ranked_candidates = sorted(
-            (item for _, item in best_by_fingerprint.values()),
-            key=lambda item: self._score_source(
+        ranked_candidates: list[dict] = []
+        for _, item in best_by_fingerprint.values():
+            score = self._score_source(
                 item.get("url") or "",
                 item.get("title") or "",
                 item.get("content") or "",
                 item.get("source_quality"),
-            ) + (
-                self._topic_domain_adjustment(
+            )
+            if topics:
+                score += self._topic_domain_adjustment(
                     item.get("url") or "",
                     item.get("title") or "",
                     item.get("content") or "",
                     item.get("source_quality"),
                     topics=topics,
                 )
-                if topics
-                else 0
-            ),
-            reverse=True,
-        )
-        selected_candidates = ranked_candidates[: self.MAX_ANALYZER_SOURCES]
+            ranked_candidates.append({**item, "_score": score})
+
+        ranked_candidates.sort(key=lambda item: item["_score"], reverse=True)
+
+        selected_candidates: list[dict] = []
+        domain_counts: dict[str, int] = {}
+        task_counts: dict[str, int] = {}
+        for candidate in ranked_candidates:
+            domain = (candidate.get("domain") or "").lower()
+            task_description = candidate.get("task_description") or ""
+            is_strong_source = candidate.get("source_quality") == "high"
+
+            if domain and domain_counts.get(domain, 0) >= self.MAX_SOURCES_PER_DOMAIN and not is_strong_source:
+                continue
+            if task_description and task_counts.get(task_description, 0) >= self.MAX_SOURCES_PER_TASK and not is_strong_source:
+                continue
+
+            selected_candidates.append(candidate)
+            if domain:
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            if task_description:
+                task_counts[task_description] = task_counts.get(task_description, 0) + 1
+
+            if len(selected_candidates) >= self.MAX_ANALYZER_SOURCES:
+                break
+
+        unique_domains = {
+            (candidate.get("domain") or "").lower()
+            for candidate in ranked_candidates
+            if candidate.get("domain")
+        }
+        if len(unique_domains) <= 1 and len(selected_candidates) < self.MAX_ANALYZER_SOURCES:
+            selected_urls = {candidate["url"] for candidate in selected_candidates}
+            for candidate in ranked_candidates:
+                if candidate["url"] in selected_urls:
+                    continue
+                selected_candidates.append(candidate)
+                if len(selected_candidates) >= self.MAX_ANALYZER_SOURCES:
+                    break
+
         return [
             {
                 "source_id": f"S{index}",
-                **candidate,
+                **{key: value for key, value in candidate.items() if key != "_score"},
             }
             for index, candidate in enumerate(selected_candidates, start=1)
         ]
@@ -690,6 +727,61 @@ class AnalyzerAgent(BaseAgent):
 
         return f"{sanitized.strip()}\n\n" + "\n".join(lines)
 
+    def _body_without_sources(self, report: str) -> str:
+        return self.SOURCE_HEADING_PATTERN.sub("", report).strip()
+
+    def _line_requires_citation(self, line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if stripped.startswith("#"):
+            return False
+        if len(stripped) < 45:
+            return False
+        if stripped.lower().startswith("source") or stripped.lower().startswith("report notes"):
+            return False
+        return bool(re.search(r"[A-Za-zА-Яа-я0-9]", stripped))
+
+    def _uncited_claim_lines(self, report: str) -> list[str]:
+        uncited_lines: list[str] = []
+        for line in self._body_without_sources(report).splitlines():
+            if not self._line_requires_citation(line):
+                continue
+            if self.CITATION_PATTERN.search(line):
+                continue
+            uncited_lines.append(self._normalize_text(line))
+        return uncited_lines
+
+    def _looks_like_structured_report(self, report: str) -> bool:
+        return "## " in report or len(report) >= 400 or report.count("\n") >= 4
+
+    def _repair_report_citations(
+        self,
+        input_data: dict,
+        language: str,
+        report: str,
+        uncited_lines: list[str],
+    ) -> str:
+        valid_source_ids = ", ".join(item["source_id"] for item in input_data.get("gathered_data", []))
+        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6])
+        repair_prompt = (
+            f"{self._language_instruction(language)} "
+            "Rewrite the report so that every factual paragraph or bullet includes inline citations. "
+            "Use only the available source IDs, do not invent citations, and preserve markdown headings.\n\n"
+            f"Available source IDs: {valid_source_ids}\n\n"
+            "Likely uncited lines:\n"
+            f"{feedback_lines}\n\n"
+            "Current report:\n"
+            f"{report}\n\n"
+            "Research payload:\n"
+            f"{json.dumps(input_data, ensure_ascii=False)}"
+        )
+        return self.llm.generate(
+            system_prompt=self.SYSTEM_PROMPT,
+            user_prompt=repair_prompt,
+            temperature=0.2,
+        )
+
     def _extract_candidate_claims(self, aggregated_data: list[dict]) -> list[dict]:
         claims: list[dict] = []
         for source in aggregated_data:
@@ -780,18 +872,24 @@ class AnalyzerAgent(BaseAgent):
                 seen_pairs.add(pair_key)
 
                 shared_tokens = sorted(self._informative_shared_tokens(left, right))
+                reason = "material discrepancy"
+                if left["has_negation"] != right["has_negation"]:
+                    reason = "one source affirms the claim while the other negates it"
+                elif set(left["numbers"]) and set(right["numbers"]) and set(left["numbers"]) != set(right["numbers"]):
+                    reason = "the sources report different concrete figures"
                 conflicts.append(
                     {
                         "topic": ", ".join(shared_tokens[:3]) or "source disagreement",
                         "source_ids": [left["source_id"], right["source_id"]],
                         "sentences": [left["sentence"], right["sentence"]],
+                        "reason": reason,
                     }
                 )
                 if len(conflicts) >= 3:
                     return conflicts
         return conflicts
 
-    def _inject_conflicts_section(self, report: str, conflicts: list[dict]) -> str:
+    def _inject_conflicts_section(self, report: str, conflicts: list[dict], language: str) -> str:
         if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
             return report
 
@@ -800,8 +898,8 @@ class AnalyzerAgent(BaseAgent):
             left_source, right_source = conflict["source_ids"]
             left_sentence, right_sentence = conflict["sentences"]
             lines.append(
-                f"- On {conflict['topic']}, {left_source} and {right_source} provide conflicting evidence: "
-                f'"{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
+                f"- Topic: {conflict['topic']}. Reason: {conflict.get('reason') or 'material discrepancy'}. "
+                f'Evidence: "{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
             )
 
         insertion = "\n".join(lines)
@@ -875,7 +973,17 @@ class AnalyzerAgent(BaseAgent):
                 result = self._generate_report(input_data, prompt_language, retry=True)
 
         normalized = self._post_process_report(result)
-        with_conflicts = self._inject_conflicts_section(normalized, conflicts)
+        with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
         rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
+        uncited_lines = self._uncited_claim_lines(rebuilt)
+        if aggregated_data and uncited_lines and self._looks_like_structured_report(rebuilt):
+            logger.warning(
+                "AnalyzerAgent detected uncited claim lines. Repairing report citations once. uncited_count=%s",
+                len(uncited_lines),
+            )
+            repaired = self._repair_report_citations(input_data, prompt_language, rebuilt, uncited_lines)
+            normalized = self._post_process_report(repaired)
+            with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
+            rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
         notes = self._report_quality_notes(rebuilt, aggregated_data)
         return self._inject_report_notes(rebuilt, notes)
