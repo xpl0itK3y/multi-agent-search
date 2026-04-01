@@ -7,6 +7,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.schemas import (
+    ExtractionMetrics,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
@@ -529,6 +530,21 @@ class SQLAlchemyTaskStore:
                 statement = select(func.count()).select_from(model).where(model.status == status_value)
                 return session.execute(statement).scalar_one()
 
+            extraction_metrics = ExtractionMetrics()
+            heartbeats = session.execute(select(WorkerHeartbeatORM)).scalars().all()
+            for heartbeat in heartbeats:
+                metrics = ExtractionMetrics.model_validate(heartbeat.extraction_metrics or {})
+                extraction_metrics.attempts += metrics.attempts
+                extraction_metrics.success_count += metrics.success_count
+                extraction_metrics.empty_count += metrics.empty_count
+                extraction_metrics.failure_count += metrics.failure_count
+                extraction_metrics.downloaded_bytes += metrics.downloaded_bytes
+                extraction_metrics.content_chars += metrics.content_chars
+                extraction_metrics.total_download_ms += metrics.total_download_ms
+                extraction_metrics.total_extract_ms += metrics.total_extract_ms
+                extraction_metrics.total_post_process_ms += metrics.total_post_process_ms
+                extraction_metrics.total_total_ms += metrics.total_total_ms
+
             return QueueMetrics(
                 pending_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.PENDING.value),
                 running_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.RUNNING.value),
@@ -536,6 +552,7 @@ class SQLAlchemyTaskStore:
                 pending_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.PENDING.value),
                 running_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.RUNNING.value),
                 dead_letter_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.DEAD_LETTER.value),
+                extraction_metrics=extraction_metrics,
             )
 
     def get_task(self, task_id: str) -> SearchTask | None:

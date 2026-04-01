@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import uuid
 
 from src.api.schemas import (
+    ExtractionMetrics,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
@@ -356,6 +357,18 @@ class InMemoryTaskStore:
         return self.worker_heartbeats.get(worker_name)
 
     def get_queue_metrics(self) -> QueueMetrics:
+        extraction_metrics = ExtractionMetrics()
+        for heartbeat in self.worker_heartbeats.values():
+            extraction_metrics.attempts += heartbeat.extraction_metrics.attempts
+            extraction_metrics.success_count += heartbeat.extraction_metrics.success_count
+            extraction_metrics.empty_count += heartbeat.extraction_metrics.empty_count
+            extraction_metrics.failure_count += heartbeat.extraction_metrics.failure_count
+            extraction_metrics.downloaded_bytes += heartbeat.extraction_metrics.downloaded_bytes
+            extraction_metrics.content_chars += heartbeat.extraction_metrics.content_chars
+            extraction_metrics.total_download_ms += heartbeat.extraction_metrics.total_download_ms
+            extraction_metrics.total_extract_ms += heartbeat.extraction_metrics.total_extract_ms
+            extraction_metrics.total_post_process_ms += heartbeat.extraction_metrics.total_post_process_ms
+            extraction_metrics.total_total_ms += heartbeat.extraction_metrics.total_total_ms
         return QueueMetrics(
             pending_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.PENDING),
             running_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.RUNNING),
@@ -363,6 +376,7 @@ class InMemoryTaskStore:
             pending_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.PENDING),
             running_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.RUNNING),
             dead_letter_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.DEAD_LETTER),
+            extraction_metrics=extraction_metrics,
         )
 
     def get_task(self, task_id: str) -> SearchTask | None:
