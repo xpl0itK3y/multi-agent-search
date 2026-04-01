@@ -64,7 +64,10 @@ async def client():
 async def test_health_check(client):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert "extraction_metrics" in payload
+    assert payload["extraction_metrics"]["attempts"] >= 0
     assert response.headers["X-Request-ID"]
 
 

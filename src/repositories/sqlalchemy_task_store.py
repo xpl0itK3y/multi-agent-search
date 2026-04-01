@@ -499,6 +499,7 @@ class SQLAlchemyTaskStore:
         processed_jobs: int,
         status: str,
         last_error: str | None = None,
+        extraction_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         with self.session_scope() as session:
             heartbeat = session.get(WorkerHeartbeatORM, worker_name)
@@ -509,6 +510,7 @@ class SQLAlchemyTaskStore:
             heartbeat.processed_jobs = processed_jobs
             heartbeat.status = status
             heartbeat.last_error = last_error
+            heartbeat.extraction_metrics = extraction_metrics or {}
             heartbeat.last_seen_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(heartbeat)

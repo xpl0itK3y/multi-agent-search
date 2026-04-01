@@ -1344,13 +1344,20 @@ def test_get_queue_metrics_reports_dead_letter_counts():
 
 def test_get_worker_heartbeat_returns_latest_value():
     task_store = InMemoryTaskStore()
-    task_store.upsert_worker_heartbeat("job-worker", processed_jobs=2, status="busy")
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=2,
+        status="busy",
+        extraction_metrics={"attempts": 3, "success_count": 2},
+    )
 
     heartbeat = ResearchService(task_store=task_store).get_worker_heartbeat("job-worker")
 
     assert heartbeat is not None
     assert heartbeat.worker_name == "job-worker"
     assert heartbeat.processed_jobs == 2
+    assert heartbeat.extraction_metrics.attempts == 3
+    assert heartbeat.extraction_metrics.success_count == 2
 
 
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
