@@ -1403,6 +1403,34 @@ def test_extraction_metrics_derives_rates_and_averages():
     assert metrics.avg_total_ms == 17.0
 
 
+def test_task_summary_preserves_search_metrics():
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "search_metrics": {
+                "candidate_count": 6,
+                "extraction_attempts": 4,
+                "extraction_success_count": 3,
+                "extraction_failure_count": 1,
+                "selected_source_count": 2,
+                "avg_content_chars": 512.5,
+            },
+        }
+    )
+
+    summary = ResearchService(task_store=task_store).get_task_summary("task-1")
+
+    assert summary.search_metrics.candidate_count == 6
+    assert summary.search_metrics.extraction_attempts == 4
+    assert summary.search_metrics.extraction_success_count == 3
+    assert summary.search_metrics.extraction_failure_count == 1
+    assert summary.search_metrics.selected_source_count == 2
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

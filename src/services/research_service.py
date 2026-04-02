@@ -216,6 +216,7 @@ class ResearchService:
             log_count=len(task.logs or []),
             recent_logs=(task.logs or [])[-self.TASK_SUMMARY_LOG_LIMIT :],
             source_preview=preview,
+            search_metrics=task.search_metrics,
             latest_search_job=self.task_store.get_latest_search_task_job(task.id),
         )
 

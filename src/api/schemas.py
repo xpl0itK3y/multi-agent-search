@@ -47,6 +47,14 @@ class DecomposeRequest(BaseModel):
     prompt: str = Field(..., description="The complex query to decompose")
     depth: SearchDepth = Field(default=SearchDepth.EASY, description="Depth of the search (easy, medium, hard)")
 
+class SearchTaskMetrics(BaseModel):
+    candidate_count: int = 0
+    extraction_attempts: int = 0
+    extraction_success_count: int = 0
+    extraction_failure_count: int = 0
+    selected_source_count: int = 0
+    avg_content_chars: float = 0.0
+
 class SearchTask(BaseModel):
     id: str
     research_id: Optional[str] = None
@@ -57,6 +65,7 @@ class SearchTask(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     result: Optional[List[Dict[str, Any]]] = None
     logs: List[str] = Field(default_factory=list)
+    search_metrics: SearchTaskMetrics = Field(default_factory=SearchTaskMetrics)
 
 
 class SearchSourcePreview(BaseModel):
@@ -80,12 +89,14 @@ class SearchTaskSummary(BaseModel):
     log_count: int = 0
     recent_logs: List[str] = Field(default_factory=list)
     source_preview: List[SearchSourcePreview] = Field(default_factory=list)
+    search_metrics: SearchTaskMetrics = Field(default_factory=SearchTaskMetrics)
     latest_search_job: Optional["SearchTaskJob"] = None
 
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     result: Optional[List[Dict[str, Any]]] = None
     log: Optional[str] = None
+    search_metrics: Optional[SearchTaskMetrics] = None
 
 class DecomposeResponse(BaseModel):
     tasks: List[SearchTask]
