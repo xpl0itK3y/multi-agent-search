@@ -1431,6 +1431,54 @@ def test_task_summary_preserves_search_metrics():
     assert summary.search_metrics.selected_source_count == 2
 
 
+def test_research_summary_aggregates_task_search_metrics():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1", "task-2"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "task 1",
+            "queries": ["query 1"],
+            "status": TaskStatus.COMPLETED,
+            "search_metrics": {
+                "candidate_count": 6,
+                "extraction_attempts": 4,
+                "extraction_success_count": 3,
+                "extraction_failure_count": 1,
+                "selected_source_count": 2,
+            },
+        }
+    )
+    task_store.add_task(
+        {
+            "id": "task-2",
+            "research_id": research.id,
+            "description": "task 2",
+            "queries": ["query 2"],
+            "status": TaskStatus.COMPLETED,
+            "search_metrics": {
+                "candidate_count": 5,
+                "extraction_attempts": 3,
+                "extraction_success_count": 2,
+                "extraction_failure_count": 1,
+                "selected_source_count": 2,
+            },
+        }
+    )
+
+    summary = ResearchService(task_store=task_store).get_research_summary(research.id)
+
+    assert summary.total_candidates == 11
+    assert summary.total_extraction_attempts == 7
+    assert summary.total_extraction_success_count == 5
+    assert summary.total_extraction_failure_count == 2
+    assert summary.total_selected_source_count == 4
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

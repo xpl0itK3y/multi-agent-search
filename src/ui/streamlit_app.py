@@ -75,6 +75,10 @@ TRANSLATIONS = {
         "completed_tasks": "Completed Tasks",
         "collected_sources_metric": "Collected Sources",
         "avg_sources_per_task": "Avg Sources / Task",
+        "research_candidates": "Candidates",
+        "research_extractions": "Extraction Attempts",
+        "research_extraction_success": "Extraction Success",
+        "research_selected_sources": "Selected Sources",
         "collected_sources": "Collected sources: {count}",
         "task_extraction_summary": "Extraction: {success}/{attempts} succeeded, {failures} failed, {selected} selected, avg chars {avg_chars}",
         "queries": "Queries",
@@ -211,6 +215,10 @@ TRANSLATIONS = {
         "completed_tasks": "Завершенные задачи",
         "collected_sources_metric": "Собранные источники",
         "avg_sources_per_task": "Среднее источников / задача",
+        "research_candidates": "Кандидаты",
+        "research_extractions": "Попытки extraction",
+        "research_extraction_success": "Успешный extraction",
+        "research_selected_sources": "Выбранные источники",
         "collected_sources": "Собрано источников: {count}",
         "task_extraction_summary": "Extraction: успешно {success}/{attempts}, ошибок {failures}, выбрано {selected}, средний размер {avg_chars}",
         "queries": "Запросы",
@@ -1044,6 +1052,10 @@ def _render_research_details() -> None:
     finalize_ready = bool(research.get("finalize_ready"))
     total_sources = int(research.get("collected_sources") or 0)
     average_sources = research.get("avg_sources_per_task") or 0.0
+    total_candidates = int(research.get("total_candidates") or 0)
+    total_extraction_attempts = int(research.get("total_extraction_attempts") or 0)
+    total_extraction_success = int(research.get("total_extraction_success_count") or 0)
+    total_selected_sources = int(research.get("total_selected_source_count") or 0)
 
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button(_t("refresh_research"), use_container_width=True):
@@ -1070,6 +1082,12 @@ def _render_research_details() -> None:
     summary_cols[2].metric(_t("collected_sources_metric"), total_sources)
     summary_cols[3].metric(_t("avg_sources_per_task"), average_sources)
     summary_cols[4].metric(_t("finalize_ready"), _t("yes") if finalize_ready else _t("no"))
+
+    extraction_summary_cols = st.columns(4)
+    extraction_summary_cols[0].metric(_t("research_candidates"), total_candidates)
+    extraction_summary_cols[1].metric(_t("research_extractions"), total_extraction_attempts)
+    extraction_summary_cols[2].metric(_t("research_extraction_success"), total_extraction_success)
+    extraction_summary_cols[3].metric(_t("research_selected_sources"), total_selected_sources)
 
     progress_total = len(tasks)
     progress_value = (completed_tasks + failed_tasks) / progress_total if progress_total else 0.0

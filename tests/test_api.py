@@ -268,6 +268,8 @@ async def test_research_summary_endpoint(client):
     assert payload["has_final_report"] is False
     assert len(payload["tasks"]) == 1
     assert payload["tasks"][0]["result_count"] == 1
+    assert payload["total_candidates"] == 0
+    assert payload["total_extraction_attempts"] == 0
 
 
 @pytest.mark.anyio
