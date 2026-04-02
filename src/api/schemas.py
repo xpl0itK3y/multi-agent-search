@@ -133,6 +133,11 @@ class ResearchSummary(BaseModel):
     failed_tasks: int = 0
     collected_sources: int = 0
     avg_sources_per_task: float = 0.0
+    total_candidates: int = 0
+    total_extraction_attempts: int = 0
+    total_extraction_success_count: int = 0
+    total_extraction_failure_count: int = 0
+    total_selected_source_count: int = 0
     finalize_ready: bool = False
     latest_finalize_job: Optional["ResearchFinalizeJob"] = None
     tasks: List[SearchTaskSummary] = Field(default_factory=list)

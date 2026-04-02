@@ -155,6 +155,11 @@ class ResearchService:
         running_tasks = sum(1 for task in tasks if task.status == TaskStatus.RUNNING)
         failed_tasks = sum(1 for task in tasks if task.status == TaskStatus.FAILED)
         collected_sources = sum(len(task.result or []) for task in tasks)
+        total_candidates = sum(task.search_metrics.candidate_count for task in tasks)
+        total_extraction_attempts = sum(task.search_metrics.extraction_attempts for task in tasks)
+        total_extraction_success_count = sum(task.search_metrics.extraction_success_count for task in tasks)
+        total_extraction_failure_count = sum(task.search_metrics.extraction_failure_count for task in tasks)
+        total_selected_source_count = sum(task.search_metrics.selected_source_count for task in tasks)
         task_count = len(tasks)
         avg_sources_per_task = round(collected_sources / task_count, 1) if task_count else 0.0
         finalize_ready = task_count > 0 and pending_tasks == 0 and running_tasks == 0
@@ -175,6 +180,11 @@ class ResearchService:
             failed_tasks=failed_tasks,
             collected_sources=collected_sources,
             avg_sources_per_task=avg_sources_per_task,
+            total_candidates=total_candidates,
+            total_extraction_attempts=total_extraction_attempts,
+            total_extraction_success_count=total_extraction_success_count,
+            total_extraction_failure_count=total_extraction_failure_count,
+            total_selected_source_count=total_selected_source_count,
             finalize_ready=finalize_ready,
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             tasks=task_summaries,
