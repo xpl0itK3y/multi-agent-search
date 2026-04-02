@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 from src.providers.search import SearchProvider, ContentExtractor
-from src.api.schemas import TaskStatus, TaskUpdate
+from src.api.schemas import SearchTaskMetrics, TaskStatus, TaskUpdate
 from src.core import rust_accel
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict
@@ -626,12 +626,30 @@ class SearchAgent:
                         )
 
             selected_results = self._select_best_results(all_results)
+            success_count = sum(1 for item in all_results if item.get("extraction_status") == "success")
+            failure_count = sum(1 for item in all_results if item.get("extraction_status") != "success")
+            avg_content_chars = (
+                round(
+                    sum(len(item.get("content") or "") for item in selected_results) / len(selected_results),
+                    1,
+                )
+                if selected_results
+                else 0.0
+            )
 
             self.task_store.update_task(
                 task_id,
                 TaskUpdate(
                     status=TaskStatus.COMPLETED,
                     result=selected_results,
+                    search_metrics=SearchTaskMetrics(
+                        candidate_count=len(candidate_results),
+                        extraction_attempts=len(all_results),
+                        extraction_success_count=success_count,
+                        extraction_failure_count=failure_count,
+                        selected_source_count=len(selected_results),
+                        avg_content_chars=avg_content_chars,
+                    ),
                     log=f"Search completed. Selected {len(selected_results)} sources from {len(all_results)} collected results.",
                 ),
             )

@@ -101,6 +101,7 @@ class SQLAlchemyTaskStore:
             queries=task_data.get("queries", []),
             status=getattr(task_data.get("status"), "value", task_data.get("status", "pending")),
             logs=task_data.get("logs", []),
+            search_metrics=task_data.get("search_metrics") or {},
         )
         with self.session_scope() as session:
             session.add(task)
@@ -598,6 +599,8 @@ class SQLAlchemyTaskStore:
                 task.status = update.status.value
             if update.result is not None:
                 task.results = search_result_dicts_to_orm(task_id, update.result)
+            if update.search_metrics is not None:
+                task.search_metrics = update.search_metrics.model_dump()
             if update.log:
                 task.logs = [*task.logs, update.log]
 

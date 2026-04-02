@@ -397,6 +397,8 @@ class InMemoryTaskStore:
             task.status = update.status
         if update.result is not None:
             task.result = update.result
+        if update.search_metrics is not None:
+            task.search_metrics = update.search_metrics
         if update.log:
             task.logs.append(update.log)
 

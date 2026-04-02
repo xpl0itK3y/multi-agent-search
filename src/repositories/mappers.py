@@ -7,6 +7,7 @@ from src.api.schemas import (
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,
+    SearchTaskMetrics,
     WorkerHeartbeat,
     ResearchRecord,
     ResearchStatus,
@@ -139,6 +140,7 @@ def search_task_orm_to_schema(task: SearchTaskORM) -> SearchTask:
         ]
         or None,
         logs=task.logs,
+        search_metrics=SearchTaskMetrics.model_validate(task.search_metrics or {}),
     )
 
 

@@ -31,6 +31,11 @@ def test_search_agent_updates_through_injected_task_store(mocker):
     assert final_task.result[0]["content_length"] == len(("Full page content " * 120).strip())
     assert final_task.result[0]["extraction_status"] == "success"
     assert final_task.result[0]["source_quality"] == "high"
+    assert final_task.search_metrics.candidate_count == 1
+    assert final_task.search_metrics.extraction_attempts == 1
+    assert final_task.search_metrics.extraction_success_count == 1
+    assert final_task.search_metrics.extraction_failure_count == 0
+    assert final_task.search_metrics.selected_source_count == 1
     assert "Search completed" in final_task.logs[-1]
 
 

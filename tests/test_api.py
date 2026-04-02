@@ -193,6 +193,7 @@ async def test_task_summary_endpoint(client):
     assert payload["log_count"] >= 1
     assert len(payload["source_preview"]) == 1
     assert payload["source_preview"][0]["domain"] == "docs.python.org"
+    assert payload["search_metrics"]["extraction_attempts"] == 0
     assert payload["latest_search_job"]["task_id"] == "task-1"
 
 

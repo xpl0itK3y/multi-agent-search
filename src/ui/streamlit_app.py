@@ -76,6 +76,7 @@ TRANSLATIONS = {
         "collected_sources_metric": "Collected Sources",
         "avg_sources_per_task": "Avg Sources / Task",
         "collected_sources": "Collected sources: {count}",
+        "task_extraction_summary": "Extraction: {success}/{attempts} succeeded, {failures} failed, {selected} selected, avg chars {avg_chars}",
         "queries": "Queries",
         "recent_logs": "Recent Logs",
         "selected_sources": "Selected Sources",
@@ -211,6 +212,7 @@ TRANSLATIONS = {
         "collected_sources_metric": "Собранные источники",
         "avg_sources_per_task": "Среднее источников / задача",
         "collected_sources": "Собрано источников: {count}",
+        "task_extraction_summary": "Extraction: успешно {success}/{attempts}, ошибок {failures}, выбрано {selected}, средний размер {avg_chars}",
         "queries": "Запросы",
         "recent_logs": "Последние логи",
         "selected_sources": "Выбранные источники",
@@ -926,6 +928,18 @@ def _render_task(task: dict, index: int) -> None:
         st.markdown(status_line, unsafe_allow_html=True)
         st.caption(_t("task_id", value=task["id"]))
         st.caption(_t("collected_sources", count=_task_source_count(task)))
+        task_metrics = task.get("search_metrics") or {}
+        if task_metrics.get("extraction_attempts", 0) > 0:
+            st.caption(
+                _t(
+                    "task_extraction_summary",
+                    success=task_metrics.get("extraction_success_count", 0),
+                    attempts=task_metrics.get("extraction_attempts", 0),
+                    failures=task_metrics.get("extraction_failure_count", 0),
+                    selected=task_metrics.get("selected_source_count", 0),
+                    avg_chars=task_metrics.get("avg_content_chars", 0.0),
+                )
+            )
 
         if search_job:
             st.caption(

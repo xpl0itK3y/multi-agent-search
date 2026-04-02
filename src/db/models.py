@@ -49,6 +49,7 @@ class SearchTaskORM(Base):
     queries: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     logs: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    search_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
