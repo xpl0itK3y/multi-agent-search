@@ -605,6 +605,48 @@ class AnalyzerAgent(BaseAgent):
             uncited_lines.append(self._normalize_text(line))
         return uncited_lines
 
+    def _line_tokens_for_citation_audit(self, line: str) -> set[str]:
+        lowered = self._normalize_text(line).lower()
+        return {
+            token
+            for token in re.findall(r"[a-zа-я0-9]+", lowered)
+            if len(token) >= 4 and token not in self.STOPWORDS and token not in self.CONFLICT_GENERIC_TOKENS
+        }
+
+    def _source_token_index(self, aggregated_data: list[dict]) -> dict[str, set[str]]:
+        return {
+            item["source_id"]: self._line_tokens_for_citation_audit(item.get("content") or "")
+            for item in aggregated_data
+        }
+
+    def _unsupported_citation_lines(self, report: str, aggregated_data: list[dict]) -> list[str]:
+        source_tokens = self._source_token_index(aggregated_data)
+        unsupported_lines: list[str] = []
+        valid_source_ids = set(source_tokens)
+        for line in self._body_without_sources(report).splitlines():
+            normalized_line = self._normalize_text(line)
+            if not self._line_requires_citation(normalized_line):
+                continue
+            cited_source_ids = {
+                source_id
+                for source_id in self._extract_used_source_ids(normalized_line)
+                if source_id in valid_source_ids
+            }
+            if not cited_source_ids:
+                continue
+            line_tokens = self._line_tokens_for_citation_audit(normalized_line)
+            if len(line_tokens) < 2:
+                continue
+            supported = False
+            for source_id in cited_source_ids:
+                overlap = line_tokens & source_tokens.get(source_id, set())
+                if len(overlap) >= 2:
+                    supported = True
+                    break
+            if not supported:
+                unsupported_lines.append(normalized_line)
+        return unsupported_lines
+
     def _looks_like_structured_report(self, report: str) -> bool:
         return "## " in report or len(report) >= 400 or report.count("\n") >= 4
 
@@ -614,16 +656,21 @@ class AnalyzerAgent(BaseAgent):
         language: str,
         report: str,
         uncited_lines: list[str],
+        unsupported_lines: list[str],
     ) -> str:
         valid_source_ids = ", ".join(item["source_id"] for item in input_data.get("gathered_data", []))
-        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6])
+        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6]) or "- none"
+        unsupported_feedback = "\n".join(f"- {line}" for line in unsupported_lines[:6]) or "- none"
         repair_prompt = (
             f"{self._language_instruction(language)} "
             "Rewrite the report so that every factual paragraph or bullet includes inline citations. "
-            "Use only the available source IDs, do not invent citations, and preserve markdown headings.\n\n"
+            "Use only the available source IDs, do not invent citations, and preserve markdown headings. "
+            "Every citation should support the sentence it is attached to; remove weak or mismatched citations.\n\n"
             f"Available source IDs: {valid_source_ids}\n\n"
             "Likely uncited lines:\n"
             f"{feedback_lines}\n\n"
+            "Likely weakly-supported cited lines:\n"
+            f"{unsupported_feedback}\n\n"
             "Current report:\n"
             f"{report}\n\n"
             "Research payload:\n"
@@ -741,6 +788,7 @@ class AnalyzerAgent(BaseAgent):
         notes: list[str] = []
         normalized = report.lower()
         used_source_ids = self._extract_used_source_ids(report)
+        unsupported_lines = self._unsupported_citation_lines(report, aggregated_data)
 
         if not self.INTRODUCTION_HEADING_PATTERN.search(report):
             notes.append("The report is missing a clear introduction heading.")
@@ -754,6 +802,8 @@ class AnalyzerAgent(BaseAgent):
             notes.append("The report is based on fewer than two usable sources.")
         elif len(used_source_ids) < min(2, len(aggregated_data)):
             notes.append("Only a small subset of the available sources is cited in the final report.")
+        if unsupported_lines:
+            notes.append("Some cited lines appear weakly supported by their attached sources.")
         if "## sources" in normalized and report.strip().endswith("## Sources"):
             notes.append("The sources section is present but no cited sources were included under it.")
 
@@ -807,12 +857,20 @@ class AnalyzerAgent(BaseAgent):
         with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
         rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
         uncited_lines = self._uncited_claim_lines(rebuilt)
-        if aggregated_data and uncited_lines and self._looks_like_structured_report(rebuilt):
+        unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
+        if aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
             logger.warning(
-                "AnalyzerAgent detected uncited claim lines. Repairing report citations once. uncited_count=%s",
+                "AnalyzerAgent detected citation issues. Repairing report citations once. uncited_count=%s unsupported_count=%s",
                 len(uncited_lines),
+                len(unsupported_lines),
             )
-            repaired = self._repair_report_citations(input_data, prompt_language, rebuilt, uncited_lines)
+            repaired = self._repair_report_citations(
+                input_data,
+                prompt_language,
+                rebuilt,
+                uncited_lines,
+                unsupported_lines,
+            )
             normalized = self._post_process_report(repaired)
             with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
             rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)

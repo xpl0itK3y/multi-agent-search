@@ -115,6 +115,40 @@ def test_analyzer_agent_repairs_structured_reports_with_uncited_claims():
     assert "## Sources" in result
 
 
+def test_analyzer_agent_repairs_weakly_supported_citations():
+    llm = SequentialLLM(
+        [
+            "## Introduction\nPython packaging metadata and wheel tags are central here [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n- [S1] https://example.com/a",
+            "## Introduction\nAsyncIO event loop behavior is central here [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n- [S1] https://example.com/a",
+        ]
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "AsyncIO",
+                        "content": "AsyncIO event loop scheduling and cooperative concurrency are central for Python network services. "
+                        * 20,
+                    }
+                ],
+            )
+        ],
+    )
+
+    assert len(llm.calls) == 2
+    assert "Likely weakly-supported cited lines" in llm.calls[1]["user_prompt"]
+    assert "AsyncIO event loop behavior is central here [S1]." in result
+
+
 def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
     llm = RecordingLLM(response="## Introduction\nSummary [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources")
     agent = AnalyzerAgent(llm)
