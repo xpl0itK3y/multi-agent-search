@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from src.graph.history import compact_graph_step_events
+from src.graph.history import compact_graph_step_events, compact_graph_trail
 from src.api.schemas import (
     ExtractionMetrics,
     FinalizeJobStatus,
@@ -94,9 +94,23 @@ class InMemoryTaskStore:
         research = self.researches.get(research_id)
         if research is None:
             return None
-        research.graph_trail.append(event)
+        normalized_event = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **event,
+        }
+        research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
         research.updated_at = datetime.now(timezone.utc)
         return research
+
+    def compact_research_graph_trails(self) -> list[str]:
+        compacted_ids: list[str] = []
+        for research in self.researches.values():
+            compacted_trail = compact_graph_trail(research.graph_trail, [])
+            if compacted_trail != (research.graph_trail or []):
+                research.graph_trail = compacted_trail
+                research.updated_at = datetime.now(timezone.utc)
+                compacted_ids.append(research.id)
+        return compacted_ids
 
     def add_research_finalize_job(
         self,
@@ -400,6 +414,15 @@ class InMemoryTaskStore:
         for heartbeat in heartbeats:
             events.extend(self.worker_graph_step_events.get(heartbeat.worker_name, []))
         return events
+
+    def compact_worker_graph_step_events(self) -> list[str]:
+        compacted_workers: list[str] = []
+        for worker_name, events in list(self.worker_graph_step_events.items()):
+            compacted = compact_graph_step_events(events, [])
+            if compacted != events:
+                self.worker_graph_step_events[worker_name] = compacted
+                compacted_workers.append(worker_name)
+        return compacted_workers
 
     def get_queue_metrics(self) -> QueueMetrics:
         extraction_metrics = ExtractionMetrics()

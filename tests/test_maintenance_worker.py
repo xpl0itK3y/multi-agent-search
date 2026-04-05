@@ -11,6 +11,7 @@ from src.api.schemas import (
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 from src.workers import MaintenanceWorker
+from src.graph.history import compact_graph_trail
 
 
 def test_maintenance_worker_recovers_stale_search_and_finalize_jobs(monkeypatch):
@@ -135,3 +136,44 @@ def test_maintenance_worker_is_idle_when_nothing_is_stale(monkeypatch):
     recovered_count = MaintenanceWorker(service).run_once()
 
     assert recovered_count == 0
+
+
+def test_maintenance_worker_compacts_graph_operational_data(monkeypatch):
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_retention_seconds", 3600)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_retention_seconds", 3600)
+    monkeypatch.setattr("src.graph.history.settings.graph_step_event_retention_seconds", 60)
+    monkeypatch.setattr("src.graph.history.settings.graph_trail_retention_seconds", 60)
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_step_events=[
+            {"timestamp": datetime.now(timezone.utc).isoformat(), "step": "verify", "elapsed_ms": 120.0, "worker_name": "job-worker"},
+        ],
+    )
+    task_store.worker_graph_step_events["job-worker"].append(
+        {"timestamp": old_ts, "step": "analyze", "elapsed_ms": 100.0, "worker_name": "job-worker"}
+    )
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    research.graph_trail = compact_graph_trail(
+        [],
+        [
+            {"timestamp": old_ts, "step": "collect_context", "detail": "old"},
+            {"timestamp": datetime.now(timezone.utc).isoformat(), "step": "verify", "detail": "fresh"},
+        ],
+    ) + [{"timestamp": old_ts, "step": "collect_context", "detail": "old"}]
+
+    processed_count = MaintenanceWorker(service).run_once()
+
+    assert processed_count == 2
+    assert task_store.get_graph_step_events("job-worker")[0]["step"] == "verify"
+    assert task_store.get_research(research.id).graph_trail[0]["step"] == "verify"

@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     langgraph_tie_break_max_loops: int = 1
     graph_step_event_history_limit: int = 250
     graph_step_event_retention_seconds: int = 86400
+    graph_trail_history_limit: int = 200
+    graph_trail_retention_seconds: int = 604800
 
     postgres_user: str = "app"
     postgres_password: str = "app"

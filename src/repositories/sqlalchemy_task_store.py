@@ -28,7 +28,7 @@ from src.db.models import (
     SearchTaskORM,
     WorkerHeartbeatORM,
 )
-from src.graph.history import compact_graph_step_events
+from src.graph.history import compact_graph_step_events, compact_graph_trail
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
@@ -158,13 +158,27 @@ class SQLAlchemyTaskStore:
             if research is None:
                 return None
 
-            current_trail = list(research.graph_trail or [])
-            current_trail.append(event)
-            research.graph_trail = current_trail
+            normalized_event = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                **event,
+            }
+            research.graph_trail = compact_graph_trail(research.graph_trail or [], [normalized_event])
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
             return research_orm_to_record(research)
+
+    def compact_research_graph_trails(self) -> list[str]:
+        with self.session_scope() as session:
+            researches = session.execute(select(ResearchORM)).scalars().all()
+            compacted_ids: list[str] = []
+            for research in researches:
+                compacted_trail = compact_graph_trail(research.graph_trail or [], [])
+                if compacted_trail != (research.graph_trail or []):
+                    research.graph_trail = compacted_trail
+                    research.updated_at = datetime.now(timezone.utc)
+                    compacted_ids.append(research.id)
+            return compacted_ids
 
     def add_research_finalize_job(
         self,
@@ -578,6 +592,17 @@ class SQLAlchemyTaskStore:
             for heartbeat in heartbeats:
                 events.extend(heartbeat.graph_step_events or [])
             return events
+
+    def compact_worker_graph_step_events(self) -> list[str]:
+        with self.session_scope() as session:
+            heartbeats = session.execute(select(WorkerHeartbeatORM)).scalars().all()
+            compacted_workers: list[str] = []
+            for heartbeat in heartbeats:
+                compacted = compact_graph_step_events(heartbeat.graph_step_events or [], [])
+                if compacted != (heartbeat.graph_step_events or []):
+                    heartbeat.graph_step_events = compacted
+                    compacted_workers.append(heartbeat.worker_name)
+            return compacted_workers
 
     def get_queue_metrics(self) -> QueueMetrics:
         with self.session_scope() as session:
