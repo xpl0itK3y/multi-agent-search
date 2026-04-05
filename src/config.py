@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     use_langgraph_finalize_graph: bool = True
     langgraph_replan_max_loops: int = 1
     langgraph_verification_max_retries: int = 1
+    langgraph_tie_break_max_loops: int = 1
 
     postgres_user: str = "app"
     postgres_password: str = "app"

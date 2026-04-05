@@ -1142,6 +1142,7 @@ def test_finalize_graph_runner_executes_second_pass_search(mocker):
         }
     )
     analyzer = mocker.Mock()
+    analyzer.enable_graph_branching = True
     analyzer.run_analysis.return_value = "## Introduction\nReport [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n### Used Sources\n- [S1] https://editorial.example.com/roundup"
     service = ResearchService(task_store=task_store, analyzer=analyzer)
 
@@ -1179,6 +1180,88 @@ def test_finalize_graph_runner_executes_second_pass_search(mocker):
     assert any(task.id.startswith("replan-") for task in all_tasks)
     analyzed_tasks = analyzer.run_analysis.call_args.args[1]
     assert len(analyzed_tasks) >= 2
+
+
+def test_finalize_graph_runner_executes_tie_break_search_for_conflicts(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="linux vs macos", depth=SearchDepth.HARD),
+        task_ids=["task-1", "task-2"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "source one",
+            "queries": ["linux vs macos source one"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "https://example.com/linux",
+                    "domain": "example.com",
+                    "title": "Linux Stability",
+                    "content": "Linux is not less stable than macOS for professional server workloads. " * 10,
+                    "source_quality": "medium",
+                }
+            ],
+            "search_metrics": {"selected_source_count": 1},
+        }
+    )
+    task_store.add_task(
+        {
+            "id": "task-2",
+            "research_id": research.id,
+            "description": "source two",
+            "queries": ["linux vs macos source two"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "https://example.net/macos",
+                    "domain": "example.net",
+                    "title": "macOS Stability",
+                    "content": "Linux is less stable than macOS for professional desktop workflows. " * 10,
+                    "source_quality": "medium",
+                }
+            ],
+            "search_metrics": {"selected_source_count": 1},
+        }
+    )
+    analyzer = AnalyzerAgent(RecordingLLM(response="## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources"))
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    def fake_run_search_task(task_id, depth):
+        task_store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://official.example.org/benchmark",
+                        "domain": "official.example.org",
+                        "title": "Tie Break Source",
+                        "content": "Professional workstation testing compares Linux and macOS in a narrower, source-backed way. "
+                        * 20,
+                        "source_quality": "high",
+                    }
+                ],
+                search_metrics={
+                    "candidate_count": 2,
+                    "extraction_attempts": 1,
+                    "extraction_success_count": 1,
+                    "selected_source_count": 1,
+                },
+                log="completed tie-break pass",
+            ),
+        )
+
+    spy = mocker.patch.object(service, "run_search_task", side_effect=fake_run_search_task)
+
+    finalized = service.finalize_research(research.id)
+    all_tasks = task_store.get_tasks_by_research(research.id)
+
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert spy.call_count >= 1
+    assert any("resolve conflicting evidence" in (task.logs or [""])[0].lower() for task in all_tasks if task.id.startswith("replan-"))
 
 
 def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
