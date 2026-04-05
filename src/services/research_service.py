@@ -70,6 +70,10 @@ class ResearchService:
     MAINTENANCE_COMPACTED_CRITICAL_AVG = 8.0
     MAINTENANCE_STALE_WARNING_SECONDS = 1800
     MAINTENANCE_STALE_CRITICAL_SECONDS = 7200
+    OPERATIONAL_WORSENING_WARNING_DELTA = 8.0
+    OPERATIONAL_WORSENING_CRITICAL_DELTA = 18.0
+    OPERATIONAL_CRITICAL_STATE_WARNING_COUNT = 2
+    OPERATIONAL_CRITICAL_STATE_CRITICAL_COUNT = 3
 
     def __init__(
         self,
@@ -1088,15 +1092,80 @@ class ResearchService:
                 score_direction = "worsening"
             elif recent_avg > previous_avg + 8:
                 score_direction = "improving"
+        trend = OperationalHealth.OperationalHealthTrend(
+            score_direction=score_direction,
+            average_score=average_score,
+            recent_scores=score_values,
+            recent_statuses=statuses,
+        )
+        alerts: list[OperationalHealth.OperationalHealthAlert] = []
+        if len(score_values) >= 4:
+            half = len(score_values) // 2
+            previous = score_values[:half]
+            recent = score_values[half:]
+            previous_avg = sum(previous) / len(previous) if previous else 0.0
+            recent_avg = sum(recent) / len(recent) if recent else 0.0
+            if recent_avg <= previous_avg - self.OPERATIONAL_WORSENING_CRITICAL_DELTA:
+                alerts.append(
+                    OperationalHealth.OperationalHealthAlert(
+                        code="score_worsening",
+                        severity="critical",
+                        current_value=round(recent_avg, 2),
+                        threshold=round(previous_avg, 2),
+                        hint="Operational score is falling quickly; inspect graph and maintenance alerts before backlog compounds.",
+                    )
+                )
+            elif recent_avg <= previous_avg - self.OPERATIONAL_WORSENING_WARNING_DELTA:
+                alerts.append(
+                    OperationalHealth.OperationalHealthAlert(
+                        code="score_worsening",
+                        severity="warning",
+                        current_value=round(recent_avg, 2),
+                        threshold=round(previous_avg, 2),
+                        hint="Operational score is trending downward; check recent alert growth and cleanup pressure.",
+                    )
+                )
+
+        recent_critical_count = sum(1 for item in history[-5:] if str(item.status or "").lower() == "critical")
+        if recent_critical_count >= self.OPERATIONAL_CRITICAL_STATE_CRITICAL_COUNT:
+            alerts.append(
+                OperationalHealth.OperationalHealthAlert(
+                    code="repeated_critical_states",
+                    severity="critical",
+                    current_value=float(recent_critical_count),
+                    threshold=float(self.OPERATIONAL_CRITICAL_STATE_CRITICAL_COUNT),
+                    hint="Too many recent critical states; investigate persistent graph failures, backlog pressure, or stale maintenance.",
+                )
+            )
+        elif recent_critical_count >= self.OPERATIONAL_CRITICAL_STATE_WARNING_COUNT:
+            alerts.append(
+                OperationalHealth.OperationalHealthAlert(
+                    code="repeated_critical_states",
+                    severity="warning",
+                    current_value=float(recent_critical_count),
+                    threshold=float(self.OPERATIONAL_CRITICAL_STATE_WARNING_COUNT),
+                    hint="Critical states are recurring; confirm the system is actually recovering between maintenance cycles.",
+                )
+            )
+
+        if len(history) >= 2:
+            previous_status = str(history[-2].status or "healthy").lower()
+            if previous_status in {"critical", "warning"} and status == "healthy" and score >= 90:
+                alerts.append(
+                    OperationalHealth.OperationalHealthAlert(
+                        code="score_recovered",
+                        severity="warning",
+                        current_value=float(score),
+                        threshold=90.0,
+                        hint="Operational health has recovered; verify the underlying cause was actually resolved and not just transient.",
+                    )
+                )
+
         return current_health.model_copy(
             update={
+                "alerts": alerts,
                 "history": history,
-                "trend": OperationalHealth.OperationalHealthTrend(
-                    score_direction=score_direction,
-                    average_score=average_score,
-                    recent_scores=score_values,
-                    recent_statuses=statuses,
-                ),
+                "trend": trend,
             }
         )
 

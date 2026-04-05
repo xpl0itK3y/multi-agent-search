@@ -345,6 +345,65 @@ async def test_queue_health_includes_operational_health_history(client):
 
 
 @pytest.mark.anyio
+async def test_queue_health_includes_operational_health_meta_alerts(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=3,
+        status="busy",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T12:10:00+00:00",
+            "recent_operational_health": [
+                {"status": "healthy", "score": 98, "timestamp": "2026-04-05T12:00:00+00:00"},
+                {"status": "warning", "score": 84, "timestamp": "2026-04-05T12:02:00+00:00"},
+                {"status": "critical", "score": 58, "timestamp": "2026-04-05T12:04:00+00:00"},
+                {"status": "critical", "score": 42, "timestamp": "2026-04-05T12:06:00+00:00"},
+            ],
+            "recent_runs": [
+                {"total_count": 2, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
+                {"total_count": 9, "compacted_count": 4, "last_run_at": "2026-04-05T12:05:00+00:00"},
+                {"total_count": 11, "compacted_count": 5, "last_run_at": "2026-04-05T12:10:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    alert_codes = {item["code"] for item in payload["operational_health"]["alerts"]}
+    assert "score_worsening" in alert_codes
+    assert "repeated_critical_states" in alert_codes
+
+
+@pytest.mark.anyio
+async def test_queue_health_includes_operational_recovery_alert(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T12:10:00+00:00",
+            "recent_operational_health": [
+                {"status": "critical", "score": 40, "timestamp": "2026-04-05T12:00:00+00:00"},
+                {"status": "warning", "score": 72, "timestamp": "2026-04-05T12:05:00+00:00"},
+            ],
+            "recent_runs": [
+                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    alert_codes = {item["code"] for item in payload["operational_health"]["alerts"]}
+    assert "score_recovered" in alert_codes
+
+
+@pytest.mark.anyio
 async def test_optimize_endpoint(client):
     response = await client.post("/v1/optimize", json={"prompt": "raw input"})
 

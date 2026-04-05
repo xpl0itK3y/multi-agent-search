@@ -380,6 +380,13 @@ class MaintenanceSummary(BaseModel):
 
 
 class OperationalHealth(BaseModel):
+    class OperationalHealthAlert(BaseModel):
+        code: str
+        severity: str = "warning"
+        current_value: float = 0.0
+        threshold: float = 0.0
+        hint: Optional[str] = None
+
     class OperationalHealthEntry(BaseModel):
         status: str = "healthy"
         score: int = 100
@@ -395,6 +402,7 @@ class OperationalHealth(BaseModel):
     status: str = "healthy"
     score: int = 100
     reasons: List[str] = Field(default_factory=list)
+    alerts: List["OperationalHealth.OperationalHealthAlert"] = Field(default_factory=list)
     history: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
     trend: "OperationalHealth.OperationalHealthTrend" = Field(default_factory=OperationalHealthTrend)
 
