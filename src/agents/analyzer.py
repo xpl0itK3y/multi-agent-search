@@ -23,9 +23,9 @@ class AnalyzerAgent(BaseAgent):
     MAX_LOW_SOURCE_CONTENT_CHARS = 700
     CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
     SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
-    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
-    CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+Conflicts And Uncertainties\s*$")
-    REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+Report Notes\s*$")
+    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники)\s*$.*\Z")
+    CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conflicts And Uncertainties|Противоречия и неопределенности|Противоречия и неопределённости)\s*$")
+    REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту)\s*$")
     INTRODUCTION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Introduction|Введение)\s*$")
     CONCLUSION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conclusion|Заключение)\s*$")
     LANGUAGE_HINTS = {
@@ -535,15 +535,18 @@ class AnalyzerAgent(BaseAgent):
             max_groups=5,
         )
 
-    def _post_process_report(self, report: str) -> str:
+    def _post_process_report(self, report: str, language: str) -> str:
         normalized = report.replace("\r\n", "\n").strip()
         normalized = re.sub(r"\n{3,}", "\n\n", normalized)
         normalized = re.sub(r"(?m)^[ \t]+$", "", normalized)
 
+        localized_sources_heading = self._sources_heading(language)
         if re.search(r"(?im)^sources:\s*$", normalized):
-            normalized = re.sub(r"(?im)^sources:\s*$", "## Sources", normalized)
-        elif re.search(r"(?im)^#*\s*sources\s*$", normalized) is None:
-            normalized = f"{normalized}\n\n## Sources"
+            normalized = re.sub(r"(?im)^sources:\s*$", localized_sources_heading, normalized)
+        elif re.search(r"(?im)^источники:\s*$", normalized):
+            normalized = re.sub(r"(?im)^источники:\s*$", localized_sources_heading, normalized)
+        elif re.search(r"(?im)^#*\s*(sources|источники)\s*$", normalized) is None:
+            normalized = f"{normalized}\n\n{localized_sources_heading}"
 
         normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
         return normalized
@@ -579,6 +582,38 @@ class AnalyzerAgent(BaseAgent):
         if language == "en":
             return "Write the full report in English."
         return "Write the full report in the same language as the original prompt."
+
+    def _sources_heading(self, language: str) -> str:
+        return "## Источники" if language == "ru" else "## Sources"
+
+    def _conflicts_heading(self, language: str) -> str:
+        return "## Противоречия и неопределённости" if language == "ru" else "## Conflicts And Uncertainties"
+
+    def _report_notes_heading(self, language: str) -> str:
+        return "## Примечания к отчёту" if language == "ru" else "## Report Notes"
+
+    def _quality_note_messages(self, language: str) -> dict[str, str]:
+        if language == "ru":
+            return {
+                "missing_intro": "В отчёте отсутствует явный заголовок введения.",
+                "missing_conclusion": "В отчёте отсутствует явный заголовок заключения.",
+                "no_inline_citations": "В отчёте нет встроенных ссылок на источники.",
+                "no_sources": "Для анализа не было доступно пригодных извлечённых источников.",
+                "few_sources": "Отчёт опирается менее чем на два пригодных источника.",
+                "small_subset": "В финальном отчёте используется лишь небольшая часть доступных источников.",
+                "weak_support": "Некоторые цитируемые строки слабо подтверждаются указанными источниками.",
+                "empty_sources": "Раздел источников присутствует, но в нём нет реально использованных ссылок.",
+            }
+        return {
+            "missing_intro": "The report is missing a clear introduction heading.",
+            "missing_conclusion": "The report is missing a clear conclusion heading.",
+            "no_inline_citations": "The report does not cite any sources inline.",
+            "no_sources": "No usable extracted sources were available for analysis.",
+            "few_sources": "The report is based on fewer than two usable sources.",
+            "small_subset": "Only a small subset of the available sources is cited in the final report.",
+            "weak_support": "Some cited lines appear weakly supported by their attached sources.",
+            "empty_sources": "The sources section is present but no cited sources were included under it.",
+        }
 
     def _build_user_prompt(self, input_data: dict, language: str, retry: bool = False) -> str:
         instruction = self._language_instruction(language)
@@ -631,13 +666,13 @@ class AnalyzerAgent(BaseAgent):
     def _sanitize_citations(self, report: str, valid_source_ids: set[str]) -> str:
         return rust_accel.sanitize_citations(report, valid_source_ids)
 
-    def _rebuild_sources_section(self, report: str, aggregated_data: list[dict]) -> str:
+    def _rebuild_sources_section(self, report: str, aggregated_data: list[dict], language: str) -> str:
         without_sources = self.SOURCE_HEADING_PATTERN.sub("", report).strip()
         valid_sources = {item["source_id"]: item for item in aggregated_data}
         sanitized = self._sanitize_citations(without_sources, set(valid_sources))
         used_source_ids = self._extract_used_source_ids(sanitized)
 
-        lines = ["## Sources"]
+        lines = [self._sources_heading(language)]
         for source_id in used_source_ids:
             source = valid_sources.get(source_id)
             if source is None:
@@ -657,7 +692,16 @@ class AnalyzerAgent(BaseAgent):
             return False
         if len(stripped) < 45:
             return False
-        if stripped.lower().startswith("source") or stripped.lower().startswith("report notes"):
+        lowered = stripped.lower()
+        if (
+            lowered.startswith("source")
+            or lowered.startswith("sources")
+            or lowered.startswith("report notes")
+            or lowered.startswith("источник")
+            or lowered.startswith("источники")
+            or lowered.startswith("примечания к отчету")
+            or lowered.startswith("примечания к отчёту")
+        ):
             return False
         return bool(re.search(r"[A-Za-zА-Яа-я0-9]", stripped))
 
@@ -885,14 +929,20 @@ class AnalyzerAgent(BaseAgent):
         if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
             return report
 
-        lines = ["## Conflicts And Uncertainties"]
+        lines = [self._conflicts_heading(language)]
         for conflict in conflicts:
             left_source, right_source = conflict["source_ids"]
             left_sentence, right_sentence = conflict["sentences"]
-            lines.append(
-                f"- Topic: {conflict['topic']}. Reason: {conflict.get('reason') or 'material discrepancy'}. "
-                f'Evidence: "{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
-            )
+            if language == "ru":
+                lines.append(
+                    f"- Тема: {conflict['topic']}. Причина: {conflict.get('reason') or 'существенное расхождение'}. "
+                    f'Данные: "{left_sentence}" [{left_source}] против "{right_sentence}" [{right_source}].'
+                )
+            else:
+                lines.append(
+                    f"- Topic: {conflict['topic']}. Reason: {conflict.get('reason') or 'material discrepancy'}. "
+                    f'Evidence: "{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
+                )
 
         insertion = "\n".join(lines)
         conclusion_match = re.search(r"(?im)^##\s+Conclusion\s*$", report)
@@ -900,37 +950,40 @@ class AnalyzerAgent(BaseAgent):
             return f"{report[:conclusion_match.start()].rstrip()}\n\n{insertion}\n\n{report[conclusion_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{insertion}"
 
-    def _report_quality_notes(self, report: str, aggregated_data: list[dict]) -> list[str]:
+    def _report_quality_notes(self, report: str, aggregated_data: list[dict], language: str) -> list[str]:
         notes: list[str] = []
+        messages = self._quality_note_messages(language)
         normalized = report.lower()
         used_source_ids = self._extract_used_source_ids(report)
         unsupported_lines = self._unsupported_citation_lines(report, aggregated_data)
 
         if not self.INTRODUCTION_HEADING_PATTERN.search(report):
-            notes.append("The report is missing a clear introduction heading.")
+            notes.append(messages["missing_intro"])
         if not self.CONCLUSION_HEADING_PATTERN.search(report):
-            notes.append("The report is missing a clear conclusion heading.")
+            notes.append(messages["missing_conclusion"])
         if not used_source_ids:
-            notes.append("The report does not cite any sources inline.")
+            notes.append(messages["no_inline_citations"])
         if not aggregated_data:
-            notes.append("No usable extracted sources were available for analysis.")
+            notes.append(messages["no_sources"])
         elif len(aggregated_data) < 2:
-            notes.append("The report is based on fewer than two usable sources.")
+            notes.append(messages["few_sources"])
         elif len(used_source_ids) < min(2, len(aggregated_data)):
-            notes.append("Only a small subset of the available sources is cited in the final report.")
+            notes.append(messages["small_subset"])
         if unsupported_lines:
-            notes.append("Some cited lines appear weakly supported by their attached sources.")
-        if "## sources" in normalized and report.strip().endswith("## Sources"):
-            notes.append("The sources section is present but no cited sources were included under it.")
+            notes.append(messages["weak_support"])
+        if ("## sources" in normalized or "## источники" in normalized) and report.strip().endswith(
+            self._sources_heading(language)
+        ):
+            notes.append(messages["empty_sources"])
 
         return notes
 
-    def _inject_report_notes(self, report: str, notes: list[str]) -> str:
+    def _inject_report_notes(self, report: str, notes: list[str], language: str) -> str:
         if not notes or self.REPORT_NOTES_HEADING_PATTERN.search(report):
             return report
 
-        section = "## Report Notes\n" + "\n".join(f"- {note}" for note in notes)
-        sources_match = re.search(r"(?im)^##\s+Sources\s*$", report)
+        section = self._report_notes_heading(language) + "\n" + "\n".join(f"- {note}" for note in notes)
+        sources_match = re.search(r"(?im)^##\s+(Sources|Источники)\s*$", report)
         if sources_match:
             return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{section}"
@@ -983,9 +1036,9 @@ class AnalyzerAgent(BaseAgent):
                 result = self._generate_report(input_data, prompt_language, retry=True)
         llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
-        normalized = self._post_process_report(result)
+        normalized = self._post_process_report(result, prompt_language)
         with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
-        rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
+        rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data, prompt_language)
         uncited_lines = self._uncited_claim_lines(rebuilt)
         unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
         repair_ms = 0.0
@@ -998,7 +1051,7 @@ class AnalyzerAgent(BaseAgent):
                 unsupported_lines,
             )
             if repaired_body is not None:
-                rebuilt = self._rebuild_sources_section(repaired_body, aggregated_data)
+                rebuilt = self._rebuild_sources_section(repaired_body, aggregated_data, prompt_language)
             else:
                 logger.warning(
                     "AnalyzerAgent detected citation issues. Repairing report citations once. uncited_count=%s unsupported_count=%s",
@@ -1014,11 +1067,11 @@ class AnalyzerAgent(BaseAgent):
                     unsupported_lines,
                 )
                 repair_ms = (time.perf_counter() - repair_started_at) * 1000
-                normalized = self._post_process_report(repaired)
+                normalized = self._post_process_report(repaired, prompt_language)
                 with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
-                rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
-        notes = self._report_quality_notes(rebuilt, aggregated_data)
-        final_report = self._inject_report_notes(rebuilt, notes)
+                rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data, prompt_language)
+        notes = self._report_quality_notes(rebuilt, aggregated_data, prompt_language)
+        final_report = self._inject_report_notes(rebuilt, notes, prompt_language)
         total_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
             "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f llm_ms=%.2f repair_ms=%.2f total_ms=%.2f",
