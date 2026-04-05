@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 
+from src.graph.history import compact_graph_step_events
 from src.api.schemas import (
     ExtractionMetrics,
     FinalizeJobStatus,
@@ -380,7 +381,10 @@ class InMemoryTaskStore:
             graph_metrics=graph_metrics or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
-        self.worker_graph_step_events[worker_name] = list(graph_step_events or [])
+        self.worker_graph_step_events[worker_name] = compact_graph_step_events(
+            self.worker_graph_step_events.get(worker_name, []),
+            list(graph_step_events or []),
+        )
         return heartbeat
 
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:

@@ -28,6 +28,7 @@ from src.db.models import (
     SearchTaskORM,
     WorkerHeartbeatORM,
 )
+from src.graph.history import compact_graph_step_events
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
@@ -551,7 +552,10 @@ class SQLAlchemyTaskStore:
             heartbeat.last_error = last_error
             heartbeat.extraction_metrics = extraction_metrics or {}
             heartbeat.graph_metrics = graph_metrics or {}
-            heartbeat.graph_step_events = graph_step_events or []
+            heartbeat.graph_step_events = compact_graph_step_events(
+                heartbeat.graph_step_events or [],
+                graph_step_events or [],
+            )
             heartbeat.last_seen_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(heartbeat)

@@ -63,6 +63,8 @@ def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
     assert settings.analyzer_conflict_source_limit == 12
     assert settings.analyzer_evidence_source_limit == 12
     assert settings.analyzer_local_repair_issue_threshold == 2
+    assert settings.graph_step_event_history_limit == 250
+    assert settings.graph_step_event_retention_seconds == 86400
 
 
 def test_settings_supports_optional_langsmith_flags():
