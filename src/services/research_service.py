@@ -631,23 +631,39 @@ class ResearchService:
             deleted_count=len(deleted_ids),
         )
 
+    def compact_graph_operational_data(self) -> tuple[list[str], list[str]]:
+        compacted_worker_names = self.task_store.compact_worker_graph_step_events()
+        compacted_research_ids = self.task_store.compact_research_graph_trails()
+        if compacted_worker_names or compacted_research_ids:
+            logger.info(
+                "graph_operational_data_compacted worker_count=%s research_count=%s",
+                len(compacted_worker_names),
+                len(compacted_research_ids),
+            )
+        return compacted_worker_names, compacted_research_ids
+
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         search_recovery = self.recover_stale_search_task_jobs()
         finalize_recovery = self.recover_stale_research_finalize_jobs()
         search_cleanup = self.cleanup_old_search_task_jobs()
         finalize_cleanup = self.cleanup_old_research_finalize_jobs()
+        compacted_worker_names, compacted_research_ids = self.compact_graph_operational_data()
 
         recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count
         deleted_count = search_cleanup.deleted_count + finalize_cleanup.deleted_count
+        compacted_count = len(compacted_worker_names) + len(compacted_research_ids)
 
         return QueueMaintenanceResponse(
             recovered_search_job_ids=search_recovery.recovered_job_ids,
             recovered_finalize_job_ids=finalize_recovery.recovered_job_ids,
             deleted_search_job_ids=search_cleanup.deleted_job_ids,
             deleted_finalize_job_ids=finalize_cleanup.deleted_job_ids,
+            compacted_graph_event_worker_names=compacted_worker_names,
+            compacted_graph_trail_research_ids=compacted_research_ids,
             recovered_count=recovered_count,
             deleted_count=deleted_count,
-            total_count=recovered_count + deleted_count,
+            compacted_count=compacted_count,
+            total_count=recovered_count + deleted_count + compacted_count,
         )
 
     def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
