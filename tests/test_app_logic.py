@@ -1999,6 +1999,45 @@ def test_queue_metrics_include_graph_alert_trend():
     assert metrics.graph_alert_trend.recent_alerts
 
 
+def test_worker_heartbeat_merges_persisted_graph_step_history():
+    task_store = InMemoryTaskStore()
+    first_batch = [
+        {
+            "timestamp": "2026-04-05T10:00:00+00:00",
+            "step": "analyze",
+            "elapsed_ms": 100.0,
+            "worker_name": "job-worker",
+        }
+    ]
+    second_batch = [
+        {
+            "timestamp": "2026-04-05T10:01:00+00:00",
+            "step": "verify",
+            "elapsed_ms": 120.0,
+            "worker_name": "job-worker",
+        }
+    ]
+
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_step_events=first_batch,
+    )
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=2,
+        status="busy",
+        graph_step_events=second_batch,
+    )
+
+    events = task_store.get_graph_step_events(worker_name="job-worker")
+
+    assert len(events) == 2
+    assert events[0]["step"] == "analyze"
+    assert events[1]["step"] == "verify"
+
+
 def test_extraction_metrics_derives_rates_and_averages():
     metrics = ExtractionMetrics(
         attempts=4,
