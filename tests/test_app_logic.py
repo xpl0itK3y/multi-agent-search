@@ -1927,6 +1927,29 @@ def test_graph_metrics_derive_step_averages():
     assert metrics.steps["verify"].run_count == 0
 
 
+def test_queue_metrics_include_graph_alerts():
+    task_store = InMemoryTaskStore()
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_metrics={
+            "completed_run_count": 1,
+            "steps": {
+                "collect_context": {"run_count": 1, "failure_count": 1, "total_ms": 1600.0},
+                "analyze": {"run_count": 5, "failure_count": 0, "total_ms": 400.0},
+            },
+        },
+    )
+
+    metrics = ResearchService(task_store=task_store).get_queue_metrics()
+
+    codes = {(alert.code, alert.step, alert.severity) for alert in metrics.graph_alerts}
+    assert ("high_avg_ms", "collect_context", "warning") in codes
+    assert ("step_failures", "collect_context", "warning") in codes
+    assert ("analyze_retries", "analyze", "warning") in codes
+
+
 def test_extraction_metrics_derives_rates_and_averages():
     metrics = ExtractionMetrics(
         attempts=4,

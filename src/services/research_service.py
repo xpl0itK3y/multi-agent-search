@@ -16,6 +16,8 @@ from src.api.schemas import (
     JobCleanupResponse,
     DecomposeResponse,
     FinalizeJobStatus,
+    GraphAlert,
+    GraphMetrics,
     JobRecoveryResponse,
     QueueMetrics,
     QueueMaintenanceResponse,
@@ -52,6 +54,12 @@ logger = logging.getLogger(__name__)
 class ResearchService:
     TASK_SUMMARY_LOG_LIMIT = 6
     TASK_SUMMARY_SOURCE_LIMIT = 4
+    GRAPH_STEP_WARNING_MS = 1500.0
+    GRAPH_STEP_CRITICAL_MS = 5000.0
+    GRAPH_STEP_FAILURE_WARNING_COUNT = 1
+    GRAPH_STEP_FAILURE_CRITICAL_COUNT = 3
+    GRAPH_ANALYZE_RETRY_WARNING_COUNT = 3
+    GRAPH_ANALYZE_RETRY_CRITICAL_COUNT = 6
 
     def __init__(
         self,
@@ -644,7 +652,10 @@ class ResearchService:
         return self.task_store.get_latest_search_task_job(task_id)
 
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
-        return self.task_store.get_worker_heartbeat(worker_name)
+        heartbeat = self.task_store.get_worker_heartbeat(worker_name)
+        if not heartbeat:
+            return None
+        return heartbeat.model_copy(update={"graph_alerts": self._build_graph_alerts(heartbeat.graph_metrics)})
 
     def touch_worker_heartbeat(
         self,
@@ -665,14 +676,90 @@ class ResearchService:
         )
 
     def get_queue_metrics(self) -> QueueMetrics:
-        return self.task_store.get_queue_metrics()
+        metrics = self.task_store.get_queue_metrics()
+        return metrics.model_copy(update={"graph_alerts": self._build_graph_alerts(metrics.graph_metrics)})
 
     def get_health_status(self) -> dict:
+        graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         return {
             "status": "ok",
             "extraction_metrics": get_extraction_metrics_snapshot(),
-            "graph_metrics": get_graph_metrics_snapshot(),
+            "graph_metrics": graph_metrics.model_dump(),
+            "graph_alerts": [alert.model_dump() for alert in self._build_graph_alerts(graph_metrics)],
         }
+
+    def _build_graph_alerts(self, graph_metrics: GraphMetrics) -> list[GraphAlert]:
+        alerts: list[GraphAlert] = []
+        for step_name, step_metrics in graph_metrics.steps.items():
+            if step_metrics.run_count <= 0:
+                continue
+
+            if step_metrics.avg_ms >= self.GRAPH_STEP_CRITICAL_MS:
+                alerts.append(
+                    GraphAlert(
+                        code="high_avg_ms",
+                        severity="critical",
+                        step=step_name,
+                        current_value=step_metrics.avg_ms,
+                        threshold=self.GRAPH_STEP_CRITICAL_MS,
+                    )
+                )
+            elif step_metrics.avg_ms >= self.GRAPH_STEP_WARNING_MS:
+                alerts.append(
+                    GraphAlert(
+                        code="high_avg_ms",
+                        severity="warning",
+                        step=step_name,
+                        current_value=step_metrics.avg_ms,
+                        threshold=self.GRAPH_STEP_WARNING_MS,
+                    )
+                )
+
+            if step_metrics.failure_count >= self.GRAPH_STEP_FAILURE_CRITICAL_COUNT:
+                alerts.append(
+                    GraphAlert(
+                        code="step_failures",
+                        severity="critical",
+                        step=step_name,
+                        current_value=float(step_metrics.failure_count),
+                        threshold=float(self.GRAPH_STEP_FAILURE_CRITICAL_COUNT),
+                    )
+                )
+            elif step_metrics.failure_count >= self.GRAPH_STEP_FAILURE_WARNING_COUNT:
+                alerts.append(
+                    GraphAlert(
+                        code="step_failures",
+                        severity="warning",
+                        step=step_name,
+                        current_value=float(step_metrics.failure_count),
+                        threshold=float(self.GRAPH_STEP_FAILURE_WARNING_COUNT),
+                    )
+                )
+
+        analyze_runs = graph_metrics.steps["analyze"].run_count
+        completed_runs = max(graph_metrics.completed_run_count, 1)
+        analyze_retry_count = max(analyze_runs - completed_runs, 0)
+        if analyze_retry_count >= self.GRAPH_ANALYZE_RETRY_CRITICAL_COUNT:
+            alerts.append(
+                GraphAlert(
+                    code="analyze_retries",
+                    severity="critical",
+                    step="analyze",
+                    current_value=float(analyze_retry_count),
+                    threshold=float(self.GRAPH_ANALYZE_RETRY_CRITICAL_COUNT),
+                )
+            )
+        elif analyze_retry_count >= self.GRAPH_ANALYZE_RETRY_WARNING_COUNT:
+            alerts.append(
+                GraphAlert(
+                    code="analyze_retries",
+                    severity="warning",
+                    step="analyze",
+                    current_value=float(analyze_retry_count),
+                    threshold=float(self.GRAPH_ANALYZE_RETRY_WARNING_COUNT),
+                )
+            )
+        return alerts
 
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)

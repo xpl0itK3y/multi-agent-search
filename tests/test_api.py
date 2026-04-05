@@ -11,6 +11,7 @@ from src.api.schemas import (
     TaskStatus,
     TaskUpdate,
 )
+from src.graph.metrics import record_graph_step, reset_graph_metrics
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 
@@ -45,6 +46,7 @@ class StubAnalyzer:
 
 @pytest.fixture
 async def client():
+    reset_graph_metrics()
     app = create_app()
     service = ResearchService(
         task_store=InMemoryTaskStore(),
@@ -62,13 +64,16 @@ async def client():
 
 @pytest.mark.anyio
 async def test_health_check(client):
+    record_graph_step("analyze", 9000.0)
     response = await client.get("/health")
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
     assert "extraction_metrics" in payload
     assert "graph_metrics" in payload
+    assert "graph_alerts" in payload
     assert payload["extraction_metrics"]["attempts"] >= 0
+    assert any(alert["code"] == "high_avg_ms" for alert in payload["graph_alerts"])
     assert response.headers["X-Request-ID"]
 
 
@@ -135,6 +140,7 @@ async def test_queue_health_includes_extraction_metrics(client):
     assert payload["graph_metrics"]["steps"]["collect_context"]["run_count"] == 2
     assert payload["graph_metrics"]["steps"]["collect_context"]["failure_count"] == 1
     assert payload["graph_metrics"]["steps"]["collect_context"]["avg_ms"] == 20.0
+    assert any(alert["code"] == "step_failures" for alert in payload["graph_alerts"])
 
 
 @pytest.mark.anyio
