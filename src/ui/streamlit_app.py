@@ -202,6 +202,11 @@ TRANSLATIONS = {
         "maintenance_avg_compacted": "Average compacted per run: {value}",
         "maintenance_total_sparkline": "Recent total counts: {value}",
         "maintenance_compacted_sparkline": "Recent compacted counts: {value}",
+        "maintenance_alerts": "Maintenance Alerts",
+        "maintenance_alert_cleanup_volume_growing": "Cleanup volume is growing: recent average {current_value} exceeded {threshold}",
+        "maintenance_alert_high_compacted_average": "Average compacted count {current_value} exceeded {threshold}",
+        "maintenance_alert_maintenance_stale": "Maintenance is stale: last run age {current_value}s exceeded {threshold}s",
+        "maintenance_alert_hint": "Hint: {hint}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -391,6 +396,11 @@ TRANSLATIONS = {
         "maintenance_avg_compacted": "Средний compacted за run: {value}",
         "maintenance_total_sparkline": "Последние total counts: {value}",
         "maintenance_compacted_sparkline": "Последние compacted counts: {value}",
+        "maintenance_alerts": "Проблемы maintenance",
+        "maintenance_alert_cleanup_volume_growing": "Объем cleanup растет: недавнее среднее {current_value} превысило {threshold}",
+        "maintenance_alert_high_compacted_average": "Средний compacted count {current_value} превысил {threshold}",
+        "maintenance_alert_maintenance_stale": "Maintenance устарел: возраст последнего запуска {current_value}s превысил {threshold}s",
+        "maintenance_alert_hint": "Подсказка: {hint}",
     },
 }
 
@@ -954,6 +964,22 @@ def _render_maintenance_summary(summary: dict) -> None:
     research_ids = ", ".join(summary.get("compacted_graph_trail_research_ids") or []) or "-"
     st.caption(_t("maintenance_compacted_workers", value=worker_names))
     st.caption(_t("maintenance_compacted_researches", value=research_ids))
+    alerts = summary.get("alerts") or []
+    if alerts:
+        st.caption(_t("maintenance_alerts"))
+        for alert in alerts:
+            key = f"maintenance_alert_{alert.get('code')}"
+            message = _t(
+                key,
+                current_value=round(float(alert.get("current_value", 0.0) or 0.0), 2),
+                threshold=round(float(alert.get("threshold", 0.0) or 0.0), 2),
+            )
+            if (alert.get("severity") or "warning").lower() == "critical":
+                st.error(message)
+            else:
+                st.warning(message)
+            if alert.get("hint"):
+                st.caption(_t("maintenance_alert_hint", hint=alert["hint"]))
     trend = summary.get("trend") or {}
     if trend:
         st.caption(_t("maintenance_trend"))

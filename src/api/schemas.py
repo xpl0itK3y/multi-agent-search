@@ -346,6 +346,13 @@ class GraphAlertTrend(BaseModel):
 
 
 class MaintenanceSummary(BaseModel):
+    class MaintenanceAlert(BaseModel):
+        code: str
+        severity: str = "warning"
+        current_value: float = 0.0
+        threshold: float = 0.0
+        hint: Optional[str] = None
+
     class MaintenanceRunEntry(BaseModel):
         recovered_count: int = 0
         deleted_count: int = 0
@@ -368,6 +375,7 @@ class MaintenanceSummary(BaseModel):
     last_run_at: Optional[datetime] = None
     recent_runs: List["MaintenanceSummary.MaintenanceRunEntry"] = Field(default_factory=list)
     trend: "MaintenanceSummary.MaintenanceTrend" = Field(default_factory=MaintenanceTrend)
+    alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
 
 
 class WorkerHeartbeat(BaseModel):
