@@ -56,6 +56,10 @@ def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
     assert settings.search_extraction_max_redirects == 1
     assert settings.search_domain_fail_threshold == 2
     assert settings.search_domain_cooldown_seconds == 600
+    assert settings.analyzer_payload_char_budget == 12000
+    assert settings.analyzer_conflict_source_limit == 8
+    assert settings.analyzer_evidence_source_limit == 8
+    assert settings.analyzer_local_repair_issue_threshold == 2
 
 
 def test_settings_supports_optional_langsmith_flags():

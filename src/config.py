@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
     deepseek_model: str = "deepseek-chat"
+    deepseek_repair_model: Optional[str] = None
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
@@ -27,6 +28,10 @@ class Settings(BaseSettings):
     search_extraction_max_redirects: int = 1
     search_domain_fail_threshold: int = 2
     search_domain_cooldown_seconds: int = 600
+    analyzer_payload_char_budget: int = 12000
+    analyzer_conflict_source_limit: int = 8
+    analyzer_evidence_source_limit: int = 8
+    analyzer_local_repair_issue_threshold: int = 2
 
     postgres_user: str = "app"
     postgres_password: str = "app"
