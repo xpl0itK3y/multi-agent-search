@@ -68,6 +68,33 @@ def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_fact
 
 
 @pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+
+    research = store.add_research(
+        ResearchRequest(prompt="research topic", depth=SearchDepth.MEDIUM),
+        task_ids=[],
+    )
+    updated_state = store.update_research_graph_state(
+        research.id,
+        {"step": "collect_context", "analyze_attempts": 0},
+    )
+    appended = store.append_research_graph_event(
+        research.id,
+        {"step": "collect_context", "detail": "Collected 5 sources"},
+    )
+    fetched_research = store.get_research(research.id)
+
+    assert updated_state is not None
+    assert updated_state.graph_state["step"] == "collect_context"
+    assert appended is not None
+    assert appended.graph_trail[0]["detail"] == "Collected 5 sources"
+    assert fetched_research is not None
+    assert fetched_research.graph_state["step"] == "collect_context"
+    assert fetched_research.graph_trail[0]["detail"] == "Collected 5 sources"
+
+
+@pytest.mark.postgres
 def test_sqlalchemy_task_store_persists_finalize_jobs(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
 

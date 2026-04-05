@@ -19,6 +19,8 @@ class ResearchORM(Base):
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graph_state: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    graph_trail: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     task_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

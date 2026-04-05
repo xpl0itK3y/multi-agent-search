@@ -34,6 +34,18 @@ class TaskStore(Protocol):
         task_ids: list[str],
     ) -> ResearchRecord | None: ...
 
+    def update_research_graph_state(
+        self,
+        research_id: str,
+        graph_state: dict,
+    ) -> ResearchRecord | None: ...
+
+    def append_research_graph_event(
+        self,
+        research_id: str,
+        event: dict,
+    ) -> ResearchRecord | None: ...
+
     def add_research_finalize_job(
         self,
         research_id: str,

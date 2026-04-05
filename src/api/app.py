@@ -14,6 +14,7 @@ from src.api.schemas import (
     QueueMaintenanceResponse,
     ResearchFinalizeJob,
     ResearchFinalizeResponse,
+    ResearchGraphResponse,
     ResearchRecord,
     ResearchReportResponse,
     ResearchRequest,
@@ -204,6 +205,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse)
     async def get_research_report(research_id: str, request: Request):
         return get_research_service(request).get_research_report(research_id)
+
+    @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
+    async def get_research_graph(research_id: str, request: Request):
+        return get_research_service(request).get_research_graph(research_id)
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
     async def finalize_research(research_id: str, request: Request):

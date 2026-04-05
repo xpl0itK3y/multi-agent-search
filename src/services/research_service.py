@@ -20,6 +20,7 @@ from src.api.schemas import (
     QueueMetrics,
     QueueMaintenanceResponse,
     ResearchRecord,
+    ResearchGraphResponse,
     ResearchRequest,
     ResearchResponse,
     ResearchReportResponse,
@@ -243,6 +244,17 @@ class ResearchService:
             final_report=research.final_report,
         )
 
+    def get_research_graph(self, research_id: str) -> ResearchGraphResponse:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        return ResearchGraphResponse(
+            research_id=research.id,
+            status=research.status,
+            graph_state=research.graph_state,
+            graph_trail=research.graph_trail,
+        )
+
     def _build_task_summary(self, task: SearchTask) -> SearchTaskSummary:
         results = task.result or []
         preview = [
@@ -370,6 +382,35 @@ class ResearchService:
             "follow_up_queries": follow_up_queries[:8],
         }
 
+    def checkpoint_graph_state(self, research_id: str, graph_state: dict, event: dict | None = None) -> None:
+        self.task_store.update_research_graph_state(research_id, graph_state)
+        if event is not None:
+            self.task_store.append_research_graph_event(research_id, event)
+
+    def _inject_graph_execution_trail(self, report: str, research_id: str) -> str:
+        research = self.task_store.get_research(research_id)
+        if not research or not research.graph_trail:
+            return report
+
+        graph_state = research.graph_state or {}
+        if (
+            graph_state.get("replan_attempts", 0) <= 0
+            and graph_state.get("tie_break_attempts", 0) <= 0
+            and graph_state.get("analyze_attempts", 0) <= 1
+        ):
+            return report
+
+        language = self._detect_report_language(research.prompt, report)
+        heading = "## Трасса выполнения графа" if language == "ru" else "## Graph Execution Trail"
+        step_label = "Шаг" if language == "ru" else "Step"
+        detail_label = "Детали" if language == "ru" else "Details"
+        lines = [heading]
+        for entry in research.graph_trail[-8:]:
+            step = entry.get("step") or "unknown"
+            detail = entry.get("detail") or ""
+            lines.append(f"- {step_label}: {step}. {detail_label}: {detail}")
+        return f"{report.rstrip()}\n\n" + "\n".join(lines)
+
     def _get_research_for_finalization(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
@@ -410,6 +451,7 @@ class ResearchService:
                 report = self.finalize_graph_runner.run(research_id, research.prompt, tasks, research.depth)
             else:
                 report = analyzer.run_analysis(research.prompt, tasks, depth=research.depth)
+            report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.COMPLETED,
