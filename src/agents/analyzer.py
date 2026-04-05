@@ -14,9 +14,9 @@ from src.source_quality_policy import TOPIC_POLICIES, combined_topics
 logger = logging.getLogger(__name__)
 
 class AnalyzerAgent(BaseAgent):
-    MAX_ANALYZER_SOURCES = 12
-    MAX_SOURCES_PER_DOMAIN = 2
-    MAX_SOURCES_PER_TASK = 4
+    MAX_ANALYZER_SOURCES = 24
+    MAX_SOURCES_PER_DOMAIN = 3
+    MAX_SOURCES_PER_TASK = 6
     MAX_SOURCE_CONTENT_CHARS = 1600
     MAX_PREMIUM_SOURCE_CONTENT_CHARS = 1600
     MAX_MEDIUM_SOURCE_CONTENT_CHARS = 1000
@@ -273,11 +273,13 @@ class AnalyzerAgent(BaseAgent):
     7. Use inline source references like [S1], [S2] when you make factual claims.
     8. Include a "Sources" list at the end with the source IDs and URLs you actually used.
     9. Prefer higher-quality and more authoritative sources when sources conflict, but do not ignore useful unique evidence from medium-quality sources.
+    10. Produce a genuinely comprehensive report, not a short summary: expand major sections, include concrete examples, and cover meaningful subcategories or year-by-year breakdowns when the topic supports it.
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
     - Present speculative predictions or gadget rumors as established facts.
     - Give equal weight to weak hype posts when stronger primary or expert sources exist.
+    - State contested or weakly supported claims with absolute certainty when the sources only support softer wording.
     - Output any internal reasoning, just the final markdown report.
     """
 
@@ -511,9 +513,9 @@ class AnalyzerAgent(BaseAgent):
         selected_candidates = rust_accel.select_analyzer_sources(
             aggregated_candidates,
             topics=topics,
-            max_sources=self.MAX_ANALYZER_SOURCES,
-            max_sources_per_domain=self.MAX_SOURCES_PER_DOMAIN,
-            max_sources_per_task=self.MAX_SOURCES_PER_TASK,
+            max_sources=settings.analyzer_max_sources,
+            max_sources_per_domain=settings.analyzer_max_sources_per_domain,
+            max_sources_per_task=settings.analyzer_max_sources_per_task,
         )
 
         selected_candidates = self._apply_payload_budget(selected_candidates)
@@ -628,9 +630,23 @@ class AnalyzerAgent(BaseAgent):
                 f"{instruction} Your previous answer used the wrong language. "
                 "Rewrite the report fully in the requested language and keep factual citations."
             )
+        expanded_report_instruction = (
+            "Write a substantially more comprehensive report than a brief summary. "
+            "Prefer multiple substantial sections or subsections, include more concrete examples, "
+            "and cover the topic from several angles when the evidence supports it. "
+            "Use a broader portion of the available source pool where it materially improves coverage."
+        )
+        confidence_instruction = (
+            "When evidence comes from editorial lists, critic roundups, box-office summaries, or mixed-quality sources, "
+            "use cautious wording such as 'according to these sources', 'several sources highlight', "
+            "'editorial selections suggest', or 'the available data indicates' instead of absolute claims. "
+            "If support is weak or mixed, acknowledge that explicitly instead of overstating certainty."
+        )
         return (
             "Please analyze this data and generate the final report. "
             f"{instruction} "
+            f"{expanded_report_instruction} "
+            f"{confidence_instruction} "
             "Prefer concrete reported developments over speculative future-looking claims. "
             "Use evidence_groups to identify where multiple sources reinforce the same point. "
             "If a source is mostly predictive, label it as a forecast rather than a confirmed development. "
