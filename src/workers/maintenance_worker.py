@@ -20,6 +20,7 @@ class MaintenanceWorker:
             previous_heartbeat = self.research_service.task_store.get_worker_heartbeat("maintenance")
             previous_runs = []
             previous_operational_history = []
+            previous_recommendation_history = []
             if previous_heartbeat is not None:
                 previous_runs = [
                     item.model_dump(mode="json")
@@ -28,6 +29,10 @@ class MaintenanceWorker:
                 previous_operational_history = [
                     item.model_dump(mode="json")
                     for item in previous_heartbeat.maintenance_summary.recent_operational_health
+                ]
+                previous_recommendation_history = [
+                    item.model_dump(mode="json")
+                    for item in previous_heartbeat.maintenance_summary.recent_operational_recommendations
                 ]
             previous_runs.append(
                 {
@@ -47,6 +52,7 @@ class MaintenanceWorker:
                     "last_run_at": current_timestamp,
                     "recent_runs": previous_runs[-self.MAINTENANCE_HISTORY_LIMIT :],
                     "recent_operational_health": previous_operational_history[-self.MAINTENANCE_HISTORY_LIMIT :],
+                    "recent_operational_recommendations": previous_recommendation_history[-self.MAINTENANCE_HISTORY_LIMIT :],
                 },
             )
             queue_metrics = self.research_service.get_queue_metrics()
@@ -54,6 +60,10 @@ class MaintenanceWorker:
             maintenance_summary["recent_operational_health"] = [
                 item.model_dump(mode="json")
                 for item in queue_metrics.operational_health.history[-self.MAINTENANCE_HISTORY_LIMIT :]
+            ]
+            maintenance_summary["recent_operational_recommendations"] = [
+                item.model_dump(mode="json")
+                for item in queue_metrics.operational_health.recommendations[-self.MAINTENANCE_HISTORY_LIMIT :]
             ]
             self.research_service.touch_worker_heartbeat(
                 "maintenance",

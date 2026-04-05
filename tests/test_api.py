@@ -375,8 +375,9 @@ async def test_queue_health_includes_operational_health_meta_alerts(client):
     assert "score_worsening" in alert_codes
     assert "repeated_critical_states" in alert_codes
     recommendations = payload["operational_health"]["recommendations"]
-    assert any("worker parallelism" in item or "more workers" in item for item in recommendations)
-    assert any("queue backlog" in item and "graph retries" in item for item in recommendations)
+    assert any("worker parallelism" in item["message"] or "more workers" in item["message"] for item in recommendations)
+    assert any("queue backlog" in item["message"] and "graph retries" in item["message"] for item in recommendations)
+    assert all("shown_count" in item for item in recommendations)
 
 
 @pytest.mark.anyio
@@ -426,7 +427,128 @@ async def test_queue_health_includes_maintenance_restart_recommendation(client):
     assert response.status_code == 200
     payload = response.json()
     recommendations = payload["operational_health"]["recommendations"]
-    assert any("Maintenance appears stale" in item for item in recommendations)
+    assert any("Maintenance appears stale" in item["message"] for item in recommendations)
+
+
+@pytest.mark.anyio
+async def test_queue_health_operational_recommendations_track_repeat_count(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_operational_recommendations": [
+                {
+                    "code": "restart_or_verify_maintenance_path",
+                    "message": "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed.",
+                    "shown_count": 2,
+                    "active": True,
+                    "acknowledged": False,
+                    "last_shown_at": "2026-04-05T09:00:00+00:00",
+                }
+            ],
+            "recent_runs": [
+                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T09:00:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    recommendations = payload["operational_health"]["recommendations"]
+    stale_recommendation = next(
+        item for item in recommendations if item["code"] == "restart_or_verify_maintenance_path"
+    )
+    assert stale_recommendation["shown_count"] == 3
+    assert stale_recommendation["acknowledged"] is False
+
+
+@pytest.mark.anyio
+async def test_acknowledge_operational_recommendation_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_operational_recommendations": [
+                {
+                    "code": "reduce_queue_backlog",
+                    "message": "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                    "shown_count": 2,
+                    "active": True,
+                    "acknowledged": False,
+                    "last_shown_at": "2026-04-05T09:00:00+00:00",
+                }
+            ],
+        },
+    )
+
+    response = await client.post("/health/queues/operational-health/recommendations/reduce_queue_backlog/ack")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == "reduce_queue_backlog"
+    assert payload["acknowledged"] is True
+    assert payload["acknowledged_at"] is not None
+
+    follow_up = await client.get("/health/workers/maintenance")
+    assert follow_up.status_code == 200
+    recommendations = follow_up.json()["maintenance_summary"]["recent_operational_recommendations"]
+    acknowledged_item = next(item for item in recommendations if item["code"] == "reduce_queue_backlog")
+    assert acknowledged_item["acknowledged"] is True
+
+
+@pytest.mark.anyio
+async def test_resolve_operational_recommendation_endpoint(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_operational_recommendations": [
+                {
+                    "code": "inspect_graph_failures_and_search_quality",
+                    "message": "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs.",
+                    "shown_count": 2,
+                    "active": True,
+                    "acknowledged": True,
+                    "acknowledged_at": "2026-04-05T09:00:00+00:00",
+                    "resolved": False,
+                    "last_shown_at": "2026-04-05T09:00:00+00:00",
+                }
+            ],
+        },
+    )
+
+    response = await client.post(
+        "/health/queues/operational-health/recommendations/inspect_graph_failures_and_search_quality/resolve",
+        json={"note": "Domain filters tightened and retry path verified."},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == "inspect_graph_failures_and_search_quality"
+    assert payload["acknowledged"] is True
+    assert payload["resolved"] is True
+    assert payload["resolved_at"] is not None
+    assert payload["resolution_note"] == "Domain filters tightened and retry path verified."
+
+    follow_up = await client.get("/health/workers/maintenance")
+    assert follow_up.status_code == 200
+    recommendations = follow_up.json()["maintenance_summary"]["recent_operational_recommendations"]
+    resolved_item = next(
+        item for item in recommendations if item["code"] == "inspect_graph_failures_and_search_quality"
+    )
+    assert resolved_item["resolved"] is True
+    assert resolved_item["resolution_note"] == "Domain filters tightened and retry path verified."
 
 
 @pytest.mark.anyio

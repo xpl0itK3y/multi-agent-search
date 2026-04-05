@@ -212,3 +212,4 @@ def test_maintenance_worker_appends_maintenance_history(monkeypatch):
     assert len(heartbeat.maintenance_summary.recent_runs) == 2
     assert heartbeat.maintenance_summary.trend.cleanup_volume_direction == "stable"
     assert len(heartbeat.maintenance_summary.recent_operational_health) == 2
+    assert isinstance(heartbeat.maintenance_summary.recent_operational_recommendations, list)

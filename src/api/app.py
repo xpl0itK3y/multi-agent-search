@@ -8,6 +8,8 @@ from src.api.schemas import (
     DecomposeResponse,
     JobCleanupResponse,
     JobRecoveryResponse,
+    OperationalHealth,
+    OperationalRecommendationResolveRequest,
     OptimizeRequest,
     OptimizeResponse,
     QueueMetrics,
@@ -63,6 +65,24 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse)
     async def run_queue_maintenance(request: Request):
         return get_research_service(request).run_queue_maintenance()
+
+    @app.post(
+        "/health/queues/operational-health/recommendations/{code}/ack",
+        response_model=OperationalHealth.RecommendationEntry,
+    )
+    async def acknowledge_operational_recommendation(code: str, request: Request):
+        return get_research_service(request).acknowledge_operational_recommendation(code)
+
+    @app.post(
+        "/health/queues/operational-health/recommendations/{code}/resolve",
+        response_model=OperationalHealth.RecommendationEntry,
+    )
+    async def resolve_operational_recommendation(
+        code: str,
+        payload: OperationalRecommendationResolveRequest,
+        request: Request,
+    ):
+        return get_research_service(request).resolve_operational_recommendation(code, payload.note)
 
     @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat)
     async def worker_health(worker_name: str, request: Request):

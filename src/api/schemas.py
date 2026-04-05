@@ -377,6 +377,7 @@ class MaintenanceSummary(BaseModel):
     trend: "MaintenanceSummary.MaintenanceTrend" = Field(default_factory=MaintenanceTrend)
     alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
     recent_operational_health: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
+    recent_operational_recommendations: List["OperationalHealth.RecommendationEntry"] = Field(default_factory=list)
 
 
 class OperationalHealth(BaseModel):
@@ -399,11 +400,24 @@ class OperationalHealth(BaseModel):
         recent_scores: List[int] = Field(default_factory=list)
         recent_statuses: List[str] = Field(default_factory=list)
 
+    class RecommendationEntry(BaseModel):
+        code: str
+        message: str
+        shown_count: int = 1
+        active: bool = True
+        first_shown_at: Optional[datetime] = None
+        last_shown_at: Optional[datetime] = None
+        acknowledged: bool = False
+        acknowledged_at: Optional[datetime] = None
+        resolved: bool = False
+        resolved_at: Optional[datetime] = None
+        resolution_note: Optional[str] = None
+
     status: str = "healthy"
     score: int = 100
     reasons: List[str] = Field(default_factory=list)
     alerts: List["OperationalHealth.OperationalHealthAlert"] = Field(default_factory=list)
-    recommendations: List[str] = Field(default_factory=list)
+    recommendations: List["OperationalHealth.RecommendationEntry"] = Field(default_factory=list)
     history: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
     trend: "OperationalHealth.OperationalHealthTrend" = Field(default_factory=OperationalHealthTrend)
 
@@ -420,6 +434,10 @@ class WorkerHeartbeat(BaseModel):
     maintenance_summary: MaintenanceSummary = Field(default_factory=MaintenanceSummary)
     operational_health: OperationalHealth = Field(default_factory=OperationalHealth)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class OperationalRecommendationResolveRequest(BaseModel):
+    note: Optional[str] = None
 
 
 class QueueMetrics(BaseModel):
