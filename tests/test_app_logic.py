@@ -87,6 +87,8 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert parsed["gathered_data"][0]["source_quality"] == "low"
     assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
     assert "Prefer higher-quality and more authoritative sources when sources conflict" in agent.SYSTEM_PROMPT
+    assert "substantially more comprehensive report" in llm.calls[0]["user_prompt"]
+    assert "cautious wording" in llm.calls[0]["user_prompt"]
 
 
 def test_analyzer_agent_repairs_structured_reports_with_uncited_claims():
@@ -219,7 +221,7 @@ def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     example_sources = [item for item in gathered if item["domain"] == "example.com"]
-    assert len(example_sources) <= 2
+    assert len(example_sources) <= 3
 
 
 def test_analyzer_agent_filters_failed_and_duplicate_sources():
@@ -281,9 +283,9 @@ def test_analyzer_agent_limits_prepared_source_count():
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
-    assert len(gathered) == 12
+    assert len(gathered) == 24
     assert gathered[0]["source_id"] == "S1"
-    assert gathered[-1]["source_id"] == "S12"
+    assert gathered[-1]["source_id"] == "S24"
 
 
 def test_analyzer_agent_compacts_source_content_before_prompt_payload():
@@ -350,7 +352,7 @@ def test_analyzer_agent_applies_global_payload_budget():
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     total_chars = sum(len(item["content"]) for item in gathered)
-    assert total_chars <= 12000
+    assert total_chars <= 28000
 
 
 def test_analyzer_agent_uses_local_repair_for_small_citation_issues():

@@ -28,9 +28,12 @@ class Settings(BaseSettings):
     search_extraction_max_redirects: int = 1
     search_domain_fail_threshold: int = 2
     search_domain_cooldown_seconds: int = 600
-    analyzer_payload_char_budget: int = 12000
-    analyzer_conflict_source_limit: int = 8
-    analyzer_evidence_source_limit: int = 8
+    analyzer_max_sources: int = 24
+    analyzer_max_sources_per_domain: int = 3
+    analyzer_max_sources_per_task: int = 6
+    analyzer_payload_char_budget: int = 28000
+    analyzer_conflict_source_limit: int = 12
+    analyzer_evidence_source_limit: int = 12
     analyzer_local_repair_issue_threshold: int = 2
 
     postgres_user: str = "app"
