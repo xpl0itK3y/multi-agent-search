@@ -290,6 +290,26 @@ async def test_research_report_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_research_graph_endpoint(client):
+    response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
+    research_id = response.json()["research_id"]
+    app_service = client._transport.app.state.research_service
+    app_service.checkpoint_graph_state(
+        research_id,
+        {"step": "collect_context"},
+        {"step": "collect_context", "detail": "Collected 1 source"},
+    )
+
+    graph_response = await client.get(f"/v1/research/{research_id}/graph")
+
+    assert graph_response.status_code == 200
+    payload = graph_response.json()
+    assert payload["research_id"] == research_id
+    assert payload["graph_state"]["step"] == "collect_context"
+    assert payload["graph_trail"][0]["detail"] == "Collected 1 source"
+
+
+@pytest.mark.anyio
 async def test_requeue_search_job_endpoint(client):
     app_service = client._transport.app.state.research_service
     app_service.task_store.add_task(

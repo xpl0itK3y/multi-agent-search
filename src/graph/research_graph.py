@@ -38,6 +38,25 @@ class FinalizeGraphRunner:
             return self._run_langgraph(state)
         return self._run_fallback(state)
 
+    def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
+        snapshot = {
+            "step": step,
+            "prompt": state.get("prompt"),
+            "effective_prompt": state.get("effective_prompt"),
+            "depth": getattr(state.get("depth"), "value", state.get("depth")),
+            "task_ids": [task.id for task in state.get("tasks", [])],
+            "analyze_attempts": state.get("analyze_attempts", 0),
+            "replan_attempts": state.get("replan_attempts", 0),
+            "tie_break_attempts": state.get("tie_break_attempts", 0),
+            "should_replan": state.get("should_replan", False),
+            "should_tie_break": state.get("should_tie_break", False),
+            "should_retry_analysis": state.get("should_retry_analysis", False),
+            "replan_recommendations": state.get("replan_recommendations", []),
+            "tie_break_recommendations": state.get("tie_break_recommendations", []),
+        }
+        event = {"step": step, "detail": detail}
+        self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
+
     def _collect_context(self, state: FinalizeGraphState) -> FinalizeGraphState:
         aggregated_sources = self.service._build_research_source_pool(state["tasks"])
         _, source_summary = self.service.source_critic.assess_sources(aggregated_sources)
@@ -62,7 +81,7 @@ class FinalizeGraphRunner:
             source_summary=source_summary,
         ) if self._supports_graph_branching(analyzer) else []
         should_replan = bool(recommendations) and state["replan_attempts"] < settings.langgraph_replan_max_loops
-        return {
+        next_state = {
             **state,
             "detected_conflicts": conflicts,
             "source_summary": source_summary.model_dump(),
@@ -70,6 +89,12 @@ class FinalizeGraphRunner:
             "replan_recommendations": [item.model_dump() for item in recommendations],
             "should_replan": should_replan,
         }
+        self._checkpoint(
+            next_state,
+            "collect_context",
+            f"Collected {len(aggregated_sources)} sources, detected {len(conflicts)} conflicts, replan_needed={should_replan}",
+        )
+        return next_state
 
     def _build_conflict_pool(self, aggregated_sources: list[dict]) -> list[dict]:
         return [
@@ -108,13 +133,19 @@ class FinalizeGraphRunner:
                 for recommendation in recommendations
             ],
         )
-        return {
+        next_state = {
             **state,
             "effective_prompt": effective_prompt,
             "replan_attempts": state["replan_attempts"] + 1,
             "should_replan": False,
             "tasks": state["tasks"] + created_tasks,
         }
+        self._checkpoint(
+            next_state,
+            "replan",
+            f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
+        )
+        return next_state
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
         report = self.service.analyzer.run_analysis(
@@ -122,11 +153,17 @@ class FinalizeGraphRunner:
             state["tasks"],
             depth=state["depth"],
         )
-        return {
+        next_state = {
             **state,
             "report": report,
             "analyze_attempts": state["analyze_attempts"] + 1,
         }
+        self._checkpoint(
+            next_state,
+            "analyze",
+            f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
+        )
+        return next_state
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
         recommendations = state.get("tie_break_recommendations") or []
@@ -147,13 +184,19 @@ class FinalizeGraphRunner:
             state["depth"],
             [ReplanRecommendation.model_validate(recommendation) for recommendation in recommendations],
         )
-        return {
+        next_state = {
             **state,
             "effective_prompt": effective_prompt,
             "tie_break_attempts": state["tie_break_attempts"] + 1,
             "should_tie_break": False,
             "tasks": state["tasks"] + created_tasks,
         }
+        self._checkpoint(
+            next_state,
+            "tie_break",
+            f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
+        )
+        return next_state
 
     def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
         report = state.get("report") or ""
@@ -182,13 +225,19 @@ class FinalizeGraphRunner:
             )
         else:
             effective_prompt = state["effective_prompt"]
-        return {
+        next_state = {
             **state,
             "effective_prompt": effective_prompt,
             "tie_break_recommendations": [item.model_dump() for item in tie_break_recommendations],
             "should_tie_break": should_tie_break and bool(tie_break_recommendations),
             "should_retry_analysis": should_retry,
         }
+        self._checkpoint(
+            next_state,
+            "verify",
+            f"weak_support={weak_support} conflicts={len(state.get('detected_conflicts') or [])} retry={should_retry} tie_break={next_state['should_tie_break']}",
+        )
+        return next_state
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
@@ -234,6 +283,11 @@ class FinalizeGraphRunner:
             state.get("analyze_attempts", 0),
             False,
         )
+        self._checkpoint(
+            state,
+            "complete",
+            f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
+        )
         return state["report"]
 
     def _run_langgraph(self, state: FinalizeGraphState) -> str:  # pragma: no cover - optional dependency
@@ -257,5 +311,10 @@ class FinalizeGraphRunner:
             result.get("tie_break_attempts", 0),
             result.get("analyze_attempts", 0),
             True,
+        )
+        self._checkpoint(
+            result,
+            "complete",
+            f"Finalize graph completed with {result.get('analyze_attempts', 0)} analyze passes",
         )
         return result["report"]

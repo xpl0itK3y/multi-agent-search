@@ -130,6 +130,40 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
+    def update_research_graph_state(
+        self,
+        research_id: str,
+        graph_state: dict,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            research.graph_state = graph_state or {}
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
+    def append_research_graph_event(
+        self,
+        research_id: str,
+        event: dict,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            current_trail = list(research.graph_trail or [])
+            current_trail.append(event)
+            research.graph_trail = current_trail
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
     def add_research_finalize_job(
         self,
         research_id: str,

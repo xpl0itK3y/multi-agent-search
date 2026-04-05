@@ -71,6 +71,30 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
+    def update_research_graph_state(
+        self,
+        research_id: str,
+        graph_state: dict,
+    ) -> ResearchRecord | None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return None
+        research.graph_state = graph_state or {}
+        research.updated_at = datetime.now(timezone.utc)
+        return research
+
+    def append_research_graph_event(
+        self,
+        research_id: str,
+        event: dict,
+    ) -> ResearchRecord | None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return None
+        research.graph_trail.append(event)
+        research.updated_at = datetime.now(timezone.utc)
+        return research
+
     def add_research_finalize_job(
         self,
         research_id: str,

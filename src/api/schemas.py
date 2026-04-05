@@ -157,6 +157,8 @@ class ResearchRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     final_report: Optional[str] = None
+    graph_state: Dict[str, Any] = Field(default_factory=dict)
+    graph_trail: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ResearchSummary(BaseModel):
@@ -194,6 +196,13 @@ class ResearchReportResponse(BaseModel):
     research_id: str
     status: ResearchStatus
     final_report: Optional[str] = None
+
+
+class ResearchGraphResponse(BaseModel):
+    research_id: str
+    status: ResearchStatus
+    graph_state: Dict[str, Any] = Field(default_factory=dict)
+    graph_trail: List[Dict[str, Any]] = Field(default_factory=list)
 
 class ResearchResponse(BaseModel):
     research_id: str

@@ -2007,6 +2007,26 @@ def test_research_summary_includes_graph_execution_summary():
     assert "linux vs macos official source" in summary.graph_execution_summary.follow_up_queries
 
 
+def test_graph_checkpoint_state_and_trail_persist_in_memory_store():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    service = ResearchService(task_store=task_store)
+
+    service.checkpoint_graph_state(
+        research.id,
+        {"step": "collect_context", "analyze_attempts": 0},
+        {"step": "collect_context", "detail": "Collected 4 sources"},
+    )
+
+    stored = task_store.get_research(research.id)
+    assert stored is not None
+    assert stored.graph_state["step"] == "collect_context"
+    assert stored.graph_trail[0]["detail"] == "Collected 4 sources"
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
