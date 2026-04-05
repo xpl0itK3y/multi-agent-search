@@ -39,7 +39,7 @@ class StubAnalyzer:
     def __init__(self, report: str = "Final structured report"):
         self.report = report
 
-    def run_analysis(self, prompt: str, tasks):
+    def run_analysis(self, prompt: str, tasks, depth=None):
         return self.report
 
 

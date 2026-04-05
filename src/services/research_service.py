@@ -266,7 +266,7 @@ class ResearchService:
 
             tasks = self.task_store.get_tasks_by_research(research_id)
             analyzer = self.require_agent(self.analyzer, "Analyzer")
-            report = analyzer.run_analysis(research.prompt, tasks)
+            report = analyzer.run_analysis(research.prompt, tasks, depth=research.depth)
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.COMPLETED,
