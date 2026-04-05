@@ -160,6 +160,15 @@ TRANSLATIONS = {
         "graph_tie_break_tasks": "Tie-Break Tasks",
         "graph_follow_up_queries": "Follow-up Queries",
         "graph_no_follow_up_queries": "No follow-up graph queries were executed yet.",
+        "graph_state": "Graph State",
+        "graph_last_step": "Last Graph Step",
+        "graph_analyze_passes": "Analyze Passes",
+        "graph_replan_passes": "Replan Passes",
+        "graph_tie_break_passes": "Tie-Break Passes",
+        "graph_trail": "Graph Trail",
+        "graph_no_trail": "No graph trail has been recorded yet.",
+        "graph_trail_step": "Step: {step}",
+        "graph_trail_detail": "Detail: {detail}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -307,6 +316,15 @@ TRANSLATIONS = {
         "graph_tie_break_tasks": "Tie-break задачи",
         "graph_follow_up_queries": "Follow-up запросы",
         "graph_no_follow_up_queries": "Follow-up запросы графа пока не запускались.",
+        "graph_state": "Состояние графа",
+        "graph_last_step": "Последний шаг графа",
+        "graph_analyze_passes": "Analyze проходы",
+        "graph_replan_passes": "Replan проходы",
+        "graph_tie_break_passes": "Tie-break проходы",
+        "graph_trail": "Трасса графа",
+        "graph_no_trail": "Трасса графа пока не записана.",
+        "graph_trail_step": "Шаг: {step}",
+        "graph_trail_detail": "Детали: {detail}",
     },
 }
 
@@ -1027,6 +1045,7 @@ def _render_research_details() -> None:
     research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary")
     if not research:
         return
+    graph_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/graph")
 
     depth_profile = get_depth_profile(SearchDepth(research["depth"]))
 
@@ -1119,6 +1138,27 @@ def _render_research_details() -> None:
         st.code("\n".join(follow_up_queries), language="text")
     else:
         st.caption(_t("graph_no_follow_up_queries"))
+
+    graph_state = (graph_payload or {}).get("graph_state") or {}
+    graph_trail = (graph_payload or {}).get("graph_trail") or []
+    graph_state_cols = st.columns(4)
+    graph_state_cols[0].metric(_t("graph_last_step"), graph_state.get("step") or "-")
+    graph_state_cols[1].metric(_t("graph_analyze_passes"), int(graph_state.get("analyze_attempts") or 0))
+    graph_state_cols[2].metric(_t("graph_replan_passes"), int(graph_state.get("replan_attempts") or 0))
+    graph_state_cols[3].metric(_t("graph_tie_break_passes"), int(graph_state.get("tie_break_attempts") or 0))
+
+    with st.expander(_t("graph_trail"), expanded=False):
+        if not graph_trail:
+            st.caption(_t("graph_no_trail"))
+        else:
+            for entry in reversed(graph_trail[-10:]):
+                step = entry.get("step") or "unknown"
+                detail = entry.get("detail") or ""
+                st.markdown(f"**{_t('graph_trail_step', step=step)}**")
+                if detail:
+                    st.caption(_t("graph_trail_detail", detail=detail))
+                else:
+                    st.caption(_t("graph_trail_detail", detail="-"))
 
     progress_total = len(tasks)
     progress_value = (completed_tasks + failed_tasks) / progress_total if progress_total else 0.0
