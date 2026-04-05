@@ -80,3 +80,39 @@ class ReplanAgent:
                 )
 
         return recommendations[:3]
+
+    def suggest_tie_breakers(
+        self,
+        prompt: str,
+        conflicts: list[dict] | None = None,
+        weak_support: bool = False,
+    ) -> list[ReplanRecommendation]:
+        recommendations: list[ReplanRecommendation] = []
+        conflicts = conflicts or []
+
+        for conflict in conflicts[:2]:
+            topic = conflict.get("topic") or "disputed point"
+            recommendations.append(
+                ReplanRecommendation(
+                    reason=f"resolve conflicting evidence about {topic}",
+                    suggested_queries=[
+                        f"{prompt} {topic} official source",
+                        f"{prompt} {topic} primary source",
+                        f"{prompt} {topic} expert analysis",
+                    ],
+                )
+            )
+
+        if weak_support:
+            recommendations.append(
+                ReplanRecommendation(
+                    reason="strengthen weakly supported claims with narrower evidence",
+                    suggested_queries=[
+                        f"{prompt} source-backed analysis",
+                        f"{prompt} official report",
+                        f"{prompt} documentation evidence",
+                    ],
+                )
+            )
+
+        return recommendations[:3]
