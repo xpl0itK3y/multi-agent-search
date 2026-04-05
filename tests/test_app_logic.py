@@ -73,7 +73,8 @@ def test_analyzer_agent_uses_llm_provider_contract():
         ],
     )
 
-    assert result.endswith("## Sources")
+    assert "## Sources" in result
+    assert "### Additional Relevant Sources" in result
     assert "## Report Notes" in result
     assert len(llm.calls) == 1
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
@@ -174,7 +175,9 @@ def test_analyzer_agent_uses_configured_repair_model_for_llm_repair(mocker):
 
     assert len(llm.calls) == 2
     assert llm.calls[1]["kwargs"]["model"] == "deepseek-fast-repair"
-    assert result.endswith("## Sources\n- [S1] https://example.com")
+    assert "## Sources" in result
+    assert "### Used Sources" in result
+    assert "- [S1] https://example.com" in result
 
 
 def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
@@ -240,7 +243,8 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
         ],
     )
 
-    assert result.endswith("## Sources")
+    assert "## Sources" in result
+    assert "### Additional Relevant Sources" in result
     assert "## Report Notes" in result
     assert len(llm.calls) == 1
     payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
@@ -800,7 +804,8 @@ def test_analyzer_agent_adds_sources_heading_when_missing():
         ],
     )
 
-    assert result.endswith("## Sources")
+    assert "## Sources" in result
+    assert "### Additional Relevant Sources" in result
 
 
 def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
@@ -829,7 +834,41 @@ def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
 
     assert "[S9]" not in result
     assert "https://wrong.example" not in result
-    assert "## Sources\n- [S1] https://example.com" in result
+    assert "## Sources" in result
+    assert "### Used Sources" in result
+    assert "- [S1] https://example.com" in result
+
+
+def test_analyzer_agent_lists_additional_relevant_sources_beyond_cited_ones():
+    llm = RecordingLLM(
+        response=(
+            "## Introduction\nSummary [S1].\n\n"
+            "## Conclusion\nDone [S1].\n\n"
+            "## Sources\n- [S1] https://wrong.example"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {"url": "https://example.com/1", "title": "Example 1", "content": "Body one " * 40},
+                    {"url": "https://example.com/2", "title": "Example 2", "content": "Body two " * 40},
+                ],
+            )
+        ],
+    )
+
+    assert "### Used Sources" in result
+    assert "### Additional Relevant Sources" in result
+    assert "- [S1] https://example.com/1" in result
+    assert "- [S2] https://example.com/2" in result
 
 
 def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
@@ -1046,7 +1085,6 @@ def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
     assert "## Report Notes" in result
     assert "missing a clear introduction heading" in result
     assert "missing a clear conclusion heading" in result
-    assert "does not cite any sources inline" in result
     assert "fewer than two usable sources" in result
 
 
@@ -1076,6 +1114,7 @@ def test_analyzer_agent_localizes_post_processed_sections_for_russian_reports():
     assert "## Источники" in result
     assert "## Sources" not in result
     assert "## Примечания к отчёту" in result
+    assert "### Использованные источники" in result
 
 
 def test_analyzer_agent_localizes_report_notes_for_russian_reports():

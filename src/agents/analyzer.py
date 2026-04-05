@@ -592,6 +592,12 @@ class AnalyzerAgent(BaseAgent):
     def _report_notes_heading(self, language: str) -> str:
         return "## Примечания к отчёту" if language == "ru" else "## Report Notes"
 
+    def _used_sources_heading(self, language: str) -> str:
+        return "### Использованные источники" if language == "ru" else "### Used Sources"
+
+    def _additional_sources_heading(self, language: str) -> str:
+        return "### Дополнительные релевантные источники" if language == "ru" else "### Additional Relevant Sources"
+
     def _quality_note_messages(self, language: str) -> dict[str, str]:
         if language == "ru":
             return {
@@ -671,13 +677,28 @@ class AnalyzerAgent(BaseAgent):
         valid_sources = {item["source_id"]: item for item in aggregated_data}
         sanitized = self._sanitize_citations(without_sources, set(valid_sources))
         used_source_ids = self._extract_used_source_ids(sanitized)
+        additional_source_ids = [
+            item["source_id"]
+            for item in aggregated_data
+            if item["source_id"] not in set(used_source_ids)
+        ]
 
         lines = [self._sources_heading(language)]
-        for source_id in used_source_ids:
-            source = valid_sources.get(source_id)
-            if source is None:
-                continue
-            lines.append(f"- [{source_id}] {source['url']}")
+        if used_source_ids:
+            lines.append(self._used_sources_heading(language))
+            for source_id in used_source_ids:
+                source = valid_sources.get(source_id)
+                if source is None:
+                    continue
+                lines.append(f"- [{source_id}] {source['url']}")
+
+        if additional_source_ids:
+            lines.append(self._additional_sources_heading(language))
+            for source_id in additional_source_ids:
+                source = valid_sources.get(source_id)
+                if source is None:
+                    continue
+                lines.append(f"- [{source_id}] {source['url']}")
 
         return f"{sanitized.strip()}\n\n" + "\n".join(lines)
 
