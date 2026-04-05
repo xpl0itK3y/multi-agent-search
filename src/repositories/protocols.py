@@ -143,6 +143,7 @@ class TaskStore(Protocol):
         status: str,
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
+        graph_metrics: dict | None = None,
     ) -> WorkerHeartbeat: ...
 
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None: ...

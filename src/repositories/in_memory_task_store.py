@@ -4,6 +4,7 @@ import uuid
 from src.api.schemas import (
     ExtractionMetrics,
     FinalizeJobStatus,
+    GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
@@ -366,6 +367,7 @@ class InMemoryTaskStore:
         status: str,
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
+        graph_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         heartbeat = WorkerHeartbeat(
             worker_name=worker_name,
@@ -373,6 +375,7 @@ class InMemoryTaskStore:
             status=status,
             last_error=last_error,
             extraction_metrics=extraction_metrics or {},
+            graph_metrics=graph_metrics or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
         return heartbeat
@@ -382,6 +385,7 @@ class InMemoryTaskStore:
 
     def get_queue_metrics(self) -> QueueMetrics:
         extraction_metrics = ExtractionMetrics()
+        graph_metrics = GraphMetrics()
         for heartbeat in self.worker_heartbeats.values():
             extraction_metrics.attempts += heartbeat.extraction_metrics.attempts
             extraction_metrics.success_count += heartbeat.extraction_metrics.success_count
@@ -393,6 +397,11 @@ class InMemoryTaskStore:
             extraction_metrics.total_extract_ms += heartbeat.extraction_metrics.total_extract_ms
             extraction_metrics.total_post_process_ms += heartbeat.extraction_metrics.total_post_process_ms
             extraction_metrics.total_total_ms += heartbeat.extraction_metrics.total_total_ms
+            graph_metrics.resume_count += heartbeat.graph_metrics.resume_count
+            graph_metrics.replan_pass_count += heartbeat.graph_metrics.replan_pass_count
+            graph_metrics.tie_break_pass_count += heartbeat.graph_metrics.tie_break_pass_count
+            graph_metrics.analyze_pass_count += heartbeat.graph_metrics.analyze_pass_count
+            graph_metrics.completed_run_count += heartbeat.graph_metrics.completed_run_count
         return QueueMetrics(
             pending_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.PENDING),
             running_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.RUNNING),
@@ -401,6 +410,7 @@ class InMemoryTaskStore:
             running_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.RUNNING),
             dead_letter_finalize_jobs=sum(1 for job in self.finalize_jobs.values() if job.status == FinalizeJobStatus.DEAD_LETTER),
             extraction_metrics=extraction_metrics,
+            graph_metrics=graph_metrics,
         )
 
     def get_task(self, task_id: str) -> SearchTask | None:

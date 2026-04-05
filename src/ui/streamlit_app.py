@@ -171,6 +171,10 @@ TRANSLATIONS = {
         "graph_trail_detail": "Detail: {detail}",
         "graph_resumed_recovery": "Resumed After Recovery",
         "graph_recovery_detail": "Recovery Detail",
+        "graph_resume_count": "Graph resumes: {count}",
+        "graph_replan_count": "Graph replans: {count}",
+        "graph_tie_break_count": "Graph tie-breaks: {count}",
+        "graph_analyze_count": "Graph analyze passes: {count}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -329,6 +333,10 @@ TRANSLATIONS = {
         "graph_trail_detail": "Детали: {detail}",
         "graph_resumed_recovery": "Resume после recovery",
         "graph_recovery_detail": "Детали recovery",
+        "graph_resume_count": "Resume графа: {count}",
+        "graph_replan_count": "Replan графа: {count}",
+        "graph_tie_break_count": "Tie-break графа: {count}",
+        "graph_analyze_count": "Analyze проходы графа: {count}",
     },
 }
 
@@ -726,11 +734,16 @@ def _render_sidebar() -> None:
     st.sidebar.markdown(_status_badge(heartbeat["status"]), unsafe_allow_html=True)
     st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
     extraction_metrics = heartbeat.get("extraction_metrics") or {}
+    graph_metrics = heartbeat.get("graph_metrics") or {}
     st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
     st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
     st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
     st.sidebar.caption(_t("extraction_success_rate", value=extraction_metrics.get("success_rate_percent", 0.0)))
     st.sidebar.caption(_t("extraction_avg_total_ms", value=extraction_metrics.get("avg_total_ms", 0.0)))
+    st.sidebar.caption(_t("graph_resume_count", count=graph_metrics.get("resume_count", 0)))
+    st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
+    st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
+    st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
     heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
     heartbeat_status = (heartbeat.get("status") or "").strip().lower()
@@ -900,6 +913,12 @@ def _render_queue_overview() -> None:
     derived_row = st.columns(2)
     derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
     derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
+    graph = metrics.get("graph_metrics") or {}
+    graph_row = st.columns(4)
+    graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
+    graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
+    graph_row[2].metric(_t("graph_tie_break_count"), graph.get("tie_break_pass_count", 0))
+    graph_row[3].metric(_t("graph_analyze_count"), graph.get("analyze_pass_count", 0))
 
     st.markdown(f"**{_t('queue_actions')}**")
     action_rows = [st.columns(2), st.columns(2), st.columns(1)]

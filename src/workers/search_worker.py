@@ -1,6 +1,7 @@
 import logging
 
 from src.observability import bind_observability_context
+from src.graph.metrics import get_graph_metrics_snapshot
 from src.providers.search import get_extraction_metrics_snapshot
 from src.services import ResearchService
 
@@ -29,6 +30,7 @@ class SearchWorker:
                     processed,
                     "busy",
                     extraction_metrics=get_extraction_metrics_snapshot(),
+                    graph_metrics=get_graph_metrics_snapshot(),
                 )
                 logger.info("search_job_claimed depth=%s", job.depth.value)
                 self.research_service.process_search_task_job(job.id)
@@ -38,6 +40,7 @@ class SearchWorker:
                     processed,
                     "busy",
                     extraction_metrics=get_extraction_metrics_snapshot(),
+                    graph_metrics=get_graph_metrics_snapshot(),
                 )
 
         return processed

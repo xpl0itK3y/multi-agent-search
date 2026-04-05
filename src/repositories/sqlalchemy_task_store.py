@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 from src.api.schemas import (
     ExtractionMetrics,
     FinalizeJobStatus,
+    GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
@@ -536,6 +537,7 @@ class SQLAlchemyTaskStore:
         status: str,
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
+        graph_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         with self.session_scope() as session:
             heartbeat = session.get(WorkerHeartbeatORM, worker_name)
@@ -547,6 +549,7 @@ class SQLAlchemyTaskStore:
             heartbeat.status = status
             heartbeat.last_error = last_error
             heartbeat.extraction_metrics = extraction_metrics or {}
+            heartbeat.graph_metrics = graph_metrics or {}
             heartbeat.last_seen_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(heartbeat)
@@ -566,6 +569,7 @@ class SQLAlchemyTaskStore:
                 return session.execute(statement).scalar_one()
 
             extraction_metrics = ExtractionMetrics()
+            graph_metrics = GraphMetrics()
             heartbeats = session.execute(select(WorkerHeartbeatORM)).scalars().all()
             for heartbeat in heartbeats:
                 metrics = ExtractionMetrics.model_validate(heartbeat.extraction_metrics or {})
@@ -579,6 +583,12 @@ class SQLAlchemyTaskStore:
                 extraction_metrics.total_extract_ms += metrics.total_extract_ms
                 extraction_metrics.total_post_process_ms += metrics.total_post_process_ms
                 extraction_metrics.total_total_ms += metrics.total_total_ms
+                runtime_metrics = GraphMetrics.model_validate(heartbeat.graph_metrics or {})
+                graph_metrics.resume_count += runtime_metrics.resume_count
+                graph_metrics.replan_pass_count += runtime_metrics.replan_pass_count
+                graph_metrics.tie_break_pass_count += runtime_metrics.tie_break_pass_count
+                graph_metrics.analyze_pass_count += runtime_metrics.analyze_pass_count
+                graph_metrics.completed_run_count += runtime_metrics.completed_run_count
 
             return QueueMetrics(
                 pending_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.PENDING.value),
@@ -588,6 +598,7 @@ class SQLAlchemyTaskStore:
                 running_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.RUNNING.value),
                 dead_letter_finalize_jobs=count_for(ResearchFinalizeJobORM, FinalizeJobStatus.DEAD_LETTER.value),
                 extraction_metrics=extraction_metrics,
+                graph_metrics=graph_metrics,
             )
 
     def get_task(self, task_id: str) -> SearchTask | None:

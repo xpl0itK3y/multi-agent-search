@@ -40,6 +40,7 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.graph import FinalizeGraphRunner
+from src.graph.metrics import get_graph_metrics_snapshot
 from src.observability import bind_observability_context
 from src.providers.search import get_extraction_metrics_snapshot
 from src.repositories.protocols import TaskStore
@@ -652,6 +653,7 @@ class ResearchService:
         status: str,
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
+        graph_metrics: dict | None = None,
     ) -> WorkerHeartbeat:
         return self.task_store.upsert_worker_heartbeat(
             worker_name,
@@ -659,6 +661,7 @@ class ResearchService:
             status,
             last_error,
             extraction_metrics if extraction_metrics is not None else get_extraction_metrics_snapshot(),
+            graph_metrics if graph_metrics is not None else get_graph_metrics_snapshot(),
         )
 
     def get_queue_metrics(self) -> QueueMetrics:
@@ -668,6 +671,7 @@ class ResearchService:
         return {
             "status": "ok",
             "extraction_metrics": get_extraction_metrics_snapshot(),
+            "graph_metrics": get_graph_metrics_snapshot(),
         }
 
     def finalize_research(self, research_id: str) -> ResearchRecord:

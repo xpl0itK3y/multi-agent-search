@@ -5,6 +5,13 @@ import logging
 from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ReplanRecommendation, SearchTask
 from src.config import settings
+from src.graph.metrics import (
+    record_graph_analyze,
+    record_graph_completed_run,
+    record_graph_replan,
+    record_graph_resume,
+    record_graph_tie_break,
+)
 from src.graph.state import FinalizeGraphState
 
 logger = logging.getLogger(__name__)
@@ -64,6 +71,7 @@ class FinalizeGraphRunner:
             "resume_from_step": step,
         }
         logger.info("langgraph_finalize_resume step=%s", step)
+        record_graph_resume()
         return resumed_state
 
     def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
@@ -177,6 +185,7 @@ class FinalizeGraphRunner:
             "replan",
             f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
         )
+        record_graph_replan()
         return next_state
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
@@ -195,6 +204,7 @@ class FinalizeGraphRunner:
             "analyze",
             f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
         )
+        record_graph_analyze()
         return next_state
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
@@ -228,6 +238,7 @@ class FinalizeGraphRunner:
             "tie_break",
             f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
         )
+        record_graph_tie_break()
         return next_state
 
     def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
@@ -324,6 +335,7 @@ class FinalizeGraphRunner:
             "complete",
             f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
         )
+        record_graph_completed_run()
         return state["report"]
 
     def _resume_fallback(self, state: FinalizeGraphState, resume_from_step: str) -> str:
@@ -401,4 +413,5 @@ class FinalizeGraphRunner:
             "complete",
             f"Finalize graph completed with {result.get('analyze_attempts', 0)} analyze passes",
         )
+        record_graph_completed_run()
         return result["report"]

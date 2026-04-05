@@ -1869,6 +1869,30 @@ def test_get_queue_metrics_aggregates_extraction_metrics_from_worker_heartbeats(
     assert metrics.extraction_metrics.success_rate_percent == 71.4
 
 
+def test_get_queue_metrics_aggregates_graph_metrics_from_worker_heartbeats():
+    task_store = InMemoryTaskStore()
+    task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_metrics={"resume_count": 1, "replan_pass_count": 2, "analyze_pass_count": 3},
+    )
+    task_store.upsert_worker_heartbeat(
+        "job-worker-2",
+        processed_jobs=2,
+        status="busy",
+        graph_metrics={"resume_count": 2, "tie_break_pass_count": 1, "completed_run_count": 1},
+    )
+
+    metrics = ResearchService(task_store=task_store).get_queue_metrics()
+
+    assert metrics.graph_metrics.resume_count == 3
+    assert metrics.graph_metrics.replan_pass_count == 2
+    assert metrics.graph_metrics.tie_break_pass_count == 1
+    assert metrics.graph_metrics.analyze_pass_count == 3
+    assert metrics.graph_metrics.completed_run_count == 1
+
+
 def test_extraction_metrics_derives_rates_and_averages():
     metrics = ExtractionMetrics(
         attempts=4,
