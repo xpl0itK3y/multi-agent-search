@@ -7,7 +7,13 @@ from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ExtractionMetrics, GraphMetrics
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus, TaskUpdate
 from src.core.llm import LLMProvider
-from src.graph.metrics import record_graph_step, record_graph_step_failure, reset_graph_metrics
+from src.graph.metrics import (
+    get_graph_metrics_snapshot,
+    get_graph_step_events_snapshot,
+    record_graph_step,
+    record_graph_step_failure,
+    reset_graph_metrics,
+)
 from src.observability.context import bind_observability_context
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -1958,6 +1964,7 @@ def test_queue_metrics_include_graph_alerts():
 
 def test_queue_metrics_include_graph_alert_trend():
     reset_graph_metrics()
+    task_store = InMemoryTaskStore()
     with bind_observability_context(worker_name="job-worker"):
         record_graph_step("analyze", 1000.0, research_id="research-a")
         record_graph_step("analyze", 1200.0, research_id="research-a")
@@ -1965,10 +1972,25 @@ def test_queue_metrics_include_graph_alert_trend():
         record_graph_step("analyze", 2500.0, research_id="research-a")
         record_graph_step("analyze", 3000.0, research_id="research-a")
         record_graph_step_failure("tie_break", 400.0, research_id="research-b")
+        task_store.upsert_worker_heartbeat(
+            "job-worker",
+            processed_jobs=1,
+            status="busy",
+            graph_metrics=get_graph_metrics_snapshot(),
+            graph_step_events=get_graph_step_events_snapshot(),
+        )
+    reset_graph_metrics()
     with bind_observability_context(worker_name="job-worker-2"):
         record_graph_step("collect_context", 1700.0, research_id="research-c")
+        task_store.upsert_worker_heartbeat(
+            "job-worker-2",
+            processed_jobs=1,
+            status="busy",
+            graph_metrics=get_graph_metrics_snapshot(),
+            graph_step_events=get_graph_step_events_snapshot(),
+        )
 
-    metrics = ResearchService(task_store=InMemoryTaskStore()).get_queue_metrics()
+    metrics = ResearchService(task_store=task_store).get_queue_metrics()
 
     assert "analyze" in metrics.graph_alert_trend.worsening_steps
     assert metrics.graph_alert_trend.repeated_alerts["high_avg_ms"] >= 4

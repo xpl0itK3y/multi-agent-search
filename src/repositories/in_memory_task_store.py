@@ -25,6 +25,7 @@ class InMemoryTaskStore:
         self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
         self.search_jobs: dict[str, SearchTaskJob] = {}
         self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
+        self.worker_graph_step_events: dict[str, list[dict]] = {}
 
     def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
         research_id = str(uuid.uuid4())
@@ -368,6 +369,7 @@ class InMemoryTaskStore:
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
+        graph_step_events: list[dict] | None = None,
     ) -> WorkerHeartbeat:
         heartbeat = WorkerHeartbeat(
             worker_name=worker_name,
@@ -378,10 +380,22 @@ class InMemoryTaskStore:
             graph_metrics=graph_metrics or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
+        self.worker_graph_step_events[worker_name] = list(graph_step_events or [])
         return heartbeat
 
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None:
         return self.worker_heartbeats.get(worker_name)
+
+    def get_graph_step_events(self, worker_name: str | None = None) -> list[dict]:
+        events: list[dict] = []
+        heartbeats = (
+            [self.worker_heartbeats[worker_name]]
+            if worker_name and worker_name in self.worker_heartbeats
+            else self.worker_heartbeats.values()
+        )
+        for heartbeat in heartbeats:
+            events.extend(self.worker_graph_step_events.get(heartbeat.worker_name, []))
+        return events
 
     def get_queue_metrics(self) -> QueueMetrics:
         extraction_metrics = ExtractionMetrics()

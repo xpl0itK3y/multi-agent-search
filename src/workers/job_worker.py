@@ -1,6 +1,6 @@
 from src.services import ResearchService
 from src.observability import bind_observability_context
-from src.graph.metrics import get_graph_metrics_snapshot
+from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.providers.search import get_extraction_metrics_snapshot
 from src.workers.finalize_worker import FinalizeWorker
 from src.workers.maintenance_worker import MaintenanceWorker
@@ -32,6 +32,7 @@ class JobWorker:
                     last_error,
                     get_extraction_metrics_snapshot(),
                     get_graph_metrics_snapshot(),
+                    get_graph_step_events_snapshot(),
                 )
                 raise
 
@@ -42,5 +43,6 @@ class JobWorker:
                 last_error,
                 get_extraction_metrics_snapshot(),
                 get_graph_metrics_snapshot(),
+                get_graph_step_events_snapshot(),
             )
             return processed
