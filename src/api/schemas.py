@@ -116,6 +116,7 @@ class EvidenceCoverageSummary(BaseModel):
 class ClaimVerificationSummary(BaseModel):
     uncited_lines: int = 0
     unsupported_lines: int = 0
+    insufficient_evidence_lines: int = 0
     downgraded_lines: int = 0
     verification_notes: List[str] = Field(default_factory=list)
 
@@ -366,6 +367,14 @@ class MaintenanceSummary(BaseModel):
         recent_total_counts: List[int] = Field(default_factory=list)
         recent_compacted_counts: List[int] = Field(default_factory=list)
 
+    class RecommendationAnalytics(BaseModel):
+        average_time_to_ack_hours: float = 0.0
+        average_time_to_resolve_hours: float = 0.0
+        oldest_unresolved_hours: float = 0.0
+        unresolved_count: int = 0
+        repeated_reappeared_count: int = 0
+        top_recurring_codes: List[str] = Field(default_factory=list)
+
     class RecommendationEvent(BaseModel):
         code: str
         event_type: str
@@ -383,6 +392,7 @@ class MaintenanceSummary(BaseModel):
     recent_runs: List["MaintenanceSummary.MaintenanceRunEntry"] = Field(default_factory=list)
     trend: "MaintenanceSummary.MaintenanceTrend" = Field(default_factory=MaintenanceTrend)
     alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
+    recommendation_analytics: "MaintenanceSummary.RecommendationAnalytics" = Field(default_factory=RecommendationAnalytics)
     recent_operational_health: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
     recent_operational_recommendations: List["OperationalHealth.RecommendationEntry"] = Field(default_factory=list)
     recent_operational_recommendation_events: List["MaintenanceSummary.RecommendationEvent"] = Field(default_factory=list)

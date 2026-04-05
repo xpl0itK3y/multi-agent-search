@@ -9,6 +9,28 @@ class ReplanAgent:
         SearchDepth.MEDIUM: 8,
         SearchDepth.HARD: 14,
     }
+    TOPIC_HINTS = {
+        "movie": ["studio press release", "box office report", "festival review"],
+        "film": ["studio press release", "box office report", "festival review"],
+        "linux": ["official documentation", "vendor documentation", "benchmark report"],
+        "macos": ["official documentation", "vendor documentation", "benchmark report"],
+        "ai": ["research paper", "official model card", "benchmark report"],
+        "llm": ["research paper", "official model card", "benchmark report"],
+        "phone": ["manufacturer specification", "benchmark report", "independent review"],
+        "smartphone": ["manufacturer specification", "benchmark report", "independent review"],
+    }
+
+    def _topic_policy_hints(self, prompt: str) -> list[str]:
+        lowered = prompt.lower()
+        hints: list[str] = []
+        for keyword, values in self.TOPIC_HINTS.items():
+            if keyword in lowered:
+                hints.extend(values)
+        deduped: list[str] = []
+        for hint in hints:
+            if hint not in deduped:
+                deduped.append(hint)
+        return deduped[:3]
 
     def suggest_follow_up(
         self,
@@ -28,6 +50,7 @@ class ReplanAgent:
                     domain_counter[domain] += 1
 
         minimum_sources = self.MIN_SELECTED_SOURCES_BY_DEPTH[depth]
+        topic_hints = self._topic_policy_hints(prompt)
         if selected_sources < minimum_sources:
             recommendations.append(
                 ReplanRecommendation(
@@ -36,6 +59,7 @@ class ReplanAgent:
                         f"{prompt} official sources",
                         f"{prompt} primary data",
                         f"{prompt} expert analysis",
+                        *[f"{prompt} {hint}" for hint in topic_hints],
                     ],
                 )
             )
@@ -48,6 +72,7 @@ class ReplanAgent:
                         f"{prompt} site:gov",
                         f"{prompt} site:edu",
                         f"{prompt} documentation OR report",
+                        *[f"{prompt} {hint}" for hint in topic_hints],
                     ],
                 )
             )
@@ -60,6 +85,7 @@ class ReplanAgent:
                         f"{prompt} official announcement",
                         f"{prompt} original report",
                         f"{prompt} primary source",
+                        *[f"{prompt} {hint}" for hint in topic_hints],
                     ],
                 )
             )
@@ -71,13 +97,14 @@ class ReplanAgent:
                 recommendations.append(
                     ReplanRecommendation(
                         reason="evidence is concentrated in a narrow domain set",
-                        suggested_queries=[
-                            f"{prompt} alternative sources",
-                            f"{prompt} independent review",
-                            f"{prompt} comparison analysis",
-                        ],
-                    )
+                    suggested_queries=[
+                        f"{prompt} alternative sources",
+                        f"{prompt} independent review",
+                        f"{prompt} comparison analysis",
+                        *[f"{prompt} {hint}" for hint in topic_hints],
+                    ],
                 )
+            )
 
         return recommendations[:3]
 
@@ -89,6 +116,7 @@ class ReplanAgent:
     ) -> list[ReplanRecommendation]:
         recommendations: list[ReplanRecommendation] = []
         conflicts = conflicts or []
+        topic_hints = self._topic_policy_hints(prompt)
 
         for conflict in conflicts[:2]:
             topic = conflict.get("topic") or "disputed point"
@@ -99,6 +127,7 @@ class ReplanAgent:
                         f"{prompt} {topic} official source",
                         f"{prompt} {topic} primary source",
                         f"{prompt} {topic} expert analysis",
+                        *[f"{prompt} {topic} {hint}" for hint in topic_hints],
                     ],
                 )
             )
@@ -111,6 +140,7 @@ class ReplanAgent:
                         f"{prompt} source-backed analysis",
                         f"{prompt} official report",
                         f"{prompt} documentation evidence",
+                        *[f"{prompt} {hint}" for hint in topic_hints],
                     ],
                 )
             )

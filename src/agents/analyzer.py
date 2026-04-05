@@ -857,6 +857,43 @@ class AnalyzerAgent(BaseAgent):
                 unsupported_lines.append(normalized_line)
         return unsupported_lines
 
+    def _insufficient_evidence_lines(self, report: str, aggregated_data: list[dict]) -> list[str]:
+        insufficient_lines: list[str] = []
+        valid_source_ids = {item["source_id"] for item in aggregated_data}
+        for line in self._body_without_sources(report).splitlines():
+            normalized_line = self._normalize_text(line)
+            if not self._line_requires_citation(normalized_line):
+                continue
+            cited_source_ids = [
+                source_id
+                for source_id in self._extract_used_source_ids(normalized_line)
+                if source_id in valid_source_ids
+            ]
+            if not cited_source_ids:
+                continue
+            if len(set(cited_source_ids)) >= 2:
+                continue
+            lowered = normalized_line.lower()
+            if any(
+                marker in lowered
+                for marker in (
+                    "best ",
+                    "worst ",
+                    "clearly",
+                    "definitively",
+                    "always",
+                    "never",
+                    "лучш",
+                    "худш",
+                    "всегда",
+                    "никогда",
+                    "однозначно",
+                    "явно",
+                )
+            ):
+                insufficient_lines.append(normalized_line)
+        return insufficient_lines
+
     def _looks_like_structured_report(self, report: str) -> bool:
         return "## " in report or len(report) >= 400 or report.count("\n") >= 4
 
@@ -1176,11 +1213,13 @@ class AnalyzerAgent(BaseAgent):
         notes = self._report_quality_notes(rebuilt, aggregated_data, prompt_language)
         remaining_uncited_lines = self._uncited_claim_lines(rebuilt)
         remaining_unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
+        insufficient_evidence_lines = self._insufficient_evidence_lines(rebuilt, aggregated_data)
         verified_report, verification_summary = self.claim_verifier.verify_and_downgrade(
             rebuilt,
             prompt_language,
             remaining_uncited_lines,
             remaining_unsupported_lines,
+            insufficient_evidence_lines,
         )
         final_notes = list(notes)
         final_notes.extend(

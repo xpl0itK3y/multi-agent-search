@@ -70,6 +70,12 @@ class ResearchService:
     MAINTENANCE_COMPACTED_CRITICAL_AVG = 8.0
     MAINTENANCE_STALE_WARNING_SECONDS = 1800
     MAINTENANCE_STALE_CRITICAL_SECONDS = 7200
+    RUNBOOK_UNRESOLVED_WARNING_COUNT = 3
+    RUNBOOK_UNRESOLVED_CRITICAL_COUNT = 6
+    RUNBOOK_RESOLUTION_WARNING_HOURS = 6.0
+    RUNBOOK_RESOLUTION_CRITICAL_HOURS = 24.0
+    RUNBOOK_REAPPEARED_WARNING_COUNT = 2
+    RUNBOOK_REAPPEARED_CRITICAL_COUNT = 4
     OPERATIONAL_WORSENING_WARNING_DELTA = 8.0
     OPERATIONAL_WORSENING_CRITICAL_DELTA = 18.0
     OPERATIONAL_CRITICAL_STATE_WARNING_COUNT = 2
@@ -1012,6 +1018,8 @@ class ResearchService:
 
     def _build_maintenance_summary(self, summary: MaintenanceSummary) -> MaintenanceSummary:
         recent_runs = list(summary.recent_runs or [])
+        recommendation_events = list(summary.recent_operational_recommendation_events or [])
+        recommendations = list(summary.recent_operational_recommendations or [])
         total_counts = [int(item.total_count or 0) for item in recent_runs[-8:]]
         compacted_counts = [int(item.compacted_count or 0) for item in recent_runs[-8:]]
         average_compacted = round(sum(compacted_counts) / len(compacted_counts), 2) if compacted_counts else 0.0
@@ -1099,7 +1107,117 @@ class ResearchService:
                     )
                 )
 
-        return summary.model_copy(update={"trend": trend, "alerts": alerts})
+        recommendation_events_by_code: dict[str, list[MaintenanceSummary.RecommendationEvent]] = {}
+        for event in recommendation_events:
+            recommendation_events_by_code.setdefault(event.code, []).append(event)
+
+        ack_durations_hours: list[float] = []
+        resolve_durations_hours: list[float] = []
+        reappeared_count = 0
+        top_recurring_codes = sorted(
+            (
+                (item.code, max(int(item.shown_count or 1) - 1, 0))
+                for item in recommendations
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+
+        for code, events in recommendation_events_by_code.items():
+            shown_timestamp: datetime | None = None
+            for event in events:
+                if event.event_type in {"shown", "reappeared"}:
+                    if event.event_type == "reappeared":
+                        reappeared_count += 1
+                    shown_timestamp = event.timestamp
+                elif event.event_type == "acknowledged" and shown_timestamp and event.timestamp:
+                    ack_durations_hours.append(max((event.timestamp - shown_timestamp).total_seconds(), 0.0) / 3600.0)
+                elif event.event_type == "resolved" and shown_timestamp and event.timestamp:
+                    resolve_durations_hours.append(max((event.timestamp - shown_timestamp).total_seconds(), 0.0) / 3600.0)
+                    shown_timestamp = None
+
+        unresolved_items = [item for item in recommendations if not item.resolved]
+        now_utc = datetime.now(timezone.utc)
+        unresolved_ages_hours = [
+            max((now_utc - (item.first_shown_at or item.last_shown_at)).total_seconds(), 0.0) / 3600.0
+            for item in unresolved_items
+            if item.first_shown_at or item.last_shown_at
+        ]
+        average_time_to_ack_hours = round(sum(ack_durations_hours) / len(ack_durations_hours), 2) if ack_durations_hours else 0.0
+        average_time_to_resolve_hours = round(sum(resolve_durations_hours) / len(resolve_durations_hours), 2) if resolve_durations_hours else 0.0
+        oldest_unresolved_hours = round(max(unresolved_ages_hours), 2) if unresolved_ages_hours else 0.0
+        recommendation_analytics = MaintenanceSummary.RecommendationAnalytics(
+            average_time_to_ack_hours=average_time_to_ack_hours,
+            average_time_to_resolve_hours=average_time_to_resolve_hours,
+            oldest_unresolved_hours=oldest_unresolved_hours,
+            unresolved_count=len(unresolved_items),
+            repeated_reappeared_count=reappeared_count,
+            top_recurring_codes=[code for code, count in top_recurring_codes[:3] if count > 0],
+        )
+
+        if recommendation_analytics.unresolved_count >= self.RUNBOOK_UNRESOLVED_CRITICAL_COUNT:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_unresolved_pressure",
+                    severity="critical",
+                    current_value=float(recommendation_analytics.unresolved_count),
+                    threshold=float(self.RUNBOOK_UNRESOLVED_CRITICAL_COUNT),
+                    hint="Too many unresolved runbook items remain active; clear the operator queue before retries and backlog compound.",
+                )
+            )
+        elif recommendation_analytics.unresolved_count >= self.RUNBOOK_UNRESOLVED_WARNING_COUNT:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_unresolved_pressure",
+                    severity="warning",
+                    current_value=float(recommendation_analytics.unresolved_count),
+                    threshold=float(self.RUNBOOK_UNRESOLVED_WARNING_COUNT),
+                    hint="Runbook unresolved items are accumulating; review whether recommendations are being acknowledged but not completed.",
+                )
+            )
+
+        if recommendation_analytics.average_time_to_resolve_hours >= self.RUNBOOK_RESOLUTION_CRITICAL_HOURS:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_slow_resolution",
+                    severity="critical",
+                    current_value=recommendation_analytics.average_time_to_resolve_hours,
+                    threshold=self.RUNBOOK_RESOLUTION_CRITICAL_HOURS,
+                    hint="Recommendations are taking too long to close; prioritize recurring issues and reduce reappearing operational debt.",
+                )
+            )
+        elif recommendation_analytics.average_time_to_resolve_hours >= self.RUNBOOK_RESOLUTION_WARNING_HOURS:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_slow_resolution",
+                    severity="warning",
+                    current_value=recommendation_analytics.average_time_to_resolve_hours,
+                    threshold=self.RUNBOOK_RESOLUTION_WARNING_HOURS,
+                    hint="Resolution time is drifting upward; confirm operators are not just acknowledging items without completing the fix.",
+                )
+            )
+
+        if recommendation_analytics.repeated_reappeared_count >= self.RUNBOOK_REAPPEARED_CRITICAL_COUNT:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_reappeared_items",
+                    severity="critical",
+                    current_value=float(recommendation_analytics.repeated_reappeared_count),
+                    threshold=float(self.RUNBOOK_REAPPEARED_CRITICAL_COUNT),
+                    hint="Runbook items are repeatedly reappearing; fixes are likely not addressing the root cause.",
+                )
+            )
+        elif recommendation_analytics.repeated_reappeared_count >= self.RUNBOOK_REAPPEARED_WARNING_COUNT:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="runbook_reappeared_items",
+                    severity="warning",
+                    current_value=float(recommendation_analytics.repeated_reappeared_count),
+                    threshold=float(self.RUNBOOK_REAPPEARED_WARNING_COUNT),
+                    hint="Some recommendations keep returning; audit the last fixes and operator notes for incomplete remediation.",
+                )
+            )
+
+        return summary.model_copy(update={"trend": trend, "alerts": alerts, "recommendation_analytics": recommendation_analytics})
 
     def _build_operational_health(
         self,
