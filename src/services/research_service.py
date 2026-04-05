@@ -1161,13 +1161,78 @@ class ResearchService:
                     )
                 )
 
+        recommendations = self._build_operational_recommendations(
+            metrics=metrics,
+            graph_alerts=graph_alerts,
+            maintenance_summary=maintenance_summary,
+            operational_alerts=alerts,
+            reasons=deduped_reasons[:8],
+        )
         return current_health.model_copy(
             update={
                 "alerts": alerts,
+                "recommendations": recommendations,
                 "history": history,
                 "trend": trend,
             }
         )
+
+    def _build_operational_recommendations(
+        self,
+        metrics: QueueMetrics,
+        graph_alerts: list[GraphAlert],
+        maintenance_summary: MaintenanceSummary,
+        operational_alerts: list[OperationalHealth.OperationalHealthAlert],
+        reasons: list[str],
+    ) -> list[str]:
+        recommendations: list[str] = []
+        alert_codes = {alert.code for alert in operational_alerts}
+        reason_set = set(reasons)
+
+        if "repeated_critical_states" in alert_codes:
+            recommendations.append(
+                "Repeated critical states detected: consider increasing worker parallelism and checking whether one worker is saturating the queue."
+            )
+        if "score_worsening" in alert_codes:
+            recommendations.append(
+                "Operational score is worsening: inspect queue backlog, extraction latency, and graph retries before the next maintenance cycle."
+            )
+        if "score_recovered" in alert_codes:
+            recommendations.append(
+                "Score recovered after degradation: verify the underlying issue is resolved and not just temporarily masked."
+            )
+
+        maintenance_alert_codes = {alert.code for alert in maintenance_summary.alerts}
+        if "maintenance_stale" in maintenance_alert_codes:
+            recommendations.append(
+                "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed."
+            )
+        if "high_compacted_average" in maintenance_alert_codes:
+            recommendations.append(
+                "High graph compaction volume: review graph event/trail retention and whether operational data is growing too quickly."
+            )
+
+        graph_alert_codes = {alert.code for alert in graph_alerts}
+        if "analyze_retries" in graph_alert_codes:
+            recommendations.append(
+                "Frequent analyze retries: tighten source selection or claim verification to reduce repeated finalize passes."
+            )
+        if "step_failures" in graph_alert_codes:
+            recommendations.append(
+                "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs."
+            )
+
+        if "queue:high_backlog" in reason_set or "queue:elevated_backlog" in reason_set:
+            recommendations.append(
+                "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs."
+            )
+
+        if metrics.extraction_metrics.avg_total_ms >= 3000:
+            recommendations.append(
+                "Extraction latency is elevated: review slow domains, timeout settings, and extraction concurrency."
+            )
+
+        return list(dict.fromkeys(recommendations))[:6]
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()

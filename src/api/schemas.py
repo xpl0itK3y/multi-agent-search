@@ -403,6 +403,7 @@ class OperationalHealth(BaseModel):
     score: int = 100
     reasons: List[str] = Field(default_factory=list)
     alerts: List["OperationalHealth.OperationalHealthAlert"] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
     history: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
     trend: "OperationalHealth.OperationalHealthTrend" = Field(default_factory=OperationalHealthTrend)
 
