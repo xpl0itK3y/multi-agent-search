@@ -21,6 +21,12 @@ class FinalizeGraphRunner:
         self.service = service
 
     def run(self, research_id: str, prompt: str, tasks: list[SearchTask], depth) -> str:
+        state = self._build_initial_state(research_id, prompt, tasks, depth)
+        if StateGraph is not None and not state.get("resume_from_step"):
+            return self._run_langgraph(state)
+        return self._run_fallback(state)
+
+    def _build_initial_state(self, research_id: str, prompt: str, tasks: list[SearchTask], depth) -> FinalizeGraphState:
         state: FinalizeGraphState = {
             "research_id": research_id,
             "prompt": prompt,
@@ -34,9 +40,31 @@ class FinalizeGraphRunner:
             "should_tie_break": False,
             "should_retry_analysis": False,
         }
-        if StateGraph is not None:
-            return self._run_langgraph(state)
-        return self._run_fallback(state)
+        research = self.service.task_store.get_research(research_id)
+        graph_state = (research.graph_state if research else None) or {}
+        step = graph_state.get("step")
+        if not step or step == "complete":
+            return state
+
+        resumed_state = {
+            **state,
+            "effective_prompt": graph_state.get("effective_prompt") or prompt,
+            "analyze_attempts": int(graph_state.get("analyze_attempts") or 0),
+            "replan_attempts": int(graph_state.get("replan_attempts") or 0),
+            "tie_break_attempts": int(graph_state.get("tie_break_attempts") or 0),
+            "should_replan": bool(graph_state.get("should_replan")),
+            "should_tie_break": bool(graph_state.get("should_tie_break")),
+            "should_retry_analysis": bool(graph_state.get("should_retry_analysis")),
+            "replan_recommendations": graph_state.get("replan_recommendations") or [],
+            "tie_break_recommendations": graph_state.get("tie_break_recommendations") or [],
+            "detected_conflicts": graph_state.get("detected_conflicts") or [],
+            "source_summary": graph_state.get("source_summary") or {},
+            "evidence_summary": graph_state.get("evidence_summary") or {},
+            "report": graph_state.get("report") or "",
+            "resume_from_step": step,
+        }
+        logger.info("langgraph_finalize_resume step=%s", step)
+        return resumed_state
 
     def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
         snapshot = {
@@ -53,6 +81,10 @@ class FinalizeGraphRunner:
             "should_retry_analysis": state.get("should_retry_analysis", False),
             "replan_recommendations": state.get("replan_recommendations", []),
             "tie_break_recommendations": state.get("tie_break_recommendations", []),
+            "detected_conflicts": state.get("detected_conflicts", []),
+            "source_summary": state.get("source_summary", {}),
+            "evidence_summary": state.get("evidence_summary", {}),
+            "report": state.get("report", ""),
         }
         event = {"step": step, "detail": detail}
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
@@ -264,6 +296,10 @@ class FinalizeGraphRunner:
         return "analyze" if state.get("should_retry_analysis") else END
 
     def _run_fallback(self, state: FinalizeGraphState) -> str:
+        resume_from_step = state.get("resume_from_step")
+        if resume_from_step:
+            return self._resume_fallback(state, resume_from_step)
+
         state = self._collect_context(state)
         if state.get("should_replan"):
             state = self._apply_replan(state)
@@ -282,6 +318,54 @@ class FinalizeGraphRunner:
             state.get("tie_break_attempts", 0),
             state.get("analyze_attempts", 0),
             False,
+        )
+        self._checkpoint(
+            state,
+            "complete",
+            f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
+        )
+        return state["report"]
+
+    def _resume_fallback(self, state: FinalizeGraphState, resume_from_step: str) -> str:
+        if resume_from_step == "collect_context":
+            if state.get("should_replan"):
+                state = self._apply_replan(state)
+            state = self._analyze(state)
+            state = self._verify(state)
+        elif resume_from_step == "replan":
+            state = self._analyze(state)
+            state = self._verify(state)
+        elif resume_from_step == "analyze":
+            if not state.get("report"):
+                state = self._analyze(state)
+            state = self._verify(state)
+        elif resume_from_step == "verify":
+            if state.get("should_tie_break"):
+                state = self._apply_tie_break(state)
+                state = self._collect_context(state)
+                state = self._analyze(state)
+                state = self._verify(state)
+            elif state.get("should_retry_analysis"):
+                state = self._analyze(state)
+            elif not state.get("report"):
+                state = self._analyze(state)
+        elif resume_from_step == "tie_break":
+            state = self._collect_context(state)
+            state = self._analyze(state)
+            state = self._verify(state)
+        else:
+            state = self._collect_context(state)
+            if state.get("should_replan"):
+                state = self._apply_replan(state)
+            state = self._analyze(state)
+            state = self._verify(state)
+
+        logger.info(
+            "langgraph_finalize_runner_resumed step=%s replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s",
+            resume_from_step,
+            state.get("replan_attempts", 0),
+            state.get("tie_break_attempts", 0),
+            state.get("analyze_attempts", 0),
         )
         self._checkpoint(
             state,
