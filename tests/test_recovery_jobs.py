@@ -92,6 +92,11 @@ def test_service_recovers_stale_finalize_jobs_and_preserves_analyzing(monkeypatc
     job.status = job.status.RUNNING
     job.updated_at = datetime.now(timezone.utc) - timedelta(minutes=10)
     service = ResearchService(task_store=store)
+    service.checkpoint_graph_state(
+        research.id,
+        {"step": "verify", "analyze_attempts": 1},
+        {"step": "verify", "detail": "weak_support=True retry=True tie_break=False"},
+    )
 
     monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
     result = service.recover_stale_research_finalize_jobs()
@@ -101,3 +106,6 @@ def test_service_recovers_stale_finalize_jobs_and_preserves_analyzing(monkeypatc
     current = store.get_research(research.id)
     assert current is not None
     assert current.status == ResearchStatus.ANALYZING
+    assert current.graph_state["resume_after_stale_recovery"] is True
+    assert current.graph_trail[-1]["step"] == "stale_recovered"
+    assert "resume_from=verify" in current.graph_trail[-1]["detail"]
