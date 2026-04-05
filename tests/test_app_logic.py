@@ -2027,6 +2027,98 @@ def test_graph_checkpoint_state_and_trail_persist_in_memory_store():
     assert stored.graph_trail[0]["detail"] == "Collected 4 sources"
 
 
+def test_finalize_graph_runner_resumes_from_analyze_checkpoint(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.MEDIUM),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body " * 80}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.enable_graph_branching = True
+    analyzer.run_analysis.return_value = "SHOULD NOT RUN"
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    service.checkpoint_graph_state(
+        research.id,
+        {
+            "step": "analyze",
+            "effective_prompt": "topic",
+            "analyze_attempts": 1,
+            "replan_attempts": 0,
+            "tie_break_attempts": 0,
+            "should_replan": False,
+            "should_tie_break": False,
+            "should_retry_analysis": False,
+            "report": "## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n### Used Sources\n- [S1] https://example.com",
+            "detected_conflicts": [],
+            "replan_recommendations": [],
+            "tie_break_recommendations": [],
+        },
+        {"step": "analyze", "detail": "Analyzer run completed"},
+    )
+
+    finalized = service.finalize_research(research.id)
+
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert analyzer.run_analysis.call_count == 0
+    assert "Draft [S1]" in finalized.final_report
+
+
+def test_finalize_research_resumes_from_verify_checkpoint_without_full_restart(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.MEDIUM),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body " * 80}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.enable_graph_branching = True
+    analyzer.run_analysis.return_value = "## Introduction\nRetried [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n### Used Sources\n- [S1] https://example.com"
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    service.checkpoint_graph_state(
+        research.id,
+        {
+            "step": "verify",
+            "effective_prompt": "topic",
+            "analyze_attempts": 1,
+            "replan_attempts": 0,
+            "tie_break_attempts": 0,
+            "should_replan": False,
+            "should_tie_break": False,
+            "should_retry_analysis": True,
+            "report": "## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S1].\n\n## Report Notes\n- Weak support.\n\n## Sources\n### Used Sources\n- [S1] https://example.com",
+            "detected_conflicts": [],
+            "replan_recommendations": [],
+            "tie_break_recommendations": [],
+        },
+        {"step": "verify", "detail": "weak_support=True retry=True tie_break=False"},
+    )
+
+    finalized = service.finalize_research(research.id)
+
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert analyzer.run_analysis.call_count == 1
+    assert "Retried [S1]" in finalized.final_report
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
