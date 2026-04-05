@@ -536,6 +536,20 @@ class ResearchService:
         recovered_jobs = self.task_store.recover_stale_research_finalize_jobs(stale_before)
         for job in recovered_jobs:
             self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
+            research = self.task_store.get_research(job.research_id)
+            graph_state = (research.graph_state if research else None) or {}
+            resume_step = graph_state.get("step") or "unknown"
+            self.checkpoint_graph_state(
+                job.research_id,
+                {
+                    **graph_state,
+                    "resume_after_stale_recovery": True,
+                },
+                {
+                    "step": "stale_recovered",
+                    "detail": f"Finalize job {job.id} recovered after timeout; resume_from={resume_step}",
+                },
+            )
             logger.warning("finalize_job_recovered job_id=%s research_id=%s", job.id, job.research_id)
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],
