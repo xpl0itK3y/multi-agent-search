@@ -74,6 +74,7 @@ class ResearchService:
     OPERATIONAL_WORSENING_CRITICAL_DELTA = 18.0
     OPERATIONAL_CRITICAL_STATE_WARNING_COUNT = 2
     OPERATIONAL_CRITICAL_STATE_CRITICAL_COUNT = 3
+    OPERATIONAL_RECOMMENDATION_EVENT_LIMIT = 40
 
     def __init__(
         self,
@@ -797,7 +798,21 @@ class ResearchService:
         if updated_recommendation is None:
             raise HTTPException(status_code=404, detail="Operational recommendation not found")
 
-        maintenance_summary["recent_operational_recommendations"] = recommendations
+        if updated_recommendation is not None:
+            event_type = "acknowledged"
+            event_note = None
+            if resolved:
+                event_type = "resolved"
+                event_note = resolution_note
+            maintenance_summary["recent_operational_recommendations"] = recommendations
+            maintenance_summary["recent_operational_recommendation_events"] = self._append_operational_recommendation_event(
+                maintenance_summary.get("recent_operational_recommendation_events") or [],
+                code=str(updated_recommendation.get("code") or code),
+                event_type=event_type,
+                message=str(updated_recommendation.get("message") or ""),
+                timestamp=current_timestamp,
+                note=event_note,
+            )
         self.touch_worker_heartbeat(
             "maintenance",
             heartbeat.processed_jobs,
@@ -1332,6 +1347,7 @@ class ResearchService:
             item.code: item
             for item in (maintenance_summary.recent_operational_recommendations or [])
         }
+        recommendation_events = list(maintenance_summary.recent_operational_recommendation_events or [])
         active_codes: list[str] = []
         merged_entries: list[OperationalHealth.RecommendationEntry] = []
         seen_codes: set[str] = set()
@@ -1342,6 +1358,19 @@ class ResearchService:
             seen_codes.add(code)
             active_codes.append(code)
             previous = previous_entries.get(code)
+            event_type = None
+            if previous is None:
+                event_type = "shown"
+            elif not previous.active or previous.resolved:
+                event_type = "reappeared"
+            if event_type is not None:
+                recommendation_events = self._append_operational_recommendation_event(
+                    recommendation_events,
+                    code=code,
+                    event_type=event_type,
+                    message=message,
+                    timestamp=current_timestamp,
+                )
             merged_entries.append(
                 OperationalHealth.RecommendationEntry(
                     code=code,
@@ -1378,7 +1407,52 @@ class ResearchService:
                 item.code,
             )
         )
+        maintenance_summary.recent_operational_recommendation_events = recommendation_events[-self.OPERATIONAL_RECOMMENDATION_EVENT_LIMIT :]
         return merged_entries[:8]
+
+    def _append_operational_recommendation_event(
+        self,
+        existing_events: list[dict] | list[MaintenanceSummary.RecommendationEvent],
+        *,
+        code: str,
+        event_type: str,
+        message: str,
+        timestamp: str | datetime,
+        note: str | None = None,
+    ) -> list[MaintenanceSummary.RecommendationEvent]:
+        normalized_timestamp = (
+            timestamp.isoformat()
+            if isinstance(timestamp, datetime)
+            else str(timestamp)
+        )
+        events = [
+            item.model_dump(mode="json") if isinstance(item, MaintenanceSummary.RecommendationEvent) else dict(item)
+            for item in existing_events
+        ]
+        if events:
+            latest = events[-1]
+            if (
+                str(latest.get("code") or "") == code
+                and str(latest.get("event_type") or "") == event_type
+                and str(latest.get("message") or "") == message
+            ):
+                return [
+                    MaintenanceSummary.RecommendationEvent.model_validate(item)
+                    for item in events[-self.OPERATIONAL_RECOMMENDATION_EVENT_LIMIT :]
+                ]
+        events.append(
+            {
+                "code": code,
+                "event_type": event_type,
+                "message": message,
+                "timestamp": normalized_timestamp,
+                "note": note,
+            }
+        )
+        return [
+            MaintenanceSummary.RecommendationEvent.model_validate(item)
+            for item in events[-self.OPERATIONAL_RECOMMENDATION_EVENT_LIMIT :]
+        ]
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()

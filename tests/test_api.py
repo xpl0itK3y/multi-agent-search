@@ -552,6 +552,48 @@ async def test_resolve_operational_recommendation_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_operational_recommendation_history_tracks_lifecycle_events(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_operational_recommendations": [
+                {
+                    "code": "reduce_queue_backlog",
+                    "message": "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                    "shown_count": 2,
+                    "active": True,
+                    "acknowledged": False,
+                    "resolved": False,
+                    "last_shown_at": "2026-04-05T09:00:00+00:00",
+                }
+            ],
+        },
+    )
+
+    ack_response = await client.post("/health/queues/operational-health/recommendations/reduce_queue_backlog/ack")
+    assert ack_response.status_code == 200
+
+    resolve_response = await client.post(
+        "/health/queues/operational-health/recommendations/reduce_queue_backlog/resolve",
+        json={"note": "Scaled workers and checked long-running jobs."},
+    )
+    assert resolve_response.status_code == 200
+
+    follow_up = await client.get("/health/workers/maintenance")
+    assert follow_up.status_code == 200
+    events = follow_up.json()["maintenance_summary"]["recent_operational_recommendation_events"]
+    event_types = [item["event_type"] for item in events]
+    assert "acknowledged" in event_types
+    assert "resolved" in event_types
+    resolved_event = next(item for item in events if item["event_type"] == "resolved")
+    assert resolved_event["note"] == "Scaled workers and checked long-running jobs."
+
+
+@pytest.mark.anyio
 async def test_optimize_endpoint(client):
     response = await client.post("/v1/optimize", json={"prompt": "raw input"})
 
