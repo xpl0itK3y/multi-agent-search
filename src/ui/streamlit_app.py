@@ -220,6 +220,7 @@ TRANSLATIONS = {
         "operational_health_alert_repeated_critical_states": "Too many critical states in recent history: {current_value} reached {threshold}",
         "operational_health_alert_score_recovered": "Operational score recovered to {current_value} after degradation",
         "operational_health_alert_hint": "Hint: {hint}",
+        "operational_recommendations": "Recommended Actions",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -430,6 +431,7 @@ TRANSLATIONS = {
         "operational_health_alert_repeated_critical_states": "Слишком много critical состояний в недавней истории: {current_value} достигло {threshold}",
         "operational_health_alert_score_recovered": "Operational score восстановился до {current_value} после деградации",
         "operational_health_alert_hint": "Подсказка: {hint}",
+        "operational_recommendations": "Рекомендуемые действия",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -1068,6 +1070,11 @@ def _render_operational_health(health: dict) -> None:
                 st.warning(message)
             if alert.get("hint"):
                 st.caption(_t("operational_health_alert_hint", hint=alert["hint"]))
+    recommendations = health.get("recommendations") or []
+    if recommendations:
+        st.caption(_t("operational_recommendations"))
+        for item in recommendations:
+            st.caption(f"- {item}")
     trend = health.get("trend") or {}
     if trend:
         st.caption(_t("operational_health_trend"))

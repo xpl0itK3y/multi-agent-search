@@ -374,6 +374,9 @@ async def test_queue_health_includes_operational_health_meta_alerts(client):
     alert_codes = {item["code"] for item in payload["operational_health"]["alerts"]}
     assert "score_worsening" in alert_codes
     assert "repeated_critical_states" in alert_codes
+    recommendations = payload["operational_health"]["recommendations"]
+    assert any("worker parallelism" in item or "more workers" in item for item in recommendations)
+    assert any("queue backlog" in item and "graph retries" in item for item in recommendations)
 
 
 @pytest.mark.anyio
@@ -401,6 +404,29 @@ async def test_queue_health_includes_operational_recovery_alert(client):
     payload = response.json()
     alert_codes = {item["code"] for item in payload["operational_health"]["alerts"]}
     assert "score_recovered" in alert_codes
+
+
+@pytest.mark.anyio
+async def test_queue_health_includes_maintenance_restart_recommendation(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_runs": [
+                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T09:00:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    recommendations = payload["operational_health"]["recommendations"]
+    assert any("Maintenance appears stale" in item for item in recommendations)
 
 
 @pytest.mark.anyio
