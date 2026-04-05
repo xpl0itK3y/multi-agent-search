@@ -376,12 +376,27 @@ class MaintenanceSummary(BaseModel):
     recent_runs: List["MaintenanceSummary.MaintenanceRunEntry"] = Field(default_factory=list)
     trend: "MaintenanceSummary.MaintenanceTrend" = Field(default_factory=MaintenanceTrend)
     alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
+    recent_operational_health: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
 
 
 class OperationalHealth(BaseModel):
+    class OperationalHealthEntry(BaseModel):
+        status: str = "healthy"
+        score: int = 100
+        reasons: List[str] = Field(default_factory=list)
+        timestamp: Optional[datetime] = None
+
+    class OperationalHealthTrend(BaseModel):
+        score_direction: str = "stable"
+        average_score: float = 100.0
+        recent_scores: List[int] = Field(default_factory=list)
+        recent_statuses: List[str] = Field(default_factory=list)
+
     status: str = "healthy"
     score: int = 100
     reasons: List[str] = Field(default_factory=list)
+    history: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
+    trend: "OperationalHealth.OperationalHealthTrend" = Field(default_factory=OperationalHealthTrend)
 
 
 class WorkerHeartbeat(BaseModel):

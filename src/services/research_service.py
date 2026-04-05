@@ -1062,7 +1062,43 @@ class ResearchService:
             status = "warning"
 
         deduped_reasons = list(dict.fromkeys(reasons))
-        return OperationalHealth(status=status, score=score, reasons=deduped_reasons[:8])
+        current_health = OperationalHealth(status=status, score=score, reasons=deduped_reasons[:8])
+        history = list(maintenance_summary.recent_operational_health or [])
+        current_timestamp = maintenance_summary.last_run_at
+        history.append(
+            OperationalHealth.OperationalHealthEntry(
+                status=status,
+                score=score,
+                reasons=deduped_reasons[:8],
+                timestamp=current_timestamp,
+            )
+        )
+        history = history[-20:]
+        score_values = [int(item.score or 100) for item in history[-8:]]
+        statuses = [str(item.status or "healthy") for item in history[-8:]]
+        average_score = round(sum(score_values) / len(score_values), 2) if score_values else 100.0
+        score_direction = "stable"
+        if len(score_values) >= 4:
+            half = len(score_values) // 2
+            previous = score_values[:half]
+            recent = score_values[half:]
+            previous_avg = sum(previous) / len(previous) if previous else 0.0
+            recent_avg = sum(recent) / len(recent) if recent else 0.0
+            if recent_avg < previous_avg - 8:
+                score_direction = "worsening"
+            elif recent_avg > previous_avg + 8:
+                score_direction = "improving"
+        return current_health.model_copy(
+            update={
+                "history": history,
+                "trend": OperationalHealth.OperationalHealthTrend(
+                    score_direction=score_direction,
+                    average_score=average_score,
+                    recent_scores=score_values,
+                    recent_statuses=statuses,
+                ),
+            }
+        )
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()
