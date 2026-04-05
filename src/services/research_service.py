@@ -673,6 +673,7 @@ class ResearchService:
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
+        graph_step_events: list[dict] | None = None,
     ) -> WorkerHeartbeat:
         return self.task_store.upsert_worker_heartbeat(
             worker_name,
@@ -681,6 +682,7 @@ class ResearchService:
             last_error,
             extraction_metrics if extraction_metrics is not None else get_extraction_metrics_snapshot(),
             graph_metrics if graph_metrics is not None else get_graph_metrics_snapshot(),
+            graph_step_events if graph_step_events is not None else get_graph_step_events_snapshot(),
         )
 
     def get_queue_metrics(self) -> QueueMetrics:
@@ -783,11 +785,9 @@ class ResearchService:
         return alerts
 
     def _filter_graph_step_events(self, worker_name: str | None = None, research_id: str | None = None) -> list[dict]:
-        events = get_graph_step_events_snapshot()
+        events = self.task_store.get_graph_step_events(worker_name=worker_name)
         filtered = []
         for event in events:
-            if worker_name and event.get("worker_name") != worker_name:
-                continue
             if research_id and event.get("research_id") != research_id:
                 continue
             filtered.append(event)

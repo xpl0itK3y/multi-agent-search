@@ -538,6 +538,7 @@ class SQLAlchemyTaskStore:
         last_error: str | None = None,
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
+        graph_step_events: list[dict] | None = None,
     ) -> WorkerHeartbeat:
         with self.session_scope() as session:
             heartbeat = session.get(WorkerHeartbeatORM, worker_name)
@@ -550,6 +551,7 @@ class SQLAlchemyTaskStore:
             heartbeat.last_error = last_error
             heartbeat.extraction_metrics = extraction_metrics or {}
             heartbeat.graph_metrics = graph_metrics or {}
+            heartbeat.graph_step_events = graph_step_events or []
             heartbeat.last_seen_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(heartbeat)
@@ -561,6 +563,17 @@ class SQLAlchemyTaskStore:
             if heartbeat is None:
                 return None
             return worker_heartbeat_orm_to_schema(heartbeat)
+
+    def get_graph_step_events(self, worker_name: str | None = None) -> list[dict]:
+        with self.session_scope() as session:
+            statement = select(WorkerHeartbeatORM)
+            if worker_name:
+                statement = statement.where(WorkerHeartbeatORM.worker_name == worker_name)
+            heartbeats = session.execute(statement).scalars().all()
+            events: list[dict] = []
+            for heartbeat in heartbeats:
+                events.extend(heartbeat.graph_step_events or [])
+            return events
 
     def get_queue_metrics(self) -> QueueMetrics:
         with self.session_scope() as session:

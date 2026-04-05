@@ -151,6 +151,7 @@ class WorkerHeartbeatORM(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     extraction_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     graph_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    graph_step_events: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

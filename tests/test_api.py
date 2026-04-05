@@ -11,7 +11,7 @@ from src.api.schemas import (
     TaskStatus,
     TaskUpdate,
 )
-from src.graph.metrics import record_graph_step, reset_graph_metrics
+from src.graph.metrics import record_graph_step, get_graph_metrics_snapshot, get_graph_step_events_snapshot, reset_graph_metrics
 from src.observability.context import bind_observability_context
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
@@ -65,8 +65,16 @@ async def client():
 
 @pytest.mark.anyio
 async def test_health_check(client):
+    app_service = client._transport.app.state.research_service
     with bind_observability_context(worker_name="job-worker"):
         record_graph_step("analyze", 9000.0, research_id="research-health")
+    app_service.task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_metrics=get_graph_metrics_snapshot(),
+        graph_step_events=get_graph_step_events_snapshot(),
+    )
     response = await client.get("/health")
     assert response.status_code == 200
     payload = response.json()
