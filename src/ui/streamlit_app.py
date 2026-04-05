@@ -210,6 +210,11 @@ TRANSLATIONS = {
         "operational_health": "Operational Health",
         "operational_health_score": "Operational score: {score}",
         "operational_health_reasons": "Reasons: {value}",
+        "operational_health_trend": "Operational Health Trend",
+        "operational_health_direction": "Score direction: {value}",
+        "operational_health_average": "Average score: {value}",
+        "operational_health_scores": "Recent scores: {value}",
+        "operational_health_statuses": "Recent statuses: {value}",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -410,6 +415,11 @@ TRANSLATIONS = {
         "operational_health": "Operational Health",
         "operational_health_score": "Operational score: {score}",
         "operational_health_reasons": "Причины: {value}",
+        "operational_health_trend": "Тренд operational health",
+        "operational_health_direction": "Динамика score: {value}",
+        "operational_health_average": "Средний score: {value}",
+        "operational_health_scores": "Последние score: {value}",
+        "operational_health_statuses": "Последние статусы: {value}",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -1032,6 +1042,15 @@ def _render_operational_health(health: dict) -> None:
     st.caption(_t("operational_health_score", score=int(health.get("score", 100) or 100)))
     reasons = ", ".join(health.get("reasons") or []) or "-"
     st.caption(_t("operational_health_reasons", value=reasons))
+    trend = health.get("trend") or {}
+    if trend:
+        st.caption(_t("operational_health_trend"))
+        st.caption(_t("operational_health_direction", value=trend.get("score_direction") or "stable"))
+        st.caption(_t("operational_health_average", value=trend.get("average_score", 100.0)))
+        scores = " ".join(str(item) for item in (trend.get("recent_scores") or [])) or "-"
+        statuses = " ".join(str(item) for item in (trend.get("recent_statuses") or [])) or "-"
+        st.caption(_t("operational_health_scores", value=scores))
+        st.caption(_t("operational_health_statuses", value=statuses))
 
 
 def _render_job_card(job: dict, job_kind: str) -> None:

@@ -211,3 +211,4 @@ def test_maintenance_worker_appends_maintenance_history(monkeypatch):
     assert heartbeat is not None
     assert len(heartbeat.maintenance_summary.recent_runs) == 2
     assert heartbeat.maintenance_summary.trend.cleanup_volume_direction == "stable"
+    assert len(heartbeat.maintenance_summary.recent_operational_health) == 2

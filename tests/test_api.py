@@ -253,6 +253,8 @@ async def test_queue_health_includes_maintenance_trend(client):
     assert payload["operational_health"]["status"] in {"warning", "critical"}
     assert payload["operational_health"]["score"] < 100
     assert any(reason.startswith("maintenance:") for reason in payload["operational_health"]["reasons"])
+    assert payload["operational_health"]["trend"]["score_direction"] in {"stable", "worsening", "improving"}
+    assert payload["operational_health"]["trend"]["recent_scores"]
 
 
 @pytest.mark.anyio
@@ -299,6 +301,47 @@ async def test_worker_health_includes_operational_health(client):
     payload = response.json()
     assert payload["operational_health"]["status"] == "critical"
     assert payload["operational_health"]["score"] <= 50
+
+
+@pytest.mark.anyio
+async def test_queue_health_includes_operational_health_history(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=3,
+        status="busy",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T12:10:00+00:00",
+            "recent_operational_health": [
+                {
+                    "status": "healthy",
+                    "score": 96,
+                    "reasons": [],
+                    "timestamp": "2026-04-05T12:00:00+00:00",
+                },
+                {
+                    "status": "warning",
+                    "score": 78,
+                    "reasons": ["maintenance:cleanup_volume_growing"],
+                    "timestamp": "2026-04-05T12:05:00+00:00",
+                },
+            ],
+            "recent_runs": [
+                {"total_count": 2, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
+                {"total_count": 7, "compacted_count": 3, "last_run_at": "2026-04-05T12:05:00+00:00"},
+                {"total_count": 9, "compacted_count": 4, "last_run_at": "2026-04-05T12:10:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    history = payload["operational_health"]["history"]
+    assert len(history) >= 3
+    assert history[-1]["timestamp"].startswith("2026-04-05T12:10:00")
+    assert payload["operational_health"]["trend"]["recent_scores"]
 
 
 @pytest.mark.anyio

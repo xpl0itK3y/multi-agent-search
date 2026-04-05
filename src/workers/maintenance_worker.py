@@ -19,10 +19,15 @@ class MaintenanceWorker:
             current_timestamp = datetime.now(timezone.utc).isoformat()
             previous_heartbeat = self.research_service.task_store.get_worker_heartbeat("maintenance")
             previous_runs = []
+            previous_operational_history = []
             if previous_heartbeat is not None:
                 previous_runs = [
                     item.model_dump(mode="json")
                     for item in previous_heartbeat.maintenance_summary.recent_runs
+                ]
+                previous_operational_history = [
+                    item.model_dump(mode="json")
+                    for item in previous_heartbeat.maintenance_summary.recent_operational_health
                 ]
             previous_runs.append(
                 {
@@ -41,7 +46,20 @@ class MaintenanceWorker:
                     **result.model_dump(),
                     "last_run_at": current_timestamp,
                     "recent_runs": previous_runs[-self.MAINTENANCE_HISTORY_LIMIT :],
+                    "recent_operational_health": previous_operational_history[-self.MAINTENANCE_HISTORY_LIMIT :],
                 },
+            )
+            queue_metrics = self.research_service.get_queue_metrics()
+            maintenance_summary = queue_metrics.maintenance_summary.model_dump(mode="json")
+            maintenance_summary["recent_operational_health"] = [
+                item.model_dump(mode="json")
+                for item in queue_metrics.operational_health.history[-self.MAINTENANCE_HISTORY_LIMIT :]
+            ]
+            self.research_service.touch_worker_heartbeat(
+                "maintenance",
+                result.total_count,
+                "busy" if result.total_count else "idle",
+                maintenance_summary=maintenance_summary,
             )
             if result.total_count:
                 logger.info(
