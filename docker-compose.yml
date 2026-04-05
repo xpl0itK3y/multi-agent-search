@@ -70,7 +70,7 @@ services:
 
   worker_2:
     <<: *worker-base
-    profiles: ["parallel"]
+    container_name: multi-agent-search-worker-2
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
@@ -78,7 +78,7 @@ services:
 
   worker_3:
     <<: *worker-base
-    profiles: ["parallel"]
+    container_name: multi-agent-search-worker-3
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432

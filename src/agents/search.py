@@ -272,12 +272,18 @@ class SearchAgent:
         "bing.com/aclick",
         "news.google.com",
         "amazon.com/s",
+        "amazon.",
+        "aliexpress.",
+        "ubuy.",
+        "login.aliexpress.com",
         "yandex.",
         "/shopping/",
         "/discover/",
         "/video/",
         "/gallery/",
         "/pin/",
+        "/dp/",
+        "/wholesale-",
     )
     LOW_SIGNAL_RESULT_TOKENS = (
         "best",
@@ -347,11 +353,23 @@ class SearchAgent:
             return 40
         return 0
 
+    def _matches_low_value_domain(self, domain: str | None) -> bool:
+        if not domain:
+            return False
+        normalized_domain = domain.removeprefix("www.")
+        exact_domains = {
+            item.removeprefix("www.") for item in self.LOW_VALUE_DOMAIN_EXACT_MATCHES
+        }
+        return any(
+            normalized_domain == item or normalized_domain.endswith(f".{item}")
+            for item in exact_domains
+        )
+
     def _low_value_domain_penalty(self, domain: str) -> int:
         if not domain:
             return 0
         normalized_domain = domain.removeprefix("www.")
-        if normalized_domain in self.LOW_VALUE_DOMAIN_EXACT_MATCHES:
+        if self._matches_low_value_domain(normalized_domain):
             return 120
         if any(token in normalized_domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
             return 90
@@ -367,7 +385,7 @@ class SearchAgent:
 
         if not normalized_domain:
             return True
-        if normalized_domain in {item.removeprefix("www.") for item in self.LOW_VALUE_DOMAIN_EXACT_MATCHES}:
+        if self._matches_low_value_domain(normalized_domain):
             return True
         if any(token in normalized_domain for token in self.LOW_VALUE_DOMAIN_SUBSTRINGS):
             return True
@@ -576,11 +594,16 @@ class SearchAgent:
                         }
                     )
 
-            candidate_results = rust_accel.score_search_candidates(
+            scored_candidates = rust_accel.score_search_candidates(
                 raw_candidates,
                 topics=topics,
                 limit=self.max_candidate_urls,
             )
+            candidate_results = [
+                candidate
+                for candidate in scored_candidates
+                if not self._should_skip_search_result(candidate["url"], candidate.get("title"), topics=topics)
+            ]
             selected_urls = {candidate["url"] for candidate in candidate_results}
             logged_skipped_urls: set[str] = set()
             for candidate in raw_candidates:

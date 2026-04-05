@@ -136,6 +136,13 @@ class ExtractionDomainSnapshot:
 
 
 class ExtractionDomainRegistry:
+    BLOCKED_DOMAIN_SUFFIXES = (
+        "youtube.com",
+        "youtu.be",
+        "passport.yandex.ru",
+        "login.aliexpress.com",
+    )
+
     def __init__(self):
         self._lock = threading.Lock()
         self._domains: dict[str, ExtractionDomainSnapshot] = {}
@@ -147,11 +154,17 @@ class ExtractionDomainRegistry:
 
         if not domain:
             return "missing-domain"
-        if domain in {"youtube.com", "m.youtube.com", "youtu.be", "passport.yandex.ru"}:
+        if any(domain == suffix or domain.endswith(f".{suffix}") for suffix in self.BLOCKED_DOMAIN_SUFFIXES):
             return "blocked-domain"
         if any(
             token in normalized_url
-            for token in ("youtube.com/watch", "youtu.be/", "/shorts/", "passport.yandex.ru/auth")
+            for token in (
+                "youtube.com/watch",
+                "youtu.be/",
+                "/shorts/",
+                "passport.yandex.ru/auth",
+                "login.aliexpress.com",
+            )
         ):
             return "blocked-url"
 

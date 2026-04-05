@@ -1305,7 +1305,7 @@ def test_run_search_task_uses_depth_profile_source_limit(
         max_sources=expected_limit,
         search_results_per_query=expected_results_per_query,
         max_candidate_urls=expected_candidate_urls,
-        extraction_concurrency=3,
+        extraction_concurrency=4,
         extraction_timeout_seconds=12,
     )
     run_task.assert_called_once_with("task-1")
