@@ -153,6 +153,13 @@ TRANSLATIONS = {
         "disable_finalize_reason": "Finalize is blocked until all tasks are in `completed` or `failed` state.",
         "showing_sources_preview": "Showing {shown} of {total} sources",
         "requeue_dead_search_job": "Requeue Dead Search Job",
+        "graph_loop": "Graph Loop",
+        "graph_branching_active": "Branching Active",
+        "graph_follow_up_tasks": "Follow-up Tasks",
+        "graph_replan_tasks": "Replan Tasks",
+        "graph_tie_break_tasks": "Tie-Break Tasks",
+        "graph_follow_up_queries": "Follow-up Queries",
+        "graph_no_follow_up_queries": "No follow-up graph queries were executed yet.",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -293,6 +300,13 @@ TRANSLATIONS = {
         "disable_finalize_reason": "Finalize заблокирован, пока все задачи не перейдут в `completed` или `failed`.",
         "showing_sources_preview": "Показано {shown} из {total} источников",
         "requeue_dead_search_job": "Перепоставить dead search job",
+        "graph_loop": "Graph Loop",
+        "graph_branching_active": "Ветвление активно",
+        "graph_follow_up_tasks": "Follow-up задачи",
+        "graph_replan_tasks": "Replan задачи",
+        "graph_tie_break_tasks": "Tie-break задачи",
+        "graph_follow_up_queries": "Follow-up запросы",
+        "graph_no_follow_up_queries": "Follow-up запросы графа пока не запускались.",
     },
 }
 
@@ -1088,6 +1102,23 @@ def _render_research_details() -> None:
     extraction_summary_cols[1].metric(_t("research_extractions"), total_extraction_attempts)
     extraction_summary_cols[2].metric(_t("research_extraction_success"), total_extraction_success)
     extraction_summary_cols[3].metric(_t("research_selected_sources"), total_selected_sources)
+
+    graph_summary = research.get("graph_execution_summary") or {}
+    graph_cols = st.columns(4)
+    graph_cols[0].metric(
+        _t("graph_branching_active"),
+        _t("yes") if graph_summary.get("branching_active") else _t("no"),
+    )
+    graph_cols[1].metric(_t("graph_follow_up_tasks"), int(graph_summary.get("follow_up_task_count") or 0))
+    graph_cols[2].metric(_t("graph_replan_tasks"), int(graph_summary.get("replan_task_count") or 0))
+    graph_cols[3].metric(_t("graph_tie_break_tasks"), int(graph_summary.get("tie_break_task_count") or 0))
+
+    st.markdown(f"**{_t('graph_loop')}**")
+    follow_up_queries = graph_summary.get("follow_up_queries") or []
+    if follow_up_queries:
+        st.code("\n".join(follow_up_queries), language="text")
+    else:
+        st.caption(_t("graph_no_follow_up_queries"))
 
     progress_total = len(tasks)
     progress_value = (completed_tasks + failed_tasks) / progress_total if progress_total else 0.0

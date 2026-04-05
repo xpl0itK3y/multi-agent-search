@@ -125,6 +125,15 @@ class ReplanRecommendation(BaseModel):
     suggested_queries: List[str] = Field(default_factory=list)
 
 
+class GraphExecutionSummary(BaseModel):
+    branching_active: bool = False
+    follow_up_task_count: int = 0
+    replan_task_count: int = 0
+    tie_break_task_count: int = 0
+    follow_up_query_count: int = 0
+    follow_up_queries: List[str] = Field(default_factory=list)
+
+
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     result: Optional[List[Dict[str, Any]]] = None
@@ -176,6 +185,7 @@ class ResearchSummary(BaseModel):
     evidence_coverage_summary: EvidenceCoverageSummary = Field(default_factory=EvidenceCoverageSummary)
     claim_verification_summary: ClaimVerificationSummary = Field(default_factory=ClaimVerificationSummary)
     replan_recommendations: List[ReplanRecommendation] = Field(default_factory=list)
+    graph_execution_summary: GraphExecutionSummary = Field(default_factory=GraphExecutionSummary)
     latest_finalize_job: Optional["ResearchFinalizeJob"] = None
     tasks: List[SearchTaskSummary] = Field(default_factory=list)
 
