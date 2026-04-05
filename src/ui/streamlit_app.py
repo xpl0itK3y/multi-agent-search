@@ -195,6 +195,8 @@ TRANSLATIONS = {
         "maintenance_compacted_count": "Compacted operational items: {count}",
         "maintenance_compacted_workers": "Compacted graph workers: {value}",
         "maintenance_compacted_researches": "Compacted graph researches: {value}",
+        "maintenance_recent_runs": "Recent maintenance runs",
+        "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -377,6 +379,8 @@ TRANSLATIONS = {
         "maintenance_compacted_count": "Сжатых operational элементов: {count}",
         "maintenance_compacted_workers": "Воркеры с compact graph data: {value}",
         "maintenance_compacted_researches": "Research с compact graph trail: {value}",
+        "maintenance_recent_runs": "Последние maintenance запуски",
+        "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
     },
 }
 
@@ -940,6 +944,20 @@ def _render_maintenance_summary(summary: dict) -> None:
     research_ids = ", ".join(summary.get("compacted_graph_trail_research_ids") or []) or "-"
     st.caption(_t("maintenance_compacted_workers", value=worker_names))
     st.caption(_t("maintenance_compacted_researches", value=research_ids))
+    recent_runs = summary.get("recent_runs") or []
+    if recent_runs:
+        st.caption(_t("maintenance_recent_runs"))
+        for run in recent_runs[-5:]:
+            st.caption(
+                _t(
+                    "maintenance_recent_run_line",
+                    timestamp=_format_timestamp(run.get("last_run_at")),
+                    recovered=int(run.get("recovered_count", 0) or 0),
+                    deleted=int(run.get("deleted_count", 0) or 0),
+                    compacted=int(run.get("compacted_count", 0) or 0),
+                    total=int(run.get("total_count", 0) or 0),
+                )
+            )
 
 
 def _render_job_card(job: dict, job_kind: str) -> None:

@@ -180,6 +180,44 @@ async def test_queue_health_includes_maintenance_summary(client):
     assert payload["maintenance_summary"]["compacted_count"] == 2
     assert payload["maintenance_summary"]["compacted_graph_event_worker_names"] == ["job-worker"]
     assert payload["maintenance_summary"]["compacted_graph_trail_research_ids"] == ["research-1"]
+    assert payload["maintenance_summary"]["recent_runs"] == []
+
+
+@pytest.mark.anyio
+async def test_queue_health_includes_maintenance_history(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=3,
+        status="busy",
+        maintenance_summary={
+            "total_count": 3,
+            "last_run_at": "2026-04-05T12:00:00+00:00",
+            "recent_runs": [
+                {
+                    "recovered_count": 1,
+                    "deleted_count": 0,
+                    "compacted_count": 2,
+                    "total_count": 3,
+                    "last_run_at": "2026-04-05T12:00:00+00:00",
+                },
+                {
+                    "recovered_count": 0,
+                    "deleted_count": 1,
+                    "compacted_count": 1,
+                    "total_count": 2,
+                    "last_run_at": "2026-04-05T12:05:00+00:00",
+                },
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["maintenance_summary"]["recent_runs"]) == 2
+    assert payload["maintenance_summary"]["recent_runs"][1]["deleted_count"] == 1
 
 
 @pytest.mark.anyio
