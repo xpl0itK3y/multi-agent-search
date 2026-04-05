@@ -1,11 +1,13 @@
 import logging
 import json
 import re
+import time
 from typing import List
 from urllib.parse import urlparse
 from src.core.agent import BaseAgent
 from src.core import rust_accel
 from src.api.schemas import SearchTask
+from src.config import settings
 from src.observability import maybe_traceable
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics
 
@@ -16,6 +18,9 @@ class AnalyzerAgent(BaseAgent):
     MAX_SOURCES_PER_DOMAIN = 2
     MAX_SOURCES_PER_TASK = 4
     MAX_SOURCE_CONTENT_CHARS = 1600
+    MAX_PREMIUM_SOURCE_CONTENT_CHARS = 1600
+    MAX_MEDIUM_SOURCE_CONTENT_CHARS = 1000
+    MAX_LOW_SOURCE_CONTENT_CHARS = 700
     CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
     SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+")
     SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+Sources\s*$.*\Z")
@@ -446,6 +451,37 @@ class AnalyzerAgent(BaseAgent):
     def _compact_source_content(self, content: str) -> str:
         return rust_accel.compact_source_content(content, self.MAX_SOURCE_CONTENT_CHARS)
 
+    def _content_budget_for_source(self, candidate: dict) -> int:
+        quality = candidate.get("source_quality")
+        trusted_score = self._trusted_domain_score(candidate.get("url") or "")
+        if quality == "high" or trusted_score >= 150:
+            return self.MAX_PREMIUM_SOURCE_CONTENT_CHARS
+        if quality == "medium" or trusted_score > 0:
+            return self.MAX_MEDIUM_SOURCE_CONTENT_CHARS
+        return self.MAX_LOW_SOURCE_CONTENT_CHARS
+
+    def _budget_compacted_content(self, content: str, char_budget: int) -> str:
+        budget = max(220, min(self.MAX_SOURCE_CONTENT_CHARS, char_budget))
+        return rust_accel.compact_source_content(content, budget)
+
+    def _apply_payload_budget(self, candidates: list[dict]) -> list[dict]:
+        remaining_budget = max(settings.analyzer_payload_char_budget, 2000)
+        budgeted_candidates: list[dict] = []
+        for index, candidate in enumerate(candidates):
+            reserved_tail = max(0, len(candidates) - index - 1) * 220
+            available_budget = remaining_budget - reserved_tail
+            target_budget = min(self._content_budget_for_source(candidate), max(220, available_budget))
+            if target_budget < 220:
+                break
+            compacted = self._budget_compacted_content(candidate.get("content") or "", target_budget)
+            if not compacted:
+                continue
+            budgeted_candidates.append({**candidate, "content": compacted})
+            remaining_budget -= len(compacted)
+            if remaining_budget <= 220:
+                break
+        return budgeted_candidates
+
     def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask]) -> list[dict]:
         topics = self._detect_topics(prompt, tasks)
         aggregated_candidates = []
@@ -479,6 +515,8 @@ class AnalyzerAgent(BaseAgent):
             max_sources_per_domain=self.MAX_SOURCES_PER_DOMAIN,
             max_sources_per_task=self.MAX_SOURCES_PER_TASK,
         )
+
+        selected_candidates = self._apply_payload_budget(selected_candidates)
 
         return [
             {
@@ -556,6 +594,34 @@ class AnalyzerAgent(BaseAgent):
             "Use evidence_groups to identify where multiple sources reinforce the same point. "
             "If a source is mostly predictive, label it as a forecast rather than a confirmed development. "
             "If sources disagree, add a section titled 'Conflicts And Uncertainties' and cite the competing evidence.\n\n"
+            f"{json.dumps(input_data, ensure_ascii=False)}"
+        )
+
+    def _build_repair_prompt(
+        self,
+        input_data: dict,
+        language: str,
+        report_body: str,
+        uncited_lines: list[str],
+        unsupported_lines: list[str],
+    ) -> str:
+        valid_source_ids = ", ".join(item["source_id"] for item in input_data.get("gathered_data", []))
+        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6]) or "- none"
+        unsupported_feedback = "\n".join(f"- {line}" for line in unsupported_lines[:6]) or "- none"
+        return (
+            f"{self._language_instruction(language)} "
+            "Rewrite only the report body so that every factual paragraph or bullet includes inline citations. "
+            "Do not include a Sources section in your answer. "
+            "Use only the available source IDs, do not invent citations, and preserve markdown headings. "
+            "Every citation should support the sentence it is attached to; remove weak or mismatched citations.\n\n"
+            f"Available source IDs: {valid_source_ids}\n\n"
+            "Likely uncited lines:\n"
+            f"{feedback_lines}\n\n"
+            "Likely weakly-supported cited lines:\n"
+            f"{unsupported_feedback}\n\n"
+            "Current report body:\n"
+            f"{report_body}\n\n"
+            "Research payload:\n"
             f"{json.dumps(input_data, ensure_ascii=False)}"
         )
 
@@ -654,33 +720,83 @@ class AnalyzerAgent(BaseAgent):
         self,
         input_data: dict,
         language: str,
-        report: str,
+        report_body: str,
         uncited_lines: list[str],
         unsupported_lines: list[str],
     ) -> str:
-        valid_source_ids = ", ".join(item["source_id"] for item in input_data.get("gathered_data", []))
-        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6]) or "- none"
-        unsupported_feedback = "\n".join(f"- {line}" for line in unsupported_lines[:6]) or "- none"
-        repair_prompt = (
-            f"{self._language_instruction(language)} "
-            "Rewrite the report so that every factual paragraph or bullet includes inline citations. "
-            "Use only the available source IDs, do not invent citations, and preserve markdown headings. "
-            "Every citation should support the sentence it is attached to; remove weak or mismatched citations.\n\n"
-            f"Available source IDs: {valid_source_ids}\n\n"
-            "Likely uncited lines:\n"
-            f"{feedback_lines}\n\n"
-            "Likely weakly-supported cited lines:\n"
-            f"{unsupported_feedback}\n\n"
-            "Current report:\n"
-            f"{report}\n\n"
-            "Research payload:\n"
-            f"{json.dumps(input_data, ensure_ascii=False)}"
+        repair_prompt = self._build_repair_prompt(
+            input_data,
+            language,
+            report_body,
+            uncited_lines,
+            unsupported_lines,
         )
+        kwargs = {"temperature": 0.2}
+        if settings.deepseek_repair_model:
+            kwargs["model"] = settings.deepseek_repair_model
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=repair_prompt,
-            temperature=0.2,
+            **kwargs,
         )
+
+    def _best_supporting_source_id(self, line: str, aggregated_data: list[dict]) -> str | None:
+        line_tokens = self._line_tokens_for_citation_audit(line)
+        if len(line_tokens) < 2:
+            return None
+
+        best_source_id = None
+        best_overlap = 0
+        for source in aggregated_data:
+            source_id = source["source_id"]
+            source_tokens = self._line_tokens_for_citation_audit(source.get("content") or "")
+            overlap = len(line_tokens & source_tokens)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_source_id = source_id
+
+        if best_overlap < 2:
+            return None
+        return best_source_id
+
+    def _patch_line_with_source(self, line: str, source_id: str) -> str:
+        if self.CITATION_PATTERN.search(line):
+            return self.CITATION_PATTERN.sub(f"[{source_id}]", line)
+        stripped = line.rstrip()
+        if stripped.endswith((".", "!", "?")):
+            return f"{stripped} [{source_id}]"
+        return f"{stripped} [{source_id}]"
+
+    def _deterministic_repair_report_body(
+        self,
+        report_body: str,
+        aggregated_data: list[dict],
+        uncited_lines: list[str],
+        unsupported_lines: list[str],
+    ) -> str | None:
+        issue_lines = list(dict.fromkeys(uncited_lines + unsupported_lines))
+        if not issue_lines or len(issue_lines) > settings.analyzer_local_repair_issue_threshold:
+            return None
+
+        patched = report_body
+        replacements = 0
+        for issue_line in issue_lines:
+            source_id = self._best_supporting_source_id(issue_line, aggregated_data)
+            if source_id is None:
+                return None
+            escaped = re.escape(issue_line)
+            updated = re.sub(
+                escaped,
+                lambda match: self._patch_line_with_source(match.group(0), source_id),
+                patched,
+                count=1,
+            )
+            if updated == patched:
+                return None
+            patched = updated
+            replacements += 1
+
+        return patched if replacements == len(issue_lines) else None
 
     def _extract_candidate_claims(self, aggregated_data: list[dict]) -> list[dict]:
         claims: list[dict] = []
@@ -829,9 +945,21 @@ class AnalyzerAgent(BaseAgent):
 
     @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
     def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
+        started_at = time.perf_counter()
+        prepare_started_at = time.perf_counter()
         aggregated_data = self._prepare_aggregated_data(prompt, tasks)
-        conflicts = self._detect_conflicts(aggregated_data)
-        evidence_groups = self._extract_evidence_groups(aggregated_data)
+        prepare_ms = (time.perf_counter() - prepare_started_at) * 1000
+
+        conflict_pool = aggregated_data[: settings.analyzer_conflict_source_limit]
+        evidence_pool = aggregated_data[: settings.analyzer_evidence_source_limit]
+
+        conflict_started_at = time.perf_counter()
+        conflicts = self._detect_conflicts(conflict_pool)
+        conflict_ms = (time.perf_counter() - conflict_started_at) * 1000
+
+        evidence_started_at = time.perf_counter()
+        evidence_groups = self._extract_evidence_groups(evidence_pool)
+        evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = self._detect_language(prompt)
 
         input_data = {
@@ -842,6 +970,7 @@ class AnalyzerAgent(BaseAgent):
         }
 
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
+        llm_started_at = time.perf_counter()
         result = self._generate_report(input_data, prompt_language)
         if prompt_language != "unknown":
             report_language = self._detect_language(result)
@@ -852,27 +981,56 @@ class AnalyzerAgent(BaseAgent):
                     report_language,
                 )
                 result = self._generate_report(input_data, prompt_language, retry=True)
+        llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
         normalized = self._post_process_report(result)
         with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
         rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
         uncited_lines = self._uncited_claim_lines(rebuilt)
         unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
+        repair_ms = 0.0
         if aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
-            logger.warning(
-                "AnalyzerAgent detected citation issues. Repairing report citations once. uncited_count=%s unsupported_count=%s",
-                len(uncited_lines),
-                len(unsupported_lines),
-            )
-            repaired = self._repair_report_citations(
-                input_data,
-                prompt_language,
-                rebuilt,
+            report_body = self._body_without_sources(rebuilt)
+            repaired_body = self._deterministic_repair_report_body(
+                report_body,
+                aggregated_data,
                 uncited_lines,
                 unsupported_lines,
             )
-            normalized = self._post_process_report(repaired)
-            with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
-            rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
+            if repaired_body is not None:
+                rebuilt = self._rebuild_sources_section(repaired_body, aggregated_data)
+            else:
+                logger.warning(
+                    "AnalyzerAgent detected citation issues. Repairing report citations once. uncited_count=%s unsupported_count=%s",
+                    len(uncited_lines),
+                    len(unsupported_lines),
+                )
+                repair_started_at = time.perf_counter()
+                repaired = self._repair_report_citations(
+                    input_data,
+                    prompt_language,
+                    report_body,
+                    uncited_lines,
+                    unsupported_lines,
+                )
+                repair_ms = (time.perf_counter() - repair_started_at) * 1000
+                normalized = self._post_process_report(repaired)
+                with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
+                rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data)
         notes = self._report_quality_notes(rebuilt, aggregated_data)
-        return self._inject_report_notes(rebuilt, notes)
+        final_report = self._inject_report_notes(rebuilt, notes)
+        total_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f llm_ms=%.2f repair_ms=%.2f total_ms=%.2f",
+            len(aggregated_data),
+            sum(len(item.get("content") or "") for item in aggregated_data),
+            len(conflicts),
+            len(evidence_groups),
+            prepare_ms,
+            conflict_ms,
+            evidence_ms,
+            llm_ms,
+            repair_ms,
+            total_ms,
+        )
+        return final_report

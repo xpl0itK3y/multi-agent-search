@@ -149,6 +149,34 @@ def test_analyzer_agent_repairs_weakly_supported_citations():
     assert "AsyncIO event loop behavior is central here [S1]." in result
 
 
+def test_analyzer_agent_uses_configured_repair_model_for_llm_repair(mocker):
+    mocker.patch("src.agents.analyzer.settings.deepseek_repair_model", "deepseek-fast-repair")
+    llm = SequentialLLM(
+        [
+            "## Introduction\nThis paragraph makes a factual claim without citations.\n\n## Conclusion\nAnother factual claim without citations.\n\n## Sources",
+            "## Introduction\nThis paragraph makes a factual claim with support [S1].\n\n## Conclusion\nAnother factual claim with support [S1].",
+        ]
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body " * 100}],
+            )
+        ],
+    )
+
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["kwargs"]["model"] == "deepseek-fast-repair"
+    assert result.endswith("## Sources\n- [S1] https://example.com")
+
+
 def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
     llm = RecordingLLM(response="## Introduction\nSummary [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources")
     agent = AnalyzerAgent(llm)
@@ -288,6 +316,72 @@ def test_analyzer_agent_compacts_source_content_before_prompt_payload():
     gathered = parsed["gathered_data"]
     assert len(gathered[0]["content"]) <= 1605
     assert gathered[0]["content"].endswith(" ...")
+
+
+def test_analyzer_agent_applies_global_payload_budget():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    tasks = [
+        SearchTask(
+            id="task-1",
+            description="desc",
+            queries=["query"],
+            status=TaskStatus.COMPLETED,
+            result=[
+                {
+                    "url": f"https://example.com/{index}",
+                    "title": f"Title {index}",
+                    "content": ("Body with detailed implementation notes and benchmarks. " * 120),
+                    "source_quality": "medium",
+                }
+                for index in range(12)
+            ],
+        )
+    ]
+
+    agent.run_analysis("original prompt", tasks)
+
+    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    parsed = json.loads(payload)
+    gathered = parsed["gathered_data"]
+    total_chars = sum(len(item["content"]) for item in gathered)
+    assert total_chars <= 12000
+
+
+def test_analyzer_agent_uses_local_repair_for_small_citation_issues():
+    llm = RecordingLLM(
+        response=(
+            "## Introduction\n"
+            "AsyncIO event loop scheduling and cooperative concurrency are central for Python network services.\n\n"
+            "## Conclusion\nDone [S1].\n\n"
+            "## Sources\n- [S1] https://example.com/a"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "original prompt",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "AsyncIO",
+                        "content": "AsyncIO event loop scheduling and cooperative concurrency are central for Python network services. "
+                        * 20,
+                    }
+                ],
+            )
+        ],
+    )
+
+    assert len(llm.calls) == 1
+    assert "AsyncIO event loop scheduling and cooperative concurrency are central for Python network services. [S1]" in result
 
 
 def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
