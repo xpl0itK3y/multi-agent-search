@@ -147,6 +147,7 @@ class TaskStore(Protocol):
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
         graph_step_events: list[dict] | None = None,
+        maintenance_summary: dict | None = None,
     ) -> WorkerHeartbeat: ...
 
     def get_worker_heartbeat(self, worker_name: str) -> WorkerHeartbeat | None: ...

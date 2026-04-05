@@ -554,6 +554,7 @@ class SQLAlchemyTaskStore:
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
         graph_step_events: list[dict] | None = None,
+        maintenance_summary: dict | None = None,
     ) -> WorkerHeartbeat:
         with self.session_scope() as session:
             heartbeat = session.get(WorkerHeartbeatORM, worker_name)
@@ -570,6 +571,7 @@ class SQLAlchemyTaskStore:
                 heartbeat.graph_step_events or [],
                 graph_step_events or [],
             )
+            heartbeat.maintenance_summary = maintenance_summary or {}
             heartbeat.last_seen_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(heartbeat)

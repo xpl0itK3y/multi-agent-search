@@ -345,6 +345,16 @@ class GraphAlertTrend(BaseModel):
     recent_alerts: List[GraphAlertHistoryEntry] = Field(default_factory=list)
 
 
+class MaintenanceSummary(BaseModel):
+    recovered_count: int = 0
+    deleted_count: int = 0
+    compacted_count: int = 0
+    total_count: int = 0
+    compacted_graph_event_worker_names: List[str] = Field(default_factory=list)
+    compacted_graph_trail_research_ids: List[str] = Field(default_factory=list)
+    last_run_at: Optional[datetime] = None
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
@@ -354,6 +364,7 @@ class WorkerHeartbeat(BaseModel):
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
     graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
+    maintenance_summary: MaintenanceSummary = Field(default_factory=MaintenanceSummary)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -368,6 +379,7 @@ class QueueMetrics(BaseModel):
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
     graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
+    maintenance_summary: MaintenanceSummary = Field(default_factory=MaintenanceSummary)
 
 
 class JobRecoveryResponse(BaseModel):

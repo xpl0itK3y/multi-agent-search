@@ -385,6 +385,7 @@ class InMemoryTaskStore:
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
         graph_step_events: list[dict] | None = None,
+        maintenance_summary: dict | None = None,
     ) -> WorkerHeartbeat:
         heartbeat = WorkerHeartbeat(
             worker_name=worker_name,
@@ -393,6 +394,7 @@ class InMemoryTaskStore:
             last_error=last_error,
             extraction_metrics=extraction_metrics or {},
             graph_metrics=graph_metrics or {},
+            maintenance_summary=maintenance_summary or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
         self.worker_graph_step_events[worker_name] = compact_graph_step_events(

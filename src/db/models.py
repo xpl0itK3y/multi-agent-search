@@ -152,6 +152,7 @@ class WorkerHeartbeatORM(Base):
     extraction_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     graph_metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     graph_step_events: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    maintenance_summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

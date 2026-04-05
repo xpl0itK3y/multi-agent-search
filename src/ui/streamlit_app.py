@@ -190,6 +190,11 @@ TRANSLATIONS = {
         "graph_top_workers": "Top workers: {value}",
         "graph_recent_alerts": "Recent alert events",
         "graph_recent_alert_line": "{timestamp} | {step} | {code} | research={research_id} | worker={worker_name}",
+        "maintenance_summary": "Maintenance Summary",
+        "maintenance_last_run": "Last maintenance run: {timestamp}",
+        "maintenance_compacted_count": "Compacted operational items: {count}",
+        "maintenance_compacted_workers": "Compacted graph workers: {value}",
+        "maintenance_compacted_researches": "Compacted graph researches: {value}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -367,6 +372,11 @@ TRANSLATIONS = {
         "graph_top_workers": "Воркеры с alert-ами чаще всего: {value}",
         "graph_recent_alerts": "Последние alert-события",
         "graph_recent_alert_line": "{timestamp} | {step} | {code} | research={research_id} | worker={worker_name}",
+        "maintenance_summary": "Сводка maintenance",
+        "maintenance_last_run": "Последний maintenance запуск: {timestamp}",
+        "maintenance_compacted_count": "Сжатых operational элементов: {count}",
+        "maintenance_compacted_workers": "Воркеры с compact graph data: {value}",
+        "maintenance_compacted_researches": "Research с compact graph trail: {value}",
     },
 }
 
@@ -921,6 +931,17 @@ def _render_graph_alert_trend(graph_alert_trend: dict) -> None:
             )
 
 
+def _render_maintenance_summary(summary: dict) -> None:
+    if not summary:
+        return
+    st.caption(_t("maintenance_last_run", timestamp=_format_timestamp(summary.get("last_run_at"))))
+    st.caption(_t("maintenance_compacted_count", count=int(summary.get("compacted_count", 0) or 0)))
+    worker_names = ", ".join(summary.get("compacted_graph_event_worker_names") or []) or "-"
+    research_ids = ", ".join(summary.get("compacted_graph_trail_research_ids") or []) or "-"
+    st.caption(_t("maintenance_compacted_workers", value=worker_names))
+    st.caption(_t("maintenance_compacted_researches", value=research_ids))
+
+
 def _render_job_card(job: dict, job_kind: str) -> None:
     status_html = _status_badge(job["status"])
     owner_id = job["task_id"] if job_kind == "search" else job["research_id"]
@@ -1020,6 +1041,7 @@ def _render_queue_overview() -> None:
     graph = metrics.get("graph_metrics") or {}
     graph_alerts = metrics.get("graph_alerts") or []
     graph_alert_trend = metrics.get("graph_alert_trend") or {}
+    maintenance_summary = metrics.get("maintenance_summary") or {}
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
@@ -1031,6 +1053,12 @@ def _render_queue_overview() -> None:
     if graph_alert_trend:
         with st.expander(_t("graph_alert_trend"), expanded=False):
             _render_graph_alert_trend(graph_alert_trend)
+    if maintenance_summary and (
+        maintenance_summary.get("last_run_at")
+        or int(maintenance_summary.get("compacted_count", 0) or 0) > 0
+    ):
+        with st.expander(_t("maintenance_summary"), expanded=False):
+            _render_maintenance_summary(maintenance_summary)
     with st.expander(_t("graph_step_metrics"), expanded=False):
         _render_graph_step_metrics(graph)
 
