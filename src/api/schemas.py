@@ -322,6 +322,7 @@ class GraphAlert(BaseModel):
     step: Optional[str] = None
     current_value: float = 0.0
     threshold: float = 0.0
+    hint: Optional[str] = None
 
 
 class WorkerHeartbeat(BaseModel):

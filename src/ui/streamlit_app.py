@@ -181,6 +181,7 @@ TRANSLATIONS = {
         "graph_alert_high_avg_ms": "{step}: average latency {current_value} ms exceeded {threshold} ms",
         "graph_alert_step_failures": "{step}: failure count {current_value} reached threshold {threshold}",
         "graph_alert_analyze_retries": "{step}: analyze retries {current_value} reached threshold {threshold}",
+        "graph_alert_hint": "Hint: {hint}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -349,6 +350,7 @@ TRANSLATIONS = {
         "graph_alert_high_avg_ms": "{step}: средняя задержка {current_value} мс превысила {threshold} мс",
         "graph_alert_step_failures": "{step}: число ошибок {current_value} достигло порога {threshold}",
         "graph_alert_analyze_retries": "{step}: число analyze retry {current_value} достигло порога {threshold}",
+        "graph_alert_hint": "Подсказка: {hint}",
     },
 }
 
@@ -865,6 +867,8 @@ def _render_graph_alerts(graph_alerts: list[dict]) -> None:
             st.error(message)
         else:
             st.warning(message)
+        if alert.get("hint"):
+            st.caption(_t("graph_alert_hint", hint=alert["hint"]))
 
 
 def _render_job_card(job: dict, job_kind: str) -> None:

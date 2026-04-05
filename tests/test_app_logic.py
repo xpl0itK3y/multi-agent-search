@@ -1948,6 +1948,9 @@ def test_queue_metrics_include_graph_alerts():
     assert ("high_avg_ms", "collect_context", "warning") in codes
     assert ("step_failures", "collect_context", "warning") in codes
     assert ("analyze_retries", "analyze", "warning") in codes
+    hints = {alert.code: alert.hint for alert in metrics.graph_alerts}
+    assert "source pool size" in hints["high_avg_ms"]
+    assert "fewer analyze passes" in hints["analyze_retries"]
 
 
 def test_extraction_metrics_derives_rates_and_averages():
