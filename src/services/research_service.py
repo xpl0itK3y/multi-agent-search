@@ -4,9 +4,13 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
+from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
+from src.agents.replan import ReplanAgent
 from src.agents.search import SearchAgent
+from src.agents.source_critic import SourceCriticAgent
 from src.api.schemas import (
     JobCleanupResponse,
     DecomposeResponse,
@@ -50,11 +54,19 @@ class ResearchService:
         optimizer: PromptOptimizerAgent | None = None,
         orchestrator: OrchestratorAgent | None = None,
         analyzer: AnalyzerAgent | None = None,
+        source_critic: SourceCriticAgent | None = None,
+        evidence_mapper: EvidenceMapperAgent | None = None,
+        claim_verifier: ClaimVerifierAgent | None = None,
+        replan_agent: ReplanAgent | None = None,
     ):
         self.task_store = task_store
         self.optimizer = optimizer
         self.orchestrator = orchestrator
         self.analyzer = analyzer
+        self.source_critic = source_critic or SourceCriticAgent()
+        self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
+        self.claim_verifier = claim_verifier or ClaimVerifierAgent()
+        self.replan_agent = replan_agent or ReplanAgent()
 
     def require_agent(self, agent, agent_name: str):
         if agent is None:
@@ -163,6 +175,27 @@ class ResearchService:
         task_count = len(tasks)
         avg_sources_per_task = round(collected_sources / task_count, 1) if task_count else 0.0
         finalize_ready = task_count > 0 and pending_tasks == 0 and running_tasks == 0
+        aggregated_sources = self._build_research_source_pool(tasks)
+        _, source_critic_summary = self.source_critic.assess_sources(aggregated_sources)
+        _, evidence_coverage_summary = self.evidence_mapper.build_evidence_groups(
+            aggregated_sources,
+            stopwords=AnalyzerAgent.STOPWORDS,
+            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
+            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
+            max_groups=5,
+        )
+        claim_verification_summary = self.claim_verifier.verify_and_downgrade(
+            research.final_report or "",
+            self._detect_report_language(research.prompt, research.final_report),
+            [],
+            [],
+        )[1]
+        replan_recommendations = self.replan_agent.suggest_follow_up(
+            research.prompt,
+            research.depth,
+            tasks,
+            source_summary=source_critic_summary,
+        )
 
         return ResearchSummary(
             id=research.id,
@@ -186,6 +219,10 @@ class ResearchService:
             total_extraction_failure_count=total_extraction_failure_count,
             total_selected_source_count=total_selected_source_count,
             finalize_ready=finalize_ready,
+            source_critic_summary=source_critic_summary,
+            evidence_coverage_summary=evidence_coverage_summary,
+            claim_verification_summary=claim_verification_summary,
+            replan_recommendations=replan_recommendations,
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             tasks=task_summaries,
         )
@@ -229,6 +266,33 @@ class ResearchService:
             search_metrics=task.search_metrics,
             latest_search_job=self.task_store.get_latest_search_task_job(task.id),
         )
+
+    def _build_research_source_pool(self, tasks: list[SearchTask]) -> list[dict]:
+        aggregated_sources: list[dict] = []
+        for task in tasks:
+            for result in task.result or []:
+                url = result.get("url")
+                content = result.get("content")
+                if not url or not content:
+                    continue
+                aggregated_sources.append(
+                    {
+                        "url": url,
+                        "domain": result.get("domain"),
+                        "title": result.get("title"),
+                        "content": content,
+                        "source_quality": result.get("source_quality"),
+                    }
+                )
+        return aggregated_sources
+
+    def _detect_report_language(self, prompt: str, report: str | None) -> str:
+        text = (report or prompt).lower()
+        if any("а" <= char <= "я" or char == "ё" for char in text):
+            return "ru"
+        if any(token in text for token in (" el ", " la ", " para ", " según ")):
+            return "es"
+        return "en"
 
     def _get_research_for_finalization(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)

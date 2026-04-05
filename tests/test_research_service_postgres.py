@@ -34,7 +34,7 @@ class StubOrchestrator:
 
 
 class StubAnalyzer:
-    def run_analysis(self, prompt: str, tasks):
+    def run_analysis(self, prompt: str, tasks, depth=None):
         assert prompt == "postgres lifecycle"
         assert len(tasks) == 2
         return "postgres final report"

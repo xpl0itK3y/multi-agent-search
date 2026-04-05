@@ -85,6 +85,10 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert parsed["gathered_data"][0]["source_id"] == "S1"
     assert parsed["gathered_data"][0]["domain"] == "example.com"
     assert parsed["gathered_data"][0]["source_quality"] == "low"
+    assert parsed["gathered_data"][0]["source_type"]
+    assert parsed["gathered_data"][0]["confidence"]
+    assert parsed["source_summary"]["total_sources"] == 1
+    assert "evidence_summary" in parsed
     assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
     assert "Prefer higher-quality and more authoritative sources when sources conflict" in agent.SYSTEM_PROMPT
     assert "substantially more comprehensive report" in llm.calls[0]["user_prompt"]
@@ -1037,6 +1041,48 @@ def test_analyzer_agent_passes_evidence_groups_into_prompt_payload():
     parsed = json.loads(payload)
     assert parsed["evidence_groups"]
     assert parsed["evidence_groups"][0]["source_ids"] == ["S1", "S2"]
+    assert parsed["evidence_groups"][0]["support_level"] in {"medium", "strong"}
+
+
+def test_research_summary_includes_replan_and_agent_summaries():
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+    research = task_store.add_research(
+        ResearchRequest(prompt="best horror films", depth=SearchDepth.HARD),
+        task_ids=[],
+    )
+    task = task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "collect source one",
+            "queries": ["best horror films official sources"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "https://editorial.example.com/horror",
+                    "domain": "editorial.example.com",
+                    "title": "Best Horror Movies of the Year",
+                    "content": "A long editorial roundup of horror releases and critic picks. " * 20,
+                    "source_quality": "medium",
+                }
+            ],
+            "search_metrics": {
+                "candidate_count": 4,
+                "extraction_attempts": 2,
+                "extraction_success_count": 1,
+                "selected_source_count": 1,
+            },
+        }
+    )
+    task_store.set_research_task_ids(research.id, [task.id])
+
+    summary = service.get_research_summary(research.id)
+
+    assert summary.source_critic_summary.total_sources == 1
+    assert summary.evidence_coverage_summary.evidence_group_count >= 0
+    assert summary.claim_verification_summary.uncited_lines == 0
+    assert summary.replan_recommendations
 
 
 def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
