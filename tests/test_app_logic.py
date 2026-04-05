@@ -4,8 +4,8 @@ import pytest
 from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
+from src.api.schemas import ExtractionMetrics, GraphMetrics
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus, TaskUpdate
-from src.api.schemas import ExtractionMetrics
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
@@ -1875,13 +1875,29 @@ def test_get_queue_metrics_aggregates_graph_metrics_from_worker_heartbeats():
         "job-worker",
         processed_jobs=1,
         status="busy",
-        graph_metrics={"resume_count": 1, "replan_pass_count": 2, "analyze_pass_count": 3},
+        graph_metrics={
+            "resume_count": 1,
+            "replan_pass_count": 2,
+            "analyze_pass_count": 3,
+            "steps": {
+                "analyze": {"run_count": 3, "failure_count": 1, "total_ms": 90.0},
+                "verify": {"run_count": 2, "failure_count": 0, "total_ms": 20.0},
+            },
+        },
     )
     task_store.upsert_worker_heartbeat(
         "job-worker-2",
         processed_jobs=2,
         status="busy",
-        graph_metrics={"resume_count": 2, "tie_break_pass_count": 1, "completed_run_count": 1},
+        graph_metrics={
+            "resume_count": 2,
+            "tie_break_pass_count": 1,
+            "completed_run_count": 1,
+            "steps": {
+                "analyze": {"run_count": 1, "failure_count": 0, "total_ms": 30.0},
+                "tie_break": {"run_count": 1, "failure_count": 1, "total_ms": 15.0},
+            },
+        },
     )
 
     metrics = ResearchService(task_store=task_store).get_queue_metrics()
@@ -1891,6 +1907,24 @@ def test_get_queue_metrics_aggregates_graph_metrics_from_worker_heartbeats():
     assert metrics.graph_metrics.tie_break_pass_count == 1
     assert metrics.graph_metrics.analyze_pass_count == 3
     assert metrics.graph_metrics.completed_run_count == 1
+    assert metrics.graph_metrics.steps["analyze"].run_count == 4
+    assert metrics.graph_metrics.steps["analyze"].failure_count == 1
+    assert metrics.graph_metrics.steps["analyze"].avg_ms == 30.0
+    assert metrics.graph_metrics.steps["tie_break"].failure_count == 1
+
+
+def test_graph_metrics_derive_step_averages():
+    metrics = GraphMetrics(
+        steps={
+            "collect_context": {"run_count": 2, "failure_count": 1, "total_ms": 50.0},
+            "analyze": {"run_count": 3, "total_ms": 90.0},
+        }
+    )
+
+    assert metrics.steps["collect_context"].avg_ms == 25.0
+    assert metrics.steps["collect_context"].failure_count == 1
+    assert metrics.steps["analyze"].avg_ms == 30.0
+    assert metrics.steps["verify"].run_count == 0
 
 
 def test_extraction_metrics_derives_rates_and_averages():

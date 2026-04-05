@@ -3,12 +3,31 @@ import threading
 
 
 @dataclass
+class GraphStepMetricsSnapshot:
+    run_count: int = 0
+    failure_count: int = 0
+    total_ms: float = 0.0
+    avg_ms: float = 0.0
+
+
+@dataclass
 class GraphMetricsSnapshot:
     resume_count: int = 0
     replan_pass_count: int = 0
     tie_break_pass_count: int = 0
     analyze_pass_count: int = 0
     completed_run_count: int = 0
+    steps: dict[str, GraphStepMetricsSnapshot] = None
+
+    def __post_init__(self) -> None:
+        if self.steps is None:
+            self.steps = {
+                "collect_context": GraphStepMetricsSnapshot(),
+                "replan": GraphStepMetricsSnapshot(),
+                "analyze": GraphStepMetricsSnapshot(),
+                "verify": GraphStepMetricsSnapshot(),
+                "tie_break": GraphStepMetricsSnapshot(),
+            }
 
 
 class GraphMetricsRegistry:
@@ -35,6 +54,17 @@ class GraphMetricsRegistry:
     def record_completed_run(self) -> None:
         with self._lock:
             self._metrics.completed_run_count += 1
+
+    def record_step(self, step_name: str, elapsed_ms: float, *, failed: bool = False) -> None:
+        with self._lock:
+            step = self._metrics.steps.get(step_name)
+            if step is None:
+                return
+            step.run_count += 1
+            if failed:
+                step.failure_count += 1
+            step.total_ms = round(step.total_ms + max(elapsed_ms, 0.0), 2)
+            step.avg_ms = round(step.total_ms / step.run_count, 2) if step.run_count > 0 else 0.0
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -74,3 +104,11 @@ def record_graph_analyze() -> None:
 
 def record_graph_completed_run() -> None:
     _GRAPH_METRICS.record_completed_run()
+
+
+def record_graph_step(step_name: str, elapsed_ms: float) -> None:
+    _GRAPH_METRICS.record_step(step_name, elapsed_ms, failed=False)
+
+
+def record_graph_step_failure(step_name: str, elapsed_ms: float) -> None:
+    _GRAPH_METRICS.record_step(step_name, elapsed_ms, failed=True)

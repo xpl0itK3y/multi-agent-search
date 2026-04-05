@@ -589,6 +589,12 @@ class SQLAlchemyTaskStore:
                 graph_metrics.tie_break_pass_count += runtime_metrics.tie_break_pass_count
                 graph_metrics.analyze_pass_count += runtime_metrics.analyze_pass_count
                 graph_metrics.completed_run_count += runtime_metrics.completed_run_count
+                for step_name, step_metrics in runtime_metrics.steps.items():
+                    aggregate_step = graph_metrics.steps[step_name]
+                    aggregate_step.run_count += step_metrics.run_count
+                    aggregate_step.failure_count += step_metrics.failure_count
+                    aggregate_step.total_ms += step_metrics.total_ms
+                    aggregate_step.avg_ms = round(aggregate_step.total_ms / aggregate_step.run_count, 2) if aggregate_step.run_count > 0 else 0.0
 
             return QueueMetrics(
                 pending_search_jobs=count_for(SearchTaskJobORM, SearchJobStatus.PENDING.value),

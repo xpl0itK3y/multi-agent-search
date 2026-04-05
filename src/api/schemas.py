@@ -273,12 +273,47 @@ class ExtractionMetrics(BaseModel):
         return self
 
 
+class GraphStepMetrics(BaseModel):
+    run_count: int = 0
+    failure_count: int = 0
+    total_ms: float = 0.0
+    avg_ms: float = 0.0
+
+    @model_validator(mode="after")
+    def _derive_averages(self) -> "GraphStepMetrics":
+        runs = max(self.run_count, 0)
+        self.avg_ms = round(self.total_ms / runs, 2) if runs > 0 else 0.0
+        return self
+
+
+def _default_graph_steps() -> Dict[str, GraphStepMetrics]:
+    return {
+        "collect_context": GraphStepMetrics(),
+        "replan": GraphStepMetrics(),
+        "analyze": GraphStepMetrics(),
+        "verify": GraphStepMetrics(),
+        "tie_break": GraphStepMetrics(),
+    }
+
+
 class GraphMetrics(BaseModel):
+
     resume_count: int = 0
     replan_pass_count: int = 0
     tie_break_pass_count: int = 0
     analyze_pass_count: int = 0
     completed_run_count: int = 0
+    steps: Dict[str, GraphStepMetrics] = Field(default_factory=_default_graph_steps)
+
+    @model_validator(mode="after")
+    def _normalize_steps(self) -> "GraphMetrics":
+        merged_steps = _default_graph_steps()
+        for step_name, payload in (self.steps or {}).items():
+            if step_name not in merged_steps:
+                continue
+            merged_steps[step_name] = GraphStepMetrics.model_validate(payload)
+        self.steps = merged_steps
+        return self
 
 
 class WorkerHeartbeat(BaseModel):
