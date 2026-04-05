@@ -177,6 +177,10 @@ TRANSLATIONS = {
         "graph_analyze_count": "Graph analyze passes: {count}",
         "graph_step_metrics": "Graph Step Metrics",
         "graph_step_summary": "{step}: runs {runs}, failures {failures}, avg {avg_ms} ms",
+        "graph_alerts": "Graph Alerts",
+        "graph_alert_high_avg_ms": "{step}: average latency {current_value} ms exceeded {threshold} ms",
+        "graph_alert_step_failures": "{step}: failure count {current_value} reached threshold {threshold}",
+        "graph_alert_analyze_retries": "{step}: analyze retries {current_value} reached threshold {threshold}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -341,6 +345,10 @@ TRANSLATIONS = {
         "graph_analyze_count": "Analyze проходы графа: {count}",
         "graph_step_metrics": "Метрики шагов графа",
         "graph_step_summary": "{step}: запусков {runs}, ошибок {failures}, среднее {avg_ms} мс",
+        "graph_alerts": "Проблемы графа",
+        "graph_alert_high_avg_ms": "{step}: средняя задержка {current_value} мс превысила {threshold} мс",
+        "graph_alert_step_failures": "{step}: число ошибок {current_value} достигло порога {threshold}",
+        "graph_alert_analyze_retries": "{step}: число analyze retry {current_value} достигло порога {threshold}",
     },
 }
 
@@ -739,6 +747,7 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
     extraction_metrics = heartbeat.get("extraction_metrics") or {}
     graph_metrics = heartbeat.get("graph_metrics") or {}
+    graph_alerts = heartbeat.get("graph_alerts") or []
     st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
     st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
     st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
@@ -748,6 +757,9 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
     st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
     st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
+    if graph_alerts:
+        with st.sidebar.expander(_t("graph_alerts"), expanded=True):
+            _render_graph_alerts(graph_alerts)
     with st.sidebar.expander(_t("graph_step_metrics"), expanded=False):
         _render_graph_step_metrics(graph_metrics)
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
@@ -836,6 +848,23 @@ def _render_graph_step_metrics(graph_metrics: dict) -> None:
                 avg_ms=round(float(metrics.get("avg_ms", 0.0) or 0.0), 2),
             )
         )
+
+
+def _render_graph_alerts(graph_alerts: list[dict]) -> None:
+    if not graph_alerts:
+        return
+    for alert in graph_alerts:
+        key = f"graph_alert_{alert.get('code')}"
+        message = _t(
+            key,
+            step=alert.get("step") or "-",
+            current_value=round(float(alert.get("current_value", 0.0) or 0.0), 2),
+            threshold=round(float(alert.get("threshold", 0.0) or 0.0), 2),
+        )
+        if (alert.get("severity") or "warning").lower() == "critical":
+            st.error(message)
+        else:
+            st.warning(message)
 
 
 def _render_job_card(job: dict, job_kind: str) -> None:
@@ -935,11 +964,15 @@ def _render_queue_overview() -> None:
     derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
     derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
     graph = metrics.get("graph_metrics") or {}
+    graph_alerts = metrics.get("graph_alerts") or []
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
     graph_row[2].metric(_t("graph_tie_break_count"), graph.get("tie_break_pass_count", 0))
     graph_row[3].metric(_t("graph_analyze_count"), graph.get("analyze_pass_count", 0))
+    if graph_alerts:
+        with st.expander(_t("graph_alerts"), expanded=True):
+            _render_graph_alerts(graph_alerts)
     with st.expander(_t("graph_step_metrics"), expanded=False):
         _render_graph_step_metrics(graph)
 

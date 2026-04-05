@@ -316,6 +316,14 @@ class GraphMetrics(BaseModel):
         return self
 
 
+class GraphAlert(BaseModel):
+    code: str
+    severity: str = "warning"
+    step: Optional[str] = None
+    current_value: float = 0.0
+    threshold: float = 0.0
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
@@ -323,6 +331,7 @@ class WorkerHeartbeat(BaseModel):
     last_error: Optional[str] = None
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
+    graph_alerts: List[GraphAlert] = Field(default_factory=list)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -335,6 +344,7 @@ class QueueMetrics(BaseModel):
     dead_letter_finalize_jobs: int = 0
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
+    graph_alerts: List[GraphAlert] = Field(default_factory=list)
 
 
 class JobRecoveryResponse(BaseModel):
