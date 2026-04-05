@@ -92,6 +92,39 @@ class SearchTaskSummary(BaseModel):
     search_metrics: SearchTaskMetrics = Field(default_factory=SearchTaskMetrics)
     latest_search_job: Optional["SearchTaskJob"] = None
 
+
+class SourceCriticSummary(BaseModel):
+    total_sources: int = 0
+    high_confidence_sources: int = 0
+    medium_confidence_sources: int = 0
+    low_confidence_sources: int = 0
+    primary_sources: int = 0
+    editorial_sources: int = 0
+    community_sources: int = 0
+    speculative_sources: int = 0
+    flagged_sources: int = 0
+    dominant_domains: List[str] = Field(default_factory=list)
+
+
+class EvidenceCoverageSummary(BaseModel):
+    evidence_group_count: int = 0
+    multi_source_group_count: int = 0
+    weak_group_count: int = 0
+    avg_sources_per_group: float = 0.0
+
+
+class ClaimVerificationSummary(BaseModel):
+    uncited_lines: int = 0
+    unsupported_lines: int = 0
+    downgraded_lines: int = 0
+    verification_notes: List[str] = Field(default_factory=list)
+
+
+class ReplanRecommendation(BaseModel):
+    reason: str
+    suggested_queries: List[str] = Field(default_factory=list)
+
+
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
     result: Optional[List[Dict[str, Any]]] = None
@@ -139,6 +172,10 @@ class ResearchSummary(BaseModel):
     total_extraction_failure_count: int = 0
     total_selected_source_count: int = 0
     finalize_ready: bool = False
+    source_critic_summary: SourceCriticSummary = Field(default_factory=SourceCriticSummary)
+    evidence_coverage_summary: EvidenceCoverageSummary = Field(default_factory=EvidenceCoverageSummary)
+    claim_verification_summary: ClaimVerificationSummary = Field(default_factory=ClaimVerificationSummary)
+    replan_recommendations: List[ReplanRecommendation] = Field(default_factory=list)
     latest_finalize_job: Optional["ResearchFinalizeJob"] = None
     tasks: List[SearchTaskSummary] = Field(default_factory=list)
 

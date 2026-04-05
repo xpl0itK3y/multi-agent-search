@@ -4,6 +4,9 @@ import re
 import time
 from typing import List
 from urllib.parse import urlparse
+from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.evidence_mapper import EvidenceMapperAgent
+from src.agents.source_critic import SourceCriticAgent
 from src.core.agent import BaseAgent
 from src.core import rust_accel
 from src.api.schemas import SearchTask, SearchDepth
@@ -323,6 +326,18 @@ class AnalyzerAgent(BaseAgent):
     - Output any internal reasoning, just the final markdown report.
     """
 
+    def __init__(
+        self,
+        llm,
+        source_critic: SourceCriticAgent | None = None,
+        evidence_mapper: EvidenceMapperAgent | None = None,
+        claim_verifier: ClaimVerifierAgent | None = None,
+    ):
+        super().__init__(llm)
+        self.source_critic = source_critic or SourceCriticAgent()
+        self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
+        self.claim_verifier = claim_verifier or ClaimVerifierAgent()
+
     def run(self, input_data: str) -> str:
         # Dummy implementation to satisfy abstract base class
         return ""
@@ -529,7 +544,7 @@ class AnalyzerAgent(BaseAgent):
             depth = SearchDepth.MEDIUM
         return self.DEPTH_ANALYSIS_PROFILES[depth]
 
-    def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> list[dict]:
+    def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> tuple[list[dict], object]:
         topics = self._detect_topics(prompt, tasks)
         profile = self._resolve_depth_profile(depth)
         aggregated_candidates = []
@@ -569,16 +584,17 @@ class AnalyzerAgent(BaseAgent):
             payload_char_budget=profile["payload_char_budget"],
         )
 
-        return [
+        aggregated_data = [
             {
                 "source_id": f"S{index}",
                 **{key: value for key, value in candidate.items() if key != "_score"},
             }
             for index, candidate in enumerate(selected_candidates, start=1)
         ]
+        return self.source_critic.assess_sources(aggregated_data)
 
-    def _extract_evidence_groups(self, aggregated_data: list[dict]) -> list[dict]:
-        return rust_accel.extract_evidence_groups(
+    def _extract_evidence_groups(self, aggregated_data: list[dict]) -> tuple[list[dict], object]:
+        return self.evidence_mapper.build_evidence_groups(
             aggregated_data=aggregated_data,
             stopwords=self.STOPWORDS,
             generic_tokens=self.CONFLICT_GENERIC_TOKENS,
@@ -1084,7 +1100,7 @@ class AnalyzerAgent(BaseAgent):
     def run_analysis(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> str:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
-        aggregated_data = self._prepare_aggregated_data(prompt, tasks, depth=depth)
+        aggregated_data, source_summary = self._prepare_aggregated_data(prompt, tasks, depth=depth)
         prepare_ms = (time.perf_counter() - prepare_started_at) * 1000
 
         profile = self._resolve_depth_profile(depth)
@@ -1096,15 +1112,17 @@ class AnalyzerAgent(BaseAgent):
         conflict_ms = (time.perf_counter() - conflict_started_at) * 1000
 
         evidence_started_at = time.perf_counter()
-        evidence_groups = self._extract_evidence_groups(evidence_pool)
+        evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool)
         evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = self._detect_language(prompt)
 
         input_data = {
             "original_prompt": prompt,
             "gathered_data": aggregated_data,
+            "source_summary": source_summary.model_dump(),
             "detected_conflicts": conflicts,
             "evidence_groups": evidence_groups,
+            "evidence_summary": evidence_summary.model_dump(),
         }
 
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
@@ -1156,14 +1174,30 @@ class AnalyzerAgent(BaseAgent):
                 with_conflicts = self._inject_conflicts_section(normalized, conflicts, prompt_language)
                 rebuilt = self._rebuild_sources_section(with_conflicts, aggregated_data, prompt_language)
         notes = self._report_quality_notes(rebuilt, aggregated_data, prompt_language)
-        final_report = self._inject_report_notes(rebuilt, notes, prompt_language)
+        remaining_uncited_lines = self._uncited_claim_lines(rebuilt)
+        remaining_unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
+        verified_report, verification_summary = self.claim_verifier.verify_and_downgrade(
+            rebuilt,
+            prompt_language,
+            remaining_uncited_lines,
+            remaining_unsupported_lines,
+        )
+        final_notes = list(notes)
+        final_notes.extend(
+            note
+            for note in verification_summary.verification_notes
+            if note not in final_notes
+        )
+        final_report = self._inject_report_notes(verified_report, final_notes, prompt_language)
         total_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
-            "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f llm_ms=%.2f repair_ms=%.2f total_ms=%.2f",
+            "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s high_confidence_sources=%s downgraded_lines=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f llm_ms=%.2f repair_ms=%.2f total_ms=%.2f",
             len(aggregated_data),
             sum(len(item.get("content") or "") for item in aggregated_data),
             len(conflicts),
             len(evidence_groups),
+            source_summary.high_confidence_sources,
+            verification_summary.downgraded_lines,
             prepare_ms,
             conflict_ms,
             evidence_ms,
