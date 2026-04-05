@@ -197,6 +197,9 @@ TRANSLATIONS = {
         "maintenance_compacted_researches": "Compacted graph researches: {value}",
         "maintenance_recent_runs": "Recent maintenance runs",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
+        "maintenance_recommendation_history": "Recommendation History",
+        "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
+        "maintenance_recommendation_event_note": "Note: {value}",
         "maintenance_trend": "Maintenance Trend",
         "maintenance_cleanup_direction": "Cleanup volume: {value}",
         "maintenance_avg_compacted": "Average compacted per run: {value}",
@@ -417,6 +420,9 @@ TRANSLATIONS = {
         "maintenance_compacted_researches": "Research с compact graph trail: {value}",
         "maintenance_recent_runs": "Последние maintenance запуски",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
+        "maintenance_recommendation_history": "История рекомендаций",
+        "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
+        "maintenance_recommendation_event_note": "Заметка: {value}",
         "maintenance_trend": "Тренд maintenance",
         "maintenance_cleanup_direction": "Объем cleanup: {value}",
         "maintenance_avg_compacted": "Средний compacted за run: {value}",
@@ -1057,6 +1063,20 @@ def _render_maintenance_summary(summary: dict) -> None:
                     total=int(run.get("total_count", 0) or 0),
                 )
             )
+    recommendation_events = summary.get("recent_operational_recommendation_events") or []
+    if recommendation_events:
+        st.caption(_t("maintenance_recommendation_history"))
+        for event in recommendation_events[-8:]:
+            st.caption(
+                _t(
+                    "maintenance_recommendation_event_line",
+                    timestamp=_format_timestamp(event.get("timestamp")),
+                    code=event.get("code") or "-",
+                    event_type=event.get("event_type") or "-",
+                )
+            )
+            if event.get("note"):
+                st.caption(_t("maintenance_recommendation_event_note", value=event["note"]))
 
 
 def _render_operational_health(health: dict, scope_key: str = "global", enable_ack: bool = False) -> None:

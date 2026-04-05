@@ -366,6 +366,13 @@ class MaintenanceSummary(BaseModel):
         recent_total_counts: List[int] = Field(default_factory=list)
         recent_compacted_counts: List[int] = Field(default_factory=list)
 
+    class RecommendationEvent(BaseModel):
+        code: str
+        event_type: str
+        message: str
+        timestamp: Optional[datetime] = None
+        note: Optional[str] = None
+
     recovered_count: int = 0
     deleted_count: int = 0
     compacted_count: int = 0
@@ -378,6 +385,7 @@ class MaintenanceSummary(BaseModel):
     alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
     recent_operational_health: List["OperationalHealth.OperationalHealthEntry"] = Field(default_factory=list)
     recent_operational_recommendations: List["OperationalHealth.RecommendationEntry"] = Field(default_factory=list)
+    recent_operational_recommendation_events: List["MaintenanceSummary.RecommendationEvent"] = Field(default_factory=list)
 
 
 class OperationalHealth(BaseModel):
