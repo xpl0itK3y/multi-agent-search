@@ -207,6 +207,12 @@ TRANSLATIONS = {
         "maintenance_alert_high_compacted_average": "Average compacted count {current_value} exceeded {threshold}",
         "maintenance_alert_maintenance_stale": "Maintenance is stale: last run age {current_value}s exceeded {threshold}s",
         "maintenance_alert_hint": "Hint: {hint}",
+        "operational_health": "Operational Health",
+        "operational_health_score": "Operational score: {score}",
+        "operational_health_reasons": "Reasons: {value}",
+        "health_healthy": "healthy",
+        "health_warning": "warning",
+        "health_critical": "critical",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -401,6 +407,12 @@ TRANSLATIONS = {
         "maintenance_alert_high_compacted_average": "Средний compacted count {current_value} превысил {threshold}",
         "maintenance_alert_maintenance_stale": "Maintenance устарел: возраст последнего запуска {current_value}s превысил {threshold}s",
         "maintenance_alert_hint": "Подсказка: {hint}",
+        "operational_health": "Operational Health",
+        "operational_health_score": "Operational score: {score}",
+        "operational_health_reasons": "Причины: {value}",
+        "health_healthy": "healthy",
+        "health_warning": "warning",
+        "health_critical": "critical",
     },
 }
 
@@ -801,6 +813,7 @@ def _render_sidebar() -> None:
     graph_metrics = heartbeat.get("graph_metrics") or {}
     graph_alerts = heartbeat.get("graph_alerts") or []
     graph_alert_trend = heartbeat.get("graph_alert_trend") or {}
+    operational_health = heartbeat.get("operational_health") or {}
     st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
     st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
     st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
@@ -810,6 +823,7 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
     st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
     st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
+    _render_operational_health(operational_health)
     if graph_alerts:
         with st.sidebar.expander(_t("graph_alerts"), expanded=True):
             _render_graph_alerts(graph_alerts)
@@ -1005,6 +1019,21 @@ def _render_maintenance_summary(summary: dict) -> None:
             )
 
 
+def _render_operational_health(health: dict) -> None:
+    if not health:
+        return
+    status = str(health.get("status") or "healthy").lower()
+    if status == "critical":
+        st.error(f"{_t('operational_health')}: {_t('health_critical')}")
+    elif status == "warning":
+        st.warning(f"{_t('operational_health')}: {_t('health_warning')}")
+    else:
+        st.success(f"{_t('operational_health')}: {_t('health_healthy')}")
+    st.caption(_t("operational_health_score", score=int(health.get("score", 100) or 100)))
+    reasons = ", ".join(health.get("reasons") or []) or "-"
+    st.caption(_t("operational_health_reasons", value=reasons))
+
+
 def _render_job_card(job: dict, job_kind: str) -> None:
     status_html = _status_badge(job["status"])
     owner_id = job["task_id"] if job_kind == "search" else job["research_id"]
@@ -1105,6 +1134,8 @@ def _render_queue_overview() -> None:
     graph_alerts = metrics.get("graph_alerts") or []
     graph_alert_trend = metrics.get("graph_alert_trend") or {}
     maintenance_summary = metrics.get("maintenance_summary") or {}
+    operational_health = metrics.get("operational_health") or {}
+    _render_operational_health(operational_health)
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))

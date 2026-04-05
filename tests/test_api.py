@@ -250,6 +250,9 @@ async def test_queue_health_includes_maintenance_trend(client):
     assert trend["recent_compacted_counts"] == [0, 1, 2, 3]
     alert_codes = {item["code"] for item in payload["maintenance_summary"]["alerts"]}
     assert "cleanup_volume_growing" in alert_codes
+    assert payload["operational_health"]["status"] in {"warning", "critical"}
+    assert payload["operational_health"]["score"] < 100
+    assert any(reason.startswith("maintenance:") for reason in payload["operational_health"]["reasons"])
 
 
 @pytest.mark.anyio
@@ -273,6 +276,29 @@ async def test_queue_health_includes_maintenance_stale_alert(client):
     payload = response.json()
     alert_codes = {item["code"] for item in payload["maintenance_summary"]["alerts"]}
     assert "maintenance_stale" in alert_codes
+    assert any(reason == "maintenance:maintenance_stale" for reason in payload["operational_health"]["reasons"])
+
+
+@pytest.mark.anyio
+async def test_worker_health_includes_operational_health(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "job-worker",
+        processed_jobs=1,
+        status="busy",
+        graph_metrics={
+            "steps": {
+                "analyze": {"run_count": 5, "failure_count": 3, "total_ms": 30000.0},
+            },
+        },
+    )
+
+    response = await client.get("/health/workers/job-worker")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operational_health"]["status"] == "critical"
+    assert payload["operational_health"]["score"] <= 50
 
 
 @pytest.mark.anyio

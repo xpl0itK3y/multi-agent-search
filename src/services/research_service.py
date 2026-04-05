@@ -15,6 +15,7 @@ from src.agents.source_critic import SourceCriticAgent
 from src.api.schemas import (
     JobCleanupResponse,
     MaintenanceSummary,
+    OperationalHealth,
     DecomposeResponse,
     FinalizeJobStatus,
     GraphAlert,
@@ -681,10 +682,18 @@ class ResearchService:
         if not heartbeat:
             return None
         step_events = self._filter_graph_step_events(worker_name=worker_name)
+        maintenance_summary = self._build_maintenance_summary(heartbeat.maintenance_summary)
+        graph_alerts = self._build_graph_alerts(heartbeat.graph_metrics)
         return heartbeat.model_copy(
             update={
-                "graph_alerts": self._build_graph_alerts(heartbeat.graph_metrics),
+                "graph_alerts": graph_alerts,
                 "graph_alert_trend": self._build_graph_alert_trend(step_events),
+                "maintenance_summary": maintenance_summary,
+                "operational_health": self._build_operational_health(
+                    QueueMetrics(),
+                    graph_alerts,
+                    maintenance_summary,
+                ),
             }
         )
 
@@ -713,27 +722,32 @@ class ResearchService:
     def get_queue_metrics(self) -> QueueMetrics:
         metrics = self.task_store.get_queue_metrics()
         maintenance_heartbeat = self.task_store.get_worker_heartbeat("maintenance")
+        graph_alerts = self._build_graph_alerts(metrics.graph_metrics)
+        maintenance_summary = (
+            self._build_maintenance_summary(maintenance_heartbeat.maintenance_summary)
+            if maintenance_heartbeat
+            else MaintenanceSummary()
+        )
         return metrics.model_copy(
             update={
-                "graph_alerts": self._build_graph_alerts(metrics.graph_metrics),
+                "graph_alerts": graph_alerts,
                 "graph_alert_trend": self._build_graph_alert_trend(self._filter_graph_step_events()),
-                "maintenance_summary": (
-                    self._build_maintenance_summary(maintenance_heartbeat.maintenance_summary)
-                    if maintenance_heartbeat
-                    else MaintenanceSummary()
-                ),
+                "maintenance_summary": maintenance_summary,
+                "operational_health": self._build_operational_health(metrics, graph_alerts, maintenance_summary),
             }
         )
 
     def get_health_status(self) -> dict:
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         step_events = self._filter_graph_step_events()
+        queue_metrics = self.get_queue_metrics()
         return {
             "status": "ok",
             "extraction_metrics": get_extraction_metrics_snapshot(),
             "graph_metrics": graph_metrics.model_dump(),
             "graph_alerts": [alert.model_dump() for alert in self._build_graph_alerts(graph_metrics)],
             "graph_alert_trend": self._build_graph_alert_trend(step_events).model_dump(),
+            "operational_health": queue_metrics.operational_health.model_dump(),
         }
 
     def _build_graph_alerts(self, graph_metrics: GraphMetrics) -> list[GraphAlert]:
@@ -999,6 +1013,56 @@ class ResearchService:
                 )
 
         return summary.model_copy(update={"trend": trend, "alerts": alerts})
+
+    def _build_operational_health(
+        self,
+        metrics: QueueMetrics,
+        graph_alerts: list[GraphAlert],
+        maintenance_summary: MaintenanceSummary,
+    ) -> OperationalHealth:
+        score = 100
+        reasons: list[str] = []
+
+        for alert in graph_alerts:
+            if alert.severity == "critical":
+                score -= 25
+            else:
+                score -= 10
+            reasons.append(f"graph:{alert.code}")
+
+        for alert in maintenance_summary.alerts:
+            if alert.severity == "critical":
+                score -= 20
+            else:
+                score -= 8
+            reasons.append(f"maintenance:{alert.code}")
+
+        backlog = (
+            metrics.pending_search_jobs
+            + metrics.running_search_jobs
+            + metrics.dead_letter_search_jobs
+            + metrics.pending_finalize_jobs
+            + metrics.running_finalize_jobs
+            + metrics.dead_letter_finalize_jobs
+        )
+        if backlog >= 20:
+            score -= 20
+            reasons.append("queue:high_backlog")
+        elif backlog >= 8:
+            score -= 10
+            reasons.append("queue:elevated_backlog")
+
+        score = max(score, 0)
+        status = "healthy"
+        if any(
+            (alert.severity == "critical" for alert in graph_alerts)
+        ) or any((alert.severity == "critical" for alert in maintenance_summary.alerts)) or score <= 50:
+            status = "critical"
+        elif graph_alerts or maintenance_summary.alerts or score < 90:
+            status = "warning"
+
+        deduped_reasons = list(dict.fromkeys(reasons))
+        return OperationalHealth(status=status, score=score, reasons=deduped_reasons[:8])
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()

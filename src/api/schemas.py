@@ -378,6 +378,12 @@ class MaintenanceSummary(BaseModel):
     alerts: List["MaintenanceSummary.MaintenanceAlert"] = Field(default_factory=list)
 
 
+class OperationalHealth(BaseModel):
+    status: str = "healthy"
+    score: int = 100
+    reasons: List[str] = Field(default_factory=list)
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
@@ -388,6 +394,7 @@ class WorkerHeartbeat(BaseModel):
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
     graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
     maintenance_summary: MaintenanceSummary = Field(default_factory=MaintenanceSummary)
+    operational_health: OperationalHealth = Field(default_factory=OperationalHealth)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -403,6 +410,7 @@ class QueueMetrics(BaseModel):
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
     graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
     maintenance_summary: MaintenanceSummary = Field(default_factory=MaintenanceSummary)
+    operational_health: OperationalHealth = Field(default_factory=OperationalHealth)
 
 
 class JobRecoveryResponse(BaseModel):
