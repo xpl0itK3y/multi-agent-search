@@ -210,3 +210,4 @@ def test_maintenance_worker_appends_maintenance_history(monkeypatch):
     heartbeat = task_store.get_worker_heartbeat("maintenance")
     assert heartbeat is not None
     assert len(heartbeat.maintenance_summary.recent_runs) == 2
+    assert heartbeat.maintenance_summary.trend.cleanup_volume_direction == "stable"

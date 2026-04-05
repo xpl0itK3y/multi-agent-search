@@ -353,6 +353,12 @@ class MaintenanceSummary(BaseModel):
         total_count: int = 0
         last_run_at: Optional[datetime] = None
 
+    class MaintenanceTrend(BaseModel):
+        cleanup_volume_direction: str = "stable"
+        average_compacted_count: float = 0.0
+        recent_total_counts: List[int] = Field(default_factory=list)
+        recent_compacted_counts: List[int] = Field(default_factory=list)
+
     recovered_count: int = 0
     deleted_count: int = 0
     compacted_count: int = 0
@@ -361,6 +367,7 @@ class MaintenanceSummary(BaseModel):
     compacted_graph_trail_research_ids: List[str] = Field(default_factory=list)
     last_run_at: Optional[datetime] = None
     recent_runs: List["MaintenanceSummary.MaintenanceRunEntry"] = Field(default_factory=list)
+    trend: "MaintenanceSummary.MaintenanceTrend" = Field(default_factory=MaintenanceTrend)
 
 
 class WorkerHeartbeat(BaseModel):

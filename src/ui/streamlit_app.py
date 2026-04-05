@@ -197,6 +197,11 @@ TRANSLATIONS = {
         "maintenance_compacted_researches": "Compacted graph researches: {value}",
         "maintenance_recent_runs": "Recent maintenance runs",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
+        "maintenance_trend": "Maintenance Trend",
+        "maintenance_cleanup_direction": "Cleanup volume: {value}",
+        "maintenance_avg_compacted": "Average compacted per run: {value}",
+        "maintenance_total_sparkline": "Recent total counts: {value}",
+        "maintenance_compacted_sparkline": "Recent compacted counts: {value}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -381,6 +386,11 @@ TRANSLATIONS = {
         "maintenance_compacted_researches": "Research с compact graph trail: {value}",
         "maintenance_recent_runs": "Последние maintenance запуски",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
+        "maintenance_trend": "Тренд maintenance",
+        "maintenance_cleanup_direction": "Объем cleanup: {value}",
+        "maintenance_avg_compacted": "Средний compacted за run: {value}",
+        "maintenance_total_sparkline": "Последние total counts: {value}",
+        "maintenance_compacted_sparkline": "Последние compacted counts: {value}",
     },
 }
 
@@ -944,6 +954,15 @@ def _render_maintenance_summary(summary: dict) -> None:
     research_ids = ", ".join(summary.get("compacted_graph_trail_research_ids") or []) or "-"
     st.caption(_t("maintenance_compacted_workers", value=worker_names))
     st.caption(_t("maintenance_compacted_researches", value=research_ids))
+    trend = summary.get("trend") or {}
+    if trend:
+        st.caption(_t("maintenance_trend"))
+        st.caption(_t("maintenance_cleanup_direction", value=trend.get("cleanup_volume_direction") or "stable"))
+        st.caption(_t("maintenance_avg_compacted", value=trend.get("average_compacted_count", 0.0)))
+        total_sparkline = " ".join(str(item) for item in (trend.get("recent_total_counts") or [])) or "-"
+        compacted_sparkline = " ".join(str(item) for item in (trend.get("recent_compacted_counts") or [])) or "-"
+        st.caption(_t("maintenance_total_sparkline", value=total_sparkline))
+        st.caption(_t("maintenance_compacted_sparkline", value=compacted_sparkline))
     recent_runs = summary.get("recent_runs") or []
     if recent_runs:
         st.caption(_t("maintenance_recent_runs"))

@@ -712,7 +712,9 @@ class ResearchService:
                 "graph_alerts": self._build_graph_alerts(metrics.graph_metrics),
                 "graph_alert_trend": self._build_graph_alert_trend(self._filter_graph_step_events()),
                 "maintenance_summary": (
-                    maintenance_heartbeat.maintenance_summary if maintenance_heartbeat else MaintenanceSummary()
+                    self._build_maintenance_summary(maintenance_heartbeat.maintenance_summary)
+                    if maintenance_heartbeat
+                    else MaintenanceSummary()
                 ),
             }
         )
@@ -900,6 +902,30 @@ class ResearchService:
             top_worker_names=top_worker_names,
             recent_alerts=recent_alerts[-10:],
         )
+
+    def _build_maintenance_summary(self, summary: MaintenanceSummary) -> MaintenanceSummary:
+        recent_runs = list(summary.recent_runs or [])
+        total_counts = [int(item.total_count or 0) for item in recent_runs[-8:]]
+        compacted_counts = [int(item.compacted_count or 0) for item in recent_runs[-8:]]
+        average_compacted = round(sum(compacted_counts) / len(compacted_counts), 2) if compacted_counts else 0.0
+        direction = "stable"
+        if len(total_counts) >= 4:
+            half = len(total_counts) // 2
+            previous = total_counts[:half]
+            recent = total_counts[half:]
+            previous_avg = sum(previous) / len(previous) if previous else 0.0
+            recent_avg = sum(recent) / len(recent) if recent else 0.0
+            if recent_avg > previous_avg * 1.2 and recent_avg - previous_avg >= 1:
+                direction = "growing"
+            elif previous_avg > 0 and recent_avg < previous_avg * 0.8 and previous_avg - recent_avg >= 1:
+                direction = "shrinking"
+        trend = MaintenanceSummary.MaintenanceTrend(
+            cleanup_volume_direction=direction,
+            average_compacted_count=average_compacted,
+            recent_total_counts=total_counts,
+            recent_compacted_counts=compacted_counts,
+        )
+        return summary.model_copy(update={"trend": trend})
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()
