@@ -47,7 +47,7 @@ from src.api.schemas import (
 from src.config import settings
 from src.graph import FinalizeGraphRunner
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
-from src.observability import bind_observability_context
+from src.observability import bind_observability_context, set_queue_metrics
 from src.providers.search import get_extraction_metrics_snapshot
 from src.repositories.protocols import TaskStore
 from src.search_depth_profiles import get_depth_profile
@@ -739,7 +739,7 @@ class ResearchService:
             if maintenance_heartbeat
             else MaintenanceSummary()
         )
-        return metrics.model_copy(
+        enriched_metrics = metrics.model_copy(
             update={
                 "graph_alerts": graph_alerts,
                 "graph_alert_trend": self._build_graph_alert_trend(self._filter_graph_step_events()),
@@ -747,6 +747,8 @@ class ResearchService:
                 "operational_health": self._build_operational_health(metrics, graph_alerts, maintenance_summary),
             }
         )
+        set_queue_metrics(enriched_metrics)
+        return enriched_metrics
 
     def acknowledge_operational_recommendation(
         self,

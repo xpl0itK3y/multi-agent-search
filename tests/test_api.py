@@ -124,6 +124,14 @@ async def test_run_queue_maintenance_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_metrics_endpoint(client):
+    response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+
+
+@pytest.mark.anyio
 async def test_queue_health_includes_extraction_metrics(client):
     app_service = client._transport.app.state.research_service
     app_service.task_store.upsert_worker_heartbeat(

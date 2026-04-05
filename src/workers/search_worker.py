@@ -1,6 +1,6 @@
 import logging
 
-from src.observability import bind_observability_context
+from src.observability import bind_observability_context, observe_worker_job
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.providers.search import get_extraction_metrics_snapshot
 from src.services import ResearchService
@@ -34,8 +34,13 @@ class SearchWorker:
                     graph_step_events=get_graph_step_events_snapshot(),
                 )
                 logger.info("search_job_claimed depth=%s", job.depth.value)
-                self.research_service.process_search_task_job(job.id)
-                processed += 1
+                try:
+                    self.research_service.process_search_task_job(job.id)
+                    processed += 1
+                    observe_worker_job(self.worker_name, "search", "success")
+                except Exception:
+                    observe_worker_job(self.worker_name, "search", "failure")
+                    raise
                 self.research_service.touch_worker_heartbeat(
                     self.worker_name,
                     processed,

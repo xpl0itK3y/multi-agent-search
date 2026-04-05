@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from src.observability import bind_observability_context
+from src.observability import bind_observability_context, observe_worker_job
 from src.services import ResearchService
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ class MaintenanceWorker:
                 "busy" if result.total_count else "idle",
                 maintenance_summary=maintenance_summary,
             )
+            observe_worker_job("maintenance", "maintenance", "success")
             if result.total_count:
                 logger.info(
                     "queue_maintenance_completed recovered_count=%s deleted_count=%s compacted_count=%s total_count=%s",

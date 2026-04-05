@@ -1,6 +1,6 @@
 import logging
 
-from src.observability import bind_observability_context
+from src.observability import bind_observability_context, observe_worker_job
 from src.services import ResearchService
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,13 @@ class FinalizeWorker:
                     "busy",
                 )
                 logger.info("finalize_job_claimed")
-                self.research_service.process_finalize_job(job.id)
-                processed += 1
+                try:
+                    self.research_service.process_finalize_job(job.id)
+                    processed += 1
+                    observe_worker_job(self.worker_name, "finalize", "success")
+                except Exception:
+                    observe_worker_job(self.worker_name, "finalize", "failure")
+                    raise
                 self.research_service.touch_worker_heartbeat(
                     self.worker_name,
                     processed,

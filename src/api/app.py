@@ -1,7 +1,8 @@
 import uuid
+import time
 from typing import List
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from src.api.dependencies import get_research_service
 from src.api.schemas import (
     DecomposeRequest,
@@ -30,7 +31,7 @@ from src.api.schemas import (
 )
 from src.bootstrap import lifespan
 from src.config import settings
-from src.observability import bind_observability_context
+from src.observability import bind_observability_context, observe_api_request, render_metrics
 
 
 def create_app() -> FastAPI:
@@ -40,12 +41,19 @@ def create_app() -> FastAPI:
     async def correlation_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         request.state.request_id = request_id
+        started_at = time.perf_counter()
         with bind_observability_context(
             request_id=request_id,
             method=request.method,
             path=str(request.url.path),
         ):
             response = await call_next(request)
+        observe_api_request(
+            request.method,
+            str(request.url.path),
+            response.status_code,
+            time.perf_counter() - started_at,
+        )
         response.headers["X-Request-ID"] = request_id
         return response
 
@@ -57,6 +65,11 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/health")
     async def health_check(request: Request):
         return get_research_service(request).get_health_status()
+
+    @app.get("/metrics")
+    async def metrics_endpoint():
+        payload, content_type = render_metrics()
+        return Response(content=payload, media_type=content_type)
 
     @app.get("/health/queues", response_model=QueueMetrics)
     async def queue_health(request: Request):
