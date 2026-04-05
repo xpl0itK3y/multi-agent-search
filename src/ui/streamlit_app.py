@@ -199,6 +199,11 @@ TRANSLATIONS = {
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
         "maintenance_recommendation_history": "Recommendation History",
         "maintenance_recommendation_summary": "Recommendation Summary",
+        "maintenance_recommendation_counters": "Recommendation Snapshot",
+        "maintenance_recommendation_counter_needs_action": "Needs action: {count}",
+        "maintenance_recommendation_counter_acknowledged": "Acknowledged: {count}",
+        "maintenance_recommendation_counter_resolved": "Resolved: {count}",
+        "maintenance_recommendation_counter_reappeared": "Reappeared: {count}",
         "maintenance_recommendation_summary_line": "{code} | repeats={repeats} reappeared={reappeared} last_resolved={last_resolved}",
         "maintenance_recommendation_badge_needs_action": "Needs Action",
         "maintenance_recommendation_badge_acknowledged": "Acknowledged",
@@ -428,6 +433,11 @@ TRANSLATIONS = {
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
         "maintenance_recommendation_history": "История рекомендаций",
         "maintenance_recommendation_summary": "Сводка по рекомендациям",
+        "maintenance_recommendation_counters": "Снимок по рекомендациям",
+        "maintenance_recommendation_counter_needs_action": "Нужно действие: {count}",
+        "maintenance_recommendation_counter_acknowledged": "Подтверждено: {count}",
+        "maintenance_recommendation_counter_resolved": "Закрыто: {count}",
+        "maintenance_recommendation_counter_reappeared": "Повторно всплыло: {count}",
         "maintenance_recommendation_summary_line": "{code} | повторов={repeats} повторных всплытий={reappeared} последний resolved={last_resolved}",
         "maintenance_recommendation_badge_needs_action": "Нужно действие",
         "maintenance_recommendation_badge_acknowledged": "Подтверждено",
@@ -1087,6 +1097,30 @@ def _render_maintenance_summary(summary: dict) -> None:
     recommendation_events = summary.get("recent_operational_recommendation_events") or []
     recommendations = summary.get("recent_operational_recommendations") or []
     if recommendations:
+        needs_action_count = sum(
+            1
+            for item in recommendations
+            if bool(item.get("active", True))
+            and not bool(item.get("resolved", False))
+            and not bool(item.get("acknowledged", False))
+        )
+        acknowledged_count = sum(
+            1
+            for item in recommendations
+            if bool(item.get("active", True))
+            and not bool(item.get("resolved", False))
+            and bool(item.get("acknowledged", False))
+        )
+        resolved_count = sum(1 for item in recommendations if bool(item.get("resolved", False)))
+        reappeared_count = sum(
+            1 for event in recommendation_events if str(event.get("event_type") or "") == "reappeared"
+        )
+        st.caption(_t("maintenance_recommendation_counters"))
+        counter_row = st.columns(4)
+        counter_row[0].metric(_t("maintenance_recommendation_counter_needs_action", count=needs_action_count), needs_action_count)
+        counter_row[1].metric(_t("maintenance_recommendation_counter_acknowledged", count=acknowledged_count), acknowledged_count)
+        counter_row[2].metric(_t("maintenance_recommendation_counter_resolved", count=resolved_count), resolved_count)
+        counter_row[3].metric(_t("maintenance_recommendation_counter_reappeared", count=reappeared_count), reappeared_count)
         st.caption(_t("maintenance_recommendation_summary"))
         recommendation_events_by_code: dict[str, list[dict]] = {}
         for event in recommendation_events:
