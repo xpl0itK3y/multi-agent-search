@@ -67,6 +67,7 @@ async def test_health_check(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert "extraction_metrics" in payload
+    assert "graph_metrics" in payload
     assert payload["extraction_metrics"]["attempts"] >= 0
     assert response.headers["X-Request-ID"]
 
@@ -113,6 +114,7 @@ async def test_queue_health_includes_extraction_metrics(client):
         processed_jobs=1,
         status="busy",
         extraction_metrics={"attempts": 5, "success_count": 4, "failure_count": 1},
+        graph_metrics={"resume_count": 2, "replan_pass_count": 1},
     )
 
     response = await client.get("/health/queues")
@@ -122,6 +124,8 @@ async def test_queue_health_includes_extraction_metrics(client):
     assert payload["extraction_metrics"]["attempts"] == 5
     assert payload["extraction_metrics"]["success_count"] == 4
     assert payload["extraction_metrics"]["failure_count"] == 1
+    assert payload["graph_metrics"]["resume_count"] == 2
+    assert payload["graph_metrics"]["replan_pass_count"] == 1
 
 
 @pytest.mark.anyio

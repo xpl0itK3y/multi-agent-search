@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 from src.api.schemas import (
     ExtractionMetrics,
     FinalizeJobStatus,
+    GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
@@ -192,5 +193,6 @@ def worker_heartbeat_orm_to_schema(heartbeat: WorkerHeartbeatORM) -> WorkerHeart
         status=heartbeat.status,
         last_error=heartbeat.last_error,
         extraction_metrics=ExtractionMetrics.model_validate(heartbeat.extraction_metrics or {}),
+        graph_metrics=GraphMetrics.model_validate(heartbeat.graph_metrics or {}),
         last_seen_at=heartbeat.last_seen_at,
     )

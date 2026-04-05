@@ -273,12 +273,21 @@ class ExtractionMetrics(BaseModel):
         return self
 
 
+class GraphMetrics(BaseModel):
+    resume_count: int = 0
+    replan_pass_count: int = 0
+    tie_break_pass_count: int = 0
+    analyze_pass_count: int = 0
+    completed_run_count: int = 0
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
     status: str = "idle"
     last_error: Optional[str] = None
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
+    graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -290,6 +299,7 @@ class QueueMetrics(BaseModel):
     running_finalize_jobs: int = 0
     dead_letter_finalize_jobs: int = 0
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
+    graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
 
 
 class JobRecoveryResponse(BaseModel):
