@@ -702,6 +702,7 @@ class ResearchService:
                         step=step_name,
                         current_value=step_metrics.avg_ms,
                         threshold=self.GRAPH_STEP_CRITICAL_MS,
+                        hint=self._graph_alert_hint("high_avg_ms", step_name),
                     )
                 )
             elif step_metrics.avg_ms >= self.GRAPH_STEP_WARNING_MS:
@@ -712,6 +713,7 @@ class ResearchService:
                         step=step_name,
                         current_value=step_metrics.avg_ms,
                         threshold=self.GRAPH_STEP_WARNING_MS,
+                        hint=self._graph_alert_hint("high_avg_ms", step_name),
                     )
                 )
 
@@ -723,6 +725,7 @@ class ResearchService:
                         step=step_name,
                         current_value=float(step_metrics.failure_count),
                         threshold=float(self.GRAPH_STEP_FAILURE_CRITICAL_COUNT),
+                        hint=self._graph_alert_hint("step_failures", step_name),
                     )
                 )
             elif step_metrics.failure_count >= self.GRAPH_STEP_FAILURE_WARNING_COUNT:
@@ -733,6 +736,7 @@ class ResearchService:
                         step=step_name,
                         current_value=float(step_metrics.failure_count),
                         threshold=float(self.GRAPH_STEP_FAILURE_WARNING_COUNT),
+                        hint=self._graph_alert_hint("step_failures", step_name),
                     )
                 )
 
@@ -747,6 +751,7 @@ class ResearchService:
                     step="analyze",
                     current_value=float(analyze_retry_count),
                     threshold=float(self.GRAPH_ANALYZE_RETRY_CRITICAL_COUNT),
+                    hint=self._graph_alert_hint("analyze_retries", "analyze"),
                 )
             )
         elif analyze_retry_count >= self.GRAPH_ANALYZE_RETRY_WARNING_COUNT:
@@ -757,9 +762,38 @@ class ResearchService:
                     step="analyze",
                     current_value=float(analyze_retry_count),
                     threshold=float(self.GRAPH_ANALYZE_RETRY_WARNING_COUNT),
+                    hint=self._graph_alert_hint("analyze_retries", "analyze"),
                 )
             )
         return alerts
+
+    def _graph_alert_hint(self, code: str, step: str | None) -> str:
+        step_name = (step or "").strip().lower()
+        if code == "high_avg_ms":
+            if step_name == "analyze":
+                return "Check LLM latency and consider reducing analyzer payload budget for large reports."
+            if step_name in {"replan", "tie_break"}:
+                return "Inspect follow-up query volume and search pass depth; trim weak branches before re-running."
+            if step_name == "collect_context":
+                return "Review source pool size and pre-filtering; excessive source aggregation is slowing graph preparation."
+            if step_name == "verify":
+                return "Check claim-verification heuristics and conflict volume; verification may be over-processing weak evidence."
+            return "Review the slow graph step and reduce unnecessary work before the next finalize pass."
+        if code == "step_failures":
+            if step_name == "tie_break":
+                return "Check search quality, blocked domains, and domain filters for tie-break follow-up queries."
+            if step_name == "analyze":
+                return "Inspect analyzer prompt size, model stability, and citation-repair loops."
+            if step_name == "replan":
+                return "Review replan recommendations and whether follow-up queries are too broad or malformed."
+            if step_name == "collect_context":
+                return "Inspect source critic/evidence mapping inputs; malformed source data may be breaking context collection."
+            if step_name == "verify":
+                return "Review claim-verifier assumptions and conflict payload quality before verification."
+            return "Inspect logs for the failing graph step and tighten the corresponding inputs."
+        if code == "analyze_retries":
+            return "Strengthen source selection or claim verification so finalize produces a cleaner draft in fewer analyze passes."
+        return "Inspect the related graph step and recent worker logs for the underlying cause."
 
     def finalize_research(self, research_id: str) -> ResearchRecord:
         research = self._get_research_for_finalization(research_id)

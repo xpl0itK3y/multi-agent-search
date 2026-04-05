@@ -140,7 +140,9 @@ async def test_queue_health_includes_extraction_metrics(client):
     assert payload["graph_metrics"]["steps"]["collect_context"]["run_count"] == 2
     assert payload["graph_metrics"]["steps"]["collect_context"]["failure_count"] == 1
     assert payload["graph_metrics"]["steps"]["collect_context"]["avg_ms"] == 20.0
-    assert any(alert["code"] == "step_failures" for alert in payload["graph_alerts"])
+    step_failure_alert = next(alert for alert in payload["graph_alerts"] if alert["code"] == "step_failures")
+    assert "hint" in step_failure_alert
+    assert "Inspect logs" in step_failure_alert["hint"] or "Inspect source critic" in step_failure_alert["hint"]
 
 
 @pytest.mark.anyio
