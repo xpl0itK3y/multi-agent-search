@@ -59,10 +59,13 @@ This starts:
 - `migrate`
 - `api`
 - `worker`
+- `worker_2`
+- `worker_3`
+- `ui`
 
 The API will be available at `http://localhost:8000`.
 
-If you run the optional Streamlit UI, it will be available at `http://localhost:8501`.
+The Streamlit UI will be available at `http://localhost:8501`.
 
 Stop everything:
 
