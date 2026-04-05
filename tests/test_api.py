@@ -231,10 +231,10 @@ async def test_queue_health_includes_maintenance_trend(client):
             "total_count": 8,
             "last_run_at": "2026-04-05T12:30:00+00:00",
             "recent_runs": [
-                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
-                {"total_count": 2, "compacted_count": 1, "last_run_at": "2026-04-05T12:05:00+00:00"},
-                {"total_count": 6, "compacted_count": 2, "last_run_at": "2026-04-05T12:10:00+00:00"},
-                {"total_count": 8, "compacted_count": 3, "last_run_at": "2026-04-05T12:15:00+00:00"},
+                {"total_count": 2, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
+                {"total_count": 4, "compacted_count": 1, "last_run_at": "2026-04-05T12:05:00+00:00"},
+                {"total_count": 8, "compacted_count": 2, "last_run_at": "2026-04-05T12:10:00+00:00"},
+                {"total_count": 12, "compacted_count": 3, "last_run_at": "2026-04-05T12:15:00+00:00"},
             ],
         },
     )
@@ -246,8 +246,33 @@ async def test_queue_health_includes_maintenance_trend(client):
     trend = payload["maintenance_summary"]["trend"]
     assert trend["cleanup_volume_direction"] == "growing"
     assert trend["average_compacted_count"] == 1.5
-    assert trend["recent_total_counts"] == [1, 2, 6, 8]
+    assert trend["recent_total_counts"] == [2, 4, 8, 12]
     assert trend["recent_compacted_counts"] == [0, 1, 2, 3]
+    alert_codes = {item["code"] for item in payload["maintenance_summary"]["alerts"]}
+    assert "cleanup_volume_growing" in alert_codes
+
+
+@pytest.mark.anyio
+async def test_queue_health_includes_maintenance_stale_alert(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T09:00:00+00:00",
+            "recent_runs": [
+                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T09:00:00+00:00"},
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    alert_codes = {item["code"] for item in payload["maintenance_summary"]["alerts"]}
+    assert "maintenance_stale" in alert_codes
 
 
 @pytest.mark.anyio

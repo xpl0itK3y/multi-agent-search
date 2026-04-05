@@ -63,6 +63,12 @@ class ResearchService:
     GRAPH_STEP_FAILURE_CRITICAL_COUNT = 3
     GRAPH_ANALYZE_RETRY_WARNING_COUNT = 3
     GRAPH_ANALYZE_RETRY_CRITICAL_COUNT = 6
+    MAINTENANCE_GROWING_WARNING_RECENT_AVG = 5.0
+    MAINTENANCE_GROWING_CRITICAL_RECENT_AVG = 10.0
+    MAINTENANCE_COMPACTED_WARNING_AVG = 3.0
+    MAINTENANCE_COMPACTED_CRITICAL_AVG = 8.0
+    MAINTENANCE_STALE_WARNING_SECONDS = 1800
+    MAINTENANCE_STALE_CRITICAL_SECONDS = 7200
 
     def __init__(
         self,
@@ -925,7 +931,74 @@ class ResearchService:
             recent_total_counts=total_counts,
             recent_compacted_counts=compacted_counts,
         )
-        return summary.model_copy(update={"trend": trend})
+        alerts: list[MaintenanceSummary.MaintenanceAlert] = []
+        recent_avg_total = round(sum(total_counts[-4:]) / len(total_counts[-4:]), 2) if total_counts[-4:] else 0.0
+        if direction == "growing" and recent_avg_total >= self.MAINTENANCE_GROWING_CRITICAL_RECENT_AVG:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="cleanup_volume_growing",
+                    severity="critical",
+                    current_value=recent_avg_total,
+                    threshold=self.MAINTENANCE_GROWING_CRITICAL_RECENT_AVG,
+                    hint="Maintenance cleanup volume is rising; inspect backlog growth, retry churn, and graph operational noise.",
+                )
+            )
+        elif direction == "growing" and recent_avg_total >= self.MAINTENANCE_GROWING_WARNING_RECENT_AVG:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="cleanup_volume_growing",
+                    severity="warning",
+                    current_value=recent_avg_total,
+                    threshold=self.MAINTENANCE_GROWING_WARNING_RECENT_AVG,
+                    hint="Cleanup volume is trending upward; check whether queue churn or graph retries are increasing.",
+                )
+            )
+
+        if average_compacted >= self.MAINTENANCE_COMPACTED_CRITICAL_AVG:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="high_compacted_average",
+                    severity="critical",
+                    current_value=average_compacted,
+                    threshold=self.MAINTENANCE_COMPACTED_CRITICAL_AVG,
+                    hint="Persisted graph operational data is being compacted heavily; review event/trail volume and retention settings.",
+                )
+            )
+        elif average_compacted >= self.MAINTENANCE_COMPACTED_WARNING_AVG:
+            alerts.append(
+                MaintenanceSummary.MaintenanceAlert(
+                    code="high_compacted_average",
+                    severity="warning",
+                    current_value=average_compacted,
+                    threshold=self.MAINTENANCE_COMPACTED_WARNING_AVG,
+                    hint="Compacted graph data per run is elevated; check whether operational history is growing too quickly.",
+                )
+            )
+
+        if summary.last_run_at is not None:
+            age_seconds = max((datetime.now(timezone.utc) - summary.last_run_at).total_seconds(), 0.0)
+            if age_seconds >= self.MAINTENANCE_STALE_CRITICAL_SECONDS:
+                alerts.append(
+                    MaintenanceSummary.MaintenanceAlert(
+                        code="maintenance_stale",
+                        severity="critical",
+                        current_value=round(age_seconds, 2),
+                        threshold=float(self.MAINTENANCE_STALE_CRITICAL_SECONDS),
+                        hint="Maintenance has not run recently; verify the maintenance worker heartbeat and queue maintenance path.",
+                    )
+                )
+            elif age_seconds >= self.MAINTENANCE_STALE_WARNING_SECONDS:
+                alerts.append(
+                    MaintenanceSummary.MaintenanceAlert(
+                        code="maintenance_stale",
+                        severity="warning",
+                        current_value=round(age_seconds, 2),
+                        threshold=float(self.MAINTENANCE_STALE_WARNING_SECONDS),
+                        hint="Maintenance cadence is getting stale; verify periodic cleanup is still running.",
+                    )
+                )
+
+        return summary.model_copy(update={"trend": trend, "alerts": alerts})
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()
