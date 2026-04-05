@@ -245,6 +245,11 @@ class SearchAgent:
         "www.medium.com",
         "behance.net",
         "www.behance.net",
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+        "passport.yandex.ru",
     }
     LOW_VALUE_DOMAIN_SUBSTRINGS = (
         "bookmark",
@@ -304,6 +309,7 @@ class SearchAgent:
         search_results_per_query: int = 8,
         max_candidate_urls: int = 12,
         extraction_concurrency: int = 4,
+        extraction_timeout_seconds: int = 12,
     ):
         self.task_store = task_store
         self.search_provider = SearchProvider(max_results=search_results_per_query)
@@ -312,6 +318,7 @@ class SearchAgent:
         self.search_results_per_query = search_results_per_query
         self.max_candidate_urls = max_candidate_urls
         self.extraction_concurrency = max(1, extraction_concurrency)
+        self.extraction_timeout_seconds = max(1, extraction_timeout_seconds)
 
     def _normalize_text(self, value: str | None) -> str:
         return rust_accel.normalize_text(value)
@@ -517,6 +524,23 @@ class SearchAgent:
             )
         return rust_accel.select_best_results(scored_results, self.max_sources)
 
+    def _early_stop_success_target(self, candidate_count: int) -> int:
+        if candidate_count <= self.max_sources:
+            return candidate_count
+        return min(candidate_count, max(self.max_sources * 2, self.extraction_concurrency))
+
+    def _has_enough_strong_results(self, successful_results: list[dict], candidate_count: int) -> bool:
+        target = self._early_stop_success_target(candidate_count)
+        if len(successful_results) < target:
+            return False
+        preview = self._select_best_results(successful_results)
+        if len(preview) < self.max_sources:
+            return False
+        strong_preview_count = sum(
+            1 for item in preview if item.get("source_quality") in {"high", "medium"}
+        )
+        return strong_preview_count >= self.max_sources
+
     def run_task(self, task_id: str):
         """
         Execute a search task: search for queries, extract content, and update the configured task store.
@@ -575,23 +599,41 @@ class SearchAgent:
                 TaskUpdate(
                     log=(
                         f"Queued {len(candidate_results)} candidate URLs for extraction "
-                        f"with concurrency {self.extraction_concurrency}"
+                        f"with concurrency {self.extraction_concurrency} "
+                        f"and timeout {self.extraction_timeout_seconds}s"
                     )
                 ),
             )
 
+            successful_results: list[dict] = []
+            remaining_candidates = list(candidate_results)
             with ThreadPoolExecutor(max_workers=self.extraction_concurrency) as executor:
                 future_to_candidate = {}
-                for candidate in candidate_results:
-                    url = candidate["url"]
-                    self.task_store.update_task(
-                        task_id,
-                        TaskUpdate(log=f"Extracting content from: {url}"),
-                    )
-                    future_to_candidate[executor.submit(self.extractor.extract_content, url)] = candidate
 
-                for future in as_completed(future_to_candidate):
-                    candidate = future_to_candidate[future]
+                def submit_candidates() -> None:
+                    while remaining_candidates and len(future_to_candidate) < self.extraction_concurrency:
+                        if self._has_enough_strong_results(successful_results, len(candidate_results)):
+                            break
+                        candidate = remaining_candidates.pop(0)
+                        url = candidate["url"]
+                        skip_reason = self.extractor.should_skip_url(url)
+                        if skip_reason:
+                            self.task_store.update_task(
+                                task_id,
+                                TaskUpdate(log=f"Skipped extraction candidate: {url} ({skip_reason})"),
+                            )
+                            continue
+                        self.task_store.update_task(
+                            task_id,
+                            TaskUpdate(log=f"Extracting content from: {url}"),
+                        )
+                        future_to_candidate[executor.submit(self.extractor.extract_content, url)] = candidate
+
+                submit_candidates()
+
+                while future_to_candidate:
+                    future = next(as_completed(future_to_candidate))
+                    candidate = future_to_candidate.pop(future)
                     url = candidate["url"]
                     title = candidate.get("title")
                     snippet = candidate.get("snippet")
@@ -602,16 +644,16 @@ class SearchAgent:
                         content = None
 
                     if content:
-                        all_results.append(
-                            enrich_search_result_dict(
-                                {
-                                    "url": url,
-                                    "title": title,
-                                    "content": content[:10000],  # Limit content size to avoid huge payloads.
-                                    "snippet": snippet,
-                                }
-                            )
+                        enriched_result = enrich_search_result_dict(
+                            {
+                                "url": url,
+                                "title": title,
+                                "content": content[:10000],  # Limit content size to avoid huge payloads.
+                                "snippet": snippet,
+                            }
                         )
+                        all_results.append(enriched_result)
+                        successful_results.append(enriched_result)
                     else:
                         all_results.append(
                             enrich_search_result_dict(
@@ -624,6 +666,20 @@ class SearchAgent:
                                 }
                             )
                         )
+
+                    if remaining_candidates and self._has_enough_strong_results(successful_results, len(candidate_results)):
+                        skipped_tail = len(remaining_candidates)
+                        remaining_candidates.clear()
+                        self.task_store.update_task(
+                            task_id,
+                            TaskUpdate(
+                                log=(
+                                    f"Stopped extraction early after {len(successful_results)} successful sources; "
+                                    f"skipped {skipped_tail} weaker queued candidates."
+                                )
+                            )
+                        )
+                    submit_candidates()
 
             selected_results = self._select_best_results(all_results)
             success_count = sum(1 for item in all_results if item.get("extraction_status") == "success")

@@ -488,6 +488,7 @@ class ResearchService:
                 search_results_per_query=profile["search_results_per_query"],
                 max_candidate_urls=profile["max_candidate_urls"],
                 extraction_concurrency=settings.search_extraction_concurrency,
+                extraction_timeout_seconds=settings.search_extraction_timeout_seconds,
             )
             agent.run_task(task_id)
 
