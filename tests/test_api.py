@@ -158,6 +158,31 @@ async def test_queue_health_includes_extraction_metrics(client):
 
 
 @pytest.mark.anyio
+async def test_queue_health_includes_maintenance_summary(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=3,
+        status="busy",
+        maintenance_summary={
+            "compacted_count": 2,
+            "total_count": 3,
+            "compacted_graph_event_worker_names": ["job-worker"],
+            "compacted_graph_trail_research_ids": ["research-1"],
+            "last_run_at": "2026-04-05T12:00:00+00:00",
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["maintenance_summary"]["compacted_count"] == 2
+    assert payload["maintenance_summary"]["compacted_graph_event_worker_names"] == ["job-worker"]
+    assert payload["maintenance_summary"]["compacted_graph_trail_research_ids"] == ["research-1"]
+
+
+@pytest.mark.anyio
 async def test_optimize_endpoint(client):
     response = await client.post("/v1/optimize", json={"prompt": "raw input"})
 

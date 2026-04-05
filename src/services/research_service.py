@@ -14,6 +14,7 @@ from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.api.schemas import (
     JobCleanupResponse,
+    MaintenanceSummary,
     DecomposeResponse,
     FinalizeJobStatus,
     GraphAlert,
@@ -690,6 +691,7 @@ class ResearchService:
         extraction_metrics: dict | None = None,
         graph_metrics: dict | None = None,
         graph_step_events: list[dict] | None = None,
+        maintenance_summary: dict | None = None,
     ) -> WorkerHeartbeat:
         return self.task_store.upsert_worker_heartbeat(
             worker_name,
@@ -699,14 +701,19 @@ class ResearchService:
             extraction_metrics if extraction_metrics is not None else get_extraction_metrics_snapshot(),
             graph_metrics if graph_metrics is not None else get_graph_metrics_snapshot(),
             graph_step_events if graph_step_events is not None else get_graph_step_events_snapshot(),
+            maintenance_summary or {},
         )
 
     def get_queue_metrics(self) -> QueueMetrics:
         metrics = self.task_store.get_queue_metrics()
+        maintenance_heartbeat = self.task_store.get_worker_heartbeat("maintenance")
         return metrics.model_copy(
             update={
                 "graph_alerts": self._build_graph_alerts(metrics.graph_metrics),
                 "graph_alert_trend": self._build_graph_alert_trend(self._filter_graph_step_events()),
+                "maintenance_summary": (
+                    maintenance_heartbeat.maintenance_summary if maintenance_heartbeat else MaintenanceSummary()
+                ),
             }
         )
 
