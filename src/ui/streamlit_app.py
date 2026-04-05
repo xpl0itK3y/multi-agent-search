@@ -221,6 +221,15 @@ TRANSLATIONS = {
         "operational_health_alert_score_recovered": "Operational score recovered to {current_value} after degradation",
         "operational_health_alert_hint": "Hint: {hint}",
         "operational_recommendations": "Recommended Actions",
+        "operational_recommendation_repeat": "Shown {count} times",
+        "operational_recommendation_last_shown": "Last shown: {timestamp}",
+        "operational_recommendation_acknowledged": "Acknowledged: {timestamp}",
+        "operational_recommendation_resolved": "Resolved: {timestamp}",
+        "operational_recommendation_note": "Operator note: {value}",
+        "operational_recommendation_inactive": "No longer active",
+        "operational_recommendation_ack": "Acknowledge",
+        "operational_recommendation_resolve": "Mark Resolved",
+        "operational_recommendation_note_input": "Resolution note",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -432,6 +441,15 @@ TRANSLATIONS = {
         "operational_health_alert_score_recovered": "Operational score восстановился до {current_value} после деградации",
         "operational_health_alert_hint": "Подсказка: {hint}",
         "operational_recommendations": "Рекомендуемые действия",
+        "operational_recommendation_repeat": "Показано {count} раз",
+        "operational_recommendation_last_shown": "Последний показ: {timestamp}",
+        "operational_recommendation_acknowledged": "Подтверждено: {timestamp}",
+        "operational_recommendation_resolved": "Закрыто: {timestamp}",
+        "operational_recommendation_note": "Заметка оператора: {value}",
+        "operational_recommendation_inactive": "Больше не активно",
+        "operational_recommendation_ack": "Подтвердить",
+        "operational_recommendation_resolve": "Отметить как выполненное",
+        "operational_recommendation_note_input": "Заметка о выполнении",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -845,7 +863,7 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
     st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
     st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
-    _render_operational_health(operational_health)
+    _render_operational_health(operational_health, scope_key="sidebar", enable_ack=False)
     if graph_alerts:
         with st.sidebar.expander(_t("graph_alerts"), expanded=True):
             _render_graph_alerts(graph_alerts)
@@ -1041,7 +1059,7 @@ def _render_maintenance_summary(summary: dict) -> None:
             )
 
 
-def _render_operational_health(health: dict) -> None:
+def _render_operational_health(health: dict, scope_key: str = "global", enable_ack: bool = False) -> None:
     if not health:
         return
     status = str(health.get("status") or "healthy").lower()
@@ -1074,7 +1092,62 @@ def _render_operational_health(health: dict) -> None:
     if recommendations:
         st.caption(_t("operational_recommendations"))
         for item in recommendations:
-            st.caption(f"- {item}")
+            message = str(item.get("message") or item.get("code") or "-")
+            shown_count = int(item.get("shown_count", 1) or 1)
+            last_shown_at = _format_timestamp(item.get("last_shown_at"))
+            acknowledged = bool(item.get("acknowledged", False))
+            acknowledged_at = _format_timestamp(item.get("acknowledged_at"))
+            resolved = bool(item.get("resolved", False))
+            resolved_at = _format_timestamp(item.get("resolved_at"))
+            resolution_note = str(item.get("resolution_note") or "").strip()
+            active = bool(item.get("active", True))
+            st.caption(f"- {message}")
+            meta_parts = [
+                _t("operational_recommendation_repeat", count=shown_count),
+                _t("operational_recommendation_last_shown", timestamp=last_shown_at),
+            ]
+            if acknowledged:
+                meta_parts.append(_t("operational_recommendation_acknowledged", timestamp=acknowledged_at))
+            if resolved:
+                meta_parts.append(_t("operational_recommendation_resolved", timestamp=resolved_at))
+            if not active:
+                meta_parts.append(_t("operational_recommendation_inactive"))
+            st.caption(" | ".join(meta_parts))
+            if resolution_note:
+                st.caption(_t("operational_recommendation_note", value=resolution_note))
+            if enable_ack and active and not resolved:
+                if not acknowledged:
+                    button_key = f"ack-operational-recommendation-{scope_key}-{item.get('code')}"
+                    if st.button(
+                        _t("operational_recommendation_ack"),
+                        key=button_key,
+                        use_container_width=False,
+                    ):
+                        response = _safe_api_call(
+                            _api_post,
+                            f"/health/queues/operational-health/recommendations/{item.get('code')}/ack",
+                        )
+                        if response is not None:
+                            st.rerun()
+                note_key = f"resolve-operational-recommendation-note-{scope_key}-{item.get('code')}"
+                resolution_value = st.text_input(
+                    _t("operational_recommendation_note_input"),
+                    key=note_key,
+                    value=resolution_note,
+                )
+                resolve_button_key = f"resolve-operational-recommendation-{scope_key}-{item.get('code')}"
+                if st.button(
+                    _t("operational_recommendation_resolve"),
+                    key=resolve_button_key,
+                    use_container_width=False,
+                ):
+                    response = _safe_api_call(
+                        _api_post,
+                        f"/health/queues/operational-health/recommendations/{item.get('code')}/resolve",
+                        {"note": resolution_value},
+                    )
+                    if response is not None:
+                        st.rerun()
     trend = health.get("trend") or {}
     if trend:
         st.caption(_t("operational_health_trend"))
@@ -1187,7 +1260,7 @@ def _render_queue_overview() -> None:
     graph_alert_trend = metrics.get("graph_alert_trend") or {}
     maintenance_summary = metrics.get("maintenance_summary") or {}
     operational_health = metrics.get("operational_health") or {}
-    _render_operational_health(operational_health)
+    _render_operational_health(operational_health, scope_key="queue", enable_ack=True)
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))

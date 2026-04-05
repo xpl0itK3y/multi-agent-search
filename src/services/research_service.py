@@ -741,6 +741,74 @@ class ResearchService:
             }
         )
 
+    def acknowledge_operational_recommendation(
+        self,
+        code: str,
+    ) -> OperationalHealth.RecommendationEntry:
+        return self._update_operational_recommendation_state(
+            code,
+            acknowledged=True,
+        )
+
+    def resolve_operational_recommendation(
+        self,
+        code: str,
+        note: str | None = None,
+    ) -> OperationalHealth.RecommendationEntry:
+        normalized_note = " ".join((note or "").split()) or None
+        return self._update_operational_recommendation_state(
+            code,
+            acknowledged=True,
+            resolved=True,
+            resolution_note=normalized_note,
+        )
+
+    def _update_operational_recommendation_state(
+        self,
+        code: str,
+        *,
+        acknowledged: bool | None = None,
+        resolved: bool | None = None,
+        resolution_note: str | None = None,
+    ) -> OperationalHealth.RecommendationEntry:
+        heartbeat = self.task_store.get_worker_heartbeat("maintenance")
+        if heartbeat is None:
+            raise HTTPException(status_code=404, detail="Maintenance heartbeat not found")
+
+        maintenance_summary = heartbeat.maintenance_summary.model_dump(mode="json")
+        recommendations = list(maintenance_summary.get("recent_operational_recommendations") or [])
+        updated_recommendation: dict | None = None
+        current_timestamp = datetime.now(timezone.utc).isoformat()
+
+        for item in recommendations:
+            if str(item.get("code") or "") != code:
+                continue
+            if acknowledged is not None:
+                item["acknowledged"] = acknowledged
+                item["acknowledged_at"] = current_timestamp if acknowledged else None
+            if resolved is not None:
+                item["resolved"] = resolved
+                item["resolved_at"] = current_timestamp if resolved else None
+            if resolution_note is not None:
+                item["resolution_note"] = resolution_note
+            updated_recommendation = item
+            break
+
+        if updated_recommendation is None:
+            raise HTTPException(status_code=404, detail="Operational recommendation not found")
+
+        maintenance_summary["recent_operational_recommendations"] = recommendations
+        self.touch_worker_heartbeat(
+            "maintenance",
+            heartbeat.processed_jobs,
+            heartbeat.status,
+            heartbeat.last_error,
+            heartbeat.extraction_metrics.model_dump(mode="json"),
+            heartbeat.graph_metrics.model_dump(mode="json"),
+            maintenance_summary=maintenance_summary,
+        )
+        return OperationalHealth.RecommendationEntry.model_validate(updated_recommendation)
+
     def get_health_status(self) -> dict:
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         step_events = self._filter_graph_step_events()
@@ -1184,55 +1252,133 @@ class ResearchService:
         maintenance_summary: MaintenanceSummary,
         operational_alerts: list[OperationalHealth.OperationalHealthAlert],
         reasons: list[str],
-    ) -> list[str]:
-        recommendations: list[str] = []
+    ) -> list[OperationalHealth.RecommendationEntry]:
+        recommendation_specs: list[tuple[str, str]] = []
         alert_codes = {alert.code for alert in operational_alerts}
         reason_set = set(reasons)
+        current_timestamp = maintenance_summary.last_run_at or datetime.now(timezone.utc)
 
         if "repeated_critical_states" in alert_codes:
-            recommendations.append(
-                "Repeated critical states detected: consider increasing worker parallelism and checking whether one worker is saturating the queue."
+            recommendation_specs.append(
+                (
+                    "increase_worker_parallelism",
+                    "Repeated critical states detected: consider increasing worker parallelism and checking whether one worker is saturating the queue.",
+                )
             )
         if "score_worsening" in alert_codes:
-            recommendations.append(
-                "Operational score is worsening: inspect queue backlog, extraction latency, and graph retries before the next maintenance cycle."
+            recommendation_specs.append(
+                (
+                    "inspect_backlog_latency_and_retries",
+                    "Operational score is worsening: inspect queue backlog, extraction latency, and graph retries before the next maintenance cycle.",
+                )
             )
         if "score_recovered" in alert_codes:
-            recommendations.append(
-                "Score recovered after degradation: verify the underlying issue is resolved and not just temporarily masked."
+            recommendation_specs.append(
+                (
+                    "verify_recovered_score_root_cause",
+                    "Score recovered after degradation: verify the underlying issue is resolved and not just temporarily masked.",
+                )
             )
 
         maintenance_alert_codes = {alert.code for alert in maintenance_summary.alerts}
         if "maintenance_stale" in maintenance_alert_codes:
-            recommendations.append(
-                "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed."
+            recommendation_specs.append(
+                (
+                    "restart_or_verify_maintenance_path",
+                    "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed.",
+                )
             )
         if "high_compacted_average" in maintenance_alert_codes:
-            recommendations.append(
-                "High graph compaction volume: review graph event/trail retention and whether operational data is growing too quickly."
+            recommendation_specs.append(
+                (
+                    "review_graph_retention_pressure",
+                    "High graph compaction volume: review graph event/trail retention and whether operational data is growing too quickly.",
+                )
             )
 
         graph_alert_codes = {alert.code for alert in graph_alerts}
         if "analyze_retries" in graph_alert_codes:
-            recommendations.append(
-                "Frequent analyze retries: tighten source selection or claim verification to reduce repeated finalize passes."
+            recommendation_specs.append(
+                (
+                    "tighten_source_selection_and_claim_verification",
+                    "Frequent analyze retries: tighten source selection or claim verification to reduce repeated finalize passes.",
+                )
             )
         if "step_failures" in graph_alert_codes:
-            recommendations.append(
-                "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs."
+            recommendation_specs.append(
+                (
+                    "inspect_graph_failures_and_search_quality",
+                    "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs.",
+                )
             )
 
         if "queue:high_backlog" in reason_set or "queue:elevated_backlog" in reason_set:
-            recommendations.append(
-                "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs."
+            recommendation_specs.append(
+                (
+                    "reduce_queue_backlog",
+                    "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                )
             )
 
         if metrics.extraction_metrics.avg_total_ms >= 3000:
-            recommendations.append(
-                "Extraction latency is elevated: review slow domains, timeout settings, and extraction concurrency."
+            recommendation_specs.append(
+                (
+                    "reduce_extraction_latency",
+                    "Extraction latency is elevated: review slow domains, timeout settings, and extraction concurrency.",
+                )
             )
 
-        return list(dict.fromkeys(recommendations))[:6]
+        previous_entries = {
+            item.code: item
+            for item in (maintenance_summary.recent_operational_recommendations or [])
+        }
+        active_codes: list[str] = []
+        merged_entries: list[OperationalHealth.RecommendationEntry] = []
+        seen_codes: set[str] = set()
+
+        for code, message in recommendation_specs:
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            active_codes.append(code)
+            previous = previous_entries.get(code)
+            merged_entries.append(
+                OperationalHealth.RecommendationEntry(
+                    code=code,
+                    message=message,
+                    shown_count=(previous.shown_count + 1) if previous else 1,
+                    active=True,
+                    first_shown_at=(previous.first_shown_at if previous else current_timestamp),
+                    last_shown_at=current_timestamp,
+                    acknowledged=(previous.acknowledged if previous and not previous.resolved else False),
+                    acknowledged_at=(previous.acknowledged_at if previous and not previous.resolved else None),
+                    resolved=False,
+                    resolved_at=None,
+                    resolution_note=None,
+                )
+            )
+
+        for code, previous in previous_entries.items():
+            if code in active_codes:
+                continue
+            merged_entries.append(
+                previous.model_copy(
+                    update={
+                        "active": False,
+                    }
+                )
+            )
+
+        merged_entries.sort(
+            key=lambda item: (
+                0 if item.active else 1,
+                0 if not item.resolved else 1,
+                0 if not item.acknowledged else 1,
+                -(item.shown_count or 0),
+                item.code,
+            )
+        )
+        return merged_entries[:8]
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()
