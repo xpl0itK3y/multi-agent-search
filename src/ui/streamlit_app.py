@@ -215,6 +215,11 @@ TRANSLATIONS = {
         "operational_health_average": "Average score: {value}",
         "operational_health_scores": "Recent scores: {value}",
         "operational_health_statuses": "Recent statuses: {value}",
+        "operational_health_alerts": "Operational Health Alerts",
+        "operational_health_alert_score_worsening": "Operational score is worsening: recent average {current_value} vs previous {threshold}",
+        "operational_health_alert_repeated_critical_states": "Too many critical states in recent history: {current_value} reached {threshold}",
+        "operational_health_alert_score_recovered": "Operational score recovered to {current_value} after degradation",
+        "operational_health_alert_hint": "Hint: {hint}",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -420,6 +425,11 @@ TRANSLATIONS = {
         "operational_health_average": "Средний score: {value}",
         "operational_health_scores": "Последние score: {value}",
         "operational_health_statuses": "Последние статусы: {value}",
+        "operational_health_alerts": "Проблемы operational health",
+        "operational_health_alert_score_worsening": "Operational score ухудшается: недавнее среднее {current_value} против прошлого {threshold}",
+        "operational_health_alert_repeated_critical_states": "Слишком много critical состояний в недавней истории: {current_value} достигло {threshold}",
+        "operational_health_alert_score_recovered": "Operational score восстановился до {current_value} после деградации",
+        "operational_health_alert_hint": "Подсказка: {hint}",
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
@@ -1042,6 +1052,22 @@ def _render_operational_health(health: dict) -> None:
     st.caption(_t("operational_health_score", score=int(health.get("score", 100) or 100)))
     reasons = ", ".join(health.get("reasons") or []) or "-"
     st.caption(_t("operational_health_reasons", value=reasons))
+    alerts = health.get("alerts") or []
+    if alerts:
+        st.caption(_t("operational_health_alerts"))
+        for alert in alerts:
+            key = f"operational_health_alert_{alert.get('code')}"
+            message = _t(
+                key,
+                current_value=round(float(alert.get("current_value", 0.0) or 0.0), 2),
+                threshold=round(float(alert.get("threshold", 0.0) or 0.0), 2),
+            )
+            if (alert.get("severity") or "warning").lower() == "critical":
+                st.error(message)
+            else:
+                st.warning(message)
+            if alert.get("hint"):
+                st.caption(_t("operational_health_alert_hint", hint=alert["hint"]))
     trend = health.get("trend") or {}
     if trend:
         st.caption(_t("operational_health_trend"))
