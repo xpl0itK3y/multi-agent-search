@@ -857,6 +857,8 @@ def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
     assert len(llm.calls) == 2
     assert "wrong language" in llm.calls[1]["user_prompt"]
     assert "## Введение" in result
+    assert "## Источники" in result
+    assert "## Sources" not in result
 
 
 def test_analyzer_agent_detects_conflicts_from_overlapping_claims():
@@ -1046,6 +1048,56 @@ def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
     assert "missing a clear conclusion heading" in result
     assert "does not cite any sources inline" in result
     assert "fewer than two usable sources" in result
+
+
+def test_analyzer_agent_localizes_post_processed_sections_for_russian_reports():
+    llm = RecordingLLM(
+        response=(
+            "## Введение\nКраткое резюме [S1].\n\n"
+            "## Заключение\nВывод [S1].\n\n"
+            "## Sources\n- [S1] https://wrong.example"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Сравни Linux и macOS для работы",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body " * 80}],
+            )
+        ],
+    )
+
+    assert "## Источники" in result
+    assert "## Sources" not in result
+    assert "## Примечания к отчёту" in result
+
+
+def test_analyzer_agent_localizes_report_notes_for_russian_reports():
+    llm = RecordingLLM(response="Обычный текст без заголовков и без ссылок.")
+    agent = AnalyzerAgent(llm)
+
+    result = agent.run_analysis(
+        "Сравни Linux и macOS для работы",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://example.com", "title": "Example", "content": "Body"}],
+            )
+        ],
+    )
+
+    assert "## Примечания к отчёту" in result
+    assert "## Report Notes" not in result
+    assert "В отчёте отсутствует явный заголовок введения." in result
 
 
 def test_analyzer_agent_does_not_add_report_notes_for_well_formed_report():
