@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus
+from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus, TaskUpdate
 from src.api.schemas import ExtractionMetrics
 from src.core.llm import LLMProvider
 from src.repositories import InMemoryTaskStore
@@ -1112,6 +1112,73 @@ def test_finalize_graph_runner_retries_after_report_notes(mocker):
 
     assert finalized.final_report.startswith("## Introduction")
     assert analyzer.run_analysis.call_count == 2
+
+
+def test_finalize_graph_runner_executes_second_pass_search(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="best horror films", depth=SearchDepth.HARD),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "initial pass",
+            "queries": ["best horror films"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "https://editorial.example.com/roundup",
+                    "domain": "editorial.example.com",
+                    "title": "Best Horror Movies Roundup",
+                    "content": "Editorial roundup content. " * 20,
+                    "source_quality": "medium",
+                }
+            ],
+            "search_metrics": {
+                "selected_source_count": 1,
+            },
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.run_analysis.return_value = "## Introduction\nReport [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n### Used Sources\n- [S1] https://editorial.example.com/roundup"
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    def fake_run_search_task(task_id, depth):
+        task_store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://official.example.com/source",
+                        "domain": "official.example.com",
+                        "title": "Official Source",
+                        "content": "Primary-source style content. " * 30,
+                        "source_quality": "high",
+                    }
+                ],
+                search_metrics={
+                    "candidate_count": 2,
+                    "extraction_attempts": 1,
+                    "extraction_success_count": 1,
+                    "selected_source_count": 1,
+                },
+                log="completed second pass",
+            ),
+        )
+
+    mocker.patch.object(service, "run_search_task", side_effect=fake_run_search_task)
+
+    finalized = service.finalize_research(research.id)
+    all_tasks = task_store.get_tasks_by_research(research.id)
+
+    assert finalized.status == ResearchStatus.COMPLETED
+    assert len(all_tasks) >= 2
+    assert any(task.id.startswith("replan-") for task in all_tasks)
+    analyzed_tasks = analyzer.run_analysis.call_args.args[1]
+    assert len(analyzed_tasks) >= 2
 
 
 def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():

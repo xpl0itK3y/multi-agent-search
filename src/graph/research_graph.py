@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import SearchTask
+from src.api.schemas import ReplanRecommendation, SearchTask
 from src.config import settings
 from src.graph.state import FinalizeGraphState
 
@@ -21,8 +20,9 @@ class FinalizeGraphRunner:
     def __init__(self, service):
         self.service = service
 
-    def run(self, prompt: str, tasks: list[SearchTask], depth) -> str:
+    def run(self, research_id: str, prompt: str, tasks: list[SearchTask], depth) -> str:
         state: FinalizeGraphState = {
+            "research_id": research_id,
             "prompt": prompt,
             "effective_prompt": prompt,
             "depth": depth,
@@ -66,6 +66,7 @@ class FinalizeGraphRunner:
         recommendations = state.get("replan_recommendations") or []
         if not recommendations:
             return {**state, "should_replan": False}
+
         query_hints: list[str] = []
         for recommendation in recommendations:
             query_hints.extend(recommendation.get("suggested_queries") or [])
@@ -75,11 +76,21 @@ class FinalizeGraphRunner:
             "Uncovered angles to prioritize during synthesis:\n"
             f"{hint_block}"
         )
+
+        created_tasks = self.service.execute_replan_search_pass(
+            state["research_id"],
+            state["depth"],
+            [
+                ReplanRecommendation.model_validate(recommendation)
+                for recommendation in recommendations
+            ],
+        )
         return {
             **state,
             "effective_prompt": effective_prompt,
             "replan_attempts": state["replan_attempts"] + 1,
             "should_replan": False,
+            "tasks": state["tasks"] + created_tasks,
         }
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:

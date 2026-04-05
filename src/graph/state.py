@@ -4,6 +4,7 @@ from src.api.schemas import SearchDepth, SearchTask
 
 
 class FinalizeGraphState(TypedDict, total=False):
+    research_id: str
     prompt: str
     effective_prompt: str
     depth: SearchDepth
