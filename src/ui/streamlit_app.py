@@ -204,6 +204,10 @@ TRANSLATIONS = {
         "maintenance_recommendation_counter_acknowledged": "Acknowledged: {count}",
         "maintenance_recommendation_counter_resolved": "Resolved: {count}",
         "maintenance_recommendation_counter_reappeared": "Reappeared: {count}",
+        "maintenance_recommendation_analytics": "Runbook Analytics",
+        "maintenance_recommendation_top_recurring": "Top recurring codes: {value}",
+        "maintenance_recommendation_avg_resolution_hours": "Average time to resolve: {value} h",
+        "maintenance_recommendation_oldest_unresolved_hours": "Oldest unresolved age: {value} h",
         "maintenance_recommendation_summary_line": "{code} | repeats={repeats} reappeared={reappeared} last_resolved={last_resolved}",
         "maintenance_recommendation_badge_needs_action": "Needs Action",
         "maintenance_recommendation_badge_acknowledged": "Acknowledged",
@@ -438,6 +442,10 @@ TRANSLATIONS = {
         "maintenance_recommendation_counter_acknowledged": "Подтверждено: {count}",
         "maintenance_recommendation_counter_resolved": "Закрыто: {count}",
         "maintenance_recommendation_counter_reappeared": "Повторно всплыло: {count}",
+        "maintenance_recommendation_analytics": "Runbook аналитика",
+        "maintenance_recommendation_top_recurring": "Самые повторяющиеся коды: {value}",
+        "maintenance_recommendation_avg_resolution_hours": "Среднее время до закрытия: {value} ч",
+        "maintenance_recommendation_oldest_unresolved_hours": "Возраст самого старого незакрытого: {value} ч",
         "maintenance_recommendation_summary_line": "{code} | повторов={repeats} повторных всплытий={reappeared} последний resolved={last_resolved}",
         "maintenance_recommendation_badge_needs_action": "Нужно действие",
         "maintenance_recommendation_badge_acknowledged": "Подтверждено",
@@ -732,6 +740,19 @@ def _format_timestamp(value: str | None) -> str:
     except ValueError:
         return value
     return parsed.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _is_recent_timestamp(value: str | None, threshold_seconds: int = 45) -> bool:
@@ -1097,6 +1118,13 @@ def _render_maintenance_summary(summary: dict) -> None:
     recommendation_events = summary.get("recent_operational_recommendation_events") or []
     recommendations = summary.get("recent_operational_recommendations") or []
     if recommendations:
+        recommendation_events_by_code: dict[str, list[dict]] = {}
+        for event in recommendation_events:
+            code = str(event.get("code") or "")
+            if not code:
+                continue
+            recommendation_events_by_code.setdefault(code, []).append(event)
+
         needs_action_count = sum(
             1
             for item in recommendations
@@ -1121,13 +1149,64 @@ def _render_maintenance_summary(summary: dict) -> None:
         counter_row[1].metric(_t("maintenance_recommendation_counter_acknowledged", count=acknowledged_count), acknowledged_count)
         counter_row[2].metric(_t("maintenance_recommendation_counter_resolved", count=resolved_count), resolved_count)
         counter_row[3].metric(_t("maintenance_recommendation_counter_reappeared", count=reappeared_count), reappeared_count)
-        st.caption(_t("maintenance_recommendation_summary"))
-        recommendation_events_by_code: dict[str, list[dict]] = {}
-        for event in recommendation_events:
-            code = str(event.get("code") or "")
-            if not code:
+
+        recurring_codes = sorted(
+            (
+                (
+                    str(item.get("code") or ""),
+                    max(int(item.get("shown_count", 1) or 1) - 1, 0),
+                )
+                for item in recommendations
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        top_recurring = ", ".join(f"{code}={count}" for code, count in recurring_codes[:3] if code) or "-"
+
+        resolution_durations_hours: list[float] = []
+        for code, events in recommendation_events_by_code.items():
+            shown_timestamp: datetime | None = None
+            for event in events:
+                event_type = str(event.get("event_type") or "")
+                event_timestamp = _parse_timestamp(event.get("timestamp"))
+                if event_type in {"shown", "reappeared"} and event_timestamp is not None:
+                    shown_timestamp = event_timestamp
+                elif event_type == "resolved" and shown_timestamp is not None and event_timestamp is not None:
+                    duration_hours = max((event_timestamp - shown_timestamp).total_seconds(), 0.0) / 3600.0
+                    resolution_durations_hours.append(duration_hours)
+                    shown_timestamp = None
+
+        average_resolution_hours = (
+            round(sum(resolution_durations_hours) / len(resolution_durations_hours), 2)
+            if resolution_durations_hours
+            else 0.0
+        )
+
+        now_utc = datetime.now(timezone.utc)
+        unresolved_ages_hours: list[float] = []
+        for item in recommendations:
+            if bool(item.get("resolved", False)):
                 continue
-            recommendation_events_by_code.setdefault(code, []).append(event)
+            started_at = _parse_timestamp(
+                item.get("first_shown_at") or item.get("last_shown_at")
+            )
+            if started_at is None:
+                continue
+            unresolved_ages_hours.append(max((now_utc - started_at).total_seconds(), 0.0) / 3600.0)
+        oldest_unresolved_hours = round(max(unresolved_ages_hours), 2) if unresolved_ages_hours else 0.0
+
+        st.caption(_t("maintenance_recommendation_analytics"))
+        analytics_row = st.columns(3)
+        analytics_row[0].metric(_t("maintenance_recommendation_top_recurring", value=top_recurring), top_recurring)
+        analytics_row[1].metric(
+            _t("maintenance_recommendation_avg_resolution_hours", value=average_resolution_hours),
+            average_resolution_hours,
+        )
+        analytics_row[2].metric(
+            _t("maintenance_recommendation_oldest_unresolved_hours", value=oldest_unresolved_hours),
+            oldest_unresolved_hours,
+        )
+
+        st.caption(_t("maintenance_recommendation_summary"))
         sorted_recommendations = sorted(
             recommendations,
             key=lambda item: (
