@@ -198,6 +198,8 @@ TRANSLATIONS = {
         "maintenance_recent_runs": "Recent maintenance runs",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
         "maintenance_recommendation_history": "Recommendation History",
+        "maintenance_recommendation_summary": "Recommendation Summary",
+        "maintenance_recommendation_summary_line": "{code} | repeats={repeats} reappeared={reappeared} last_resolved={last_resolved}",
         "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
         "maintenance_recommendation_event_note": "Note: {value}",
         "maintenance_trend": "Maintenance Trend",
@@ -421,6 +423,8 @@ TRANSLATIONS = {
         "maintenance_recent_runs": "Последние maintenance запуски",
         "maintenance_recent_run_line": "{timestamp} | recovered={recovered} deleted={deleted} compacted={compacted} total={total}",
         "maintenance_recommendation_history": "История рекомендаций",
+        "maintenance_recommendation_summary": "Сводка по рекомендациям",
+        "maintenance_recommendation_summary_line": "{code} | повторов={repeats} повторных всплытий={reappeared} последний resolved={last_resolved}",
         "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
         "maintenance_recommendation_event_note": "Заметка: {value}",
         "maintenance_trend": "Тренд maintenance",
@@ -1064,6 +1068,33 @@ def _render_maintenance_summary(summary: dict) -> None:
                 )
             )
     recommendation_events = summary.get("recent_operational_recommendation_events") or []
+    recommendations = summary.get("recent_operational_recommendations") or []
+    if recommendations:
+        st.caption(_t("maintenance_recommendation_summary"))
+        recommendation_events_by_code: dict[str, list[dict]] = {}
+        for event in recommendation_events:
+            code = str(event.get("code") or "")
+            if not code:
+                continue
+            recommendation_events_by_code.setdefault(code, []).append(event)
+        for item in recommendations:
+            code = str(item.get("code") or "-")
+            shown_count = int(item.get("shown_count", 1) or 1)
+            code_events = recommendation_events_by_code.get(code, [])
+            reappeared_count = sum(1 for event in code_events if str(event.get("event_type") or "") == "reappeared")
+            resolved_events = [
+                event for event in code_events if str(event.get("event_type") or "") == "resolved"
+            ]
+            last_resolved = _format_timestamp(resolved_events[-1].get("timestamp")) if resolved_events else "-"
+            st.caption(
+                _t(
+                    "maintenance_recommendation_summary_line",
+                    code=code,
+                    repeats=max(shown_count - 1, 0),
+                    reappeared=reappeared_count,
+                    last_resolved=last_resolved,
+                )
+            )
     if recommendation_events:
         st.caption(_t("maintenance_recommendation_history"))
         for event in recommendation_events[-8:]:
