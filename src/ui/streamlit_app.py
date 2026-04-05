@@ -169,6 +169,8 @@ TRANSLATIONS = {
         "graph_no_trail": "No graph trail has been recorded yet.",
         "graph_trail_step": "Step: {step}",
         "graph_trail_detail": "Detail: {detail}",
+        "graph_resumed_recovery": "Resumed After Recovery",
+        "graph_recovery_detail": "Recovery Detail",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -325,6 +327,8 @@ TRANSLATIONS = {
         "graph_no_trail": "Трасса графа пока не записана.",
         "graph_trail_step": "Шаг: {step}",
         "graph_trail_detail": "Детали: {detail}",
+        "graph_resumed_recovery": "Resume после recovery",
+        "graph_recovery_detail": "Детали recovery",
     },
 }
 
@@ -1141,11 +1145,22 @@ def _render_research_details() -> None:
 
     graph_state = (graph_payload or {}).get("graph_state") or {}
     graph_trail = (graph_payload or {}).get("graph_trail") or []
+    recovery_events = [entry for entry in graph_trail if (entry.get("step") or "") == "stale_recovered"]
+    latest_recovery_event = recovery_events[-1] if recovery_events else None
     graph_state_cols = st.columns(4)
     graph_state_cols[0].metric(_t("graph_last_step"), graph_state.get("step") or "-")
     graph_state_cols[1].metric(_t("graph_analyze_passes"), int(graph_state.get("analyze_attempts") or 0))
     graph_state_cols[2].metric(_t("graph_replan_passes"), int(graph_state.get("replan_attempts") or 0))
     graph_state_cols[3].metric(_t("graph_tie_break_passes"), int(graph_state.get("tie_break_attempts") or 0))
+
+    recovery_cols = st.columns([1, 3])
+    recovery_cols[0].metric(
+        _t("graph_resumed_recovery"),
+        _t("yes") if graph_state.get("resume_after_stale_recovery") else _t("no"),
+    )
+    if latest_recovery_event:
+        recovery_cols[1].caption(_t("graph_recovery_detail"))
+        recovery_cols[1].code(latest_recovery_event.get("detail") or "-", language="text")
 
     with st.expander(_t("graph_trail"), expanded=False):
         if not graph_trail:
