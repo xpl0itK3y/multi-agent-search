@@ -204,7 +204,14 @@ TRANSLATIONS = {
         "maintenance_recommendation_counter_acknowledged": "Acknowledged: {count}",
         "maintenance_recommendation_counter_resolved": "Resolved: {count}",
         "maintenance_recommendation_counter_reappeared": "Reappeared: {count}",
+        "ops_snapshot": "Ops Snapshot",
+        "ops_snapshot_health": "Health: {value}",
+        "ops_snapshot_backlog": "Backlog: {value}",
+        "ops_snapshot_graph_alerts": "Graph alerts: {value}",
+        "ops_snapshot_maintenance_alerts": "Maintenance alerts: {value}",
+        "ops_snapshot_needs_action": "Needs action: {value}",
         "maintenance_recommendation_analytics": "Runbook Analytics",
+        "maintenance_recommendation_avg_ack_hours": "Average time to acknowledge: {value} h",
         "maintenance_recommendation_top_recurring": "Top recurring codes: {value}",
         "maintenance_recommendation_avg_resolution_hours": "Average time to resolve: {value} h",
         "maintenance_recommendation_oldest_unresolved_hours": "Oldest unresolved age: {value} h",
@@ -442,7 +449,14 @@ TRANSLATIONS = {
         "maintenance_recommendation_counter_acknowledged": "Подтверждено: {count}",
         "maintenance_recommendation_counter_resolved": "Закрыто: {count}",
         "maintenance_recommendation_counter_reappeared": "Повторно всплыло: {count}",
+        "ops_snapshot": "Ops snapshot",
+        "ops_snapshot_health": "Health: {value}",
+        "ops_snapshot_backlog": "Backlog: {value}",
+        "ops_snapshot_graph_alerts": "Graph alerts: {value}",
+        "ops_snapshot_maintenance_alerts": "Maintenance alerts: {value}",
+        "ops_snapshot_needs_action": "Нужно действие: {value}",
         "maintenance_recommendation_analytics": "Runbook аналитика",
+        "maintenance_recommendation_avg_ack_hours": "Среднее время до подтверждения: {value} ч",
         "maintenance_recommendation_top_recurring": "Самые повторяющиеся коды: {value}",
         "maintenance_recommendation_avg_resolution_hours": "Среднее время до закрытия: {value} ч",
         "maintenance_recommendation_oldest_unresolved_hours": "Возраст самого старого незакрытого: {value} ч",
@@ -1117,6 +1131,7 @@ def _render_maintenance_summary(summary: dict) -> None:
             )
     recommendation_events = summary.get("recent_operational_recommendation_events") or []
     recommendations = summary.get("recent_operational_recommendations") or []
+    recommendation_analytics = summary.get("recommendation_analytics") or {}
     if recommendations:
         recommendation_events_by_code: dict[str, list[dict]] = {}
         for event in recommendation_events:
@@ -1150,60 +1165,22 @@ def _render_maintenance_summary(summary: dict) -> None:
         counter_row[2].metric(_t("maintenance_recommendation_counter_resolved", count=resolved_count), resolved_count)
         counter_row[3].metric(_t("maintenance_recommendation_counter_reappeared", count=reappeared_count), reappeared_count)
 
-        recurring_codes = sorted(
-            (
-                (
-                    str(item.get("code") or ""),
-                    max(int(item.get("shown_count", 1) or 1) - 1, 0),
-                )
-                for item in recommendations
-            ),
-            key=lambda item: (-item[1], item[0]),
-        )
-        top_recurring = ", ".join(f"{code}={count}" for code, count in recurring_codes[:3] if code) or "-"
-
-        resolution_durations_hours: list[float] = []
-        for code, events in recommendation_events_by_code.items():
-            shown_timestamp: datetime | None = None
-            for event in events:
-                event_type = str(event.get("event_type") or "")
-                event_timestamp = _parse_timestamp(event.get("timestamp"))
-                if event_type in {"shown", "reappeared"} and event_timestamp is not None:
-                    shown_timestamp = event_timestamp
-                elif event_type == "resolved" and shown_timestamp is not None and event_timestamp is not None:
-                    duration_hours = max((event_timestamp - shown_timestamp).total_seconds(), 0.0) / 3600.0
-                    resolution_durations_hours.append(duration_hours)
-                    shown_timestamp = None
-
-        average_resolution_hours = (
-            round(sum(resolution_durations_hours) / len(resolution_durations_hours), 2)
-            if resolution_durations_hours
-            else 0.0
-        )
-
-        now_utc = datetime.now(timezone.utc)
-        unresolved_ages_hours: list[float] = []
-        for item in recommendations:
-            if bool(item.get("resolved", False)):
-                continue
-            started_at = _parse_timestamp(
-                item.get("first_shown_at") or item.get("last_shown_at")
-            )
-            if started_at is None:
-                continue
-            unresolved_ages_hours.append(max((now_utc - started_at).total_seconds(), 0.0) / 3600.0)
-        oldest_unresolved_hours = round(max(unresolved_ages_hours), 2) if unresolved_ages_hours else 0.0
-
         st.caption(_t("maintenance_recommendation_analytics"))
         analytics_row = st.columns(3)
+        top_recurring = ", ".join(recommendation_analytics.get("top_recurring_codes") or []) or "-"
         analytics_row[0].metric(_t("maintenance_recommendation_top_recurring", value=top_recurring), top_recurring)
         analytics_row[1].metric(
-            _t("maintenance_recommendation_avg_resolution_hours", value=average_resolution_hours),
-            average_resolution_hours,
+            _t("maintenance_recommendation_avg_ack_hours", value=recommendation_analytics.get("average_time_to_ack_hours", 0.0)),
+            recommendation_analytics.get("average_time_to_ack_hours", 0.0),
         )
         analytics_row[2].metric(
-            _t("maintenance_recommendation_oldest_unresolved_hours", value=oldest_unresolved_hours),
-            oldest_unresolved_hours,
+            _t("maintenance_recommendation_oldest_unresolved_hours", value=recommendation_analytics.get("oldest_unresolved_hours", 0.0)),
+            recommendation_analytics.get("oldest_unresolved_hours", 0.0),
+        )
+        analytics_row_2 = st.columns(1)
+        analytics_row_2[0].metric(
+            _t("maintenance_recommendation_avg_resolution_hours", value=recommendation_analytics.get("average_time_to_resolve_hours", 0.0)),
+            recommendation_analytics.get("average_time_to_resolve_hours", 0.0),
         )
 
         st.caption(_t("maintenance_recommendation_summary"))
@@ -1473,6 +1450,23 @@ def _render_queue_overview() -> None:
     graph_alert_trend = metrics.get("graph_alert_trend") or {}
     maintenance_summary = metrics.get("maintenance_summary") or {}
     operational_health = metrics.get("operational_health") or {}
+    recommendation_analytics = maintenance_summary.get("recommendation_analytics") or {}
+    with st.expander(_t("ops_snapshot"), expanded=True):
+        snapshot_row = st.columns(5)
+        snapshot_row[0].metric(
+            _t("ops_snapshot_health", value=operational_health.get("status", "healthy")),
+            operational_health.get("score", 100),
+        )
+        snapshot_row[1].metric(_t("ops_snapshot_backlog", value=queue_backlog), queue_backlog)
+        snapshot_row[2].metric(_t("ops_snapshot_graph_alerts", value=len(graph_alerts)), len(graph_alerts))
+        snapshot_row[3].metric(
+            _t("ops_snapshot_maintenance_alerts", value=len(maintenance_summary.get("alerts") or [])),
+            len(maintenance_summary.get("alerts") or []),
+        )
+        snapshot_row[4].metric(
+            _t("ops_snapshot_needs_action", value=recommendation_analytics.get("unresolved_count", 0)),
+            recommendation_analytics.get("unresolved_count", 0),
+        )
     _render_operational_health(operational_health, scope_key="queue", enable_ack=True)
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))

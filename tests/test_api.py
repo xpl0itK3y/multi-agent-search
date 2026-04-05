@@ -431,6 +431,95 @@ async def test_queue_health_includes_maintenance_restart_recommendation(client):
 
 
 @pytest.mark.anyio
+async def test_queue_health_includes_runbook_analytics_and_alerts(client):
+    app_service = client._transport.app.state.research_service
+    app_service.task_store.upsert_worker_heartbeat(
+        "maintenance",
+        processed_jobs=1,
+        status="idle",
+        maintenance_summary={
+            "last_run_at": "2026-04-05T12:00:00+00:00",
+            "recent_operational_recommendations": [
+                {
+                    "code": "reduce_queue_backlog",
+                    "message": "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                    "shown_count": 4,
+                    "active": True,
+                    "acknowledged": False,
+                    "resolved": False,
+                    "first_shown_at": "2026-04-04T06:00:00+00:00",
+                    "last_shown_at": "2026-04-05T11:00:00+00:00",
+                },
+                {
+                    "code": "inspect_graph_failures_and_search_quality",
+                    "message": "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs.",
+                    "shown_count": 3,
+                    "active": True,
+                    "acknowledged": True,
+                    "acknowledged_at": "2026-04-05T11:30:00+00:00",
+                    "resolved": False,
+                    "first_shown_at": "2026-04-05T08:00:00+00:00",
+                    "last_shown_at": "2026-04-05T11:00:00+00:00",
+                },
+                {
+                    "code": "restart_or_verify_maintenance_path",
+                    "message": "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed.",
+                    "shown_count": 2,
+                    "active": True,
+                    "acknowledged": False,
+                    "resolved": False,
+                    "first_shown_at": "2026-04-05T07:00:00+00:00",
+                    "last_shown_at": "2026-04-05T11:45:00+00:00",
+                },
+            ],
+            "recent_operational_recommendation_events": [
+                {
+                    "code": "reduce_queue_backlog",
+                    "event_type": "shown",
+                    "message": "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                    "timestamp": "2026-04-04T06:00:00+00:00",
+                },
+                {
+                    "code": "reduce_queue_backlog",
+                    "event_type": "reappeared",
+                    "message": "Queue backlog is elevated: consider adding more workers and review long-running search/finalize jobs.",
+                    "timestamp": "2026-04-05T11:00:00+00:00",
+                },
+                {
+                    "code": "inspect_graph_failures_and_search_quality",
+                    "event_type": "shown",
+                    "message": "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs.",
+                    "timestamp": "2026-04-05T08:00:00+00:00",
+                },
+                {
+                    "code": "inspect_graph_failures_and_search_quality",
+                    "event_type": "acknowledged",
+                    "message": "Graph step failures detected: inspect failing steps, search quality, and blocked domains before rerunning jobs.",
+                    "timestamp": "2026-04-05T11:30:00+00:00",
+                },
+                {
+                    "code": "restart_or_verify_maintenance_path",
+                    "event_type": "shown",
+                    "message": "Maintenance appears stale: verify the maintenance worker is running and trigger the maintenance path if needed.",
+                    "timestamp": "2026-04-05T07:00:00+00:00",
+                },
+            ],
+        },
+    )
+
+    response = await client.get("/health/queues")
+
+    assert response.status_code == 200
+    payload = response.json()
+    analytics = payload["maintenance_summary"]["recommendation_analytics"]
+    assert analytics["unresolved_count"] == 3
+    assert analytics["repeated_reappeared_count"] == 1
+    assert "reduce_queue_backlog" in analytics["top_recurring_codes"]
+    alert_codes = {item["code"] for item in payload["maintenance_summary"]["alerts"]}
+    assert "runbook_slow_resolution" in alert_codes or "runbook_unresolved_pressure" in alert_codes
+
+
+@pytest.mark.anyio
 async def test_queue_health_operational_recommendations_track_repeat_count(client):
     app_service = client._transport.app.state.research_service
     app_service.task_store.upsert_worker_heartbeat(
