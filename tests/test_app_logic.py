@@ -1085,6 +1085,35 @@ def test_research_summary_includes_replan_and_agent_summaries():
     assert summary.replan_recommendations
 
 
+def test_finalize_graph_runner_retries_after_report_notes(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.MEDIUM),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body " * 80}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.run_analysis.side_effect = [
+        "## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S1].\n\n## Report Notes\n- Weak support.\n\n## Sources\n### Used Sources\n- [S1] https://example.com",
+        "## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S1].\n\n## Sources\n### Used Sources\n- [S1] https://example.com",
+    ]
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    finalized = service.finalize_research(research.id)
+
+    assert finalized.final_report.startswith("## Introduction")
+    assert analyzer.run_analysis.call_count == 2
+
+
 def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
     llm = RecordingLLM(response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)

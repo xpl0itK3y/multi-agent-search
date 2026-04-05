@@ -2,6 +2,21 @@
 
 FastAPI backend for a research workflow with persistent jobs, Postgres storage, and a separate worker process.
 
+## LangGraph Finalize Loop
+
+The project now includes an optional LangGraph-style finalize orchestration layer in `src/graph/`.
+
+It is used for the post-search decision loop:
+
+- collect source and evidence summaries
+- branch into a replan step when coverage looks weak
+- run the analyzer
+- retry analysis once when the generated draft still contains report-note style quality warnings
+
+By default, `USE_LANGGRAPH_FINALIZE_GRAPH=true`.
+
+If `langgraph` is not installed, the project falls back to an internal sequential runner with the same decisions, so the app still works.
+
 ## Requirements
 
 - Python 3.11+
