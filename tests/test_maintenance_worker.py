@@ -193,3 +193,20 @@ def test_maintenance_worker_persists_last_maintenance_summary(monkeypatch):
     assert heartbeat is not None
     assert heartbeat.maintenance_summary.last_run_at is not None
     assert heartbeat.maintenance_summary.total_count == 0
+    assert len(heartbeat.maintenance_summary.recent_runs) == 1
+
+
+def test_maintenance_worker_appends_maintenance_history(monkeypatch):
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
+    monkeypatch.setattr("src.services.research_service.settings.search_job_retention_seconds", 3600)
+    monkeypatch.setattr("src.services.research_service.settings.finalize_job_retention_seconds", 3600)
+
+    MaintenanceWorker(service).run_once()
+    MaintenanceWorker(service).run_once()
+
+    heartbeat = task_store.get_worker_heartbeat("maintenance")
+    assert heartbeat is not None
+    assert len(heartbeat.maintenance_summary.recent_runs) == 2

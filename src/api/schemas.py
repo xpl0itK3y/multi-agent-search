@@ -346,6 +346,13 @@ class GraphAlertTrend(BaseModel):
 
 
 class MaintenanceSummary(BaseModel):
+    class MaintenanceRunEntry(BaseModel):
+        recovered_count: int = 0
+        deleted_count: int = 0
+        compacted_count: int = 0
+        total_count: int = 0
+        last_run_at: Optional[datetime] = None
+
     recovered_count: int = 0
     deleted_count: int = 0
     compacted_count: int = 0
@@ -353,6 +360,7 @@ class MaintenanceSummary(BaseModel):
     compacted_graph_event_worker_names: List[str] = Field(default_factory=list)
     compacted_graph_trail_research_ids: List[str] = Field(default_factory=list)
     last_run_at: Optional[datetime] = None
+    recent_runs: List["MaintenanceSummary.MaintenanceRunEntry"] = Field(default_factory=list)
 
 
 class WorkerHeartbeat(BaseModel):
