@@ -355,6 +355,42 @@ def test_analyzer_agent_applies_global_payload_budget():
     assert total_chars <= 28000
 
 
+def test_analyzer_agent_expands_source_window_for_hard_depth():
+    llm = RecordingLLM(response="report")
+    agent = AnalyzerAgent(llm)
+
+    tasks = [
+        SearchTask(
+            id=f"task-{task_index}",
+            description="desc",
+            queries=["query"],
+            status=TaskStatus.COMPLETED,
+            result=[
+                {
+                    "url": f"https://source{task_index}-{index}.example/article",
+                    "title": f"Title {task_index}-{index}",
+                    "content": f"Body {task_index}-{index} " * 60,
+                }
+                for index in range(10)
+            ],
+        )
+        for task_index in range(6)
+    ]
+
+    agent.run_analysis("original prompt", tasks, depth=SearchDepth.MEDIUM)
+    medium_payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    medium_parsed = json.loads(medium_payload)
+    medium_gathered = medium_parsed["gathered_data"]
+
+    agent.run_analysis("original prompt", tasks, depth=SearchDepth.HARD)
+    hard_payload = llm.calls[1]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    hard_parsed = json.loads(hard_payload)
+    hard_gathered = hard_parsed["gathered_data"]
+
+    assert len(hard_gathered) >= len(medium_gathered)
+    assert "very comprehensive deep-dive report" in llm.calls[1]["user_prompt"]
+
+
 def test_analyzer_agent_uses_local_repair_for_small_citation_issues():
     llm = RecordingLLM(
         response=(

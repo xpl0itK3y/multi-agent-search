@@ -6,7 +6,7 @@ from typing import List
 from urllib.parse import urlparse
 from src.core.agent import BaseAgent
 from src.core import rust_accel
-from src.api.schemas import SearchTask
+from src.api.schemas import SearchTask, SearchDepth
 from src.config import settings
 from src.observability import maybe_traceable
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics
@@ -256,6 +256,46 @@ class AnalyzerAgent(BaseAgent):
         "what to expect",
         "predictions for",
     )
+    DEPTH_ANALYSIS_PROFILES = {
+        SearchDepth.EASY: {
+            "max_sources": 12,
+            "max_sources_per_domain": 2,
+            "max_sources_per_task": 4,
+            "payload_char_budget": 12000,
+            "conflict_source_limit": 8,
+            "evidence_source_limit": 8,
+            "report_instruction": (
+                "Write a concise but complete report with a limited number of substantial sections. "
+                "Prioritize the clearest findings and avoid unnecessary expansion."
+            ),
+        },
+        SearchDepth.MEDIUM: {
+            "max_sources": 24,
+            "max_sources_per_domain": 3,
+            "max_sources_per_task": 6,
+            "payload_char_budget": 28000,
+            "conflict_source_limit": 12,
+            "evidence_source_limit": 12,
+            "report_instruction": (
+                "Write a substantially more comprehensive report than a brief summary. "
+                "Prefer multiple substantial sections or subsections, include more concrete examples, "
+                "and cover the topic from several angles when the evidence supports it."
+            ),
+        },
+        SearchDepth.HARD: {
+            "max_sources": 36,
+            "max_sources_per_domain": 4,
+            "max_sources_per_task": 8,
+            "payload_char_budget": 42000,
+            "conflict_source_limit": 16,
+            "evidence_source_limit": 16,
+            "report_instruction": (
+                "Write a very comprehensive deep-dive report. Expand the analysis substantially, "
+                "cover major subtopics in detail, use more year-by-year or category-by-category breakdowns when relevant, "
+                "and synthesize a wider portion of the available evidence into a long-form answer."
+            ),
+        },
+    }
     
     SYSTEM_PROMPT = """
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
@@ -466,8 +506,8 @@ class AnalyzerAgent(BaseAgent):
         budget = max(220, min(self.MAX_SOURCE_CONTENT_CHARS, char_budget))
         return rust_accel.compact_source_content(content, budget)
 
-    def _apply_payload_budget(self, candidates: list[dict]) -> list[dict]:
-        remaining_budget = max(settings.analyzer_payload_char_budget, 2000)
+    def _apply_payload_budget(self, candidates: list[dict], payload_char_budget: int) -> list[dict]:
+        remaining_budget = max(payload_char_budget, 2000)
         budgeted_candidates: list[dict] = []
         for index, candidate in enumerate(candidates):
             reserved_tail = max(0, len(candidates) - index - 1) * 220
@@ -484,8 +524,14 @@ class AnalyzerAgent(BaseAgent):
                 break
         return budgeted_candidates
 
-    def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask]) -> list[dict]:
+    def _resolve_depth_profile(self, depth: SearchDepth | None) -> dict:
+        if depth is None:
+            depth = SearchDepth.MEDIUM
+        return self.DEPTH_ANALYSIS_PROFILES[depth]
+
+    def _prepare_aggregated_data(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> list[dict]:
         topics = self._detect_topics(prompt, tasks)
+        profile = self._resolve_depth_profile(depth)
         aggregated_candidates = []
         for task in tasks:
             if task.status != "completed" or not task.result:
@@ -513,12 +559,15 @@ class AnalyzerAgent(BaseAgent):
         selected_candidates = rust_accel.select_analyzer_sources(
             aggregated_candidates,
             topics=topics,
-            max_sources=settings.analyzer_max_sources,
-            max_sources_per_domain=settings.analyzer_max_sources_per_domain,
-            max_sources_per_task=settings.analyzer_max_sources_per_task,
+            max_sources=profile["max_sources"],
+            max_sources_per_domain=profile["max_sources_per_domain"],
+            max_sources_per_task=profile["max_sources_per_task"],
         )
 
-        selected_candidates = self._apply_payload_budget(selected_candidates)
+        selected_candidates = self._apply_payload_budget(
+            selected_candidates,
+            payload_char_budget=profile["payload_char_budget"],
+        )
 
         return [
             {
@@ -623,18 +672,16 @@ class AnalyzerAgent(BaseAgent):
             "empty_sources": "The sources section is present but no cited sources were included under it.",
         }
 
-    def _build_user_prompt(self, input_data: dict, language: str, retry: bool = False) -> str:
+    def _build_user_prompt(self, input_data: dict, language: str, retry: bool = False, depth: SearchDepth | None = None) -> str:
         instruction = self._language_instruction(language)
         if retry:
             instruction = (
                 f"{instruction} Your previous answer used the wrong language. "
                 "Rewrite the report fully in the requested language and keep factual citations."
             )
+        profile = self._resolve_depth_profile(depth)
         expanded_report_instruction = (
-            "Write a substantially more comprehensive report than a brief summary. "
-            "Prefer multiple substantial sections or subsections, include more concrete examples, "
-            "and cover the topic from several angles when the evidence supports it. "
-            "Use a broader portion of the available source pool where it materially improves coverage."
+            f"{profile['report_instruction']} Use a broader portion of the available source pool where it materially improves coverage."
         )
         confidence_instruction = (
             "When evidence comes from editorial lists, critic roundups, box-office summaries, or mixed-quality sources, "
@@ -1025,8 +1072,8 @@ class AnalyzerAgent(BaseAgent):
             return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{section}"
 
-    def _generate_report(self, input_data: dict, language: str, retry: bool = False) -> str:
-        user_prompt = self._build_user_prompt(input_data, language, retry=retry)
+    def _generate_report(self, input_data: dict, language: str, retry: bool = False, depth: SearchDepth | None = None) -> str:
+        user_prompt = self._build_user_prompt(input_data, language, retry=retry, depth=depth)
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
@@ -1034,14 +1081,15 @@ class AnalyzerAgent(BaseAgent):
         )
 
     @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
-    def run_analysis(self, prompt: str, tasks: List[SearchTask]) -> str:
+    def run_analysis(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> str:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
-        aggregated_data = self._prepare_aggregated_data(prompt, tasks)
+        aggregated_data = self._prepare_aggregated_data(prompt, tasks, depth=depth)
         prepare_ms = (time.perf_counter() - prepare_started_at) * 1000
 
-        conflict_pool = aggregated_data[: settings.analyzer_conflict_source_limit]
-        evidence_pool = aggregated_data[: settings.analyzer_evidence_source_limit]
+        profile = self._resolve_depth_profile(depth)
+        conflict_pool = aggregated_data[: profile["conflict_source_limit"]]
+        evidence_pool = aggregated_data[: profile["evidence_source_limit"]]
 
         conflict_started_at = time.perf_counter()
         conflicts = self._detect_conflicts(conflict_pool)
@@ -1061,7 +1109,7 @@ class AnalyzerAgent(BaseAgent):
 
         logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
         llm_started_at = time.perf_counter()
-        result = self._generate_report(input_data, prompt_language)
+        result = self._generate_report(input_data, prompt_language, depth=depth)
         if prompt_language != "unknown":
             report_language = self._detect_language(result)
             if report_language not in {prompt_language, "unknown"}:
@@ -1070,7 +1118,7 @@ class AnalyzerAgent(BaseAgent):
                     prompt_language,
                     report_language,
                 )
-                result = self._generate_report(input_data, prompt_language, retry=True)
+                result = self._generate_report(input_data, prompt_language, retry=True, depth=depth)
         llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
         normalized = self._post_process_report(result, prompt_language)
