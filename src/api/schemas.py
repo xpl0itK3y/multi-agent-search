@@ -325,6 +325,26 @@ class GraphAlert(BaseModel):
     hint: Optional[str] = None
 
 
+class GraphAlertHistoryEntry(BaseModel):
+    timestamp: datetime
+    code: str
+    severity: str = "warning"
+    step: Optional[str] = None
+    current_value: float = 0.0
+    threshold: float = 0.0
+    research_id: Optional[str] = None
+    worker_name: Optional[str] = None
+
+
+class GraphAlertTrend(BaseModel):
+    worsening_steps: List[str] = Field(default_factory=list)
+    improving_steps: List[str] = Field(default_factory=list)
+    repeated_alerts: Dict[str, int] = Field(default_factory=dict)
+    top_research_ids: List[str] = Field(default_factory=list)
+    top_worker_names: List[str] = Field(default_factory=list)
+    recent_alerts: List[GraphAlertHistoryEntry] = Field(default_factory=list)
+
+
 class WorkerHeartbeat(BaseModel):
     worker_name: str
     processed_jobs: int = 0
@@ -333,6 +353,7 @@ class WorkerHeartbeat(BaseModel):
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
+    graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -346,6 +367,7 @@ class QueueMetrics(BaseModel):
     extraction_metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     graph_metrics: GraphMetrics = Field(default_factory=GraphMetrics)
     graph_alerts: List[GraphAlert] = Field(default_factory=list)
+    graph_alert_trend: GraphAlertTrend = Field(default_factory=GraphAlertTrend)
 
 
 class JobRecoveryResponse(BaseModel):

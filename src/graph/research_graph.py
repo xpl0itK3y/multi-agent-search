@@ -100,17 +100,17 @@ class FinalizeGraphRunner:
         event = {"step": step, "detail": detail}
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
 
-    def _run_timed_step(self, step_name: str, action):
+    def _run_timed_step(self, step_name: str, action, research_id: str):
         started_at = perf_counter()
         try:
             result = action()
         except Exception:
             elapsed_ms = (perf_counter() - started_at) * 1000
-            record_graph_step_failure(step_name, elapsed_ms)
+            record_graph_step_failure(step_name, elapsed_ms, research_id=research_id)
             logger.exception("langgraph_finalize_step_failed step=%s elapsed_ms=%.2f", step_name, elapsed_ms)
             raise
         elapsed_ms = (perf_counter() - started_at) * 1000
-        record_graph_step(step_name, elapsed_ms)
+        record_graph_step(step_name, elapsed_ms, research_id=research_id)
         logger.info("langgraph_finalize_step_completed step=%s elapsed_ms=%.2f", step_name, elapsed_ms)
         return result
 
@@ -154,7 +154,7 @@ class FinalizeGraphRunner:
             )
             return next_state
 
-        return self._run_timed_step("collect_context", action)
+        return self._run_timed_step("collect_context", action, state["research_id"])
 
     def _build_conflict_pool(self, aggregated_sources: list[dict]) -> list[dict]:
         return [
@@ -209,7 +209,7 @@ class FinalizeGraphRunner:
             record_graph_replan()
             return next_state
 
-        return self._run_timed_step("replan", action)
+        return self._run_timed_step("replan", action, state["research_id"])
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -231,7 +231,7 @@ class FinalizeGraphRunner:
             record_graph_analyze()
             return next_state
 
-        return self._run_timed_step("analyze", action)
+        return self._run_timed_step("analyze", action, state["research_id"])
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -268,7 +268,7 @@ class FinalizeGraphRunner:
             record_graph_tie_break()
             return next_state
 
-        return self._run_timed_step("tie_break", action)
+        return self._run_timed_step("tie_break", action, state["research_id"])
 
     def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -312,7 +312,7 @@ class FinalizeGraphRunner:
             )
             return next_state
 
-        return self._run_timed_step("verify", action)
+        return self._run_timed_step("verify", action, state["research_id"])
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True

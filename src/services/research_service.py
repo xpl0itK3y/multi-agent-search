@@ -17,6 +17,8 @@ from src.api.schemas import (
     DecomposeResponse,
     FinalizeJobStatus,
     GraphAlert,
+    GraphAlertHistoryEntry,
+    GraphAlertTrend,
     GraphMetrics,
     JobRecoveryResponse,
     QueueMetrics,
@@ -42,7 +44,7 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.graph import FinalizeGraphRunner
-from src.graph.metrics import get_graph_metrics_snapshot
+from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context
 from src.providers.search import get_extraction_metrics_snapshot
 from src.repositories.protocols import TaskStore
@@ -655,7 +657,13 @@ class ResearchService:
         heartbeat = self.task_store.get_worker_heartbeat(worker_name)
         if not heartbeat:
             return None
-        return heartbeat.model_copy(update={"graph_alerts": self._build_graph_alerts(heartbeat.graph_metrics)})
+        step_events = self._filter_graph_step_events(worker_name=worker_name)
+        return heartbeat.model_copy(
+            update={
+                "graph_alerts": self._build_graph_alerts(heartbeat.graph_metrics),
+                "graph_alert_trend": self._build_graph_alert_trend(step_events),
+            }
+        )
 
     def touch_worker_heartbeat(
         self,
@@ -677,15 +685,22 @@ class ResearchService:
 
     def get_queue_metrics(self) -> QueueMetrics:
         metrics = self.task_store.get_queue_metrics()
-        return metrics.model_copy(update={"graph_alerts": self._build_graph_alerts(metrics.graph_metrics)})
+        return metrics.model_copy(
+            update={
+                "graph_alerts": self._build_graph_alerts(metrics.graph_metrics),
+                "graph_alert_trend": self._build_graph_alert_trend(self._filter_graph_step_events()),
+            }
+        )
 
     def get_health_status(self) -> dict:
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
+        step_events = self._filter_graph_step_events()
         return {
             "status": "ok",
             "extraction_metrics": get_extraction_metrics_snapshot(),
             "graph_metrics": graph_metrics.model_dump(),
             "graph_alerts": [alert.model_dump() for alert in self._build_graph_alerts(graph_metrics)],
+            "graph_alert_trend": self._build_graph_alert_trend(step_events).model_dump(),
         }
 
     def _build_graph_alerts(self, graph_metrics: GraphMetrics) -> list[GraphAlert]:
@@ -766,6 +781,102 @@ class ResearchService:
                 )
             )
         return alerts
+
+    def _filter_graph_step_events(self, worker_name: str | None = None, research_id: str | None = None) -> list[dict]:
+        events = get_graph_step_events_snapshot()
+        filtered = []
+        for event in events:
+            if worker_name and event.get("worker_name") != worker_name:
+                continue
+            if research_id and event.get("research_id") != research_id:
+                continue
+            filtered.append(event)
+        return filtered
+
+    def _build_graph_alert_trend(self, step_events: list[dict]) -> GraphAlertTrend:
+        step_windows: dict[str, list[float]] = {}
+        repeated_alerts: dict[str, int] = {}
+        research_counts: dict[str, int] = {}
+        worker_counts: dict[str, int] = {}
+        recent_alerts: list[GraphAlertHistoryEntry] = []
+
+        for event in step_events:
+            step_name = str(event.get("step") or "").strip()
+            if not step_name:
+                continue
+            elapsed_ms = float(event.get("elapsed_ms") or 0.0)
+            failed = bool(event.get("failed"))
+            step_windows.setdefault(step_name, []).append(elapsed_ms)
+
+            alert_code = None
+            severity = "warning"
+            threshold = 0.0
+            if failed:
+                alert_code = "step_failures"
+                threshold = float(self.GRAPH_STEP_FAILURE_WARNING_COUNT)
+            elif elapsed_ms >= self.GRAPH_STEP_WARNING_MS:
+                alert_code = "high_avg_ms"
+                severity = "critical" if elapsed_ms >= self.GRAPH_STEP_CRITICAL_MS else "warning"
+                threshold = self.GRAPH_STEP_WARNING_MS if severity == "warning" else self.GRAPH_STEP_CRITICAL_MS
+
+            if not alert_code:
+                continue
+
+            repeated_alerts[alert_code] = repeated_alerts.get(alert_code, 0) + 1
+            if event.get("research_id"):
+                research_id_value = str(event["research_id"])
+                research_counts[research_id_value] = research_counts.get(research_id_value, 0) + 1
+            if event.get("worker_name"):
+                worker_name_value = str(event["worker_name"])
+                worker_counts[worker_name_value] = worker_counts.get(worker_name_value, 0) + 1
+            recent_alerts.append(
+                GraphAlertHistoryEntry(
+                    timestamp=datetime.fromisoformat(event["timestamp"]),
+                    code=alert_code,
+                    severity=severity,
+                    step=step_name,
+                    current_value=elapsed_ms if alert_code == "high_avg_ms" else 1.0,
+                    threshold=threshold,
+                    research_id=event.get("research_id"),
+                    worker_name=event.get("worker_name"),
+                )
+            )
+
+        worsening_steps: list[str] = []
+        improving_steps: list[str] = []
+        for step_name, values in step_windows.items():
+            if len(values) < 4:
+                continue
+            window_size = min(5, len(values) // 2)
+            if window_size <= 0:
+                continue
+            previous = values[-(window_size * 2):-window_size]
+            recent = values[-window_size:]
+            if not previous or not recent:
+                continue
+            previous_avg = sum(previous) / len(previous)
+            recent_avg = sum(recent) / len(recent)
+            if recent_avg > previous_avg * 1.25 and recent_avg - previous_avg >= 100:
+                worsening_steps.append(step_name)
+            elif previous_avg > 0 and recent_avg < previous_avg * 0.8 and previous_avg - recent_avg >= 100:
+                improving_steps.append(step_name)
+
+        top_research_ids = [
+            research_id_value
+            for research_id_value, _ in sorted(research_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+        ]
+        top_worker_names = [
+            worker_name_value
+            for worker_name_value, _ in sorted(worker_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+        ]
+        return GraphAlertTrend(
+            worsening_steps=sorted(set(worsening_steps)),
+            improving_steps=sorted(set(improving_steps)),
+            repeated_alerts=dict(sorted(repeated_alerts.items(), key=lambda item: item[1], reverse=True)),
+            top_research_ids=top_research_ids,
+            top_worker_names=top_worker_names,
+            recent_alerts=recent_alerts[-10:],
+        )
 
     def _graph_alert_hint(self, code: str, step: str | None) -> str:
         step_name = (step or "").strip().lower()

@@ -7,6 +7,8 @@ from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ExtractionMetrics, GraphMetrics
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, SearchTask, TaskStatus, SearchJobStatus, TaskUpdate
 from src.core.llm import LLMProvider
+from src.graph.metrics import record_graph_step, record_graph_step_failure, reset_graph_metrics
+from src.observability.context import bind_observability_context
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
 from src.search_depth_profiles import get_depth_profile
@@ -1928,6 +1930,7 @@ def test_graph_metrics_derive_step_averages():
 
 
 def test_queue_metrics_include_graph_alerts():
+    reset_graph_metrics()
     task_store = InMemoryTaskStore()
     task_store.upsert_worker_heartbeat(
         "job-worker",
@@ -1951,6 +1954,27 @@ def test_queue_metrics_include_graph_alerts():
     hints = {alert.code: alert.hint for alert in metrics.graph_alerts}
     assert "source pool size" in hints["high_avg_ms"]
     assert "fewer analyze passes" in hints["analyze_retries"]
+
+
+def test_queue_metrics_include_graph_alert_trend():
+    reset_graph_metrics()
+    with bind_observability_context(worker_name="job-worker"):
+        record_graph_step("analyze", 1000.0, research_id="research-a")
+        record_graph_step("analyze", 1200.0, research_id="research-a")
+        record_graph_step("analyze", 2000.0, research_id="research-a")
+        record_graph_step("analyze", 2500.0, research_id="research-a")
+        record_graph_step("analyze", 3000.0, research_id="research-a")
+        record_graph_step_failure("tie_break", 400.0, research_id="research-b")
+    with bind_observability_context(worker_name="job-worker-2"):
+        record_graph_step("collect_context", 1700.0, research_id="research-c")
+
+    metrics = ResearchService(task_store=InMemoryTaskStore()).get_queue_metrics()
+
+    assert "analyze" in metrics.graph_alert_trend.worsening_steps
+    assert metrics.graph_alert_trend.repeated_alerts["high_avg_ms"] >= 4
+    assert metrics.graph_alert_trend.top_research_ids[0] == "research-a"
+    assert "job-worker" in metrics.graph_alert_trend.top_worker_names
+    assert metrics.graph_alert_trend.recent_alerts
 
 
 def test_extraction_metrics_derives_rates_and_averages():

@@ -182,6 +182,14 @@ TRANSLATIONS = {
         "graph_alert_step_failures": "{step}: failure count {current_value} reached threshold {threshold}",
         "graph_alert_analyze_retries": "{step}: analyze retries {current_value} reached threshold {threshold}",
         "graph_alert_hint": "Hint: {hint}",
+        "graph_alert_trend": "Graph Alert Trend",
+        "graph_worsening_steps": "Worsening steps: {value}",
+        "graph_improving_steps": "Improving steps: {value}",
+        "graph_repeated_alerts": "Repeated alerts: {value}",
+        "graph_top_researches": "Top research IDs: {value}",
+        "graph_top_workers": "Top workers: {value}",
+        "graph_recent_alerts": "Recent alert events",
+        "graph_recent_alert_line": "{timestamp} | {step} | {code} | research={research_id} | worker={worker_name}",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -351,6 +359,14 @@ TRANSLATIONS = {
         "graph_alert_step_failures": "{step}: число ошибок {current_value} достигло порога {threshold}",
         "graph_alert_analyze_retries": "{step}: число analyze retry {current_value} достигло порога {threshold}",
         "graph_alert_hint": "Подсказка: {hint}",
+        "graph_alert_trend": "Тренд проблем графа",
+        "graph_worsening_steps": "Шаги с ухудшением: {value}",
+        "graph_improving_steps": "Шаги с улучшением: {value}",
+        "graph_repeated_alerts": "Повторяющиеся alerts: {value}",
+        "graph_top_researches": "Research ID с alert-ами чаще всего: {value}",
+        "graph_top_workers": "Воркеры с alert-ами чаще всего: {value}",
+        "graph_recent_alerts": "Последние alert-события",
+        "graph_recent_alert_line": "{timestamp} | {step} | {code} | research={research_id} | worker={worker_name}",
     },
 }
 
@@ -750,6 +766,7 @@ def _render_sidebar() -> None:
     extraction_metrics = heartbeat.get("extraction_metrics") or {}
     graph_metrics = heartbeat.get("graph_metrics") or {}
     graph_alerts = heartbeat.get("graph_alerts") or []
+    graph_alert_trend = heartbeat.get("graph_alert_trend") or {}
     st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
     st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
     st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
@@ -762,6 +779,9 @@ def _render_sidebar() -> None:
     if graph_alerts:
         with st.sidebar.expander(_t("graph_alerts"), expanded=True):
             _render_graph_alerts(graph_alerts)
+    if graph_alert_trend:
+        with st.sidebar.expander(_t("graph_alert_trend"), expanded=False):
+            _render_graph_alert_trend(graph_alert_trend)
     with st.sidebar.expander(_t("graph_step_metrics"), expanded=False):
         _render_graph_step_metrics(graph_metrics)
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
@@ -871,6 +891,36 @@ def _render_graph_alerts(graph_alerts: list[dict]) -> None:
             st.caption(_t("graph_alert_hint", hint=alert["hint"]))
 
 
+def _render_graph_alert_trend(graph_alert_trend: dict) -> None:
+    if not graph_alert_trend:
+        return
+    worsening = ", ".join(graph_alert_trend.get("worsening_steps") or []) or "-"
+    improving = ", ".join(graph_alert_trend.get("improving_steps") or []) or "-"
+    repeated_alerts = graph_alert_trend.get("repeated_alerts") or {}
+    repeated_value = ", ".join(f"{code}={count}" for code, count in repeated_alerts.items()) or "-"
+    top_research_ids = ", ".join(graph_alert_trend.get("top_research_ids") or []) or "-"
+    top_worker_names = ", ".join(graph_alert_trend.get("top_worker_names") or []) or "-"
+    st.caption(_t("graph_worsening_steps", value=worsening))
+    st.caption(_t("graph_improving_steps", value=improving))
+    st.caption(_t("graph_repeated_alerts", value=repeated_value))
+    st.caption(_t("graph_top_researches", value=top_research_ids))
+    st.caption(_t("graph_top_workers", value=top_worker_names))
+    recent_alerts = graph_alert_trend.get("recent_alerts") or []
+    if recent_alerts:
+        st.caption(_t("graph_recent_alerts"))
+        for event in recent_alerts[-5:]:
+            st.caption(
+                _t(
+                    "graph_recent_alert_line",
+                    timestamp=_format_timestamp(event.get("timestamp")),
+                    step=event.get("step") or "-",
+                    code=event.get("code") or "-",
+                    research_id=event.get("research_id") or "-",
+                    worker_name=event.get("worker_name") or "-",
+                )
+            )
+
+
 def _render_job_card(job: dict, job_kind: str) -> None:
     status_html = _status_badge(job["status"])
     owner_id = job["task_id"] if job_kind == "search" else job["research_id"]
@@ -969,6 +1019,7 @@ def _render_queue_overview() -> None:
     derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
     graph = metrics.get("graph_metrics") or {}
     graph_alerts = metrics.get("graph_alerts") or []
+    graph_alert_trend = metrics.get("graph_alert_trend") or {}
     graph_row = st.columns(4)
     graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
@@ -977,6 +1028,9 @@ def _render_queue_overview() -> None:
     if graph_alerts:
         with st.expander(_t("graph_alerts"), expanded=True):
             _render_graph_alerts(graph_alerts)
+    if graph_alert_trend:
+        with st.expander(_t("graph_alert_trend"), expanded=False):
+            _render_graph_alert_trend(graph_alert_trend)
     with st.expander(_t("graph_step_metrics"), expanded=False):
         _render_graph_step_metrics(graph)
 
