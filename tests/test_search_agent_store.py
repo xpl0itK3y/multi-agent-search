@@ -414,7 +414,7 @@ def test_search_agent_limits_candidate_urls_and_uses_parallel_queue(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert extract_mock.call_count == 3
     assert len(final_task.result) == 3
-    assert any("Queued 3 candidate URLs for extraction with concurrency 2" in entry for entry in final_task.logs)
+    assert any("Queued 3 candidate URLs for extraction with concurrency 2 and timeout" in entry for entry in final_task.logs)
 
 
 def test_search_agent_prioritizes_stronger_candidates_before_extraction(mocker):
@@ -454,6 +454,49 @@ def test_search_agent_prioritizes_stronger_candidates_before_extraction(mocker):
     assert "https://example.com/best-phones-2026" not in extracted_urls
     assert "https://www.dxomark.com/smartphones/" in extracted_urls
     assert "https://www.tomsguide.com/best-picks/best-phones" in extracted_urls
+
+
+def test_search_agent_stops_early_after_enough_successful_results(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+
+    mocker.patch(
+        "src.providers.search.SearchProvider.search",
+        return_value=[
+            {"url": "https://docs.python.org/3/tutorial/", "title": "Python Tutorial"},
+            {"url": "https://developer.mozilla.org/en-US/docs/Web/HTTP", "title": "MDN HTTP"},
+            {"url": "https://fastapi.tiangolo.com/", "title": "FastAPI Documentation"},
+            {"url": "https://flask.palletsprojects.com/en/stable/", "title": "Flask Documentation"},
+            {"url": "https://example.com/weaker-1", "title": "Weaker Result 1"},
+            {"url": "https://example.com/weaker-2", "title": "Weaker Result 2"},
+        ],
+    )
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"content for {url} " * 40,
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=2,
+        search_results_per_query=6,
+        max_candidate_urls=6,
+        extraction_concurrency=2,
+    )
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert extract_mock.call_count < 6
+    assert any("Stopped extraction early" in entry for entry in final_task.logs)
 
 
 def test_search_agent_boosts_mobile_tech_authority_domains(mocker):

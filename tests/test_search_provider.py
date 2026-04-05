@@ -38,3 +38,16 @@ def test_content_extractor_logs_failure_metrics_on_exception(mocker):
     metrics = get_extraction_metrics_snapshot()
     assert metrics["attempts"] >= 1
     assert metrics["failure_count"] >= 1
+
+
+def test_content_extractor_skips_blocked_video_urls(mocker):
+    reset_extraction_metrics()
+    fetch_mock = mocker.patch("src.providers.search.trafilatura.fetch_url")
+    info_mock = mocker.patch("src.providers.search.logger.info")
+
+    result = ContentExtractor.extract_content("https://www.youtube.com/watch?v=abc")
+
+    assert result is None
+    fetch_mock.assert_not_called()
+    assert info_mock.call_count == 1
+    assert info_mock.call_args.args[0] == "content_extraction_skipped url=%s reason=%s"

@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     finalize_job_timeout_seconds: int = 300
     search_job_retention_seconds: int = 86400
     finalize_job_retention_seconds: int = 86400
-    search_extraction_concurrency: int = 1
+    search_extraction_concurrency: int = 3
+    search_extraction_timeout_seconds: int = 12
+    search_extraction_max_redirects: int = 1
+    search_domain_fail_threshold: int = 2
+    search_domain_cooldown_seconds: int = 600
 
     postgres_user: str = "app"
     postgres_password: str = "app"

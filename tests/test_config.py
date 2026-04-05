@@ -51,6 +51,11 @@ def test_settings_supports_job_retry_and_worker_heartbeat_defaults():
     assert settings.finalize_job_timeout_seconds == 300
     assert settings.search_job_retention_seconds == 86400
     assert settings.finalize_job_retention_seconds == 86400
+    assert settings.search_extraction_concurrency == 3
+    assert settings.search_extraction_timeout_seconds == 12
+    assert settings.search_extraction_max_redirects == 1
+    assert settings.search_domain_fail_threshold == 2
+    assert settings.search_domain_cooldown_seconds == 600
 
 
 def test_settings_supports_optional_langsmith_flags():
