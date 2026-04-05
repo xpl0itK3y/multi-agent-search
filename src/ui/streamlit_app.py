@@ -200,6 +200,10 @@ TRANSLATIONS = {
         "maintenance_recommendation_history": "Recommendation History",
         "maintenance_recommendation_summary": "Recommendation Summary",
         "maintenance_recommendation_summary_line": "{code} | repeats={repeats} reappeared={reappeared} last_resolved={last_resolved}",
+        "maintenance_recommendation_badge_needs_action": "Needs Action",
+        "maintenance_recommendation_badge_acknowledged": "Acknowledged",
+        "maintenance_recommendation_badge_monitor": "Monitor",
+        "maintenance_recommendation_badge_resolved": "Resolved",
         "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
         "maintenance_recommendation_event_note": "Note: {value}",
         "maintenance_trend": "Maintenance Trend",
@@ -425,6 +429,10 @@ TRANSLATIONS = {
         "maintenance_recommendation_history": "История рекомендаций",
         "maintenance_recommendation_summary": "Сводка по рекомендациям",
         "maintenance_recommendation_summary_line": "{code} | повторов={repeats} повторных всплытий={reappeared} последний resolved={last_resolved}",
+        "maintenance_recommendation_badge_needs_action": "Нужно действие",
+        "maintenance_recommendation_badge_acknowledged": "Подтверждено",
+        "maintenance_recommendation_badge_monitor": "Наблюдать",
+        "maintenance_recommendation_badge_resolved": "Закрыто",
         "maintenance_recommendation_event_line": "{timestamp} | {code} | {event_type}",
         "maintenance_recommendation_event_note": "Заметка: {value}",
         "maintenance_trend": "Тренд maintenance",
@@ -554,6 +562,10 @@ def _render_styles() -> None:
         .mas-status.failed, .mas-status.dead_letter, .mas-status.error {
             background: #fee2e2; color: #b91c1c;
         }
+        .mas-status.needs_action { background: #fee2e2; color: #b91c1c; }
+        .mas-status.acknowledged { background: #dbeafe; color: #1d4ed8; }
+        .mas-status.monitor { background: #fef3c7; color: #92400e; }
+        .mas-status.resolved { background: #dcfce7; color: #166534; }
         .mas-kv {
             color: #475569;
             font-size: 0.92rem;
@@ -694,6 +706,11 @@ def _render_styles() -> None:
 def _status_badge(status: str | None) -> str:
     label = (status or "unknown").strip().lower()
     return f'<span class="mas-status {label}">{escape(label)}</span>'
+
+
+def _runbook_badge(status_key: str, label: str) -> str:
+    normalized_key = (status_key or "monitor").strip().lower()
+    return f'<span class="mas-status {escape(normalized_key)}">{escape(label)}</span>'
 
 
 def _format_timestamp(value: str | None) -> str:
@@ -1077,7 +1094,21 @@ def _render_maintenance_summary(summary: dict) -> None:
             if not code:
                 continue
             recommendation_events_by_code.setdefault(code, []).append(event)
-        for item in recommendations:
+        sorted_recommendations = sorted(
+            recommendations,
+            key=lambda item: (
+                0
+                if bool(item.get("active", True)) and not bool(item.get("resolved", False)) and not bool(item.get("acknowledged", False))
+                else 1
+                if bool(item.get("active", True)) and not bool(item.get("resolved", False)) and bool(item.get("acknowledged", False))
+                else 2
+                if not bool(item.get("active", True)) and not bool(item.get("resolved", False))
+                else 3,
+                -int(item.get("shown_count", 1) or 1),
+                str(item.get("code") or ""),
+            ),
+        )
+        for item in sorted_recommendations:
             code = str(item.get("code") or "-")
             shown_count = int(item.get("shown_count", 1) or 1)
             code_events = recommendation_events_by_code.get(code, [])
@@ -1086,6 +1117,24 @@ def _render_maintenance_summary(summary: dict) -> None:
                 event for event in code_events if str(event.get("event_type") or "") == "resolved"
             ]
             last_resolved = _format_timestamp(resolved_events[-1].get("timestamp")) if resolved_events else "-"
+            active = bool(item.get("active", True))
+            acknowledged = bool(item.get("acknowledged", False))
+            resolved = bool(item.get("resolved", False))
+            badge_key = "resolved"
+            badge_label = _t("maintenance_recommendation_badge_resolved")
+            if active and not resolved and not acknowledged:
+                badge_key = "needs_action"
+                badge_label = _t("maintenance_recommendation_badge_needs_action")
+            elif active and not resolved and acknowledged:
+                badge_key = "acknowledged"
+                badge_label = _t("maintenance_recommendation_badge_acknowledged")
+            elif not active and not resolved:
+                badge_key = "monitor"
+                badge_label = _t("maintenance_recommendation_badge_monitor")
+            st.markdown(
+                f"{_runbook_badge(badge_key, badge_label)} <strong>{escape(code)}</strong>",
+                unsafe_allow_html=True,
+            )
             st.caption(
                 _t(
                     "maintenance_recommendation_summary_line",
