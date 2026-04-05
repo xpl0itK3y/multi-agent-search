@@ -12,6 +12,7 @@ x-worker-base: &worker-base
   environment:
     POSTGRES_HOST: db
     POSTGRES_PORT: 5432
+    LOG_FORMAT: json
   command: ["python", "scripts/run_finalize_worker.py"]
   restart: unless-stopped
 
@@ -31,6 +32,7 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      LOG_FORMAT: json
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -48,6 +50,7 @@ services:
     environment:
       STREAMLIT_API_BASE_URL: http://api:8000
       STREAMLIT_WORKER_NAME: job-worker
+      LOG_FORMAT: json
     command:
       [
         "streamlit",
@@ -115,8 +118,34 @@ services:
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
+      LOG_FORMAT: json
     command: ["python", "-m", "alembic", "upgrade", "head"]
     restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: multi-agent-search-prometheus
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: multi-agent-search-grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
 
 volumes:
   postgres_data:

@@ -1,5 +1,7 @@
 openai
+langgraph
 langsmith
+prometheus-client
 python-dotenv
 fastapi
 uvicorn

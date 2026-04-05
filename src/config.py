@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_project: Optional[str] = None
+    log_format: str = "text"
+    prometheus_metrics_enabled: bool = True
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False

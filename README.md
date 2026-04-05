@@ -17,6 +17,22 @@ By default, `USE_LANGGRAPH_FINALIZE_GRAPH=true`.
 
 If `langgraph` is not installed, the project falls back to an internal sequential runner with the same decisions, so the app still works.
 
+## Observability
+
+The project now supports:
+
+- structured JSON logging with `LOG_FORMAT=json`
+- Prometheus metrics at `/metrics`
+- Docker Compose services for `prometheus` and `grafana`
+
+Useful flags:
+
+```env
+LOG_FORMAT=json
+PROMETHEUS_METRICS_ENABLED=true
+USE_LANGGRAPH_FINALIZE_GRAPH=true
+```
+
 ## Requirements
 
 - Python 3.11+
@@ -77,10 +93,16 @@ This starts:
 - `worker_2`
 - `worker_3`
 - `ui`
+- `prometheus`
+- `grafana`
 
 The API will be available at `http://localhost:8000`.
 
 The Streamlit UI will be available at `http://localhost:8501`.
+
+Prometheus will be available at `http://localhost:9090`.
+
+Grafana will be available at `http://localhost:3000`.
 
 Stop everything:
 
@@ -141,12 +163,33 @@ Run the worker once:
 python scripts/run_finalize_worker.py --once
 ```
 
+## Infra Notes
+
+Implemented in this repository:
+
+- structured JSON logs to stdout
+- Prometheus scraping from the API
+- Grafana and Prometheus services in Docker Compose
+- explicit `langgraph` dependency in `requirements.txt`
+
+Still not implemented yet:
+
+- broker-backed runtime
+- external log shipping pipeline
+- live production profiling on a real deployment
+
 ## Quick Check
 
 Health:
 
 ```bash
 curl http://localhost:8000/health
+```
+
+Prometheus metrics:
+
+```bash
+curl http://localhost:8000/metrics
 ```
 
 Create a research:
