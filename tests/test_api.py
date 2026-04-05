@@ -114,7 +114,13 @@ async def test_queue_health_includes_extraction_metrics(client):
         processed_jobs=1,
         status="busy",
         extraction_metrics={"attempts": 5, "success_count": 4, "failure_count": 1},
-        graph_metrics={"resume_count": 2, "replan_pass_count": 1},
+        graph_metrics={
+            "resume_count": 2,
+            "replan_pass_count": 1,
+            "steps": {
+                "collect_context": {"run_count": 2, "failure_count": 1, "total_ms": 40.0},
+            },
+        },
     )
 
     response = await client.get("/health/queues")
@@ -126,6 +132,9 @@ async def test_queue_health_includes_extraction_metrics(client):
     assert payload["extraction_metrics"]["failure_count"] == 1
     assert payload["graph_metrics"]["resume_count"] == 2
     assert payload["graph_metrics"]["replan_pass_count"] == 1
+    assert payload["graph_metrics"]["steps"]["collect_context"]["run_count"] == 2
+    assert payload["graph_metrics"]["steps"]["collect_context"]["failure_count"] == 1
+    assert payload["graph_metrics"]["steps"]["collect_context"]["avg_ms"] == 20.0
 
 
 @pytest.mark.anyio

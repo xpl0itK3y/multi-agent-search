@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ReplanRecommendation, SearchTask
@@ -10,6 +11,8 @@ from src.graph.metrics import (
     record_graph_completed_run,
     record_graph_replan,
     record_graph_resume,
+    record_graph_step,
+    record_graph_step_failure,
     record_graph_tie_break,
 )
 from src.graph.state import FinalizeGraphState
@@ -97,44 +100,61 @@ class FinalizeGraphRunner:
         event = {"step": step, "detail": detail}
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
 
+    def _run_timed_step(self, step_name: str, action):
+        started_at = perf_counter()
+        try:
+            result = action()
+        except Exception:
+            elapsed_ms = (perf_counter() - started_at) * 1000
+            record_graph_step_failure(step_name, elapsed_ms)
+            logger.exception("langgraph_finalize_step_failed step=%s elapsed_ms=%.2f", step_name, elapsed_ms)
+            raise
+        elapsed_ms = (perf_counter() - started_at) * 1000
+        record_graph_step(step_name, elapsed_ms)
+        logger.info("langgraph_finalize_step_completed step=%s elapsed_ms=%.2f", step_name, elapsed_ms)
+        return result
+
     def _collect_context(self, state: FinalizeGraphState) -> FinalizeGraphState:
-        aggregated_sources = self.service._build_research_source_pool(state["tasks"])
-        _, source_summary = self.service.source_critic.assess_sources(aggregated_sources)
-        analyzer = self.service.analyzer
-        detect_conflicts = getattr(analyzer, "_detect_conflicts", None) if self._supports_conflict_detection(analyzer) else None
-        max_sources = getattr(analyzer, "MAX_ANALYZER_SOURCES", 24)
-        if not isinstance(max_sources, int):
-            max_sources = 24
-        conflict_pool = self._build_conflict_pool(aggregated_sources[:max_sources])
-        conflicts = detect_conflicts(conflict_pool) if callable(detect_conflicts) else []
-        _, evidence_summary = self.service.evidence_mapper.build_evidence_groups(
-            aggregated_sources,
-            stopwords=getattr(analyzer, "STOPWORDS", AnalyzerAgent.STOPWORDS),
-            generic_tokens=getattr(analyzer, "CONFLICT_GENERIC_TOKENS", AnalyzerAgent.CONFLICT_GENERIC_TOKENS),
-            negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
-            max_groups=5,
-        )
-        recommendations = self.service.replan_agent.suggest_follow_up(
-            state["prompt"],
-            state["depth"],
-            state["tasks"],
-            source_summary=source_summary,
-        ) if self._supports_graph_branching(analyzer) else []
-        should_replan = bool(recommendations) and state["replan_attempts"] < settings.langgraph_replan_max_loops
-        next_state = {
-            **state,
-            "detected_conflicts": conflicts,
-            "source_summary": source_summary.model_dump(),
-            "evidence_summary": evidence_summary.model_dump(),
-            "replan_recommendations": [item.model_dump() for item in recommendations],
-            "should_replan": should_replan,
-        }
-        self._checkpoint(
-            next_state,
-            "collect_context",
-            f"Collected {len(aggregated_sources)} sources, detected {len(conflicts)} conflicts, replan_needed={should_replan}",
-        )
-        return next_state
+        def action() -> FinalizeGraphState:
+            aggregated_sources = self.service._build_research_source_pool(state["tasks"])
+            _, source_summary = self.service.source_critic.assess_sources(aggregated_sources)
+            analyzer = self.service.analyzer
+            detect_conflicts = getattr(analyzer, "_detect_conflicts", None) if self._supports_conflict_detection(analyzer) else None
+            max_sources = getattr(analyzer, "MAX_ANALYZER_SOURCES", 24)
+            if not isinstance(max_sources, int):
+                max_sources = 24
+            conflict_pool = self._build_conflict_pool(aggregated_sources[:max_sources])
+            conflicts = detect_conflicts(conflict_pool) if callable(detect_conflicts) else []
+            _, evidence_summary = self.service.evidence_mapper.build_evidence_groups(
+                aggregated_sources,
+                stopwords=getattr(analyzer, "STOPWORDS", AnalyzerAgent.STOPWORDS),
+                generic_tokens=getattr(analyzer, "CONFLICT_GENERIC_TOKENS", AnalyzerAgent.CONFLICT_GENERIC_TOKENS),
+                negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
+                max_groups=5,
+            )
+            recommendations = self.service.replan_agent.suggest_follow_up(
+                state["prompt"],
+                state["depth"],
+                state["tasks"],
+                source_summary=source_summary,
+            ) if self._supports_graph_branching(analyzer) else []
+            should_replan = bool(recommendations) and state["replan_attempts"] < settings.langgraph_replan_max_loops
+            next_state = {
+                **state,
+                "detected_conflicts": conflicts,
+                "source_summary": source_summary.model_dump(),
+                "evidence_summary": evidence_summary.model_dump(),
+                "replan_recommendations": [item.model_dump() for item in recommendations],
+                "should_replan": should_replan,
+            }
+            self._checkpoint(
+                next_state,
+                "collect_context",
+                f"Collected {len(aggregated_sources)} sources, detected {len(conflicts)} conflicts, replan_needed={should_replan}",
+            )
+            return next_state
+
+        return self._run_timed_step("collect_context", action)
 
     def _build_conflict_pool(self, aggregated_sources: list[dict]) -> list[dict]:
         return [
@@ -151,136 +171,148 @@ class FinalizeGraphRunner:
         ]
 
     def _apply_replan(self, state: FinalizeGraphState) -> FinalizeGraphState:
-        recommendations = state.get("replan_recommendations") or []
-        if not recommendations:
-            return {**state, "should_replan": False}
+        def action() -> FinalizeGraphState:
+            recommendations = state.get("replan_recommendations") or []
+            if not recommendations:
+                return {**state, "should_replan": False}
 
-        query_hints: list[str] = []
-        for recommendation in recommendations:
-            query_hints.extend(recommendation.get("suggested_queries") or [])
-        hint_block = "\n".join(f"- {query}" for query in query_hints[:6])
-        effective_prompt = (
-            f"{state['prompt']}\n\n"
-            "Uncovered angles to prioritize during synthesis:\n"
-            f"{hint_block}"
-        )
+            query_hints: list[str] = []
+            for recommendation in recommendations:
+                query_hints.extend(recommendation.get("suggested_queries") or [])
+            hint_block = "\n".join(f"- {query}" for query in query_hints[:6])
+            effective_prompt = (
+                f"{state['prompt']}\n\n"
+                "Uncovered angles to prioritize during synthesis:\n"
+                f"{hint_block}"
+            )
 
-        created_tasks = self.service.execute_replan_search_pass(
-            state["research_id"],
-            state["depth"],
-            [
-                ReplanRecommendation.model_validate(recommendation)
-                for recommendation in recommendations
-            ],
-        )
-        next_state = {
-            **state,
-            "effective_prompt": effective_prompt,
-            "replan_attempts": state["replan_attempts"] + 1,
-            "should_replan": False,
-            "tasks": state["tasks"] + created_tasks,
-        }
-        self._checkpoint(
-            next_state,
-            "replan",
-            f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
-        )
-        record_graph_replan()
-        return next_state
+            created_tasks = self.service.execute_replan_search_pass(
+                state["research_id"],
+                state["depth"],
+                [
+                    ReplanRecommendation.model_validate(recommendation)
+                    for recommendation in recommendations
+                ],
+            )
+            next_state = {
+                **state,
+                "effective_prompt": effective_prompt,
+                "replan_attempts": state["replan_attempts"] + 1,
+                "should_replan": False,
+                "tasks": state["tasks"] + created_tasks,
+            }
+            self._checkpoint(
+                next_state,
+                "replan",
+                f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
+            )
+            record_graph_replan()
+            return next_state
+
+        return self._run_timed_step("replan", action)
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
-        report = self.service.analyzer.run_analysis(
-            state["effective_prompt"],
-            state["tasks"],
-            depth=state["depth"],
-        )
-        next_state = {
-            **state,
-            "report": report,
-            "analyze_attempts": state["analyze_attempts"] + 1,
-        }
-        self._checkpoint(
-            next_state,
-            "analyze",
-            f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
-        )
-        record_graph_analyze()
-        return next_state
+        def action() -> FinalizeGraphState:
+            report = self.service.analyzer.run_analysis(
+                state["effective_prompt"],
+                state["tasks"],
+                depth=state["depth"],
+            )
+            next_state = {
+                **state,
+                "report": report,
+                "analyze_attempts": state["analyze_attempts"] + 1,
+            }
+            self._checkpoint(
+                next_state,
+                "analyze",
+                f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
+            )
+            record_graph_analyze()
+            return next_state
+
+        return self._run_timed_step("analyze", action)
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
-        recommendations = state.get("tie_break_recommendations") or []
-        if not recommendations:
-            return {**state, "should_tie_break": False}
+        def action() -> FinalizeGraphState:
+            recommendations = state.get("tie_break_recommendations") or []
+            if not recommendations:
+                return {**state, "should_tie_break": False}
 
-        query_hints: list[str] = []
-        for recommendation in recommendations:
-            query_hints.extend(recommendation.get("suggested_queries") or [])
-        hint_block = "\n".join(f"- {query}" for query in query_hints[:6])
-        effective_prompt = (
-            f"{state['effective_prompt']}\n\n"
-            "Tie-breaker evidence to resolve disputed or weakly supported points:\n"
-            f"{hint_block}"
-        )
-        created_tasks = self.service.execute_replan_search_pass(
-            state["research_id"],
-            state["depth"],
-            [ReplanRecommendation.model_validate(recommendation) for recommendation in recommendations],
-        )
-        next_state = {
-            **state,
-            "effective_prompt": effective_prompt,
-            "tie_break_attempts": state["tie_break_attempts"] + 1,
-            "should_tie_break": False,
-            "tasks": state["tasks"] + created_tasks,
-        }
-        self._checkpoint(
-            next_state,
-            "tie_break",
-            f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
-        )
-        record_graph_tie_break()
-        return next_state
-
-    def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
-        report = state.get("report") or ""
-        should_retry = False
-        weak_support = self._report_needs_retry(report)
-        has_conflicts = bool(state.get("detected_conflicts"))
-        should_tie_break = False
-        if (
-            self._supports_graph_branching(self.service.analyzer)
-            and state["tie_break_attempts"] < settings.langgraph_tie_break_max_loops
-            and (weak_support or has_conflicts)
-        ):
-            should_tie_break = True
-        tie_break_recommendations = self.service.replan_agent.suggest_tie_breakers(
-            state["prompt"],
-            conflicts=state.get("detected_conflicts") or [],
-            weak_support=weak_support,
-        ) if should_tie_break else []
-        if state["analyze_attempts"] <= settings.langgraph_verification_max_retries:
-            should_retry = weak_support
-        if should_retry:
+            query_hints: list[str] = []
+            for recommendation in recommendations:
+                query_hints.extend(recommendation.get("suggested_queries") or [])
+            hint_block = "\n".join(f"- {query}" for query in query_hints[:6])
             effective_prompt = (
                 f"{state['effective_prompt']}\n\n"
-                "The previous draft still had report notes or weak-support issues. "
-                "Prioritize higher-confidence evidence, reduce overconfident wording, and improve citation discipline."
+                "Tie-breaker evidence to resolve disputed or weakly supported points:\n"
+                f"{hint_block}"
             )
-        else:
-            effective_prompt = state["effective_prompt"]
-        next_state = {
-            **state,
-            "effective_prompt": effective_prompt,
-            "tie_break_recommendations": [item.model_dump() for item in tie_break_recommendations],
-            "should_tie_break": should_tie_break and bool(tie_break_recommendations),
-            "should_retry_analysis": should_retry,
-        }
-        self._checkpoint(
-            next_state,
-            "verify",
-            f"weak_support={weak_support} conflicts={len(state.get('detected_conflicts') or [])} retry={should_retry} tie_break={next_state['should_tie_break']}",
-        )
-        return next_state
+            created_tasks = self.service.execute_replan_search_pass(
+                state["research_id"],
+                state["depth"],
+                [ReplanRecommendation.model_validate(recommendation) for recommendation in recommendations],
+            )
+            next_state = {
+                **state,
+                "effective_prompt": effective_prompt,
+                "tie_break_attempts": state["tie_break_attempts"] + 1,
+                "should_tie_break": False,
+                "tasks": state["tasks"] + created_tasks,
+            }
+            self._checkpoint(
+                next_state,
+                "tie_break",
+                f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
+            )
+            record_graph_tie_break()
+            return next_state
+
+        return self._run_timed_step("tie_break", action)
+
+    def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
+        def action() -> FinalizeGraphState:
+            report = state.get("report") or ""
+            should_retry = False
+            weak_support = self._report_needs_retry(report)
+            has_conflicts = bool(state.get("detected_conflicts"))
+            should_tie_break = False
+            if (
+                self._supports_graph_branching(self.service.analyzer)
+                and state["tie_break_attempts"] < settings.langgraph_tie_break_max_loops
+                and (weak_support or has_conflicts)
+            ):
+                should_tie_break = True
+            tie_break_recommendations = self.service.replan_agent.suggest_tie_breakers(
+                state["prompt"],
+                conflicts=state.get("detected_conflicts") or [],
+                weak_support=weak_support,
+            ) if should_tie_break else []
+            if state["analyze_attempts"] <= settings.langgraph_verification_max_retries:
+                should_retry = weak_support
+            if should_retry:
+                effective_prompt = (
+                    f"{state['effective_prompt']}\n\n"
+                    "The previous draft still had report notes or weak-support issues. "
+                    "Prioritize higher-confidence evidence, reduce overconfident wording, and improve citation discipline."
+                )
+            else:
+                effective_prompt = state["effective_prompt"]
+            next_state = {
+                **state,
+                "effective_prompt": effective_prompt,
+                "tie_break_recommendations": [item.model_dump() for item in tie_break_recommendations],
+                "should_tie_break": should_tie_break and bool(tie_break_recommendations),
+                "should_retry_analysis": should_retry,
+            }
+            self._checkpoint(
+                next_state,
+                "verify",
+                f"weak_support={weak_support} conflicts={len(state.get('detected_conflicts') or [])} retry={should_retry} tie_break={next_state['should_tie_break']}",
+            )
+            return next_state
+
+        return self._run_timed_step("verify", action)
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
@@ -384,6 +416,7 @@ class FinalizeGraphRunner:
             "complete",
             f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
         )
+        record_graph_completed_run()
         return state["report"]
 
     def _run_langgraph(self, state: FinalizeGraphState) -> str:  # pragma: no cover - optional dependency

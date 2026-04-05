@@ -175,6 +175,8 @@ TRANSLATIONS = {
         "graph_replan_count": "Graph replans: {count}",
         "graph_tie_break_count": "Graph tie-breaks: {count}",
         "graph_analyze_count": "Graph analyze passes: {count}",
+        "graph_step_metrics": "Graph Step Metrics",
+        "graph_step_summary": "{step}: runs {runs}, failures {failures}, avg {avg_ms} ms",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -337,6 +339,8 @@ TRANSLATIONS = {
         "graph_replan_count": "Replan графа: {count}",
         "graph_tie_break_count": "Tie-break графа: {count}",
         "graph_analyze_count": "Analyze проходы графа: {count}",
+        "graph_step_metrics": "Метрики шагов графа",
+        "graph_step_summary": "{step}: запусков {runs}, ошибок {failures}, среднее {avg_ms} мс",
     },
 }
 
@@ -744,6 +748,8 @@ def _render_sidebar() -> None:
     st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
     st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
     st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
+    with st.sidebar.expander(_t("graph_step_metrics"), expanded=False):
+        _render_graph_step_metrics(graph_metrics)
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
     heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
     heartbeat_status = (heartbeat.get("status") or "").strip().lower()
@@ -815,6 +821,21 @@ def _requeue_job(path: str, label: str) -> None:
         return
     st.success(f"{label}: {result['id']}")
     st.rerun()
+
+
+def _render_graph_step_metrics(graph_metrics: dict) -> None:
+    steps = graph_metrics.get("steps") or {}
+    for step_name in ("collect_context", "replan", "analyze", "verify", "tie_break"):
+        metrics = steps.get(step_name) or {}
+        st.caption(
+            _t(
+                "graph_step_summary",
+                step=step_name,
+                runs=int(metrics.get("run_count", 0) or 0),
+                failures=int(metrics.get("failure_count", 0) or 0),
+                avg_ms=round(float(metrics.get("avg_ms", 0.0) or 0.0), 2),
+            )
+        )
 
 
 def _render_job_card(job: dict, job_kind: str) -> None:
@@ -919,6 +940,8 @@ def _render_queue_overview() -> None:
     graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
     graph_row[2].metric(_t("graph_tie_break_count"), graph.get("tie_break_pass_count", 0))
     graph_row[3].metric(_t("graph_analyze_count"), graph.get("analyze_pass_count", 0))
+    with st.expander(_t("graph_step_metrics"), expanded=False):
+        _render_graph_step_metrics(graph)
 
     st.markdown(f"**{_t('queue_actions')}**")
     action_rows = [st.columns(2), st.columns(2), st.columns(1)]

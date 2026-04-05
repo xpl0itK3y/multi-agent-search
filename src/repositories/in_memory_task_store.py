@@ -402,6 +402,12 @@ class InMemoryTaskStore:
             graph_metrics.tie_break_pass_count += heartbeat.graph_metrics.tie_break_pass_count
             graph_metrics.analyze_pass_count += heartbeat.graph_metrics.analyze_pass_count
             graph_metrics.completed_run_count += heartbeat.graph_metrics.completed_run_count
+            for step_name, step_metrics in heartbeat.graph_metrics.steps.items():
+                aggregate_step = graph_metrics.steps[step_name]
+                aggregate_step.run_count += step_metrics.run_count
+                aggregate_step.failure_count += step_metrics.failure_count
+                aggregate_step.total_ms += step_metrics.total_ms
+                aggregate_step.avg_ms = round(aggregate_step.total_ms / aggregate_step.run_count, 2) if aggregate_step.run_count > 0 else 0.0
         return QueueMetrics(
             pending_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.PENDING),
             running_search_jobs=sum(1 for job in self.search_jobs.values() if job.status == SearchJobStatus.RUNNING),
