@@ -36,6 +36,7 @@ from src.api.schemas import (
     WorkerHeartbeat,
 )
 from src.config import settings
+from src.graph import FinalizeGraphRunner
 from src.observability import bind_observability_context
 from src.providers.search import get_extraction_metrics_snapshot
 from src.repositories.protocols import TaskStore
@@ -67,6 +68,7 @@ class ResearchService:
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
         self.replan_agent = replan_agent or ReplanAgent()
+        self.finalize_graph_runner = FinalizeGraphRunner(self)
 
     def require_agent(self, agent, agent_name: str):
         if agent is None:
@@ -330,7 +332,10 @@ class ResearchService:
 
             tasks = self.task_store.get_tasks_by_research(research_id)
             analyzer = self.require_agent(self.analyzer, "Analyzer")
-            report = analyzer.run_analysis(research.prompt, tasks, depth=research.depth)
+            if settings.use_langgraph_finalize_graph:
+                report = self.finalize_graph_runner.run(research.prompt, tasks, research.depth)
+            else:
+                report = analyzer.run_analysis(research.prompt, tasks, depth=research.depth)
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.COMPLETED,

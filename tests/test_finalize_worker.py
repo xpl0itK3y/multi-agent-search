@@ -34,3 +34,34 @@ def test_finalize_worker_processes_pending_jobs(mocker):
     assert task_store.get_research(research.id).status == ResearchStatus.COMPLETED
     assert task_store.get_research(research.id).final_report == "worker report"
     assert task_store.get_research_finalize_job(job.id).status.value == "completed"
+
+
+def test_finalize_worker_uses_graph_runner_when_enabled(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+    runner = mocker.patch.object(service.finalize_graph_runner, "run", return_value="graph report")
+    queued, job = service.enqueue_research_finalization(research.id)
+
+    assert queued.status == ResearchStatus.ANALYZING
+    assert job is not None
+
+    processed_count = FinalizeWorker(service).run_once()
+
+    assert processed_count == 1
+    assert runner.called
+    assert task_store.get_research(research.id).final_report == "graph report"

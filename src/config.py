@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     analyzer_conflict_source_limit: int = 12
     analyzer_evidence_source_limit: int = 12
     analyzer_local_repair_issue_threshold: int = 2
+    use_langgraph_finalize_graph: bool = True
+    langgraph_replan_max_loops: int = 1
+    langgraph_verification_max_retries: int = 1
 
     postgres_user: str = "app"
     postgres_password: str = "app"
