@@ -7,6 +7,7 @@ import httpx
 import streamlit as st
 from src.api.schemas import SearchDepth
 from src.search_depth_profiles import SEARCH_DEPTH_PROFILES, get_depth_profile
+from src.ui.report_export import generate_docx, generate_pdf
 
 
 API_BASE_URL = os.getenv("STREAMLIT_API_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -269,6 +270,9 @@ TRANSLATIONS = {
         "history_delete_confirm": "Delete this research?",
         "history_delete_yes": "Yes, delete",
         "history_delete_no": "Cancel",
+        "download_pdf": "⬇ Download PDF",
+        "download_docx": "⬇ Download Word",
+        "download_preparing": "Preparing file…",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -525,6 +529,9 @@ TRANSLATIONS = {
         "history_delete_confirm": "Удалить это исследование?",
         "history_delete_yes": "Да, удалить",
         "history_delete_no": "Отмена",
+        "download_pdf": "⬇ Скачать PDF",
+        "download_docx": "⬇ Скачать Word",
+        "download_preparing": "Подготовка файла…",
     },
 }
 
@@ -1818,6 +1825,38 @@ def _render_research_details() -> None:
         st.markdown(final_report)
     with raw_tab:
         st.code(final_report, language="markdown")
+
+    # ── download buttons ─────────────────────────────────────────────────────
+    st.divider()
+    _prompt  = research.get("prompt", "")
+    _depth   = research.get("depth", "")
+    _created = research.get("created_at", "")
+
+    col_pdf, col_docx = st.columns(2)
+    with col_pdf:
+        try:
+            pdf_bytes = generate_pdf(final_report, _prompt, _depth, _created)
+            st.download_button(
+                label=_t("download_pdf"),
+                data=pdf_bytes,
+                file_name="research_report.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as _exc:
+            st.error(f"PDF error: {_exc}")
+    with col_docx:
+        try:
+            docx_bytes = generate_docx(final_report, _prompt, _depth, _created)
+            st.download_button(
+                label=_t("download_docx"),
+                data=docx_bytes,
+                file_name="research_report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+        except Exception as _exc:
+            st.error(f"DOCX error: {_exc}")
 
 
 def main() -> None:
