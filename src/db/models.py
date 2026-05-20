@@ -42,7 +42,7 @@ class ResearchORM(Base):
 class SearchTaskORM(Base):
     __tablename__ = "search_tasks"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     research_id: Mapped[str | None] = mapped_column(
         ForeignKey("researches.id", ondelete="CASCADE"),
         nullable=True,
