@@ -8,6 +8,96 @@ from src.search_depth_profiles import get_depth_profile
 from src.source_quality_policy import combined_topics
 
 class OrchestratorAgent(BaseAgent):
+    DOCS_FRAMEWORKS: dict[str, dict] = {
+        "fastapi": {
+            "display": "FastAPI",
+            "context_tokens": ("производ", "performance", "async", "асинх", "feature", "возможност", "function", "функц"),
+            "context_query": "FastAPI official documentation async reference",
+            "default_query": "FastAPI official documentation REST API reference",
+        },
+        "flask": {
+            "display": "Flask",
+            "context_tokens": ("extension", "extensions", "расширен", "feature", "возможност", "function", "функц"),
+            "context_query": "Flask official documentation extensions reference",
+            "default_query": "Flask official documentation REST API patterns",
+        },
+        "django": {
+            "display": "Django",
+            "context_tokens": ("orm", "model", "migration", "модел", "миграц"),
+            "context_query": "Django official documentation ORM models reference",
+            "default_query": "Django official documentation views and routing guide",
+        },
+        "express": {
+            "display": "Express",
+            "context_tokens": ("middleware", "router", "async", "route"),
+            "context_query": "Express.js official documentation middleware reference",
+            "default_query": "Express.js official documentation REST API guide",
+        },
+        "spring": {
+            "display": "Spring",
+            "context_tokens": ("boot", "security", "jpa", "bean"),
+            "context_query": "Spring Boot official documentation reference guide",
+            "default_query": "Spring Framework official documentation REST API",
+        },
+        "rails": {
+            "display": "Rails",
+            "context_tokens": ("active record", "migration", "model", "scaffold"),
+            "context_query": "Ruby on Rails official documentation Active Record reference",
+            "default_query": "Ruby on Rails official documentation routing REST",
+        },
+        "laravel": {
+            "display": "Laravel",
+            "context_tokens": ("eloquent", "migration", "blade", "route"),
+            "context_query": "Laravel official documentation Eloquent ORM reference",
+            "default_query": "Laravel official documentation routing REST API",
+        },
+        "nextjs": {
+            "display": "Next.js",
+            "context_tokens": ("app router", "server component", "ssr", "api route"),
+            "context_query": "Next.js official documentation App Router reference",
+            "default_query": "Next.js official documentation API routes guide",
+        },
+        "react": {
+            "display": "React",
+            "context_tokens": ("hook", "hooks", "component", "state", "effect", "хук"),
+            "context_query": "React official documentation hooks reference",
+            "default_query": "React official documentation component API",
+        },
+        "vue": {
+            "display": "Vue",
+            "context_tokens": ("composition", "component", "reactive", "directive"),
+            "context_query": "Vue.js official documentation Composition API reference",
+            "default_query": "Vue.js official documentation component guide",
+        },
+        "angular": {
+            "display": "Angular",
+            "context_tokens": ("service", "module", "directive", "rxjs"),
+            "context_query": "Angular official documentation services dependency injection",
+            "default_query": "Angular official documentation HTTP client REST",
+        },
+        "fastify": {
+            "display": "Fastify",
+            "context_tokens": ("plugin", "schema", "hook", "validation"),
+            "context_query": "Fastify official documentation plugins reference",
+            "default_query": "Fastify official documentation REST API guide",
+        },
+        "gin": {
+            "display": "Gin",
+            "context_tokens": ("middleware", "router", "handler", "context"),
+            "context_query": "Gin framework official documentation middleware reference",
+            "default_query": "Gin framework official documentation REST API guide",
+        },
+        "actix": {
+            "display": "Actix",
+            "context_tokens": ("actor", "handler", "middleware", "extractor"),
+            "context_query": "Actix-web official documentation extractors reference",
+            "default_query": "Actix-web official documentation REST API guide",
+        },
+    }
+    COMPARISON_TOKENS = (
+        "сравнен", "compare", "comparison", "performance", "выбор", "choose", "vs", "versus",
+    )
+
     LANGUAGE_HINTS = {
         "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
         "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
@@ -121,24 +211,23 @@ class OrchestratorAgent(BaseAgent):
         prompt_text = self._normalize_text(prompt).lower()
         normalized_queries = self._dedupe_queries(queries)
 
-        mentions_fastapi = "fastapi" in description_text or "fastapi" in prompt_text
-        mentions_flask = "flask" in description_text or "flask" in prompt_text
+        detected = [
+            (keyword, config)
+            for keyword, config in self.DOCS_FRAMEWORKS.items()
+            if keyword in description_text or keyword in prompt_text
+        ]
 
         doc_queries: list[str] = []
-        if mentions_fastapi:
-            if any(token in description_text for token in ("производ", "performance", "async", "асинх", "feature", "возможност", "function", "функц")):
-                doc_queries.append("FastAPI official documentation async reference")
-            else:
-                doc_queries.append("FastAPI official documentation REST API reference")
-        if mentions_flask:
-            if any(token in description_text for token in ("extension", "extensions", "расширен", "feature", "возможност", "function", "функц")):
-                doc_queries.append("Flask official documentation extensions reference")
-            else:
-                doc_queries.append("Flask official documentation REST API patterns")
+        for _keyword, config in detected[:2]:
+            has_context = any(token in description_text for token in config["context_tokens"])
+            doc_queries.append(config["context_query"] if has_context else config["default_query"])
 
-        if mentions_fastapi and mentions_flask:
-            if any(token in description_text for token in ("сравнен", "compare", "comparison", "performance", "выбор", "choose")):
-                doc_queries.append("FastAPI vs Flask official documentation comparison")
+        if len(detected) >= 2:
+            is_comparison = any(token in description_text for token in self.COMPARISON_TOKENS)
+            if is_comparison:
+                left = detected[0][1]["display"]
+                right = detected[1][1]["display"]
+                doc_queries.append(f"{left} vs {right} official documentation comparison")
 
         comparison_queries = [
             query for query in normalized_queries
@@ -206,5 +295,5 @@ class OrchestratorAgent(BaseAgent):
             }]
 
     def run(self, input_data: str) -> str:
-        tasks = self.run_decompose(input_data, SearchDepth.EASY)
+        tasks = self.run_decompose(input_data, SearchDepth.MEDIUM)
         return json.dumps(tasks, ensure_ascii=False)
