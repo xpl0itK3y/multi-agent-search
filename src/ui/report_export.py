@@ -25,6 +25,25 @@ def _detect_lang(text: str) -> str:
     return "ru" if cyrillic / len(text) > 0.15 else "en"
 
 
+_EXPORT_PREAMBLE = re.compile(
+    r"(?i)^(ниже\s+представлен|ниже\s+приведён|below\s+is\s+(the|a)\s+(synthesized|final|complete)|"
+    r"the\s+following\s+is\s+(a|the)\s+(synthesized|final)|вот\s+синтезирован|"
+    r"данный\s+отчёт\s+объединяет|синтезирую\s+все|"
+    r"i\s+have\s+(combined|merged|synthesized)|here\s+is\s+(the|a)\s+(synthesized|final))[^\n]*\n+"
+)
+_EXPORT_NOTES_SECTION = re.compile(
+    r"\n+##\s+(Примечания\s+к\s+отчёту|Report\s+Notes|Notas\s+del\s+informe)\s*\n.*?(?=\n## |\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _clean_report_for_export(report: str) -> str:
+    """Strip LLM meta-commentary preamble and quality notes section before export."""
+    report = _EXPORT_PREAMBLE.sub("", report).strip()
+    report = _EXPORT_NOTES_SECTION.sub("", report)
+    return report
+
+
 _LABELS: dict[str, dict[str, str]] = {
     "en": {
         "title":     "Research Report",
@@ -157,6 +176,7 @@ def generate_pdf(
         TableStyle,
     )
 
+    report = _clean_report_for_export(report)
     lang  = _detect_lang(prompt)
     lbl   = _LABELS[lang]
     fonts = _register_pdf_fonts()
@@ -198,6 +218,14 @@ def generate_pdf(
 
     def _md_to_rl(text: str) -> str:
         text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        # unescape markdown bracket escapes written by _source_line()
+        text = text.replace("\\[", "[").replace("\\]", "]")
+        # markdown links [label](url) → clickable PDF link
+        text = re.sub(
+            r"\[([^\]]+)\]\((https?://[^\s)]+)\)",
+            r'<a href="\2" color="#1d4ed8">\1</a>',
+            text,
+        )
         text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
         text = re.sub(
             r"\[S(\d+)\]",
@@ -316,7 +344,6 @@ def generate_pdf(
                     Paragraph(_md_to_rl(item), STYLES["bullet"]),
                     leftIndent=16,
                     bulletColor=C_BLUE_LT,
-                    value="bullet",
                 )
                 for item in block["items"]
             ]
@@ -343,6 +370,7 @@ def generate_docx(
     from docx.oxml.ns import qn
     from docx.shared import Cm, Pt, RGBColor
 
+    report = _clean_report_for_export(report)
     lang = _detect_lang(prompt)
     lbl  = _LABELS[lang]
 
@@ -417,8 +445,33 @@ def generate_docx(
     _add_divider()
 
     # ── inline markdown helper ────────────────────────────────────────────────
+    def _add_hyperlink(paragraph, url: str, label: str):
+        """Add a clickable hyperlink run to paragraph."""
+        r_id = paragraph.part.relate_to(
+            url,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+            is_external=True,
+        )
+        hl = OxmlElement("w:hyperlink")
+        hl.set(qn("r:id"), r_id)
+        new_run = OxmlElement("w:r")
+        rPr = OxmlElement("w:rPr")
+        rStyle = OxmlElement("w:rStyle")
+        rStyle.set(qn("w:val"), "Hyperlink")
+        rPr.append(rStyle)
+        new_run.append(rPr)
+        t = OxmlElement("w:t")
+        t.text = label
+        new_run.append(t)
+        hl.append(new_run)
+        paragraph._p.append(hl)
+
     def _add_inline(paragraph, text: str):
-        for part in re.split(r"(\*\*[^*]+\*\*|\[S\d+\])", text):
+        # unescape markdown bracket escapes from _source_line()
+        text = text.replace("\\[", "[").replace("\\]", "]")
+        # split on bold, citations, and markdown links
+        _INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\[S\d+\]|\[[^\]]+\]\(https?://[^\s)]+\))")
+        for part in _INLINE_RE.split(text):
             if part.startswith("**") and part.endswith("**"):
                 run = paragraph.add_run(part[2:-2])
                 run.bold = True
@@ -430,6 +483,8 @@ def generate_docx(
                 vertAlign = OxmlElement("w:vertAlign")
                 vertAlign.set(qn("w:val"), "superscript")
                 rPr.append(vertAlign)
+            elif m := re.match(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", part):
+                _add_hyperlink(paragraph, m.group(2), m.group(1))
             elif part:
                 run = paragraph.add_run(part)
                 run.font.color.rgb = C_DARK
