@@ -93,7 +93,10 @@ This starts:
 - `worker_2`
 - `worker_3`
 - `ui`
+- `redis`
 - `prometheus`
+- `loki`
+- `promtail`
 - `grafana`
 
 The API will be available at `http://localhost:8000`.
@@ -102,7 +105,9 @@ The Streamlit UI will be available at `http://localhost:8501`.
 
 Prometheus will be available at `http://localhost:9090`.
 
-Grafana will be available at `http://localhost:3000`.
+Loki will be available at `http://localhost:3100`.
+
+Grafana will be available at `http://localhost:3000` (Prometheus and Loki are pre-provisioned as datasources).
 
 Stop everything:
 
@@ -174,8 +179,6 @@ Implemented in this repository:
 
 Still not implemented yet:
 
-- broker-backed runtime
-- external log shipping pipeline
 - live production profiling on a real deployment
 
 ## Quick Check

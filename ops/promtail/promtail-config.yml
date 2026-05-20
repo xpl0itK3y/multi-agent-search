@@ -1,0 +1,49 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project"]
+    relabel_configs:
+      # Strip the leading "/" from container names (e.g. /my-container → my-container)
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: container
+      # Expose the Compose service name as a label
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      # Expose stdout vs stderr
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+    pipeline_stages:
+      # Try to parse JSON logs (LOG_FORMAT=json). Non-JSON lines pass through unchanged.
+      - json:
+          expressions:
+            level: level
+            logger: name
+            msg: message
+            request_id: request_id
+            research_id: research_id
+            worker_name: worker_name
+            job_id: job_id
+            task_id: task_id
+      # Promote extracted fields to Loki labels (indexed, filterable)
+      - labels:
+          level:
+          worker_name:
+      # Replace the log line with the parsed "message" field when present
+      - output:
+          source: msg
