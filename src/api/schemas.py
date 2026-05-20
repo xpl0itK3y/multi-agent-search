@@ -205,6 +205,16 @@ class ResearchGraphResponse(BaseModel):
     graph_state: Dict[str, Any] = Field(default_factory=dict)
     graph_trail: List[Dict[str, Any]] = Field(default_factory=list)
 
+class ResearchHistoryItem(BaseModel):
+    id: str
+    prompt: str
+    depth: SearchDepth
+    status: ResearchStatus
+    created_at: datetime
+    updated_at: datetime
+    has_final_report: bool = False
+
+
 class ResearchResponse(BaseModel):
     research_id: str
     status: str

@@ -8,6 +8,7 @@ from src.api.schemas import (
     GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
+    ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
     WorkerHeartbeat,
@@ -41,6 +42,25 @@ class InMemoryTaskStore:
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)
+
+    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
+        sorted_records = sorted(
+            self.researches.values(),
+            key=lambda r: r.created_at,
+            reverse=True,
+        )
+        return [
+            ResearchHistoryItem(
+                id=r.id,
+                prompt=r.prompt,
+                depth=r.depth,
+                status=r.status,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                has_final_report=bool(r.final_report),
+            )
+            for r in sorted_records[:max(1, min(limit, 100))]
+        ]
 
     def update_research_status(
         self,

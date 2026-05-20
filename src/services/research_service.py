@@ -26,6 +26,7 @@ from src.api.schemas import (
     JobRecoveryResponse,
     QueueMetrics,
     QueueMaintenanceResponse,
+    ResearchHistoryItem,
     ResearchRecord,
     ResearchGraphResponse,
     ResearchRequest,
@@ -183,6 +184,9 @@ class ResearchService:
             status="success",
             message=f"Research started with {len(registered_tasks)} tasks.",
         )
+
+    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
+        return self.task_store.list_researches(limit=limit)
 
     def get_research_status(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)

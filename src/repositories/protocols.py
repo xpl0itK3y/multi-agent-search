@@ -5,6 +5,7 @@ from src.api.schemas import (
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
+    ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
     WorkerHeartbeat,
@@ -20,6 +21,8 @@ class TaskStore(Protocol):
     def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord: ...
 
     def get_research(self, research_id: str) -> ResearchRecord | None: ...
+
+    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]: ...
 
     def update_research_status(
         self,

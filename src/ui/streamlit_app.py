@@ -259,6 +259,13 @@ TRANSLATIONS = {
         "health_healthy": "healthy",
         "health_warning": "warning",
         "health_critical": "critical",
+        "history": "Recent Researches",
+        "history_empty": "No researches yet.",
+        "history_select": "Select",
+        "history_ago_seconds": "{n}s ago",
+        "history_ago_minutes": "{n}m ago",
+        "history_ago_hours": "{n}h ago",
+        "history_ago_days": "{n}d ago",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -505,6 +512,13 @@ TRANSLATIONS = {
         "health_healthy": "в норме",
         "health_warning": "предупреждение",
         "health_critical": "критично",
+        "history": "История запросов",
+        "history_empty": "Нет исследований.",
+        "history_select": "Открыть",
+        "history_ago_seconds": "{n}с назад",
+        "history_ago_minutes": "{n}м назад",
+        "history_ago_hours": "{n}ч назад",
+        "history_ago_days": "{n}д назад",
     },
 }
 
@@ -513,6 +527,24 @@ def _t(key: str, **kwargs) -> str:
     language = st.session_state.get("ui_language", "en")
     template = TRANSLATIONS.get(language, TRANSLATIONS["en"]).get(key, key)
     return template.format(**kwargs)
+
+
+def _relative_time(ts_str: str) -> str:
+    try:
+        from datetime import timezone as _tz
+        ts = datetime.fromisoformat(ts_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        diff = int((datetime.now(_tz.utc) - ts).total_seconds())
+        if diff < 60:
+            return _t("history_ago_seconds", n=diff)
+        if diff < 3600:
+            return _t("history_ago_minutes", n=diff // 60)
+        if diff < 86400:
+            return _t("history_ago_hours", n=diff // 3600)
+        return _t("history_ago_days", n=diff // 86400)
+    except Exception:
+        return ""
 
 
 def _get_client() -> httpx.Client:
@@ -876,6 +908,45 @@ def _render_header() -> None:
     st.caption(_t("header_caption"))
 
 
+_STATUS_ICON = {
+    "completed": "✅",
+    "processing": "⏳",
+    "analyzing": "🔍",
+    "failed": "❌",
+    "pending": "🕐",
+}
+
+
+def _render_sidebar_history() -> None:
+    history = _safe_api_call(_api_get, "/v1/research?limit=20", ignore_status_codes={404}) or []
+    st.sidebar.subheader(_t("history"))
+    if not history:
+        st.sidebar.caption(_t("history_empty"))
+        return
+    current_id = st.session_state.get("selected_research_id", "").strip()
+    for item in history:
+        rid = item.get("id", "")
+        prompt = item.get("prompt") or ""
+        status = (item.get("status") or "").lower()
+        icon = _STATUS_ICON.get(status, "•")
+        label = f"{icon} {prompt[:55]}{'…' if len(prompt) > 55 else ''}"
+        ago = _relative_time(item.get("created_at") or "")
+        is_selected = rid == current_id
+        with st.sidebar.container():
+            col_label, col_btn = st.sidebar.columns([3, 1])
+            col_label.caption(f"**{label}**" if is_selected else label)
+            col_label.caption(ago)
+            if col_btn.button(
+                _t("history_select"),
+                key=f"hist-{rid}",
+                use_container_width=True,
+                type="primary" if is_selected else "secondary",
+            ):
+                st.session_state["selected_research_id"] = rid
+                _sync_query_params()
+                st.rerun()
+
+
 def _render_sidebar() -> None:
     st.sidebar.header(_t("control"))
     st.session_state["ui_language"] = st.sidebar.selectbox(
@@ -896,6 +967,9 @@ def _render_sidebar() -> None:
 
     if st.sidebar.button(_t("refresh_now"), use_container_width=True):
         st.rerun()
+
+    st.sidebar.divider()
+    _render_sidebar_history()
 
     st.sidebar.divider()
     st.sidebar.subheader(_t("worker"))

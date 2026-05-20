@@ -18,6 +18,7 @@ from src.api.schemas import (
     ResearchFinalizeJob,
     ResearchFinalizeResponse,
     ResearchGraphResponse,
+    ResearchHistoryItem,
     ResearchRecord,
     ResearchReportResponse,
     ResearchRequest,
@@ -182,6 +183,10 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse)
     async def cleanup_search_jobs(request: Request):
         return get_research_service(request).cleanup_old_search_task_jobs()
+
+    @app.get("/v1/research", response_model=List[ResearchHistoryItem])
+    async def list_researches(request: Request, limit: int = 20):
+        return get_research_service(request).list_researches(limit=limit)
 
     @app.post("/v1/research", response_model=ResearchResponse)
     async def start_research(request: Request, payload: ResearchRequest):

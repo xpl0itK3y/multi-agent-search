@@ -12,6 +12,7 @@ from src.api.schemas import (
     GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
+    ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
     WorkerHeartbeat,
@@ -75,6 +76,30 @@ class SQLAlchemyTaskStore:
             if research is None:
                 return None
             return research_orm_to_record(research)
+
+    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
+        with self.session_scope() as session:
+            rows = (
+                session.execute(
+                    select(ResearchORM)
+                    .order_by(ResearchORM.created_at.desc())
+                    .limit(max(1, min(limit, 100)))
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                ResearchHistoryItem(
+                    id=r.id,
+                    prompt=r.prompt,
+                    depth=r.depth,
+                    status=r.status,
+                    created_at=r.created_at,
+                    updated_at=r.updated_at,
+                    has_final_report=bool(r.final_report),
+                )
+                for r in rows
+            ]
 
     def update_research_status(
         self,
