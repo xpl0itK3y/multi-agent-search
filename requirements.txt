@@ -11,6 +11,7 @@ psycopg[binary]
 alembic
 ddgs
 trafilatura
+redis[hiredis]
 pytest
 pytest-mock
 httpx

@@ -11,35 +11,51 @@ class FinalizeWorker:
         self.research_service = research_service
         self.worker_name = worker_name
 
+    def _process_job(self, job_id: str, processed: int) -> int:
+        with bind_observability_context(
+            worker_name=self.worker_name,
+            job_id=job_id,
+        ):
+            self.research_service.touch_worker_heartbeat(
+                self.worker_name,
+                processed,
+                "busy",
+            )
+            logger.info("finalize_job_claimed job_id=%s", job_id)
+            try:
+                self.research_service.process_finalize_job(job_id)
+                processed += 1
+                observe_worker_job(self.worker_name, "finalize", "success")
+            except Exception:
+                observe_worker_job(self.worker_name, "finalize", "failure")
+                raise
+            self.research_service.touch_worker_heartbeat(
+                self.worker_name,
+                processed,
+                "busy",
+            )
+        return processed
+
     def run_once(self) -> int:
         processed = 0
+        broker = getattr(self.research_service, "broker", None)
 
+        if broker is not None:
+            # Redis mode: BLPOP for one job_id, then claim it specifically in Postgres.
+            job_id = broker.pop_finalize_job()
+            if job_id is None:
+                return 0
+            job = self.research_service.task_store.claim_research_finalize_job_by_id(job_id)
+            if job is None:
+                logger.debug("finalize_job_skip_already_claimed job_id=%s", job_id)
+                return 0
+            return self._process_job(job.id, processed)
+
+        # Postgres polling mode: drain all pending jobs in one pass.
         while True:
             job = self.research_service.task_store.claim_next_research_finalize_job()
             if job is None:
                 break
-            with bind_observability_context(
-                worker_name=self.worker_name,
-                job_id=job.id,
-                research_id=job.research_id,
-            ):
-                self.research_service.touch_worker_heartbeat(
-                    self.worker_name,
-                    processed,
-                    "busy",
-                )
-                logger.info("finalize_job_claimed")
-                try:
-                    self.research_service.process_finalize_job(job.id)
-                    processed += 1
-                    observe_worker_job(self.worker_name, "finalize", "success")
-                except Exception:
-                    observe_worker_job(self.worker_name, "finalize", "failure")
-                    raise
-                self.research_service.touch_worker_heartbeat(
-                    self.worker_name,
-                    processed,
-                    "busy",
-                )
+            processed = self._process_job(job.id, processed)
 
         return processed

@@ -12,6 +12,7 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.brokers.redis_broker import RedisBroker
 from src.api.schemas import (
     JobCleanupResponse,
     MaintenanceSummary,
@@ -92,6 +93,7 @@ class ResearchService:
         evidence_mapper: EvidenceMapperAgent | None = None,
         claim_verifier: ClaimVerifierAgent | None = None,
         replan_agent: ReplanAgent | None = None,
+        broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
         self.optimizer = optimizer
@@ -101,6 +103,7 @@ class ResearchService:
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
         self.replan_agent = replan_agent or ReplanAgent()
+        self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
     def require_agent(self, agent, agent_name: str):
@@ -137,7 +140,9 @@ class ResearchService:
             task = self.task_store.add_task(task_dict)
             registered_tasks.append(task)
             if task.status == TaskStatus.PENDING and task.queries:
-                self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+                if self.broker:
+                    self.broker.push_search_job(job.id)
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
@@ -163,7 +168,9 @@ class ResearchService:
 
             for task in registered_tasks:
                 if task.status == TaskStatus.PENDING and task.queries:
-                    self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
+                    job = self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
+                    if self.broker:
+                        self.broker.push_search_job(job.id)
 
             logger.info(
                 "research_started task_count=%s depth=%s",
@@ -500,6 +507,8 @@ class ResearchService:
             self.require_agent(self.analyzer, "Analyzer")
             self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
             job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+            if self.broker:
+                self.broker.push_finalize_job(job.id)
             logger.info("research_finalize_enqueued finalize_job_id=%s", job.id)
             return self.task_store.get_research(research_id), job
 
@@ -558,6 +567,8 @@ class ResearchService:
         requeued = self.task_store.requeue_research_finalize_job(job_id)
         if requeued is None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
+        if self.broker:
+            self.broker.push_finalize_job(requeued.id)
         logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)
         return requeued
 
@@ -623,6 +634,8 @@ class ResearchService:
         requeued = self.task_store.requeue_search_task_job(job_id)
         if requeued is None:
             raise HTTPException(status_code=404, detail="Search job not found")
+        if self.broker:
+            self.broker.push_search_job(requeued.id)
         logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)
         return requeued
 

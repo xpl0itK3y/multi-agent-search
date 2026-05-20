@@ -9,6 +9,7 @@ from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.brokers.redis_broker import RedisBroker
 from src.config import settings
 from src.observability import configure_logging
 from src.providers.deepseek import DeepSeekProvider
@@ -22,6 +23,22 @@ class StaticAnalyzerAgent:
 
     def run_analysis(self, prompt: str, tasks, depth=None) -> str:
         return self.report
+
+
+def _create_broker() -> RedisBroker | None:
+    if not settings.use_redis_broker or not settings.redis_url:
+        return None
+    try:
+        broker = RedisBroker(settings.redis_url, settings.redis_broker_pop_timeout_seconds)
+        if broker.ping():
+            print(f"Redis broker connected: {settings.redis_url}")
+        else:
+            print("Warning: Redis broker ping failed — broker disabled, falling back to Postgres polling")
+            return None
+        return broker
+    except Exception as exc:
+        print(f"Warning: Failed to initialize Redis broker: {exc} — falling back to Postgres polling")
+        return None
 
 
 def create_research_service() -> ResearchService:
@@ -60,6 +77,7 @@ def create_research_service() -> ResearchService:
         evidence_mapper=evidence_mapper,
         claim_verifier=claim_verifier,
         replan_agent=replan_agent,
+        broker=_create_broker(),
     )
 
 

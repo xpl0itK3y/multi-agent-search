@@ -270,6 +270,27 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
+    def claim_research_finalize_job_by_id(self, job_id: str) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.PENDING.value,
+                )
+                .with_for_update(skip_locked=True)
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+
+            job.status = FinalizeJobStatus.RUNNING.value
+            job.attempt_count += 1
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return research_finalize_job_orm_to_schema(job)
+
     def update_research_finalize_job(
         self,
         job_id: str,
@@ -439,6 +460,27 @@ class SQLAlchemyTaskStore:
                 .where(SearchTaskJobORM.status == SearchJobStatus.PENDING.value)
                 .order_by(SearchTaskJobORM.created_at.asc())
                 .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            job = session.execute(statement).scalars().first()
+            if job is None:
+                return None
+
+            job.status = SearchJobStatus.RUNNING.value
+            job.attempt_count += 1
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(job)
+            return search_task_job_orm_to_schema(job)
+
+    def claim_search_task_job_by_id(self, job_id: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(SearchTaskJobORM)
+                .where(
+                    SearchTaskJobORM.id == job_id,
+                    SearchTaskJobORM.status == SearchJobStatus.PENDING.value,
+                )
                 .with_for_update(skip_locked=True)
             )
             job = session.execute(statement).scalars().first()

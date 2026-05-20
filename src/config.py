@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     postgres_port: int = 5433
     database_url: Optional[str] = None
 
+    redis_url: Optional[str] = None
+    use_redis_broker: bool = False
+    redis_broker_pop_timeout_seconds: int = 2
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

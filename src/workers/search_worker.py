@@ -1,7 +1,7 @@
 import logging
 
-from src.observability import bind_observability_context, observe_worker_job
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
+from src.observability import bind_observability_context, observe_worker_job
 from src.providers.search import get_extraction_metrics_snapshot
 from src.services import ResearchService
 
@@ -13,41 +13,57 @@ class SearchWorker:
         self.research_service = research_service
         self.worker_name = worker_name
 
+    def _process_job(self, job_id: str, processed: int) -> int:
+        with bind_observability_context(
+            worker_name=self.worker_name,
+            job_id=job_id,
+        ):
+            self.research_service.touch_worker_heartbeat(
+                self.worker_name,
+                processed,
+                "busy",
+                extraction_metrics=get_extraction_metrics_snapshot(),
+                graph_metrics=get_graph_metrics_snapshot(),
+                graph_step_events=get_graph_step_events_snapshot(),
+            )
+            logger.info("search_job_claimed job_id=%s", job_id)
+            try:
+                self.research_service.process_search_task_job(job_id)
+                processed += 1
+                observe_worker_job(self.worker_name, "search", "success")
+            except Exception:
+                observe_worker_job(self.worker_name, "search", "failure")
+                raise
+            self.research_service.touch_worker_heartbeat(
+                self.worker_name,
+                processed,
+                "busy",
+                extraction_metrics=get_extraction_metrics_snapshot(),
+                graph_metrics=get_graph_metrics_snapshot(),
+                graph_step_events=get_graph_step_events_snapshot(),
+            )
+        return processed
+
     def run_once(self) -> int:
         processed = 0
+        broker = getattr(self.research_service, "broker", None)
 
+        if broker is not None:
+            # Redis mode: BLPOP for one job_id, then claim it specifically in Postgres.
+            job_id = broker.pop_search_job()
+            if job_id is None:
+                return 0
+            job = self.research_service.task_store.claim_search_task_job_by_id(job_id)
+            if job is None:
+                logger.debug("search_job_skip_already_claimed job_id=%s", job_id)
+                return 0
+            return self._process_job(job.id, processed)
+
+        # Postgres polling mode: drain all pending jobs in one pass.
         while True:
             job = self.research_service.task_store.claim_next_search_task_job()
             if job is None:
                 break
-            with bind_observability_context(
-                worker_name=self.worker_name,
-                job_id=job.id,
-                task_id=job.task_id,
-            ):
-                self.research_service.touch_worker_heartbeat(
-                    self.worker_name,
-                    processed,
-                    "busy",
-                    extraction_metrics=get_extraction_metrics_snapshot(),
-                    graph_metrics=get_graph_metrics_snapshot(),
-                    graph_step_events=get_graph_step_events_snapshot(),
-                )
-                logger.info("search_job_claimed depth=%s", job.depth.value)
-                try:
-                    self.research_service.process_search_task_job(job.id)
-                    processed += 1
-                    observe_worker_job(self.worker_name, "search", "success")
-                except Exception:
-                    observe_worker_job(self.worker_name, "search", "failure")
-                    raise
-                self.research_service.touch_worker_heartbeat(
-                    self.worker_name,
-                    processed,
-                    "busy",
-                    extraction_metrics=get_extraction_metrics_snapshot(),
-                    graph_metrics=get_graph_metrics_snapshot(),
-                    graph_step_events=get_graph_step_events_snapshot(),
-                )
+            processed = self._process_job(job.id, processed)
 
         return processed

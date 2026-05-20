@@ -69,6 +69,8 @@ class TaskStore(Protocol):
 
     def claim_next_research_finalize_job(self) -> ResearchFinalizeJob | None: ...
 
+    def claim_research_finalize_job_by_id(self, job_id: str) -> ResearchFinalizeJob | None: ...
+
     def update_research_finalize_job(
         self,
         job_id: str,
@@ -112,6 +114,8 @@ class TaskStore(Protocol):
     def get_dead_letter_search_task_jobs(self) -> list[SearchTaskJob]: ...
 
     def claim_next_search_task_job(self) -> SearchTaskJob | None: ...
+
+    def claim_search_task_job_by_id(self, job_id: str) -> SearchTaskJob | None: ...
 
     def update_search_task_job(
         self,

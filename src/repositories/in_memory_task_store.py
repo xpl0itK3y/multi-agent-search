@@ -177,6 +177,15 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def claim_research_finalize_job_by_id(self, job_id: str) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        if job is None or job.status != FinalizeJobStatus.PENDING:
+            return None
+        job.status = FinalizeJobStatus.RUNNING
+        job.attempt_count += 1
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
     def update_research_finalize_job(
         self,
         job_id: str,
@@ -303,6 +312,15 @@ class InMemoryTaskStore:
             return None
 
         job = pending_jobs[0]
+        job.status = SearchJobStatus.RUNNING
+        job.attempt_count += 1
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def claim_search_task_job_by_id(self, job_id: str) -> SearchTaskJob | None:
+        job = self.search_jobs.get(job_id)
+        if job is None or job.status != SearchJobStatus.PENDING:
+            return None
         job.status = SearchJobStatus.RUNNING
         job.attempt_count += 1
         job.updated_at = datetime.now(timezone.utc)
