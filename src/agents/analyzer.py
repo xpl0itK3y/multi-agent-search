@@ -304,24 +304,36 @@ class AnalyzerAgent(BaseAgent):
     You are an expert Research Analyst. Your job is to take raw, messy data collected by internet search bots and synthesize it into a comprehensive, well-structured, and easy-to-read report that directly answers the user's original query.
 
     INPUT:
-    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'source_id', 'url', 'domain', 'source_quality', 'title', and 'content' (raw text from the page).
+    You will receive the original user prompt and a JSON list of data gathered by bots. Each item contains a 'source_id', 'url', 'domain', 'source_quality', 'title', 'content' (raw text from the page), 'source_type', 'confidence', and 'caution_flags'.
+
+    SOURCE RELIABILITY HIERARCHY — use this to weight claims:
+    - source_type="primary" + confidence="high": official documentation, .gov, .edu — anchor your key findings here
+    - source_type="editorial" + confidence="high"/"medium": expert reviews, tested comparisons — reliable for product/technical claims
+    - source_type="general" + confidence="medium": mainstream press, reputable blogs — good supporting evidence
+    - source_type="community": Reddit, HN, Stack Overflow — use only for direct user experience or anecdotal context, not statistics
+    - source_type="speculative" OR caution_flags contains "speculative": treat as forecast/rumor, never as established fact — always use phrases like "according to rumors", "analysts predict", "reportedly"
+    - confidence="low" OR caution_flags contains "low_confidence": secondary evidence only, corroborate with stronger sources when possible
+
+    EVIDENCE GROUPS (evidence_groups field):
+    - Claims supported by multiple sources in the same evidence group have strong multi-source backing — prioritize these in key findings
+    - Single-source groups labeled "weak" should be presented with appropriate hedging
 
     YOUR TASK:
-    1. Read all the provided content. 
+    1. Read all the provided content.
     2. Ignore generic website navigation text, cookie warnings, or irrelevant ads.
-    3. Synthesize the core information.
+    3. Synthesize the core information, weighting sources by their reliability hierarchy above.
     4. Write a detailed, structured final report in Markdown.
     5. The report MUST be written in the SAME LANGUAGE as the user's original prompt (if the prompt is in Spanish, write in Spanish; if Russian, in Russian, etc.).
     6. Include an "Introduction", "Key Findings / Main Sections", and a "Conclusion".
     7. Use inline source references like [S1], [S2] when you make factual claims.
     8. Include a "Sources" list at the end with the source IDs and URLs you actually used.
-    9. Prefer higher-quality and more authoritative sources when sources conflict, but do not ignore useful unique evidence from medium-quality sources.
+    9. When sources conflict, prefer primary and high-confidence sources; explicitly note the conflict if both sides have credible evidence.
     10. Produce a genuinely comprehensive report, not a short summary: expand major sections, include concrete examples, and cover meaningful subcategories or year-by-year breakdowns when the topic supports it.
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
-    - Present speculative predictions or gadget rumors as established facts.
-    - Give equal weight to weak hype posts when stronger primary or expert sources exist.
+    - Present speculative predictions or rumors (source_type="speculative") as established facts.
+    - Give equal weight to low-confidence sources when stronger primary or expert sources exist.
     - State contested or weakly supported claims with absolute certainty when the sources only support softer wording.
     - Output any internal reasoning, just the final markdown report.
     """
@@ -579,6 +591,10 @@ class AnalyzerAgent(BaseAgent):
             max_sources_per_task=profile["max_sources_per_task"],
         )
 
+        # Stable sort: high-quality sources first so they receive more content budget.
+        _quality_order = {"high": 0, "medium": 1, "low": 2}
+        selected_candidates.sort(key=lambda c: _quality_order.get(c.get("source_quality") or "low", 2))
+
         selected_candidates = self._apply_payload_budget(
             selected_candidates,
             payload_char_budget=profile["payload_char_budget"],
@@ -593,13 +609,20 @@ class AnalyzerAgent(BaseAgent):
         ]
         return self.source_critic.assess_sources(aggregated_data)
 
-    def _extract_evidence_groups(self, aggregated_data: list[dict]) -> tuple[list[dict], object]:
+    _EVIDENCE_GROUP_LIMITS = {
+        SearchDepth.EASY: 5,
+        SearchDepth.MEDIUM: 8,
+        SearchDepth.HARD: 12,
+    }
+
+    def _extract_evidence_groups(self, aggregated_data: list[dict], depth: SearchDepth | None = None) -> tuple[list[dict], object]:
+        max_groups = self._EVIDENCE_GROUP_LIMITS.get(depth or SearchDepth.MEDIUM, 8)
         return self.evidence_mapper.build_evidence_groups(
             aggregated_data=aggregated_data,
             stopwords=self.STOPWORDS,
             generic_tokens=self.CONFLICT_GENERIC_TOKENS,
             negation_tokens=self.NEGATION_TOKENS,
-            max_groups=5,
+            max_groups=max_groups,
         )
 
     def _post_process_report(self, report: str, language: str) -> str:
@@ -1155,7 +1178,7 @@ class AnalyzerAgent(BaseAgent):
         conflict_ms = (time.perf_counter() - conflict_started_at) * 1000
 
         evidence_started_at = time.perf_counter()
-        evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool)
+        evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool, depth=depth)
         evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = self._detect_language(prompt)
 

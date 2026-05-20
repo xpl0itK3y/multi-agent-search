@@ -98,7 +98,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert parsed["source_summary"]["total_sources"] == 1
     assert "evidence_summary" in parsed
     assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
-    assert "Prefer higher-quality and more authoritative sources when sources conflict" in agent.SYSTEM_PROMPT
+    assert "When sources conflict, prefer primary and high-confidence sources" in agent.SYSTEM_PROMPT
     assert "substantially more comprehensive report" in llm.calls[0]["user_prompt"]
     assert "cautious wording" in llm.calls[0]["user_prompt"]
 
