@@ -8,9 +8,74 @@ Usage:
 from __future__ import annotations
 
 import io
+import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Language detection
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _detect_lang(text: str) -> str:
+    """Return 'ru' if text contains significant Cyrillic content, else 'en'."""
+    if not text:
+        return "en"
+    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
+    return "ru" if cyrillic / len(text) > 0.15 else "en"
+
+
+_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "title":     "Research Report",
+        "depth":     "Depth",
+        "generated": "Generated",
+        "page":      "Page",
+    },
+    "ru": {
+        "title":     "Исследовательский отчёт",
+        "depth":     "Глубина",
+        "generated": "Создан",
+        "page":      "Стр.",
+    },
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Font resolution (DejaVu → Unicode/Cyrillic; Helvetica → ASCII fallback)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+_DEJAVU_REGULAR = "DejaVuSans.ttf"
+_DEJAVU_BOLD    = "DejaVuSans-Bold.ttf"
+
+_fonts_registered = False
+
+
+def _register_pdf_fonts() -> dict[str, str]:
+    """Register DejaVu TTF fonts if available; fall back to Helvetica."""
+    global _fonts_registered
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        r_path = os.path.join(_DEJAVU_DIR, _DEJAVU_REGULAR)
+        b_path = os.path.join(_DEJAVU_DIR, _DEJAVU_BOLD)
+
+        if os.path.isfile(r_path) and os.path.isfile(b_path):
+            if not _fonts_registered:
+                pdfmetrics.registerFont(TTFont("DV",   r_path))
+                pdfmetrics.registerFont(TTFont("DV-B", b_path))
+                # use regular as fallback for italic variants
+                registerFontFamily("DV", normal="DV", bold="DV-B",
+                                   italic="DV", boldItalic="DV-B")
+                _fonts_registered = True
+            return {"r": "DV", "b": "DV-B", "i": "DV", "bi": "DV-B"}
+    except Exception:
+        pass
+    return {"r": "Helvetica", "b": "Helvetica-Bold",
+            "i": "Helvetica-Oblique", "bi": "Helvetica-BoldOblique"}
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Markdown parser
@@ -21,12 +86,9 @@ _H3   = re.compile(r"^### (.+)$")
 _H4   = re.compile(r"^#### (.+)$")
 _BULL = re.compile(r"^[-*] (.+)$")
 _HR   = re.compile(r"^---+$")
-_BOLD = re.compile(r"\*\*(.+?)\*\*")
-_CITE = re.compile(r"\[S(\d+)\]")
 
 
 def _parse_blocks(markdown: str) -> list[dict]:
-    """Parse markdown into a flat list of typed blocks."""
     blocks: list[dict] = []
     lines = markdown.split("\n")
     i = 0
@@ -80,10 +142,10 @@ def generate_pdf(
     created_at: Optional[str] = None,
 ) -> bytes:
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+    from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.units import cm, mm
+    from reportlab.lib.units import cm
     from reportlab.platypus import (
         HRFlowable,
         ListFlowable,
@@ -95,7 +157,15 @@ def generate_pdf(
         TableStyle,
     )
 
-    # ── palette (matches app UI) ──────────────────────────────────────────────
+    lang  = _detect_lang(prompt)
+    lbl   = _LABELS[lang]
+    fonts = _register_pdf_fonts()
+    F     = fonts["r"]
+    FB    = fonts["b"]
+    FI    = fonts["i"]
+    FBI   = fonts["bi"]
+
+    # ── palette ───────────────────────────────────────────────────────────────
     C_DARK    = colors.HexColor("#1e293b")
     C_BLUE    = colors.HexColor("#1d4ed8")
     C_BLUE_LT = colors.HexColor("#3b82f6")
@@ -104,39 +174,31 @@ def generate_pdf(
     C_LIGHT   = colors.HexColor("#f1f5f9")
     C_WHITE   = colors.white
 
-    # ── styles ────────────────────────────────────────────────────────────────
     def S(name, **kw) -> ParagraphStyle:
         return ParagraphStyle(name, **kw)
 
-    BASE = S("base", fontName="Helvetica", fontSize=10, leading=15,
-             textColor=C_DARK, alignment=TA_JUSTIFY)
-
     STYLES = {
-        "h2":     S("h2",     fontName="Helvetica-Bold", fontSize=15,
-                    textColor=C_BLUE, leading=20, spaceAfter=4, spaceBefore=14),
-        "h3":     S("h3",     fontName="Helvetica-Bold", fontSize=12,
-                    textColor=C_SLATE, leading=16, spaceAfter=3, spaceBefore=10),
-        "h4":     S("h4",     fontName="Helvetica-BoldOblique", fontSize=10.5,
-                    textColor=C_GRAY, leading=14, spaceAfter=2, spaceBefore=8),
-        "para":   S("para",   fontName="Helvetica", fontSize=10, leading=15,
-                    textColor=C_DARK, alignment=TA_JUSTIFY, spaceAfter=6),
-        "bullet": S("bullet", fontName="Helvetica", fontSize=10, leading=14,
-                    textColor=C_DARK, leftIndent=8, spaceAfter=2),
-        "meta":   S("meta",   fontName="Helvetica-Oblique", fontSize=9,
-                    textColor=C_GRAY, alignment=TA_LEFT),
-        "title":  S("title",  fontName="Helvetica-Bold", fontSize=20,
+        "h2":     S("h2",     fontName=FB,  fontSize=15,
+                    textColor=C_BLUE,  leading=20, spaceAfter=4,  spaceBefore=14),
+        "h3":     S("h3",     fontName=FB,  fontSize=12,
+                    textColor=C_SLATE, leading=16, spaceAfter=3,  spaceBefore=10),
+        "h4":     S("h4",     fontName=FBI, fontSize=10.5,
+                    textColor=C_GRAY,  leading=14, spaceAfter=2,  spaceBefore=8),
+        "para":   S("para",   fontName=F,   fontSize=10, leading=15,
+                    textColor=C_DARK,  alignment=TA_JUSTIFY, spaceAfter=6),
+        "bullet": S("bullet", fontName=F,   fontSize=10, leading=14,
+                    textColor=C_DARK,  leftIndent=8, spaceAfter=2),
+        "meta":   S("meta",   fontName=FI,  fontSize=9,
+                    textColor=C_GRAY,  alignment=TA_LEFT),
+        "title":  S("title",  fontName=FB,  fontSize=20,
                     textColor=C_WHITE, leading=26, alignment=TA_LEFT),
-        "sub":    S("sub",    fontName="Helvetica", fontSize=11,
+        "sub":    S("sub",    fontName=F,   fontSize=11,
                     textColor=C_WHITE, leading=15, alignment=TA_LEFT),
     }
 
     def _md_to_rl(text: str) -> str:
-        """Convert inline Markdown to reportlab XML."""
-        # escape XML special chars first
         text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        # bold
         text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-        # citation [S1] → blue small superscript
         text = re.sub(
             r"\[S(\d+)\]",
             r'<font color="#1d4ed8" size="8"><super>[S\1]</super></font>',
@@ -144,7 +206,7 @@ def generate_pdf(
         )
         return text
 
-    # ── header / footer callbacks ─────────────────────────────────────────────
+    # ── date string ───────────────────────────────────────────────────────────
     date_str = ""
     if created_at:
         try:
@@ -153,30 +215,27 @@ def generate_pdf(
         except Exception:
             date_str = created_at[:10]
 
+    # ── header / footer ───────────────────────────────────────────────────────
     def _on_page(canvas, doc):
         canvas.saveState()
         W, H = A4
-        # top blue bar
         canvas.setFillColor(C_BLUE)
         canvas.rect(0, H - 1.8*cm, W, 1.8*cm, fill=1, stroke=0)
-        # header text
         canvas.setFillColor(C_WHITE)
-        canvas.setFont("Helvetica-Bold", 9)
-        canvas.drawString(2.5*cm, H - 1.15*cm, "RESEARCH REPORT")
-        canvas.setFont("Helvetica", 8)
+        canvas.setFont(FB, 9)
+        canvas.drawString(2.5*cm, H - 1.15*cm, lbl["title"].upper())
+        canvas.setFont(F, 8)
         prompt_short = (prompt[:80] + "…") if len(prompt) > 80 else prompt
         canvas.drawString(2.5*cm, H - 1.55*cm, prompt_short)
-        # date right-aligned
         if date_str:
             canvas.drawRightString(W - 2.5*cm, H - 1.35*cm, date_str)
-        # bottom strip
         canvas.setFillColor(C_LIGHT)
         canvas.rect(0, 0, W, 1.1*cm, fill=1, stroke=0)
         canvas.setFillColor(C_GRAY)
-        canvas.setFont("Helvetica", 8)
-        canvas.drawCentredString(W / 2, 0.4*cm, f"Page {doc.page}")
+        canvas.setFont(F, 8)
+        canvas.drawCentredString(W / 2, 0.4*cm, f"{lbl['page']} {doc.page}")
         if depth:
-            canvas.drawString(2.5*cm, 0.4*cm, f"Depth: {depth.upper()}")
+            canvas.drawString(2.5*cm, 0.4*cm, f"{lbl['depth']}: {depth.upper()}")
         canvas.restoreState()
 
     # ── build story ───────────────────────────────────────────────────────────
@@ -195,28 +254,30 @@ def generate_pdf(
     story = []
 
     # ── title block ───────────────────────────────────────────────────────────
-    title_data = [[
-        Paragraph("Research Report", STYLES["title"]),
-    ]]
     sub_text = prompt if len(prompt) <= 120 else prompt[:117] + "…"
-    title_data.append([Paragraph(sub_text, STYLES["sub"])])
-    title_tbl = Table(title_data, colWidths=[doc.width])
+    title_tbl = Table(
+        [
+            [Paragraph(lbl["title"], STYLES["title"])],
+            [Paragraph(sub_text,     STYLES["sub"])],
+        ],
+        colWidths=[doc.width],
+    )
     title_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), C_BLUE),
+        ("BACKGROUND",   (0, 0), (-1, -1), C_BLUE),
         ("LEFTPADDING",  (0, 0), (-1, -1), 14),
         ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-        ("TOPPADDING",   (0, 0), (0, 0),  14),
-        ("BOTTOMPADDING",(0, -1), (-1, -1), 14),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [C_BLUE]),
+        ("TOPPADDING",   (0, 0), (0, 0),   14),
+        ("BOTTOMPADDING",(0,-1), (-1,-1),  14),
+        ("ROWBACKGROUNDS",(0,0), (-1,-1),  [C_BLUE]),
     ]))
     story.append(title_tbl)
 
     # meta row
     meta_parts = []
     if depth:
-        meta_parts.append(f"Depth: <b>{depth.upper()}</b>")
+        meta_parts.append(f"{lbl['depth']}: <b>{depth.upper()}</b>")
     if date_str:
-        meta_parts.append(f"Generated: <b>{date_str}</b>")
+        meta_parts.append(f"{lbl['generated']}: <b>{date_str}</b>")
     if meta_parts:
         story.append(Spacer(1, 6))
         story.append(Paragraph(" &nbsp;·&nbsp; ".join(meta_parts), STYLES["meta"]))
@@ -226,13 +287,11 @@ def generate_pdf(
     story.append(Spacer(1, 8))
 
     # ── content ───────────────────────────────────────────────────────────────
-    in_sources = False
     for block in _parse_blocks(report):
         btype = block["type"]
 
         if btype == "h2":
             if block["text"].lower() in ("sources", "источники"):
-                in_sources = True
                 story.append(Spacer(1, 6))
                 story.append(HRFlowable(width="100%", thickness=0.5, color=C_LIGHT))
             story.append(Paragraph(_md_to_rl(block["text"]), STYLES["h2"]))
@@ -249,8 +308,7 @@ def generate_pdf(
             story.append(Spacer(1, 4))
 
         elif btype == "para":
-            style = STYLES["para"]
-            story.append(Paragraph(_md_to_rl(block["text"]), style))
+            story.append(Paragraph(_md_to_rl(block["text"]), STYLES["para"]))
 
         elif btype == "bullets":
             items = [
@@ -281,9 +339,12 @@ def generate_docx(
 ) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
     from docx.shared import Cm, Pt, RGBColor
+
+    lang = _detect_lang(prompt)
+    lbl  = _LABELS[lang]
 
     def hex_rgb(hex_str: str) -> RGBColor:
         h = hex_str.lstrip("#")
@@ -296,7 +357,6 @@ def generate_docx(
 
     doc = Document()
 
-    # ── page margins ──────────────────────────────────────────────────────────
     for section in doc.sections:
         section.top_margin    = Cm(2.5)
         section.bottom_margin = Cm(2.5)
@@ -306,7 +366,7 @@ def generate_docx(
     # ── title block ───────────────────────────────────────────────────────────
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    run = title_para.add_run("Research Report")
+    run = title_para.add_run(lbl["title"])
     run.font.size = Pt(26)
     run.font.bold = True
     run.font.color.rgb = C_BLUE
@@ -331,16 +391,15 @@ def generate_docx(
 
     meta_parts = []
     if depth:
-        meta_parts.append(f"Depth: {depth.upper()}")
+        meta_parts.append(f"{lbl['depth']}: {depth.upper()}")
     if date_str:
-        meta_parts.append(f"Generated: {date_str}")
+        meta_parts.append(f"{lbl['generated']}: {date_str}")
     if meta_parts:
         meta_p = doc.add_paragraph(" · ".join(meta_parts))
         meta_p.runs[0].font.size = Pt(9)
         meta_p.runs[0].font.color.rgb = C_GRAY
         meta_p.paragraph_format.space_after = Pt(10)
 
-    # divider
     def _add_divider():
         p = doc.add_paragraph()
         pPr = p._p.get_or_add_pPr()
@@ -359,10 +418,7 @@ def generate_docx(
 
     # ── inline markdown helper ────────────────────────────────────────────────
     def _add_inline(paragraph, text: str):
-        """Add inline-formatted text to a paragraph."""
-        # Split on **bold** and [Sn] citations
-        parts = re.split(r"(\*\*[^*]+\*\*|\[S\d+\])", text)
-        for part in parts:
+        for part in re.split(r"(\*\*[^*]+\*\*|\[S\d+\])", text):
             if part.startswith("**") and part.endswith("**"):
                 run = paragraph.add_run(part[2:-2])
                 run.bold = True
@@ -370,7 +426,6 @@ def generate_docx(
                 run = paragraph.add_run(part)
                 run.font.color.rgb = C_BLUE
                 run.font.size = Pt(8)
-                # superscript
                 rPr = run._r.get_or_add_rPr()
                 vertAlign = OxmlElement("w:vertAlign")
                 vertAlign.set(qn("w:val"), "superscript")
