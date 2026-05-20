@@ -654,10 +654,20 @@ class AnalyzerAgent(BaseAgent):
             max_groups=max_groups,
         )
 
+    # Patterns the synthesis LLM sometimes prepends as meta-commentary.
+    _LLM_PREAMBLE = re.compile(
+        r"(?i)^(ниже\s+представлен|ниже\s+приведён|below\s+is\s+(the|a)\s+(synthesized|final|complete)|"
+        r"the\s+following\s+is\s+(a|the)\s+(synthesized|final)|вот\s+синтезирован|"
+        r"данный\s+отчёт\s+объединяет|объединяю\s+все|синтезирую\s+все|"
+        r"i\s+have\s+(combined|merged|synthesized)|here\s+is\s+(the|a)\s+(synthesized|final))[^\n]*\n+"
+    )
+
     def _post_process_report(self, report: str, language: str) -> str:
         normalized = report.replace("\r\n", "\n").strip()
         normalized = re.sub(r"\n{3,}", "\n\n", normalized)
         normalized = re.sub(r"(?m)^[ \t]+$", "", normalized)
+        # Strip LLM meta-commentary preamble that sometimes appears before the first heading.
+        normalized = self._LLM_PREAMBLE.sub("", normalized).strip()
 
         localized_sources_heading = self._sources_heading(language)
         if re.search(r"(?im)^sources:\s*$", normalized):
@@ -868,6 +878,9 @@ class AnalyzerAgent(BaseAgent):
         if stripped.startswith("#"):
             return False
         if len(stripped) < 45:
+            return False
+        # Source list items (e.g. "- [S12] https://..." or "- **\[S12\]** [title](url)")
+        if re.match(r"^-\s*(?:\*{0,2}\\?\[S\d+\\?\]\*{0,2})", stripped):
             return False
         lowered = stripped.lower()
         if (

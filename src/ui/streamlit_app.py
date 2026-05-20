@@ -1702,14 +1702,30 @@ def _render_latest_finalize_job(latest_finalize_job: dict | None) -> None:
 
 
 def _fix_source_links(report: str) -> str:
-    """Convert old-style '- [S2] https://url' lines to proper markdown links.
+    """Patch reports stored in DB before the analyzer fixes:
 
-    Reports stored in the DB before the analyzer fix used the bare-URL format
-    which confuses Streamlit's markdown parser and renders 'bullet' as text.
-    New-style lines (already have a [text](url) link) are left untouched.
+    1. Convert '- [S2] https://url' to proper markdown links (fixes 'bullet' text).
+    2. Strip LLM meta-commentary preamble before the first heading.
+    3. Remove the '## Примечания к отчёту / Report Notes' section.
     """
     import re as _re
-    # Matches:  - [S2] https://...   (old bare-URL format, no parenthesised link)
+
+    # 1. Strip LLM meta-commentary before the first # heading
+    _PREAMBLE = _re.compile(
+        r"(?i)^(ниже\s+представлен|ниже\s+приведён|below\s+is\s+(the|a)\s+|"
+        r"the\s+following\s+is|вот\s+синтезирован|данный\s+отчёт\s+объединяет|"
+        r"here\s+is\s+(the|a)\s+)[^\n]*\n+",
+    )
+    report = _PREAMBLE.sub("", report).strip()
+
+    # 2. Remove Report Notes section
+    _NOTES_SECTION = _re.compile(
+        r"\n+##\s+(Примечания к отчёту|Примечания к отчету|Report Notes)\s*\n.*?(?=\n## |\Z)",
+        _re.DOTALL,
+    )
+    report = _NOTES_SECTION.sub("", report)
+
+    # 3. Convert old bare-URL source lines to clickable markdown links
     _OLD_SOURCE = _re.compile(
         r"^- \[S(\d+)\] (https?://\S+)$",
         _re.MULTILINE,
