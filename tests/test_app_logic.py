@@ -1094,6 +1094,7 @@ def test_research_summary_includes_replan_and_agent_summaries():
 
 
 def test_finalize_graph_runner_retries_after_report_notes(mocker):
+    mocker.patch("src.config.settings.langgraph_verification_max_retries", 1)
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
         ResearchRequest(prompt="topic", depth=SearchDepth.MEDIUM),
@@ -1123,6 +1124,7 @@ def test_finalize_graph_runner_retries_after_report_notes(mocker):
 
 
 def test_finalize_graph_runner_executes_second_pass_search(mocker):
+    mocker.patch("src.config.settings.langgraph_replan_max_loops", 1)
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
         ResearchRequest(prompt="best horror films", depth=SearchDepth.HARD),
@@ -1191,6 +1193,7 @@ def test_finalize_graph_runner_executes_second_pass_search(mocker):
 
 
 def test_finalize_graph_runner_executes_tie_break_search_for_conflicts(mocker):
+    mocker.patch("src.config.settings.langgraph_tie_break_max_loops", 1)
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
         ResearchRequest(prompt="linux vs macos", depth=SearchDepth.HARD),

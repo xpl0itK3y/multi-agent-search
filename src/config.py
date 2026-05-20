@@ -36,11 +36,11 @@ class Settings(BaseSettings):
     analyzer_payload_char_budget: int = 28000
     analyzer_conflict_source_limit: int = 12
     analyzer_evidence_source_limit: int = 12
-    analyzer_local_repair_issue_threshold: int = 5
+    analyzer_local_repair_issue_threshold: int = 20
     use_langgraph_finalize_graph: bool = True
-    langgraph_replan_max_loops: int = 1
-    langgraph_verification_max_retries: int = 1
-    langgraph_tie_break_max_loops: int = 1
+    langgraph_replan_max_loops: int = 0
+    langgraph_verification_max_retries: int = 0
+    langgraph_tie_break_max_loops: int = 0
     graph_step_event_history_limit: int = 250
     graph_step_event_retention_seconds: int = 86400
     graph_trail_history_limit: int = 200
