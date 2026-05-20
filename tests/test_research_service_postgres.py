@@ -50,9 +50,9 @@ def test_research_service_full_postgres_lifecycle(postgres_session_factory):
         analyzer=StubAnalyzer(),
     )
 
-    response = service.start_research(
-        ResearchRequest(prompt="postgres lifecycle", depth=SearchDepth.EASY),
-    )
+    request = ResearchRequest(prompt="postgres lifecycle", depth=SearchDepth.EASY)
+    response, research_id = service.start_research(request)
+    service.decompose_and_enqueue(research_id, request)
 
     tasks = store.get_tasks_by_research(response.research_id)
     assert len(tasks) == 2

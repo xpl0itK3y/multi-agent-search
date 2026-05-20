@@ -2,7 +2,7 @@ import uuid
 import time
 from typing import List
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from src.api.dependencies import get_research_service
 from src.api.schemas import (
     DecomposeRequest,
@@ -189,9 +189,13 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).list_researches(limit=limit)
 
     @app.post("/v1/research", response_model=ResearchResponse)
-    async def start_research(request: Request, payload: ResearchRequest):
+    async def start_research(request: Request, payload: ResearchRequest, background_tasks: BackgroundTasks):
         try:
-            return get_research_service(request).start_research(payload)
+            service = get_research_service(request)
+            response, research_id = service.start_research(payload)
+            # LLM decompose runs after response is sent — user gets research_id instantly
+            background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
+            return response
         except Exception as e:
             if isinstance(e, HTTPException):
                 raise e
@@ -231,6 +235,12 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse)
     async def cleanup_finalize_jobs(request: Request):
         return get_research_service(request).cleanup_old_research_finalize_jobs()
+
+    @app.delete("/v1/research/{research_id}", status_code=204)
+    async def delete_research(research_id: str, request: Request):
+        deleted = get_research_service(request).delete_research(research_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Research not found")
 
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
     async def get_research_status(research_id: str, request: Request):

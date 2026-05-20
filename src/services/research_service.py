@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -147,46 +148,50 @@ class ResearchService:
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
-    def start_research(
-        self,
-        request: ResearchRequest,
-    ) -> ResearchResponse:
-        orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
-        tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
-
-        task_ids = []
-        registered_tasks = []
+    def start_research(self, request: ResearchRequest) -> tuple["ResearchResponse", str]:
+        """Create research record immediately and return. Decompose runs in background."""
         research = self.task_store.add_research(request, task_ids=[])
-
-        with bind_observability_context(research_id=research.id):
-            for task_dict in tasks_raw:
-                task_dict["research_id"] = research.id
-                task = self.task_store.add_task(task_dict)
-                registered_tasks.append(task)
-                task_ids.append(task.id)
-
-            self.task_store.set_research_task_ids(research.id, task_ids)
-
-            for task in registered_tasks:
-                if task.status == TaskStatus.PENDING and task.queries:
-                    job = self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
-                    if self.broker:
-                        self.broker.push_search_job(job.id)
-
-            logger.info(
-                "research_started task_count=%s depth=%s",
-                len(registered_tasks),
-                request.depth.value,
-            )
-
+        logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
         return ResearchResponse(
             research_id=research.id,
             status="success",
-            message=f"Research started with {len(registered_tasks)} tasks.",
-        )
+            message="Research created. Task decomposition in progress…",
+        ), research.id
+
+    def decompose_and_enqueue(self, research_id: str, request: ResearchRequest) -> None:
+        """Background: run LLM decompose, create tasks, push to worker queue."""
+        orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
+        with bind_observability_context(research_id=research_id):
+            try:
+                tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
+                task_ids = []
+                registered_tasks = []
+                for task_dict in tasks_raw:
+                    task_dict["research_id"] = research_id
+                    task = self.task_store.add_task(task_dict)
+                    registered_tasks.append(task)
+                    task_ids.append(task.id)
+                self.task_store.set_research_task_ids(research_id, task_ids)
+                for task in registered_tasks:
+                    if task.status == TaskStatus.PENDING and task.queries:
+                        job = self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
+                        if self.broker:
+                            self.broker.push_search_job(job.id)
+                logger.info(
+                    "research_decomposed research_id=%s task_count=%s depth=%s",
+                    research_id,
+                    len(registered_tasks),
+                    request.depth.value,
+                )
+            except Exception as exc:
+                logger.error("research_decompose_failed research_id=%s error=%s", research_id, str(exc))
+                self.task_store.update_research_status(research_id, ResearchStatus.FAILED, str(exc))
 
     def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
         return self.task_store.list_researches(limit=limit)
+
+    def delete_research(self, research_id: str) -> bool:
+        return self.task_store.delete_research(research_id)
 
     def get_research_status(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
@@ -379,8 +384,30 @@ class ResearchService:
 
         self.task_store.set_research_task_ids(research_id, existing_task_ids)
 
-        for task in created_tasks:
-            self.run_search_task(task.id, depth)
+        if self.broker:
+            # Push to queue — let the parallel workers handle them concurrently
+            for task in created_tasks:
+                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+                self.broker.push_search_job(job.id)
+                logger.info("replan_task_enqueued task_id=%s job_id=%s", task.id, job.id)
+
+            # Poll until all replan tasks finish (timeout: same as search job timeout)
+            deadline = time.monotonic() + settings.search_job_timeout_seconds
+            poll_interval = 2.0
+            while time.monotonic() < deadline:
+                pending = [
+                    t for t in created_tasks
+                    if (self.task_store.get_task(t.id) or t).status
+                    not in (TaskStatus.COMPLETED, TaskStatus.FAILED)
+                ]
+                if not pending:
+                    break
+                logger.debug("replan_waiting pending_count=%d", len(pending))
+                time.sleep(poll_interval)
+        else:
+            # No broker — fallback to sequential execution in current thread
+            for task in created_tasks:
+                self.run_search_task(task.id, depth)
 
         return [
             refreshed

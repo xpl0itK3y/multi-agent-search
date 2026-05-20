@@ -77,6 +77,14 @@ class SQLAlchemyTaskStore:
                 return None
             return research_orm_to_record(research)
 
+    def delete_research(self, research_id: str) -> bool:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return False
+            session.delete(research)
+            return True
+
     def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
             rows = (

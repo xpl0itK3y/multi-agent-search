@@ -1501,9 +1501,11 @@ def test_start_research_persists_task_ids_in_task_store(mocker):
     task_store = InMemoryTaskStore()
     service = ResearchService(task_store=task_store, orchestrator=orchestrator)
 
-    response = service.start_research(
-        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
-    )
+    request = ResearchRequest(prompt="topic", depth=SearchDepth.EASY)
+    response, research_id = service.start_research(request)
+
+    # Decompose runs in background — simulate it synchronously in the test
+    service.decompose_and_enqueue(research_id, request)
 
     research = task_store.get_research(response.research_id)
     assert research is not None

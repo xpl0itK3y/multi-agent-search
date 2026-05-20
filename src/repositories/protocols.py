@@ -24,6 +24,8 @@ class TaskStore(Protocol):
 
     def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]: ...
 
+    def delete_research(self, research_id: str) -> bool: ...
+
     def update_research_status(
         self,
         research_id: str,

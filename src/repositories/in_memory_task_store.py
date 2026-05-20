@@ -43,6 +43,15 @@ class InMemoryTaskStore:
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)
 
+    def delete_research(self, research_id: str) -> bool:
+        if research_id not in self.researches:
+            return False
+        del self.researches[research_id]
+        task_ids = [tid for tid, t in self.tasks.items() if t.research_id == research_id]
+        for tid in task_ids:
+            del self.tasks[tid]
+        return True
+
     def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
         sorted_records = sorted(
             self.researches.values(),
