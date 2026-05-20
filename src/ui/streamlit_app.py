@@ -849,11 +849,8 @@ def _render_auto_refresh() -> None:
 
 
 def _get_live_refresh_interval() -> int | None:
-    selected_research_id = st.session_state.get("selected_research_id", "").strip()
-    if selected_research_id:
+    if st.session_state.get("selected_research_id", "").strip():
         return 5
-    if st.session_state.get("auto_refresh_enabled"):
-        return max(int(st.session_state.get("auto_refresh_seconds", 10)), 3)
     return None
 
 
@@ -888,7 +885,6 @@ def _render_sidebar() -> None:
         format_func=lambda value: LANGUAGE_OPTIONS[value],
     )
     _sync_query_params()
-    st.sidebar.caption(f"{_t('api')}: `{API_BASE_URL}`")
 
     selected_research_id = st.sidebar.text_input(
         _t("research_id"),
@@ -898,18 +894,6 @@ def _render_sidebar() -> None:
     st.session_state["selected_research_id"] = selected_research_id
     _sync_query_params()
 
-    st.sidebar.divider()
-    st.session_state["auto_refresh_enabled"] = st.sidebar.checkbox(
-        _t("auto_refresh"),
-        value=st.session_state.get("auto_refresh_enabled", False),
-    )
-    st.session_state["auto_refresh_seconds"] = st.sidebar.slider(
-        _t("refresh_interval"),
-        min_value=3,
-        max_value=30,
-        value=int(st.session_state.get("auto_refresh_seconds", 10)),
-        disabled=not st.session_state["auto_refresh_enabled"],
-    )
     if st.sidebar.button(_t("refresh_now"), use_container_width=True):
         st.rerun()
 
@@ -921,20 +905,11 @@ def _render_sidebar() -> None:
         ignore_status_codes={404},
     )
     if heartbeat is None:
-        st.sidebar.info(_t("no_heartbeat", worker_name=WORKER_NAME))
+        st.sidebar.caption(_t("no_heartbeat", worker_name=WORKER_NAME))
         return
 
     st.sidebar.markdown(_status_badge(heartbeat["status"]), unsafe_allow_html=True)
-    st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
-    heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
-    heartbeat_status = (heartbeat.get("status") or "").strip().lower()
-    if heartbeat_is_recent:
-        st.sidebar.success(_t("worker_live"))
-    elif heartbeat_status == "busy":
-        st.sidebar.warning(_t("worker_stale"))
-    else:
-        st.sidebar.info(_t("worker_idle_ok"))
     if heartbeat.get("last_error"):
         st.sidebar.error(heartbeat["last_error"])
 
@@ -1399,16 +1374,6 @@ def _render_queue_overview() -> None:
     if not metrics:
         return
 
-    queue_backlog = (
-        metrics["pending_search_jobs"]
-        + metrics["running_search_jobs"]
-        + metrics["dead_letter_search_jobs"]
-        + metrics["pending_finalize_jobs"]
-        + metrics["running_finalize_jobs"]
-        + metrics["dead_letter_finalize_jobs"]
-    )
-    st.metric(_t("queue_backlog"), queue_backlog)
-
     top = st.columns(3)
     top[0].metric(_t("pending_search"), metrics["pending_search_jobs"])
     top[1].metric(_t("running_search"), metrics["running_search_jobs"])
@@ -1419,71 +1384,19 @@ def _render_queue_overview() -> None:
     bottom[1].metric(_t("running_finalize"), metrics["running_finalize_jobs"])
     bottom[2].metric(_t("dead_finalize"), metrics["dead_letter_finalize_jobs"])
 
-    extraction = metrics.get("extraction_metrics") or {}
-    with st.expander(_t("queue_extraction_attempts"), expanded=False):
-        extraction_row = st.columns(3)
-        extraction_row[0].metric(_t("queue_extraction_attempts"), extraction.get("attempts", 0))
-        extraction_row[1].metric(_t("queue_extraction_success"), extraction.get("success_count", 0))
-        extraction_row[2].metric(_t("queue_extraction_failures"), extraction.get("failure_count", 0))
-        derived_row = st.columns(2)
-        derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
-        derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
-
-    graph = metrics.get("graph_metrics") or {}
-    graph_alerts = metrics.get("graph_alerts") or []
-    graph_alert_trend = metrics.get("graph_alert_trend") or {}
-    maintenance_summary = metrics.get("maintenance_summary") or {}
-    operational_health = metrics.get("operational_health") or {}
-    recommendation_analytics = maintenance_summary.get("recommendation_analytics") or {}
-    with st.expander(_t("ops_snapshot"), expanded=True):
-        snapshot_row = st.columns(5)
-        snapshot_row[0].metric(
-            _t("ops_snapshot_health", value=operational_health.get("status", "healthy")),
-            operational_health.get("score", 100),
-        )
-        snapshot_row[1].metric(_t("ops_snapshot_backlog", value=queue_backlog), queue_backlog)
-        snapshot_row[2].metric(_t("ops_snapshot_graph_alerts", value=len(graph_alerts)), len(graph_alerts))
-        snapshot_row[3].metric(
-            _t("ops_snapshot_maintenance_alerts", value=len(maintenance_summary.get("alerts") or [])),
-            len(maintenance_summary.get("alerts") or []),
-        )
-        snapshot_row[4].metric(
-            _t("ops_snapshot_needs_action", value=recommendation_analytics.get("unresolved_count", 0)),
-            recommendation_analytics.get("unresolved_count", 0),
-        )
-    _render_operational_health(operational_health, scope_key="queue", enable_ack=True)
-    graph_row = st.columns(4)
-    graph_row[0].metric(_t("graph_resume_passes"), graph.get("resume_count", 0))
-    graph_row[1].metric(_t("graph_replan_passes"), graph.get("replan_pass_count", 0))
-    graph_row[2].metric(_t("graph_tie_break_passes"), graph.get("tie_break_pass_count", 0))
-    graph_row[3].metric(_t("graph_analyze_passes"), graph.get("analyze_pass_count", 0))
-    if graph_alerts:
-        with st.expander(_t("graph_alerts"), expanded=True):
-            _render_graph_alerts(graph_alerts)
-    if graph_alert_trend:
-        with st.expander(_t("graph_alert_trend"), expanded=False):
-            _render_graph_alert_trend(graph_alert_trend)
-    if maintenance_summary and (
-        maintenance_summary.get("last_run_at")
-        or int(maintenance_summary.get("compacted_count", 0) or 0) > 0
-    ):
-        with st.expander(_t("maintenance_summary"), expanded=False):
-            _render_maintenance_summary(maintenance_summary)
-    with st.expander(_t("graph_step_metrics"), expanded=False):
-        _render_graph_step_metrics(graph)
-
-    st.markdown(f"**{_t('queue_actions')}**")
-    action_rows = [st.columns(2), st.columns(2), st.columns(1)]
-    if action_rows[0][0].button(_t("recover_stale_search"), use_container_width=True):
-        _run_queue_action(_t("recovered_stale_search_jobs"), "/v1/search-jobs/recover-stale")
-    if action_rows[0][1].button(_t("recover_stale_finalize"), use_container_width=True):
-        _run_queue_action(_t("recovered_stale_finalize_jobs"), "/v1/research/finalize-jobs/recover-stale")
-    if action_rows[1][0].button(_t("cleanup_search_jobs"), use_container_width=True):
-        _run_queue_action(_t("cleaned_search_jobs"), "/v1/search-jobs/cleanup")
-    if action_rows[1][1].button(_t("cleanup_finalize_jobs"), use_container_width=True):
-        _run_queue_action(_t("cleaned_finalize_jobs"), "/v1/research/finalize-jobs/cleanup")
-    if action_rows[2][0].button(_t("run_full_maintenance"), use_container_width=True):
-        _run_queue_action(_t("queue_maintenance"), "/health/queues/maintenance")
+    with st.expander(_t("queue_actions"), expanded=False):
+        c1, c2 = st.columns(2)
+        if c1.button(_t("recover_stale_search"), use_container_width=True):
+            _run_queue_action(_t("recovered_stale_search_jobs"), "/v1/search-jobs/recover-stale")
+        if c2.button(_t("recover_stale_finalize"), use_container_width=True):
+            _run_queue_action(_t("recovered_stale_finalize_jobs"), "/v1/research/finalize-jobs/recover-stale")
+        c3, c4 = st.columns(2)
+        if c3.button(_t("cleanup_search_jobs"), use_container_width=True):
+            _run_queue_action(_t("cleaned_search_jobs"), "/v1/search-jobs/cleanup")
+        if c4.button(_t("cleanup_finalize_jobs"), use_container_width=True):
+            _run_queue_action(_t("cleaned_finalize_jobs"), "/v1/research/finalize-jobs/cleanup")
+        if st.button(_t("run_full_maintenance"), use_container_width=True):
+            _run_queue_action(_t("queue_maintenance"), "/health/queues/maintenance")
 
     with st.expander(_t("operational_view"), expanded=False):
         job_filter = st.text_input(
@@ -1491,16 +1404,10 @@ def _render_queue_overview() -> None:
             value="",
             placeholder=_t("job_filter_placeholder"),
         )
-        search_running = _safe_api_call(_api_get, "/v1/search-jobs?status=running") or []
-        search_dead = _safe_api_call(_api_get, "/v1/search-jobs?status=dead_letter") or []
-        finalize_running = _safe_api_call(_api_get, "/v1/research/finalize-jobs?status=running") or []
-        finalize_dead = _safe_api_call(_api_get, "/v1/research/finalize-jobs?status=dead_letter") or []
-
-        search_running = _filter_jobs(search_running, job_filter)
-        search_dead = _filter_jobs(search_dead, job_filter)
-        finalize_running = _filter_jobs(finalize_running, job_filter)
-        finalize_dead = _filter_jobs(finalize_dead, job_filter)
-
+        search_running = _filter_jobs(_safe_api_call(_api_get, "/v1/search-jobs?status=running") or [], job_filter)
+        search_dead = _filter_jobs(_safe_api_call(_api_get, "/v1/search-jobs?status=dead_letter") or [], job_filter)
+        finalize_running = _filter_jobs(_safe_api_call(_api_get, "/v1/research/finalize-jobs?status=running") or [], job_filter)
+        finalize_dead = _filter_jobs(_safe_api_call(_api_get, "/v1/research/finalize-jobs?status=dead_letter") or [], job_filter)
         left, right = st.columns(2, gap="large")
         with left:
             _render_job_section(_t("running_search_jobs"), search_running, "search", key_prefix="ops-")
@@ -1536,60 +1443,36 @@ def _render_source(result: dict, task_id: str, source_index: int) -> None:
 def _render_task(task: dict, index: int) -> None:
     search_job = task.get("latest_search_job")
     status_line = _status_badge(task["status"])
-    if search_job:
+    if search_job and search_job.get("status") not in ("completed", None):
         status_line = f"{status_line} {_status_badge(search_job['status'])}"
 
-    with st.expander(f"{index}. {task['description']}", expanded=index == 1):
+    source_count = _task_source_count(task)
+    label = f"{index}. {task['description']}"
+    with st.expander(label, expanded=index == 1):
         st.markdown(status_line, unsafe_allow_html=True)
-        st.caption(_t("task_id", value=task["id"]))
-        st.caption(_t("collected_sources", count=_task_source_count(task)))
-        task_metrics = task.get("search_metrics") or {}
-        if task_metrics.get("extraction_attempts", 0) > 0:
-            st.caption(
-                _t(
-                    "task_extraction_summary",
-                    success=task_metrics.get("extraction_success_count", 0),
-                    attempts=task_metrics.get("extraction_attempts", 0),
-                    failures=task_metrics.get("extraction_failure_count", 0),
-                    selected=task_metrics.get("selected_source_count", 0),
-                    avg_chars=task_metrics.get("avg_content_chars", 0.0),
-                )
-            )
+        st.caption(_t("collected_sources", count=source_count))
 
-        if search_job:
-            st.caption(
-                _t(
-                    "search_job_line",
-                    job_id=search_job["id"],
-                    attempt_count=search_job["attempt_count"],
-                    max_attempts=search_job["max_attempts"],
-                    updated_at=_format_timestamp(search_job.get("updated_at")),
+        if search_job and search_job.get("error"):
+            st.warning(search_job["error"])
+        if search_job and search_job.get("status") == "dead_letter":
+            if st.button(
+                _t("requeue_dead_search_job"),
+                key=f"requeue-dead-search-job-{search_job['id']}",
+                use_container_width=True,
+            ):
+                _requeue_job(
+                    f"/v1/search-jobs/{search_job['id']}/requeue",
+                    _t("requeued_job", job_kind="search"),
                 )
-            )
-            if search_job.get("error"):
-                st.warning(search_job["error"])
-            if search_job.get("status") == "dead_letter":
-                if st.button(
-                    _t("requeue_dead_search_job"),
-                    key=f"requeue-dead-search-job-{search_job['id']}",
-                    use_container_width=True,
-                ):
-                    _requeue_job(
-                        f"/v1/search-jobs/{search_job['id']}/requeue",
-                        _t("requeued_job", job_kind="search"),
-                    )
 
-        st.markdown(f"**{_t('queries')}**")
         st.code("\n".join(task["queries"]) or "-", language="text")
 
         logs = task.get("recent_logs") or task.get("logs") or []
         if logs:
-            st.markdown(f"**{_t('recent_logs')}**")
-            st.code("\n".join(logs[-10:]), language="text")
+            st.caption("\n".join(logs[-5:]))
 
         results = task.get("source_preview") or task.get("result") or []
         if not results:
-            st.info(_t("no_sources_yet"))
             return
 
         st.markdown(f"**{_t('selected_sources')}**")
@@ -1620,50 +1503,38 @@ def _render_research_details() -> None:
     research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary")
     if not research:
         return
-    graph_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/graph")
-
-    depth_profile = get_depth_profile(SearchDepth(research["depth"]))
-
-    top_left, top_right = st.columns([2, 1], gap="large")
-    with top_left:
-        st.markdown(
-            f"""
-            <div class="mas-panel">
-                <div class="mas-accent">{escape(_t('prompt'))}</div>
-                <div>{escape(research['prompt'])}</div>
-                <div class="mas-kv">{escape(_t('created', timestamp=_format_timestamp(research.get('created_at'))))}</div>
-                <div class="mas-kv">{escape(_t('updated', timestamp=_format_timestamp(research.get('updated_at'))))}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with top_right:
-        st.markdown(
-            f"""
-            <div class="mas-panel">
-                <div class="mas-accent">{escape(_t('research_status'))}</div>
-                <div>{_status_badge(research['status'])}</div>
-                <div class="mas-kv">{escape(_t('depth', value=research['depth']))}</div>
-                <div class="mas-kv">{escape(_t('profile', value=_t(depth_profile['label'].lower().replace(' ', '_'))))}</div>
-                <div class="mas-kv">{escape(_t('tasks', count=len(research.get('task_ids', []))))}</div>
-                <div class="mas-kv">{escape(_t('target_breadth', task_count=depth_profile['task_count'], source_limit=depth_profile['source_limit']))}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
     tasks = research.get("tasks") or []
     completed_tasks = int(research.get("completed_tasks") or 0)
-    pending_tasks = int(research.get("pending_tasks") or 0)
-    running_tasks = int(research.get("running_tasks") or 0)
     failed_tasks = int(research.get("failed_tasks") or 0)
     finalize_ready = bool(research.get("finalize_ready"))
     total_sources = int(research.get("collected_sources") or 0)
-    average_sources = research.get("avg_sources_per_task") or 0.0
-    total_candidates = int(research.get("total_candidates") or 0)
-    total_extraction_attempts = int(research.get("total_extraction_attempts") or 0)
-    total_extraction_success = int(research.get("total_extraction_success_count") or 0)
-    total_selected_sources = int(research.get("total_selected_source_count") or 0)
+    latest_finalize_job = research.get("latest_finalize_job")
+    latest_finalize_status = (latest_finalize_job or {}).get("status")
+    research_status = (research.get("status") or "").strip().lower()
+
+    st.markdown(
+        f"""
+        <div class="mas-panel">
+            <div class="mas-accent">{escape(_t('prompt'))}</div>
+            <div>{escape(research['prompt'])}</div>
+            <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center;">
+                {_status_badge(research['status'])}
+                <span class="mas-kv">{escape(_t('depth', value=research['depth']))} &nbsp;·&nbsp;
+                {escape(_t('tasks', count=len(research.get('task_ids', []))))} &nbsp;·&nbsp;
+                {escape(_t('collected_sources', count=total_sources))}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    progress_total = len(tasks)
+    progress_value = (completed_tasks + failed_tasks) / progress_total if progress_total else 0.0
+    st.progress(
+        progress_value,
+        text=_t("progress_caption", completed=completed_tasks + failed_tasks, total=progress_total),
+    )
 
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button(_t("refresh_research"), use_container_width=True):
@@ -1676,104 +1547,15 @@ def _render_research_details() -> None:
     ):
         result = _safe_api_call(_api_post, f"/v1/research/{research_id}/finalize")
         if result:
-            st.session_state["auto_refresh_enabled"] = True
-            st.session_state["auto_refresh_seconds"] = min(int(st.session_state.get("auto_refresh_seconds", 10)), 5)
             st.success(_t("finalize_job_queued", job_id=result.get("finalize_job_id") or _t("already_queued")))
-            st.info(_t("auto_refresh_enabled_finalize"))
             st.rerun()
 
-    latest_finalize_job = _render_latest_finalize_job(research.get("latest_finalize_job"))
-
-    summary_cols = st.columns(5)
-    summary_cols[0].metric(_t("task_slots"), len(research.get("task_ids", [])))
-    summary_cols[1].metric(_t("completed_tasks"), completed_tasks)
-    summary_cols[2].metric(_t("collected_sources_metric"), total_sources)
-    summary_cols[3].metric(_t("avg_sources_per_task"), average_sources)
-    summary_cols[4].metric(_t("finalize_ready"), _t("yes") if finalize_ready else _t("no"))
-
-    with st.expander(_t("queue_extraction_attempts"), expanded=False):
-        extraction_summary_cols = st.columns(4)
-        extraction_summary_cols[0].metric(_t("research_candidates"), total_candidates)
-        extraction_summary_cols[1].metric(_t("research_extractions"), total_extraction_attempts)
-        extraction_summary_cols[2].metric(_t("research_extraction_success"), total_extraction_success)
-        extraction_summary_cols[3].metric(_t("research_selected_sources"), total_selected_sources)
-
-    graph_summary = research.get("graph_execution_summary") or {}
-    graph_state = (graph_payload or {}).get("graph_state") or {}
-    graph_trail = (graph_payload or {}).get("graph_trail") or []
-    recovery_events = [entry for entry in graph_trail if (entry.get("step") or "") == "stale_recovered"]
-    latest_recovery_event = recovery_events[-1] if recovery_events else None
-
-    with st.expander(_t("graph_loop"), expanded=False):
-        graph_cols = st.columns(4)
-        graph_cols[0].metric(
-            _t("graph_branching_active"),
-            _t("yes") if graph_summary.get("branching_active") else _t("no"),
-        )
-        graph_cols[1].metric(_t("graph_follow_up_tasks"), int(graph_summary.get("follow_up_task_count") or 0))
-        graph_cols[2].metric(_t("graph_replan_tasks"), int(graph_summary.get("replan_task_count") or 0))
-        graph_cols[3].metric(_t("graph_tie_break_tasks"), int(graph_summary.get("tie_break_task_count") or 0))
-
-        follow_up_queries = graph_summary.get("follow_up_queries") or []
-        if follow_up_queries:
-            st.code("\n".join(follow_up_queries), language="text")
-        else:
-            st.caption(_t("graph_no_follow_up_queries"))
-
-        graph_state_cols = st.columns(4)
-        graph_state_cols[0].metric(_t("graph_last_step"), graph_state.get("step") or "-")
-        graph_state_cols[1].metric(_t("graph_analyze_passes"), int(graph_state.get("analyze_attempts") or 0))
-        graph_state_cols[2].metric(_t("graph_replan_passes"), int(graph_state.get("replan_attempts") or 0))
-        graph_state_cols[3].metric(_t("graph_tie_break_passes"), int(graph_state.get("tie_break_attempts") or 0))
-
-        if graph_state.get("resume_after_stale_recovery") or latest_recovery_event:
-            recovery_cols = st.columns([1, 3])
-            recovery_cols[0].metric(
-                _t("graph_resumed_recovery"),
-                _t("yes") if graph_state.get("resume_after_stale_recovery") else _t("no"),
-            )
-            if latest_recovery_event:
-                recovery_cols[1].caption(_t("graph_recovery_detail"))
-                recovery_cols[1].code(latest_recovery_event.get("detail") or "-", language="text")
-
-    with st.expander(_t("graph_trail"), expanded=False):
-        if not graph_trail:
-            st.caption(_t("graph_no_trail"))
-        else:
-            for entry in reversed(graph_trail[-10:]):
-                step = entry.get("step") or "unknown"
-                detail = entry.get("detail") or ""
-                st.markdown(f"**{_t('graph_trail_step', step=step)}**")
-                if detail:
-                    st.caption(_t("graph_trail_detail", detail=detail))
-                else:
-                    st.caption(_t("graph_trail_detail", detail="-"))
-
-    progress_total = len(tasks)
-    progress_value = (completed_tasks + failed_tasks) / progress_total if progress_total else 0.0
-    st.markdown(f"**{_t('progress')}**")
-    st.progress(
-        progress_value,
-        text=_t("progress_caption", completed=completed_tasks + failed_tasks, total=progress_total),
-    )
-
-    breakdown_cols = st.columns(4)
-    breakdown_cols[0].metric(_t("pending_tasks"), pending_tasks)
-    breakdown_cols[1].metric(_t("running_tasks"), running_tasks)
-    breakdown_cols[2].metric(_t("failed_tasks"), failed_tasks)
-    breakdown_cols[3].metric(_t("completed_tasks_short"), completed_tasks)
-
-    if finalize_ready:
-        st.success(_t("all_tasks_completed"))
-    elif tasks:
-        st.info(_t("finalize_waiting"))
-
-    latest_finalize_status = (latest_finalize_job or {}).get("status")
-    research_status = (research.get("status") or "").strip().lower()
     if latest_finalize_status == "running" or research_status == "analyzing":
         st.warning(_t("finalize_running"))
     elif latest_finalize_status == "pending":
         st.info(_t("finalize_pending"))
+    elif finalize_ready and not latest_finalize_job:
+        st.success(_t("all_tasks_completed"))
 
     st.subheader(_t("task_pipeline"))
     if not tasks:
