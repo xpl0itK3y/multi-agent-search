@@ -171,6 +171,7 @@ class ResearchSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     has_final_report: bool = False
+    partial_report: Optional[str] = None
     task_count: int = 0
     completed_tasks: int = 0
     pending_tasks: int = 0

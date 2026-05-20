@@ -45,6 +45,8 @@ class TaskStore(Protocol):
         graph_state: dict,
     ) -> ResearchRecord | None: ...
 
+    def save_partial_report(self, research_id: str, partial: str) -> None: ...
+
     def append_research_graph_event(
         self,
         research_id: str,

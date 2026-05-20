@@ -181,6 +181,16 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
+    def save_partial_report(self, research_id: str, partial: str) -> None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return
+            state = dict(research.graph_state or {})
+            state["partial_report"] = partial
+            research.graph_state = state
+            session.flush()
+
     def append_research_graph_event(
         self,
         research_id: str,

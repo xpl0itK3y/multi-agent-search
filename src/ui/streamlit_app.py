@@ -273,6 +273,8 @@ TRANSLATIONS = {
         "download_pdf": "⬇ Download PDF",
         "download_docx": "⬇ Download Word",
         "download_preparing": "Preparing file…",
+        "partial_report_banner": "Generating report… (streaming live preview)",
+        "partial_report_sections_banner": "Analyzing sections in parallel… (live preview)",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -532,6 +534,8 @@ TRANSLATIONS = {
         "download_pdf": "⬇ Скачать PDF",
         "download_docx": "⬇ Скачать Word",
         "download_preparing": "Подготовка файла…",
+        "partial_report_banner": "Формируем отчёт… (предпросмотр в реальном времени)",
+        "partial_report_sections_banner": "Параллельный анализ секций… (предпросмотр)",
     },
 }
 
@@ -1705,7 +1709,13 @@ def _render_research_details() -> None:
         st.info(_t("no_research_selected"))
         return
 
-    research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary", ignore_status_codes={404})
+    # Fetch fresh data; fall back to cache so the panel never goes blank
+    # between fragment ticks (prevents the visual flicker).
+    fresh = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary", ignore_status_codes={404})
+    cache_key = f"_rc_{research_id}"
+    if fresh is not None:
+        st.session_state[cache_key] = fresh
+    research = st.session_state.get(cache_key)
     if not research:
         st.info(_t("no_research_selected"))
         return
@@ -1817,7 +1827,14 @@ def _render_research_details() -> None:
 
     st.subheader(_t("final_report"))
     if not research.get("has_final_report"):
-        st.info(_t("final_report_not_ready"))
+        partial = research.get("partial_report") or ""
+        if partial:
+            is_sections = "=== SECTION" in partial or "---" in partial[:200]
+            banner = _t("partial_report_sections_banner") if is_sections else _t("partial_report_banner")
+            st.info(f"⏳ {banner}")
+            st.markdown(partial)
+        else:
+            st.info(_t("final_report_not_ready"))
         return
 
     report_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/report", ignore_status_codes={404})

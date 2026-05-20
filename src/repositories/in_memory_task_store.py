@@ -115,6 +115,14 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
+    def save_partial_report(self, research_id: str, partial: str) -> None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return
+        state = dict(research.graph_state or {})
+        state["partial_report"] = partial
+        research.graph_state = state
+
     def append_research_graph_event(
         self,
         research_id: str,

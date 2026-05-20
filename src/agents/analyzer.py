@@ -2,7 +2,8 @@ import logging
 import json
 import re
 import time
-from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
@@ -337,6 +338,34 @@ class AnalyzerAgent(BaseAgent):
     - State contested or weakly supported claims with absolute certainty when the sources only support softer wording.
     - Output any internal reasoning, just the final markdown report.
     """
+
+    SECTION_SYSTEM_PROMPT = """
+    You are a Research Analyst. Analyze the provided subset of research sources and write detailed analytical findings.
+
+    Rules:
+    - Write ONLY analytical content sections (## heading, paragraphs, bullets).
+    - Do NOT write: Introduction, Conclusion, Summary, or Sources sections.
+    - Cite every factual claim with inline source IDs exactly as they appear in gathered_data, e.g. [S13].
+    - Be thorough and specific. Cover all meaningful findings from the provided sources.
+    - Do not invent information. If the sources are limited, say so briefly.
+    """
+
+    SYNTHESIS_SYSTEM_PROMPT = """
+    You are a Research Analyst. You have received several partial research analyses, each covering different source groups.
+    Synthesize them into ONE coherent, comprehensive research report.
+
+    Rules:
+    - Write a complete report: Introduction, main sections, Conclusion.
+    - Do NOT include a Sources section (it will be appended automatically).
+    - Preserve all inline citations [Sn] EXACTLY as they appear in the partial analyses — do not renumber or remove them.
+    - Merge and deduplicate information across sections into a unified narrative.
+    - Remove meta-commentary like "Section 1 analyzed..." — just write the findings.
+    - Output only the final markdown report, no internal reasoning.
+    """
+
+    # Minimum number of sources to activate parallel section mode on HARD depth.
+    _PARALLEL_SECTION_MIN_SOURCES = 18
+    _PARALLEL_SECTION_CHUNK = 12
 
     def __init__(
         self,
@@ -1154,16 +1183,113 @@ class AnalyzerAgent(BaseAgent):
             return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{section}"
 
-    def _generate_report(self, input_data: dict, language: str, retry: bool = False, depth: SearchDepth | None = None) -> str:
+    def _generate_report(
+        self,
+        input_data: dict,
+        language: str,
+        retry: bool = False,
+        depth: SearchDepth | None = None,
+        streaming_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         user_prompt = self._build_user_prompt(input_data, language, retry=retry, depth=depth)
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
+            streaming_callback=streaming_callback,
+            temperature=0.3,
+        )
+
+    def _build_section_user_prompt(self, chunk: list[dict], prompt: str, language: str, depth: SearchDepth | None) -> str:
+        instruction = self._language_instruction(language)
+        profile = self._resolve_depth_profile(depth)
+        section_input = {
+            "original_prompt": prompt,
+            "gathered_data": chunk,
+        }
+        return (
+            f"{instruction} "
+            f"{profile['report_instruction']} "
+            "Analyze ONLY these sources and write detailed analytical findings. "
+            "Cite every factual claim with [Sn] using the exact source_id values from gathered_data. "
+            "Do NOT write Introduction, Conclusion, or Sources sections — only the body content sections.\n\n"
+            f"{json.dumps(section_input, ensure_ascii=False)}"
+        )
+
+    def _build_synthesis_user_prompt(
+        self,
+        prompt: str,
+        section_drafts: list[str],
+        language: str,
+        depth: SearchDepth | None,
+    ) -> str:
+        instruction = self._language_instruction(language)
+        profile = self._resolve_depth_profile(depth)
+        drafts_text = "\n\n".join(
+            f"=== SECTION {i + 1} ===\n{draft}"
+            for i, draft in enumerate(section_drafts)
+        )
+        return (
+            f"{instruction} "
+            f"{profile['report_instruction']} "
+            "Below are partial research analyses from different source groups. "
+            "Merge them into one coherent report with Introduction, main sections, and Conclusion. "
+            "Preserve all inline citations [Sn] exactly. Do NOT include a Sources section.\n\n"
+            f"Research question: {prompt}\n\n"
+            f"{drafts_text}"
+        )
+
+    def _run_parallel_section_analysis(
+        self,
+        aggregated_data: list[dict],
+        prompt: str,
+        language: str,
+        depth: SearchDepth | None,
+        section_done_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> str:
+        chunk_size = self._PARALLEL_SECTION_CHUNK
+        chunks = [
+            aggregated_data[i: i + chunk_size]
+            for i in range(0, len(aggregated_data), chunk_size)
+        ]
+        n = len(chunks)
+        logger.info("analyzer_parallel_sections chunks=%d total_sources=%d", n, len(aggregated_data))
+
+        section_drafts: list[Optional[str]] = [None] * n
+
+        def _run_section(idx: int, chunk: list[dict]) -> None:
+            user_prompt = self._build_section_user_prompt(chunk, prompt, language, depth)
+            draft = self.llm.generate(
+                system_prompt=self.SECTION_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.3,
+            )
+            section_drafts[idx] = draft
+            logger.info("analyzer_section_done idx=%d chars=%d", idx, len(draft))
+            if section_done_callback:
+                section_done_callback(idx, draft)
+
+        with ThreadPoolExecutor(max_workers=n) as executor:
+            futures = [executor.submit(_run_section, i, chunk) for i, chunk in enumerate(chunks)]
+            for future in as_completed(futures):
+                future.result()  # surface any exceptions
+
+        completed_drafts = [d for d in section_drafts if d]
+        synthesis_prompt = self._build_synthesis_user_prompt(prompt, completed_drafts, language, depth)
+        logger.info("analyzer_synthesis_start section_count=%d", len(completed_drafts))
+        return self.llm.generate(
+            system_prompt=self.SYNTHESIS_SYSTEM_PROMPT,
+            user_prompt=synthesis_prompt,
             temperature=0.3,
         )
 
     @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
-    def run_analysis(self, prompt: str, tasks: List[SearchTask], depth: SearchDepth | None = None) -> str:
+    def run_analysis(
+        self,
+        prompt: str,
+        tasks: List[SearchTask],
+        depth: SearchDepth | None = None,
+        streaming_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
         aggregated_data, source_summary = self._prepare_aggregated_data(prompt, tasks, depth=depth)
@@ -1182,27 +1308,57 @@ class AnalyzerAgent(BaseAgent):
         evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = self._detect_language(prompt)
 
-        input_data = {
-            "original_prompt": prompt,
-            "gathered_data": aggregated_data,
-            "source_summary": source_summary.model_dump(),
-            "detected_conflicts": conflicts,
-            "evidence_groups": evidence_groups,
-            "evidence_summary": evidence_summary.model_dump(),
-        }
+        is_hard = depth == SearchDepth.HARD
+        use_parallel = (
+            is_hard
+            and len(aggregated_data) >= self._PARALLEL_SECTION_MIN_SOURCES
+        )
 
-        logger.info(f"AnalyzerAgent starting generation. Aggregated {len(aggregated_data)} sources.")
         llm_started_at = time.perf_counter()
-        result = self._generate_report(input_data, prompt_language, depth=depth)
-        if prompt_language != "unknown":
-            report_language = self._detect_language(result)
-            if report_language not in {prompt_language, "unknown"}:
-                logger.warning(
-                    "AnalyzerAgent detected language mismatch. prompt=%s report=%s. Retrying once.",
-                    prompt_language,
-                    report_language,
-                )
-                result = self._generate_report(input_data, prompt_language, retry=True, depth=depth)
+        if use_parallel:
+            # Parallel section generation: 3 concurrent LLM calls on source chunks,
+            # then one synthesis call. Avoids a single 42k-char blocking call.
+            partial_sections: list[str] = []
+            _section_lock = __import__("threading").Lock()
+
+            def _section_done(idx: int, draft: str) -> None:
+                with _section_lock:
+                    partial_sections.append(draft)
+                if streaming_callback:
+                    combined = "\n\n---\n\n".join(partial_sections)
+                    streaming_callback(combined)
+
+            result = self._run_parallel_section_analysis(
+                aggregated_data, prompt, prompt_language, depth,
+                section_done_callback=_section_done,
+            )
+            # Stream the synthesis result too once it's done
+            if streaming_callback:
+                streaming_callback(result)
+        else:
+            input_data = {
+                "original_prompt": prompt,
+                "gathered_data": aggregated_data,
+                "source_summary": source_summary.model_dump(),
+                "detected_conflicts": conflicts,
+                "evidence_groups": evidence_groups,
+                "evidence_summary": evidence_summary.model_dump(),
+            }
+            logger.info("AnalyzerAgent starting generation. Aggregated %d sources.", len(aggregated_data))
+            result = self._generate_report(
+                input_data, prompt_language, depth=depth,
+                streaming_callback=streaming_callback,
+            )
+            # Skip language retry for HARD (avoids an extra multi-minute LLM call).
+            if not is_hard and prompt_language != "unknown":
+                report_language = self._detect_language(result)
+                if report_language not in {prompt_language, "unknown"}:
+                    logger.warning(
+                        "AnalyzerAgent detected language mismatch. prompt=%s report=%s. Retrying once.",
+                        prompt_language,
+                        report_language,
+                    )
+                    result = self._generate_report(input_data, prompt_language, retry=True, depth=depth)
         llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
         normalized = self._post_process_report(result, prompt_language)
@@ -1211,7 +1367,10 @@ class AnalyzerAgent(BaseAgent):
         uncited_lines = self._uncited_claim_lines(rebuilt)
         unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
         repair_ms = 0.0
-        if aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
+        # Skip LLM repair for HARD depth — the larger source pool naturally has
+        # more uncited lines and the repair call adds 2-3 extra minutes.
+        allow_llm_repair = not is_hard
+        if allow_llm_repair and aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
             report_body = self._body_without_sources(rebuilt)
             repaired_body = self._deterministic_repair_report_body(
                 report_body,
@@ -1228,8 +1387,16 @@ class AnalyzerAgent(BaseAgent):
                     len(unsupported_lines),
                 )
                 repair_started_at = time.perf_counter()
+                input_data_for_repair = {
+                    "original_prompt": prompt,
+                    "gathered_data": aggregated_data,
+                    "source_summary": source_summary.model_dump(),
+                    "detected_conflicts": conflicts,
+                    "evidence_groups": evidence_groups,
+                    "evidence_summary": evidence_summary.model_dump(),
+                }
                 repaired = self._repair_report_citations(
-                    input_data,
+                    input_data_for_repair,
                     prompt_language,
                     report_body,
                     uncited_lines,
@@ -1259,7 +1426,9 @@ class AnalyzerAgent(BaseAgent):
         final_report = self._inject_report_notes(verified_report, final_notes, prompt_language)
         total_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
-            "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s high_confidence_sources=%s downgraded_lines=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f llm_ms=%.2f repair_ms=%.2f total_ms=%.2f",
+            "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s "
+            "high_confidence_sources=%s downgraded_lines=%s prepare_ms=%.2f conflict_ms=%.2f evidence_ms=%.2f "
+            "llm_ms=%.2f repair_ms=%.2f total_ms=%.2f parallel=%s",
             len(aggregated_data),
             sum(len(item.get("content") or "") for item in aggregated_data),
             len(conflicts),
@@ -1272,5 +1441,6 @@ class AnalyzerAgent(BaseAgent):
             llm_ms,
             repair_ms,
             total_ms,
+            use_parallel,
         )
         return final_report

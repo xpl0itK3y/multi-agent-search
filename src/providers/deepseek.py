@@ -18,14 +18,24 @@ class DeepSeekProvider(LLMProvider):
             base_url="https://api.deepseek.com"
         ))
 
-    def generate(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
+    def generate(self, system_prompt: str, user_prompt: str, streaming_callback=None, **kwargs) -> str:
+        use_stream = streaming_callback is not None
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            stream=False,
-            **kwargs
+            stream=use_stream,
+            **kwargs,
         )
-        return response.choices[0].message.content
+        if not use_stream:
+            return response.choices[0].message.content
+
+        accumulated = ""
+        for chunk in response:
+            delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
+            accumulated += delta
+            if delta:
+                streaming_callback(accumulated)
+        return accumulated

@@ -249,6 +249,9 @@ class ResearchService:
         )
         graph_execution_summary = self._build_graph_execution_summary(tasks)
 
+        graph_state = research.graph_state or {}
+        partial_report = graph_state.get("partial_report") if not research.final_report else None
+
         return ResearchSummary(
             id=research.id,
             prompt=research.prompt,
@@ -258,6 +261,7 @@ class ResearchService:
             created_at=research.created_at,
             updated_at=research.updated_at,
             has_final_report=bool(research.final_report),
+            partial_report=partial_report,
             task_count=task_count,
             completed_tasks=completed_tasks,
             pending_tasks=pending_tasks,

@@ -219,10 +219,18 @@ class FinalizeGraphRunner:
 
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
+            _last_len = [0]
+
+            def _streaming_callback(partial: str) -> None:
+                if len(partial) - _last_len[0] >= 500:
+                    _last_len[0] = len(partial)
+                    self.service.task_store.save_partial_report(state["research_id"], partial)
+
             report = self.service.analyzer.run_analysis(
                 state["effective_prompt"],
                 state["tasks"],
                 depth=state["depth"],
+                streaming_callback=_streaming_callback,
             )
             next_state = {
                 **state,
