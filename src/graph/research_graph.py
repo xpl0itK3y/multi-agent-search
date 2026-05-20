@@ -53,7 +53,13 @@ class FinalizeGraphRunner:
         research = self.service.task_store.get_research(research_id)
         graph_state = (research.graph_state if research else None) or {}
         step = graph_state.get("step")
-        if not step or step == "complete":
+        if not step:
+            return state
+        if step == "complete":
+            saved_report = graph_state.get("report") or ""
+            if saved_report:
+                logger.info("langgraph_finalize_already_complete skip_rerun research_id=%s", research_id)
+                return {**state, "report": saved_report, "resume_from_step": "complete"}
             return state
 
         resumed_state = {
@@ -340,6 +346,9 @@ class FinalizeGraphRunner:
 
     def _run_fallback(self, state: FinalizeGraphState) -> str:
         resume_from_step = state.get("resume_from_step")
+        if resume_from_step == "complete":
+            logger.info("langgraph_finalize_resume_complete_noop")
+            return state.get("report", "")
         if resume_from_step:
             return self._resume_fallback(state, resume_from_step)
 
@@ -374,8 +383,16 @@ class FinalizeGraphRunner:
         if resume_from_step == "collect_context":
             if state.get("should_replan"):
                 state = self._apply_replan(state)
-            state = self._analyze(state)
+            if not state.get("report"):
+                state = self._analyze(state)
             state = self._verify(state)
+            if state.get("should_tie_break"):
+                state = self._apply_tie_break(state)
+                state = self._collect_context(state)
+                state = self._analyze(state)
+                state = self._verify(state)
+            if state.get("should_retry_analysis"):
+                state = self._analyze(state)
         elif resume_from_step == "replan":
             state = self._analyze(state)
             state = self._verify(state)
