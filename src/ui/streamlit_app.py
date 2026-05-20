@@ -1013,7 +1013,13 @@ _STATUS_ICON = {
 def _render_sidebar_history() -> None:
     @st.fragment(run_every=15)
     def _history_inner() -> None:
-        history = _safe_api_call(_api_get, "/v1/research?limit=15", ignore_status_codes={404}) or []
+        # Fetch fresh data; on error keep showing cached version so history
+        # never appears empty during the brief API-call window.
+        fresh = _safe_api_call(_api_get, "/v1/research?limit=15", ignore_status_codes={404})
+        if fresh is not None:          # None → 404/error → keep cache
+            st.session_state["_history_cache"] = fresh
+        history = st.session_state.get("_history_cache") or []
+
         st.markdown(f"**{_t('history')}**")
         if not history:
             st.caption(_t("history_empty"))
@@ -1035,13 +1041,14 @@ def _render_sidebar_history() -> None:
                 if col_yes.button(_t("history_delete_yes"), key=f"hist-del-yes-{rid}", use_container_width=True, type="primary"):
                     _safe_api_call(_api_delete, f"/v1/research/{rid}")
                     st.session_state.pop("_hist_confirm_delete", None)
+                    st.session_state.pop("_history_cache", None)  # invalidate cache
                     if st.session_state.get("selected_research_id") == rid:
                         st.session_state["selected_research_id"] = ""
                         _sync_query_params()
-                    st.rerun()
+                    st.rerun(scope="app")
                 if col_no.button(_t("history_delete_no"), key=f"hist-del-no-{rid}", use_container_width=True):
                     st.session_state.pop("_hist_confirm_delete", None)
-                    st.rerun()
+                    st.rerun(scope="app")
             else:
                 btn_label = f"{icon} {prompt_short}\n{ago}"
                 col_btn, col_del = st.columns([7, 1])
@@ -1053,7 +1060,7 @@ def _render_sidebar_history() -> None:
                 ):
                     st.session_state["selected_research_id"] = rid
                     _sync_query_params()
-                    st.rerun()
+                    st.rerun(scope="app")
                 if col_del.button("🗑", key=f"hist-trash-{rid}", use_container_width=True):
                     st.session_state["_hist_confirm_delete"] = rid
                     st.rerun()
@@ -1142,6 +1149,7 @@ def _render_create_research() -> None:
     result = _safe_api_call(_api_post, "/v1/research", payload)
     if result:
         st.session_state["selected_research_id"] = result["research_id"]
+        st.session_state.pop("_history_cache", None)  # force history refresh
         _sync_query_params()
         st.success(_t("research_created", research_id=result["research_id"]))
         st.rerun()
@@ -1715,7 +1723,7 @@ def _render_research_details() -> None:
     prev_status = st.session_state.get(f"_rs_{research_id}", "")
     st.session_state[f"_rs_{research_id}"] = research_status
     if research_status in _TERMINAL_STATUSES and prev_status not in _TERMINAL_STATUSES and prev_status:
-        st.rerun()  # trigger parent rerun to switch interval to None
+        st.rerun(scope="app")  # full-page rerun so _get_live_refresh_interval() returns None
 
     st.markdown(
         f"""
