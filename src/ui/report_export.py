@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional
 
@@ -107,6 +108,19 @@ def _register_pdf_fonts() -> dict[str, str]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Markdown parser
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _link_display(label: str, url: str) -> str:
+    """Return a short display string for a hyperlink.
+
+    If the label is itself a URL (happens with legacy bare-URL source lines),
+    show just the domain so the PDF column doesn't overflow.
+    Otherwise cap at 70 chars.
+    """
+    if re.match(r"https?://", label):
+        domain = urlparse(url).netloc.removeprefix("www.")
+        return domain or label[:60]
+    return (label[:70] + "…") if len(label) > 70 else label
+
 
 _H2   = re.compile(r"^## (.+)$")
 _H3   = re.compile(r"^### (.+)$")
@@ -241,10 +255,10 @@ def generate_pdf(
         text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         # unescape markdown bracket escapes written by _source_line()
         text = text.replace("\\[", "[").replace("\\]", "]")
-        # markdown links [label](url) → clickable PDF link
+        # markdown links [label](url) → clickable PDF link (display truncated)
         text = re.sub(
             r"\[([^\]]+)\]\((https?://[^\s)]+)\)",
-            r'<a href="\2" color="#1d4ed8">\1</a>',
+            lambda m: f'<a href="{m.group(2)}" color="#1d4ed8">{_link_display(m.group(1), m.group(2))}</a>',
             text,
         )
         text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
@@ -517,7 +531,7 @@ def generate_docx(
                 vertAlign.set(qn("w:val"), "superscript")
                 rPr.append(vertAlign)
             elif m := re.match(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", part):
-                _add_hyperlink(paragraph, m.group(2), m.group(1))
+                _add_hyperlink(paragraph, m.group(2), _link_display(m.group(1), m.group(2)))
             elif part:
                 run = paragraph.add_run(part)
                 run.font.color.rgb = C_DARK
