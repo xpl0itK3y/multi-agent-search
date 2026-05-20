@@ -1331,7 +1331,7 @@ def _render_operational_health(health: dict, scope_key: str = "global", enable_a
         st.caption(_t("operational_health_statuses", value=statuses))
 
 
-def _render_job_card(job: dict, job_kind: str) -> None:
+def _render_job_card(job: dict, job_kind: str, key_prefix: str = "") -> None:
     status_html = _status_badge(job["status"])
     owner_id = job["task_id"] if job_kind == "search" else job["research_id"]
     st.markdown(
@@ -1351,7 +1351,7 @@ def _render_job_card(job: dict, job_kind: str) -> None:
     )
 
     if job["status"] == "dead_letter":
-        button_key = f"requeue-{job_kind}-{job['id']}"
+        button_key = f"{key_prefix}requeue-{job_kind}-{job['id']}"
         path = (
             f"/v1/search-jobs/{job['id']}/requeue"
             if job_kind == "search"
@@ -1361,13 +1361,13 @@ def _render_job_card(job: dict, job_kind: str) -> None:
             _requeue_job(path, _t("requeued_job", job_kind=job_kind))
 
 
-def _render_job_section(title: str, jobs: list[dict], job_kind: str) -> None:
+def _render_job_section(title: str, jobs: list[dict], job_kind: str, key_prefix: str = "") -> None:
     st.markdown(f"**{title}**")
     if not jobs:
         st.caption(_t("no_jobs_bucket"))
         return
     for job in jobs:
-        _render_job_card(job, job_kind)
+        _render_job_card(job, job_kind, key_prefix=key_prefix)
 
 
 def _filter_jobs(jobs: list[dict], query: str) -> list[dict]:
@@ -1503,11 +1503,11 @@ def _render_queue_overview() -> None:
 
         left, right = st.columns(2, gap="large")
         with left:
-            _render_job_section(_t("running_search_jobs"), search_running, "search")
-            _render_job_section(_t("dead_letter_search_jobs"), search_dead, "search")
+            _render_job_section(_t("running_search_jobs"), search_running, "search", key_prefix="ops-")
+            _render_job_section(_t("dead_letter_search_jobs"), search_dead, "search", key_prefix="ops-")
         with right:
-            _render_job_section(_t("running_finalize_jobs"), finalize_running, "finalize")
-            _render_job_section(_t("dead_letter_finalize_jobs"), finalize_dead, "finalize")
+            _render_job_section(_t("running_finalize_jobs"), finalize_running, "finalize", key_prefix="ops-")
+            _render_job_section(_t("dead_letter_finalize_jobs"), finalize_dead, "finalize", key_prefix="ops-")
 
 
 def _render_source(result: dict, task_id: str, source_index: int) -> None:
@@ -1605,7 +1605,7 @@ def _render_latest_finalize_job(latest_finalize_job: dict | None) -> None:
         return None
 
     st.markdown(f"**{_t('latest_finalize_job')}**")
-    _render_job_card(latest_finalize_job, "finalize")
+    _render_job_card(latest_finalize_job, "finalize", key_prefix="latest-")
     return latest_finalize_job
 
 
