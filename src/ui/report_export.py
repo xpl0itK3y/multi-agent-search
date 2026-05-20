@@ -37,10 +37,18 @@ _EXPORT_NOTES_SECTION = re.compile(
 )
 
 
+_OLD_SOURCE_LINE = re.compile(r"^- \[S(\d+)\] (https?://\S+)$", re.MULTILINE)
+
+
 def _clean_report_for_export(report: str) -> str:
-    """Strip LLM meta-commentary preamble and quality notes section before export."""
+    """Strip LLM meta-commentary, quality notes, and fix legacy bare-URL source lines."""
     report = _EXPORT_PREAMBLE.sub("", report).strip()
     report = _EXPORT_NOTES_SECTION.sub("", report)
+    # upgrade old format "- [S1] https://..." to new clickable format
+    report = _OLD_SOURCE_LINE.sub(
+        lambda m: f"- **\\[S{m.group(1)}\\]** [{m.group(2)}]({m.group(2)})",
+        report,
+    )
     return report
 
 
