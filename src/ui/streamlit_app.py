@@ -1500,8 +1500,9 @@ def _render_research_details() -> None:
         st.info(_t("no_research_selected"))
         return
 
-    research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary")
+    research = _safe_api_call(_api_get, f"/v1/research/{research_id}/summary", ignore_status_codes={404})
     if not research:
+        st.info(_t("no_research_selected"))
         return
 
     tasks = research.get("tasks") or []
@@ -1603,7 +1604,7 @@ def _render_research_details() -> None:
         st.info(_t("final_report_not_ready"))
         return
 
-    report_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/report")
+    report_payload = _safe_api_call(_api_get, f"/v1/research/{research_id}/report", ignore_status_codes={404})
     if not report_payload:
         return
     final_report = report_payload.get("final_report")
