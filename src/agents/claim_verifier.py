@@ -10,9 +10,14 @@ class ClaimVerifierAgent:
         "es": "Según las fuentes disponibles, ",
     }
     ABSOLUTE_PATTERNS = (
-        (re.compile(r"(?i)\b(однозначно|всегда|полностью|безусловно)\b"), "по имеющимся данным"),
-        (re.compile(r"(?i)\b(always|definitely|clearly|certainly)\b"), "based on the available sources"),
-        (re.compile(r"(?i)\b(siempre|claramente|sin duda)\b"), "según las fuentes disponibles"),
+        (re.compile(r"(?i)\b(однозначно|безусловно)\b"), "по всей видимости"),
+        (re.compile(r"(?i)\bвсегда\b"), "как правило"),
+        (re.compile(r"(?i)\bполностью\b"), "в значительной мере"),
+        (re.compile(r"(?i)\b(definitely|certainly)\b"), "generally"),
+        (re.compile(r"(?i)\bclearly\b"), "apparently"),
+        (re.compile(r"(?i)\balways\b"), "typically"),
+        (re.compile(r"(?i)\b(siempre)\b"), "generalmente"),
+        (re.compile(r"(?i)\b(claramente|sin duda)\b"), "aparentemente"),
     )
     NOTE_MESSAGES = {
         "ru": {
@@ -54,7 +59,7 @@ class ClaimVerifierAgent:
             return line
 
         lowered = stripped.lower()
-        if lowered.startswith(("по имеющимся данным", "based on the available sources", "según las fuentes disponibles")):
+        if any(lowered.startswith(prefix) for prefix in self.EXISTING_SOFTENERS):
             return line
 
         softened = stripped
@@ -68,10 +73,7 @@ class ClaimVerifierAgent:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             return False
-        if any(marker in stripped for marker in ("[S",)):
-            citation_count = stripped.count("[S")
-        else:
-            citation_count = 0
+        citation_count = len(re.findall(r"\[S\d+\]", stripped))
         if citation_count >= 2:
             return False
         lowered = stripped.lower()

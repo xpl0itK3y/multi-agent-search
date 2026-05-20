@@ -1082,7 +1082,7 @@ class AnalyzerAgent(BaseAgent):
                 )
 
         insertion = "\n".join(lines)
-        conclusion_match = re.search(r"(?im)^##\s+Conclusion\s*$", report)
+        conclusion_match = re.search(r"(?im)^##\s+(Conclusion|Заключение)\s*$", report)
         if conclusion_match:
             return f"{report[:conclusion_match.start()].rstrip()}\n\n{insertion}\n\n{report[conclusion_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{insertion}"

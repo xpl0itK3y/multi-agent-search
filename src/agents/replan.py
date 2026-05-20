@@ -92,8 +92,8 @@ class ReplanAgent:
 
         if domain_counter:
             dominant_domain, dominant_count = domain_counter.most_common(1)[0]
-            total_domains = sum(domain_counter.values())
-            if total_domains and dominant_count / total_domains >= 0.4:
+            total_source_count = sum(domain_counter.values())
+            if total_source_count and dominant_count / total_source_count >= 0.4:
                 recommendations.append(
                     ReplanRecommendation(
                         reason="evidence is concentrated in a narrow domain set",
