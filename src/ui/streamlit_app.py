@@ -1701,6 +1701,27 @@ def _render_latest_finalize_job(latest_finalize_job: dict | None) -> None:
     return latest_finalize_job
 
 
+def _fix_source_links(report: str) -> str:
+    """Convert old-style '- [S2] https://url' lines to proper markdown links.
+
+    Reports stored in the DB before the analyzer fix used the bare-URL format
+    which confuses Streamlit's markdown parser and renders 'bullet' as text.
+    New-style lines (already have a [text](url) link) are left untouched.
+    """
+    import re as _re
+    # Matches:  - [S2] https://...   (old bare-URL format, no parenthesised link)
+    _OLD_SOURCE = _re.compile(
+        r"^- \[S(\d+)\] (https?://\S+)$",
+        _re.MULTILINE,
+    )
+    def _replace(m: _re.Match) -> str:
+        sid = f"S{m.group(1)}"
+        url = m.group(2)
+        return f"- **\\[{sid}\\]** [{url}]({url})"
+
+    return _OLD_SOURCE.sub(_replace, report)
+
+
 def _render_research_details() -> None:
     research_id = st.session_state.get("selected_research_id", "").strip()
     st.subheader(_t("research_details"))
@@ -1847,7 +1868,7 @@ def _render_research_details() -> None:
 
     rendered_tab, raw_tab = st.tabs([_t("rendered"), _t("raw_markdown")])
     with rendered_tab:
-        st.markdown(final_report)
+        st.markdown(_fix_source_links(final_report))
     with raw_tab:
         st.code(final_report, language="markdown")
 

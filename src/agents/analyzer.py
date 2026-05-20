@@ -809,6 +809,25 @@ class AnalyzerAgent(BaseAgent):
     def _sanitize_citations(self, report: str, valid_source_ids: set[str]) -> str:
         return rust_accel.sanitize_citations(report, valid_source_ids)
 
+    def _source_display_label(self, source: dict) -> str:
+        """Return a short human-readable label for a source (title or domain)."""
+        title = (source.get("title") or "").strip()
+        url   = source.get("url") or ""
+        domain = source.get("domain") or urlparse(url).netloc.removeprefix("www.")
+        if title:
+            return (title[:80] + "…") if len(title) > 80 else title
+        return domain or url
+
+    def _source_line(self, source_id: str, source: dict, bold: bool = True) -> str:
+        """Render one source as a proper markdown list item with a clickable link."""
+        url   = source.get("url") or ""
+        label = self._source_display_label(source)
+        # Escape brackets so [S2] in the label doesn't confuse the markdown parser.
+        id_part = f"**\\[{source_id}\\]**" if bold else f"\\[{source_id}\\]"
+        if url:
+            return f"- {id_part} [{label}]({url})"
+        return f"- {id_part} {label}"
+
     def _rebuild_sources_section(self, report: str, aggregated_data: list[dict], language: str) -> str:
         without_sources = self.SOURCE_HEADING_PATTERN.sub("", report).strip()
         valid_sources = {item["source_id"]: item for item in aggregated_data}
@@ -827,7 +846,7 @@ class AnalyzerAgent(BaseAgent):
                 source = valid_sources.get(source_id)
                 if source is None:
                     continue
-                lines.append(f"- [{source_id}] {source['url']}")
+                lines.append(self._source_line(source_id, source, bold=True))
 
         if additional_source_ids:
             lines.append(self._additional_sources_heading(language))
@@ -835,7 +854,7 @@ class AnalyzerAgent(BaseAgent):
                 source = valid_sources.get(source_id)
                 if source is None:
                     continue
-                lines.append(f"- [{source_id}] {source['url']}")
+                lines.append(self._source_line(source_id, source, bold=False))
 
         return f"{sanitized.strip()}\n\n" + "\n".join(lines)
 
