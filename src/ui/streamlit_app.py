@@ -266,6 +266,9 @@ TRANSLATIONS = {
         "history_ago_minutes": "{n}m ago",
         "history_ago_hours": "{n}h ago",
         "history_ago_days": "{n}d ago",
+        "history_delete_confirm": "Delete this research?",
+        "history_delete_yes": "Yes, delete",
+        "history_delete_no": "Cancel",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -519,6 +522,9 @@ TRANSLATIONS = {
         "history_ago_minutes": "{n}м назад",
         "history_ago_hours": "{n}ч назад",
         "history_ago_days": "{n}д назад",
+        "history_delete_confirm": "Удалить это исследование?",
+        "history_delete_yes": "Да, удалить",
+        "history_delete_no": "Отмена",
     },
 }
 
@@ -563,6 +569,12 @@ def _api_post(path: str, payload: dict | None = None) -> Any:
         response = client.post(path, json=payload)
         response.raise_for_status()
         return response.json()
+
+
+def _api_delete(path: str) -> None:
+    with _get_client() as client:
+        response = client.delete(path)
+        response.raise_for_status()
 
 
 def _render_styles() -> None:
@@ -766,6 +778,26 @@ def _render_styles() -> None:
             fill: #e2e8f0 !important;
             -webkit-text-fill-color: #e2e8f0 !important;
         }
+        [data-testid="stSidebar"] .stButton > button {
+            text-align: left !important;
+            font-size: 0.75rem !important;
+            padding: 0.25rem 0.5rem !important;
+            min-height: 0 !important;
+            height: auto !important;
+            line-height: 1.3 !important;
+            white-space: pre-wrap !important;
+            word-break: break-word !important;
+            border-radius: 6px !important;
+        }
+        [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button {
+            padding: 0.25rem 0.2rem !important;
+            font-size: 0.8rem !important;
+            text-align: center !important;
+            opacity: 0.55;
+        }
+        [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button:hover {
+            opacity: 1;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -880,14 +912,32 @@ def _render_auto_refresh() -> None:
     return
 
 
+_TERMINAL_STATUSES = {"completed", "failed"}
+_ACTIVE_STATUSES = {"processing", "analyzing"}
+
+
 def _get_live_refresh_interval() -> int | None:
-    if st.session_state.get("selected_research_id", "").strip():
-        return 5
-    return None
+    """Adaptive interval: fast during active work, stops on terminal state."""
+    research_id = st.session_state.get("selected_research_id", "").strip()
+    if not research_id:
+        return None
+    cached = st.session_state.get(f"_rs_{research_id}", "")
+    if cached in _TERMINAL_STATUSES:
+        return None  # stop polling once done
+    if cached in _ACTIVE_STATUSES:
+        return 2     # fast during active processing
+    return 4         # moderate for pending/unknown
 
 
-def _render_live_queue_fragment(run_every: int | None) -> None:
-    @st.fragment(run_every=run_every)
+def _get_queue_refresh_interval() -> int:
+    """Queue polls faster when jobs are active."""
+    return 3 if st.session_state.get("_queue_has_active", False) else 20
+
+
+def _render_live_queue_fragment() -> None:
+    interval = _get_queue_refresh_interval()
+
+    @st.fragment(run_every=interval)
     def _fragment() -> None:
         _render_queue_overview()
 
@@ -908,6 +958,42 @@ def _render_header() -> None:
     st.caption(_t("header_caption"))
 
 
+_STEP_LABEL = {
+    "collect_context": "🔍 Collect context",
+    "analyze": "🧠 Analyze",
+    "verify": "✅ Verify",
+    "replan": "🔄 Replan",
+    "tie_break": "⚖️ Tie-break",
+    "complete": "🏁 Complete",
+}
+
+
+def _render_graph_trail(research_id: str) -> None:
+    graph = _safe_api_call(_api_get, f"/v1/research/{research_id}/graph", ignore_status_codes={404})
+    if not graph:
+        return
+    trail = graph.get("graph_trail") or []
+    if not trail:
+        st.caption(_t("graph_no_trail"))
+        return
+    # Show last 10 entries
+    for entry in trail[-10:]:
+        step = entry.get("step") or ""
+        detail = entry.get("detail") or ""
+        label = _STEP_LABEL.get(step, f"◦ {step}")
+        detail_html = (
+            f' — <span style="color:#64748b">{escape(detail)}</span>'
+            if detail else ""
+        )
+        st.markdown(
+            f'<div style="font-size:0.78rem;line-height:1.4;margin-bottom:0.2rem;">'
+            f'<span style="font-weight:600;">{escape(label)}</span>'
+            f'{detail_html}'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
 _STATUS_ICON = {
     "completed": "✅",
     "processing": "⏳",
@@ -918,33 +1004,55 @@ _STATUS_ICON = {
 
 
 def _render_sidebar_history() -> None:
-    history = _safe_api_call(_api_get, "/v1/research?limit=20", ignore_status_codes={404}) or []
-    st.sidebar.subheader(_t("history"))
-    if not history:
-        st.sidebar.caption(_t("history_empty"))
-        return
-    current_id = st.session_state.get("selected_research_id", "").strip()
-    for item in history:
-        rid = item.get("id", "")
-        prompt = item.get("prompt") or ""
-        status = (item.get("status") or "").lower()
-        icon = _STATUS_ICON.get(status, "•")
-        label = f"{icon} {prompt[:55]}{'…' if len(prompt) > 55 else ''}"
-        ago = _relative_time(item.get("created_at") or "")
-        is_selected = rid == current_id
-        with st.sidebar.container():
-            col_label, col_btn = st.sidebar.columns([3, 1])
-            col_label.caption(f"**{label}**" if is_selected else label)
-            col_label.caption(ago)
-            if col_btn.button(
-                _t("history_select"),
-                key=f"hist-{rid}",
-                use_container_width=True,
-                type="primary" if is_selected else "secondary",
-            ):
-                st.session_state["selected_research_id"] = rid
-                _sync_query_params()
-                st.rerun()
+    @st.fragment(run_every=15)
+    def _history_inner() -> None:
+        history = _safe_api_call(_api_get, "/v1/research?limit=15", ignore_status_codes={404}) or []
+        st.markdown(f"**{_t('history')}**")
+        if not history:
+            st.caption(_t("history_empty"))
+            return
+        current_id = st.session_state.get("selected_research_id", "").strip()
+        confirm_id = st.session_state.get("_hist_confirm_delete", "")
+        for item in history:
+            rid = item.get("id", "")
+            prompt = item.get("prompt") or ""
+            status = (item.get("status") or "").lower()
+            icon = _STATUS_ICON.get(status, "•")
+            prompt_short = (prompt[:34] + "…") if len(prompt) > 34 else prompt
+            ago = _relative_time(item.get("created_at") or "")
+            is_selected = rid == current_id
+
+            if confirm_id == rid:
+                st.caption(f"🗑 {prompt_short}")
+                col_yes, col_no = st.columns(2)
+                if col_yes.button(_t("history_delete_yes"), key=f"hist-del-yes-{rid}", use_container_width=True, type="primary"):
+                    _safe_api_call(_api_delete, f"/v1/research/{rid}")
+                    st.session_state.pop("_hist_confirm_delete", None)
+                    if st.session_state.get("selected_research_id") == rid:
+                        st.session_state["selected_research_id"] = ""
+                        _sync_query_params()
+                    st.rerun()
+                if col_no.button(_t("history_delete_no"), key=f"hist-del-no-{rid}", use_container_width=True):
+                    st.session_state.pop("_hist_confirm_delete", None)
+                    st.rerun()
+            else:
+                btn_label = f"{icon} {prompt_short}\n{ago}"
+                col_btn, col_del = st.columns([7, 1])
+                if col_btn.button(
+                    btn_label,
+                    key=f"hist-{rid}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                ):
+                    st.session_state["selected_research_id"] = rid
+                    _sync_query_params()
+                    st.rerun()
+                if col_del.button("🗑", key=f"hist-trash-{rid}", use_container_width=True):
+                    st.session_state["_hist_confirm_delete"] = rid
+                    st.rerun()
+
+    with st.sidebar:
+        _history_inner()
 
 
 def _render_sidebar() -> None:
@@ -1448,6 +1556,14 @@ def _render_queue_overview() -> None:
     if not metrics:
         return
 
+    # Cache active state for adaptive queue interval
+    st.session_state["_queue_has_active"] = (
+        metrics.get("running_search_jobs", 0) > 0
+        or metrics.get("running_finalize_jobs", 0) > 0
+        or metrics.get("pending_search_jobs", 0) > 0
+        or metrics.get("pending_finalize_jobs", 0) > 0
+    )
+
     top = st.columns(3)
     top[0].metric(_t("pending_search"), metrics["pending_search_jobs"])
     top[1].metric(_t("running_search"), metrics["running_search_jobs"])
@@ -1522,7 +1638,7 @@ def _render_task(task: dict, index: int) -> None:
 
     source_count = _task_source_count(task)
     label = f"{index}. {task['description']}"
-    with st.expander(label, expanded=index == 1):
+    with st.expander(label, expanded=False):
         st.markdown(status_line, unsafe_allow_html=True)
         st.caption(_t("collected_sources", count=source_count))
 
@@ -1588,6 +1704,12 @@ def _render_research_details() -> None:
     latest_finalize_status = (latest_finalize_job or {}).get("status")
     research_status = (research.get("status") or "").strip().lower()
 
+    # Cache status for adaptive polling interval
+    prev_status = st.session_state.get(f"_rs_{research_id}", "")
+    st.session_state[f"_rs_{research_id}"] = research_status
+    if research_status in _TERMINAL_STATUSES and prev_status not in _TERMINAL_STATUSES and prev_status:
+        st.rerun()  # trigger parent rerun to switch interval to None
+
     st.markdown(
         f"""
         <div class="mas-panel">
@@ -1631,6 +1753,11 @@ def _render_research_details() -> None:
         st.info(_t("finalize_pending"))
     elif finalize_ready and not latest_finalize_job:
         st.success(_t("all_tasks_completed"))
+
+    # Graph trail — live execution log of the finalize graph
+    if latest_finalize_job or research_status in _ACTIVE_STATUSES | _TERMINAL_STATUSES:
+        with st.expander(_t("graph_trail"), expanded=(research_status in _ACTIVE_STATUSES)):
+            _render_graph_trail(research_id)
 
     st.subheader(_t("task_pipeline"))
     if not tasks:
@@ -1704,15 +1831,15 @@ def main() -> None:
     _render_auto_refresh()
     _render_header()
     _render_sidebar()
-    live_refresh_interval = _get_live_refresh_interval()
+    research_interval = _get_live_refresh_interval()
 
     left, right = st.columns([1.05, 1.35], gap="large")
     with left:
         _render_create_research()
         st.divider()
-        _render_live_queue_fragment(live_refresh_interval)
+        _render_live_queue_fragment()
     with right:
-        _render_live_research_fragment(live_refresh_interval)
+        _render_live_research_fragment(research_interval)
 
 
 if __name__ == "__main__":
