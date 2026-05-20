@@ -1221,6 +1221,9 @@ class AnalyzerAgent(BaseAgent):
         section_drafts: list[str],
         language: str,
         depth: SearchDepth | None,
+        conflicts: list[dict] | None = None,
+        evidence_groups: list[dict] | None = None,
+        source_summary=None,
     ) -> str:
         instruction = self._language_instruction(language)
         profile = self._resolve_depth_profile(depth)
@@ -1228,12 +1231,29 @@ class AnalyzerAgent(BaseAgent):
             f"=== SECTION {i + 1} ===\n{draft}"
             for i, draft in enumerate(section_drafts)
         )
+        meta: dict = {}
+        if source_summary is not None:
+            try:
+                meta["source_summary"] = source_summary.model_dump()
+            except Exception:
+                pass
+        if conflicts:
+            meta["detected_conflicts"] = conflicts
+        if evidence_groups:
+            meta["evidence_groups"] = evidence_groups
+        meta_block = (
+            f"\n\nContext metadata:\n{json.dumps(meta, ensure_ascii=False)}"
+            if meta else ""
+        )
         return (
             f"{instruction} "
             f"{profile['report_instruction']} "
             "Below are partial research analyses from different source groups. "
             "Merge them into one coherent report with Introduction, main sections, and Conclusion. "
-            "Preserve all inline citations [Sn] exactly. Do NOT include a Sources section.\n\n"
+            "Preserve all inline citations [Sn] exactly. Do NOT include a Sources section. "
+            "Use detected_conflicts to add a conflicts section if there are material disagreements. "
+            "Use evidence_groups to emphasise findings supported by multiple sources."
+            f"{meta_block}\n\n"
             f"Research question: {prompt}\n\n"
             f"{drafts_text}"
         )
@@ -1245,6 +1265,9 @@ class AnalyzerAgent(BaseAgent):
         language: str,
         depth: SearchDepth | None,
         section_done_callback: Optional[Callable[[int, str], None]] = None,
+        conflicts: list[dict] | None = None,
+        evidence_groups: list[dict] | None = None,
+        source_summary=None,
     ) -> str:
         chunk_size = self._PARALLEL_SECTION_CHUNK
         chunks = [
@@ -1274,7 +1297,12 @@ class AnalyzerAgent(BaseAgent):
                 future.result()  # surface any exceptions
 
         completed_drafts = [d for d in section_drafts if d]
-        synthesis_prompt = self._build_synthesis_user_prompt(prompt, completed_drafts, language, depth)
+        synthesis_prompt = self._build_synthesis_user_prompt(
+            prompt, completed_drafts, language, depth,
+            conflicts=conflicts,
+            evidence_groups=evidence_groups,
+            source_summary=source_summary,
+        )
         logger.info("analyzer_synthesis_start section_count=%d", len(completed_drafts))
         return self.llm.generate(
             system_prompt=self.SYNTHESIS_SYSTEM_PROMPT,
@@ -1331,6 +1359,9 @@ class AnalyzerAgent(BaseAgent):
             result = self._run_parallel_section_analysis(
                 aggregated_data, prompt, prompt_language, depth,
                 section_done_callback=_section_done,
+                conflicts=conflicts,
+                evidence_groups=evidence_groups,
+                source_summary=source_summary,
             )
             # Stream the synthesis result too once it's done
             if streaming_callback:
@@ -1367,10 +1398,10 @@ class AnalyzerAgent(BaseAgent):
         uncited_lines = self._uncited_claim_lines(rebuilt)
         unsupported_lines = self._unsupported_citation_lines(rebuilt, aggregated_data)
         repair_ms = 0.0
-        # Skip LLM repair for HARD depth — the larger source pool naturally has
-        # more uncited lines and the repair call adds 2-3 extra minutes.
+        # Deterministic (regex-based) repair runs for all depths — it's instant.
+        # LLM repair is skipped for HARD to avoid an extra 2-3 min call.
         allow_llm_repair = not is_hard
-        if allow_llm_repair and aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
+        if aggregated_data and (uncited_lines or unsupported_lines) and self._looks_like_structured_report(rebuilt):
             report_body = self._body_without_sources(rebuilt)
             repaired_body = self._deterministic_repair_report_body(
                 report_body,
@@ -1380,7 +1411,7 @@ class AnalyzerAgent(BaseAgent):
             )
             if repaired_body is not None:
                 rebuilt = self._rebuild_sources_section(repaired_body, aggregated_data, prompt_language)
-            else:
+            elif allow_llm_repair:
                 logger.warning(
                     "AnalyzerAgent detected citation issues. Repairing report citations once. uncited_count=%s unsupported_count=%s",
                     len(uncited_lines),
