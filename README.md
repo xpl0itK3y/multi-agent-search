@@ -107,7 +107,7 @@ Prometheus will be available at `http://localhost:9090`.
 
 Loki will be available at `http://localhost:3100`.
 
-Grafana will be available at `http://localhost:3000` (Prometheus and Loki are pre-provisioned as datasources).
+Grafana will be available at `http://localhost:3001` (Prometheus and Loki are pre-provisioned as datasources).
 
 Stop everything:
 

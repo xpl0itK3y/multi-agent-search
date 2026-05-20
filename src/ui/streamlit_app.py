@@ -162,6 +162,7 @@ TRANSLATIONS = {
         "graph_no_follow_up_queries": "No follow-up graph queries were executed yet.",
         "graph_state": "Graph State",
         "graph_last_step": "Last Graph Step",
+        "graph_resume_passes": "Graph Resumes",
         "graph_analyze_passes": "Analyze Passes",
         "graph_replan_passes": "Replan Passes",
         "graph_tie_break_passes": "Tie-Break Passes",
@@ -407,6 +408,7 @@ TRANSLATIONS = {
         "graph_no_follow_up_queries": "Follow-up запросы графа пока не запускались.",
         "graph_state": "Состояние графа",
         "graph_last_step": "Последний шаг графа",
+        "graph_resume_passes": "Resume графа",
         "graph_analyze_passes": "Analyze проходы",
         "graph_replan_passes": "Replan проходы",
         "graph_tie_break_passes": "Tie-break проходы",
@@ -1469,10 +1471,10 @@ def _render_queue_overview() -> None:
         )
     _render_operational_health(operational_health, scope_key="queue", enable_ack=True)
     graph_row = st.columns(4)
-    graph_row[0].metric(_t("graph_resume_count"), graph.get("resume_count", 0))
-    graph_row[1].metric(_t("graph_replan_count"), graph.get("replan_pass_count", 0))
-    graph_row[2].metric(_t("graph_tie_break_count"), graph.get("tie_break_pass_count", 0))
-    graph_row[3].metric(_t("graph_analyze_count"), graph.get("analyze_pass_count", 0))
+    graph_row[0].metric(_t("graph_resume_passes"), graph.get("resume_count", 0))
+    graph_row[1].metric(_t("graph_replan_passes"), graph.get("replan_pass_count", 0))
+    graph_row[2].metric(_t("graph_tie_break_passes"), graph.get("tie_break_pass_count", 0))
+    graph_row[3].metric(_t("graph_analyze_passes"), graph.get("analyze_pass_count", 0))
     if graph_alerts:
         with st.expander(_t("graph_alerts"), expanded=True):
             _render_graph_alerts(graph_alerts)
