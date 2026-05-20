@@ -1733,7 +1733,12 @@ def _fix_source_links(report: str) -> str:
     def _replace(m: _re.Match) -> str:
         sid = f"S{m.group(1)}"
         url = m.group(2)
-        return f"- **\\[{sid}\\]** [{url}]({url})"
+        try:
+            from urllib.parse import urlparse as _up
+            label = _up(url).netloc.removeprefix("www.") or url
+        except Exception:
+            label = url
+        return f"- **\\[{sid}\\]** [{label}]({url})"
 
     return _OLD_SOURCE.sub(_replace, report)
 
