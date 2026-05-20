@@ -112,6 +112,8 @@ _H2   = re.compile(r"^## (.+)$")
 _H3   = re.compile(r"^### (.+)$")
 _H4   = re.compile(r"^#### (.+)$")
 _BULL = re.compile(r"^[-*] (.+)$")
+_ENUM = re.compile(r"^\d+\. .+$")
+_ENUM_CAP = re.compile(r"^\d+\. (.+)$")
 _HR   = re.compile(r"^---+$")
 
 
@@ -141,12 +143,23 @@ def _parse_blocks(markdown: str) -> list[dict]:
                 i += 1
             blocks.append({"type": "bullets", "items": items})
             continue
+        elif m := _ENUM_CAP.match(stripped):
+            items = []
+            while i < len(lines):
+                em = _ENUM_CAP.match(lines[i].strip())
+                if not em:
+                    break
+                items.append(em.group(1))
+                i += 1
+            blocks.append({"type": "ordered", "items": items})
+            continue
         elif stripped:
             parts: list[str] = []
             while i < len(lines):
                 ln = lines[i].strip()
                 if (not ln or _H2.match(ln) or _H3.match(ln)
-                        or _H4.match(ln) or _HR.match(ln) or _BULL.match(ln)):
+                        or _H4.match(ln) or _HR.match(ln)
+                        or _BULL.match(ln) or _ENUM.match(ln)):
                     break
                 parts.append(lines[i])
                 i += 1
@@ -358,6 +371,18 @@ def generate_pdf(
             story.append(ListFlowable(items, bulletType="bullet",
                                       leftIndent=12, spaceBefore=2, spaceAfter=4))
 
+        elif btype == "ordered":
+            items = [
+                ListItem(
+                    Paragraph(_md_to_rl(item), STYLES["bullet"]),
+                    leftIndent=16,
+                    bulletColor=C_BLUE_LT,
+                )
+                for item in block["items"]
+            ]
+            story.append(ListFlowable(items, bulletType="1",
+                                      leftIndent=12, spaceBefore=2, spaceAfter=4))
+
     doc.build(story)
     return buf.getvalue()
 
@@ -543,6 +568,13 @@ def generate_docx(
         elif btype == "bullets":
             for item in block["items"]:
                 p = doc.add_paragraph(style="List Bullet")
+                p.paragraph_format.left_indent = Cm(0.5)
+                p.paragraph_format.space_after = Pt(2)
+                _add_inline(p, item)
+
+        elif btype == "ordered":
+            for item in block["items"]:
+                p = doc.add_paragraph(style="List Number")
                 p.paragraph_format.left_indent = Cm(0.5)
                 p.paragraph_format.space_after = Pt(2)
                 _add_inline(p, item)
