@@ -1120,12 +1120,37 @@ class AnalyzerAgent(BaseAgent):
             max_conflicts=3,
         )
 
+    def _is_substantive_conflict_sentence(self, sentence: str) -> bool:
+        """Return True only for real claim sentences, not titles or questions."""
+        stripped = sentence.strip()
+        if stripped.endswith("?"):
+            return False
+        words = stripped.split()
+        if len(words) < 8:
+            return False
+        # Must contain at least one concrete claim signal: number, negation, or strong verb
+        lowered = stripped.lower()
+        has_number = bool(re.search(r"\b\d+\b", lowered))
+        has_negation = any(tok in lowered for tok in self.NEGATION_TOKENS)
+        has_claim_verb = any(tok in lowered for tok in (
+            "will", "would", "could", "replace", "eliminate", "reduce", "increase",
+            "заменит", "сократит", "исчезнут", "появятся", "вырастет", "снизится",
+        ))
+        return has_number or has_negation or has_claim_verb
+
     def _inject_conflicts_section(self, report: str, conflicts: list[dict], language: str) -> str:
         if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
             return report
 
+        substantive = [
+            c for c in conflicts
+            if all(self._is_substantive_conflict_sentence(s) for s in c.get("sentences", []))
+        ]
+        if not substantive:
+            return report
+
         lines = [self._conflicts_heading(language)]
-        for conflict in conflicts:
+        for conflict in substantive:
             left_source, right_source = conflict["source_ids"]
             left_sentence, right_sentence = conflict["sentences"]
             if language == "ru":
@@ -1454,7 +1479,11 @@ class AnalyzerAgent(BaseAgent):
             for note in verification_summary.verification_notes
             if note not in final_notes
         )
-        final_report = self._inject_report_notes(verified_report, final_notes, prompt_language)
+        # Quality notes are logged for debugging but not injected into the report —
+        # they expose internal citation-audit internals which is confusing for users.
+        if final_notes:
+            logger.info("analyzer_quality_notes count=%d notes=%s", len(final_notes), final_notes)
+        final_report = verified_report
         total_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
             "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s "

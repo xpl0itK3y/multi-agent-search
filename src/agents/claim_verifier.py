@@ -53,7 +53,18 @@ class ClaimVerifierAgent:
     def _softener(self, language: str) -> str:
         return self.SOFTENER_BY_LANGUAGE.get(language, self.SOFTENER_BY_LANGUAGE["en"])
 
+    def _soften_absolute_terms(self, line: str) -> str:
+        """Replace absolute-language tokens (однозначно, clearly, etc.) in any line."""
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            return line
+        softened = stripped
+        for pattern, replacement in self.ABSOLUTE_PATTERNS:
+            softened = pattern.sub(replacement, softened)
+        return line.replace(stripped, softened, 1) if softened != stripped else line
+
     def _soften_line(self, line: str, language: str) -> str:
+        """Prepend the hedging prefix to a flagged line (after absolute-term pass)."""
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             return line
@@ -62,11 +73,7 @@ class ClaimVerifierAgent:
         if any(lowered.startswith(prefix) for prefix in self.EXISTING_SOFTENERS):
             return line
 
-        softened = stripped
-        for pattern, replacement in self.ABSOLUTE_PATTERNS:
-            softened = pattern.sub(replacement, softened)
-        if softened == stripped:
-            softened = self._softener(language) + stripped[0].lower() + stripped[1:]
+        softened = self._softener(language) + stripped[0].lower() + stripped[1:]
         return line.replace(stripped, softened, 1)
 
     def _looks_strong_or_overbroad(self, line: str) -> bool:
@@ -88,21 +95,32 @@ class ClaimVerifierAgent:
         uncited_lines: list[str],
         unsupported_lines: list[str],
         insufficient_evidence_lines: list[str] | None = None,
+        max_softened: int = 4,
     ) -> tuple[str, ClaimVerificationSummary]:
         insufficient_evidence_lines = insufficient_evidence_lines or []
-        issue_lines = list(dict.fromkeys(unsupported_lines + insufficient_evidence_lines))
+        # Only soften lines that are explicitly flagged as unsupported/insufficient.
+        # Avoid blanket softening via _looks_strong_or_overbroad — it fires on normal
+        # analytical language ("best practices", "лучший вариант") and floods the
+        # report with "По имеющимся данным". Cap total softened lines to prevent spam.
+        issue_lines = set(dict.fromkeys(unsupported_lines + insufficient_evidence_lines))
         downgraded_lines = 0
+        softened_count = 0
         updated_lines: list[str] = []
 
         for line in report.splitlines():
             normalized = line.strip()
-            if normalized in issue_lines or self._looks_strong_or_overbroad(normalized):
-                softened = self._soften_line(line, language)
+            # Apply absolute-term replacement on all lines (subtle, no prefix added).
+            term_softened = self._soften_absolute_terms(line)
+            if normalized in issue_lines and softened_count < max_softened:
+                softened = self._soften_line(term_softened, language)
                 if softened != line:
                     downgraded_lines += 1
+                    softened_count += 1
                 updated_lines.append(softened)
             else:
-                updated_lines.append(line)
+                if term_softened != line:
+                    downgraded_lines += 1
+                updated_lines.append(term_softened)
 
         notes: list[str] = []
         messages = self.NOTE_MESSAGES.get(language, self.NOTE_MESSAGES["en"])
