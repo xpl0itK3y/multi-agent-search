@@ -153,11 +153,11 @@ TRANSLATIONS = {
         "disable_finalize_reason": "Finalize is blocked until all tasks are in `completed` or `failed` state.",
         "showing_sources_preview": "Showing {shown} of {total} sources",
         "requeue_dead_search_job": "Requeue Dead Search Job",
-        "graph_loop": "Graph Loop",
-        "graph_branching_active": "Branching Active",
-        "graph_follow_up_tasks": "Follow-up Tasks",
-        "graph_replan_tasks": "Replan Tasks",
-        "graph_tie_break_tasks": "Tie-Break Tasks",
+        "graph_loop": "Цикл графа",
+        "graph_branching_active": "Ветвление активно",
+        "graph_follow_up_tasks": "Follow-up задачи",
+        "graph_replan_tasks": "Replan задачи",
+        "graph_tie_break_tasks": "Tie-break задачи",
         "graph_follow_up_queries": "Follow-up Queries",
         "graph_no_follow_up_queries": "No follow-up graph queries were executed yet.",
         "graph_state": "Graph State",
@@ -293,7 +293,7 @@ TRANSLATIONS = {
         "deep_dive": "Глубокий поиск",
         "profile_caption": "{description} Примерно {task_count} search tasks и до {source_limit} источников на задачу.",
         "queue_overview": "Обзор очередей",
-        "queue_backlog": "Общий backlog",
+        "queue_backlog": "Задач в очереди",
         "queue_extraction_attempts": "Попытки extraction",
         "queue_extraction_success": "Успешный extraction",
         "queue_extraction_failures": "Ошибки extraction",
@@ -437,7 +437,7 @@ TRANSLATIONS = {
         "graph_top_workers": "Воркеры с alert-ами чаще всего: {value}",
         "graph_recent_alerts": "Последние alert-события",
         "graph_recent_alert_line": "{timestamp} | {step} | {code} | research={research_id} | worker={worker_name}",
-        "maintenance_summary": "Сводка maintenance",
+        "maintenance_summary": "Сводка обслуживания",
         "maintenance_last_run": "Последний maintenance запуск: {timestamp}",
         "maintenance_compacted_count": "Сжатых operational элементов: {count}",
         "maintenance_compacted_workers": "Воркеры с compact graph data: {value}",
@@ -451,11 +451,11 @@ TRANSLATIONS = {
         "maintenance_recommendation_counter_acknowledged": "Подтверждено: {count}",
         "maintenance_recommendation_counter_resolved": "Закрыто: {count}",
         "maintenance_recommendation_counter_reappeared": "Повторно всплыло: {count}",
-        "ops_snapshot": "Ops snapshot",
-        "ops_snapshot_health": "Health: {value}",
-        "ops_snapshot_backlog": "Backlog: {value}",
-        "ops_snapshot_graph_alerts": "Graph alerts: {value}",
-        "ops_snapshot_maintenance_alerts": "Maintenance alerts: {value}",
+        "ops_snapshot": "Снимок состояния",
+        "ops_snapshot_health": "Состояние: {value}",
+        "ops_snapshot_backlog": "Очередь: {value}",
+        "ops_snapshot_graph_alerts": "Алертов графа: {value}",
+        "ops_snapshot_maintenance_alerts": "Алертов обслуживания: {value}",
         "ops_snapshot_needs_action": "Нужно действие: {value}",
         "maintenance_recommendation_analytics": "Runbook аналитика",
         "maintenance_recommendation_avg_ack_hours": "Среднее время до подтверждения: {value} ч",
@@ -479,8 +479,8 @@ TRANSLATIONS = {
         "maintenance_alert_high_compacted_average": "Средний compacted count {current_value} превысил {threshold}",
         "maintenance_alert_maintenance_stale": "Maintenance устарел: возраст последнего запуска {current_value}s превысил {threshold}s",
         "maintenance_alert_hint": "Подсказка: {hint}",
-        "operational_health": "Operational Health",
-        "operational_health_score": "Operational score: {score}",
+        "operational_health": "Состояние системы",
+        "operational_health_score": "Оценка системы: {score}",
         "operational_health_reasons": "Причины: {value}",
         "operational_health_trend": "Тренд operational health",
         "operational_health_direction": "Динамика score: {value}",
@@ -502,9 +502,9 @@ TRANSLATIONS = {
         "operational_recommendation_ack": "Подтвердить",
         "operational_recommendation_resolve": "Отметить как выполненное",
         "operational_recommendation_note_input": "Заметка о выполнении",
-        "health_healthy": "healthy",
-        "health_warning": "warning",
-        "health_critical": "critical",
+        "health_healthy": "в норме",
+        "health_warning": "предупреждение",
+        "health_critical": "критично",
     },
 }
 
@@ -538,15 +538,12 @@ def _render_styles() -> None:
         """
         <style>
         .stApp {
-            background:
-                radial-gradient(circle at top left, rgba(20, 184, 166, 0.12), transparent 24%),
-                radial-gradient(circle at top right, rgba(59, 130, 246, 0.10), transparent 22%),
-                linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+            background: linear-gradient(160deg, #f0f4f8 0%, #e8edf5 100%);
             color: #0f172a;
         }
         h1, h2, h3 {
-            font-family: Georgia, "Times New Roman", serif;
-            letter-spacing: -0.02em;
+            font-family: "Segoe UI", system-ui, sans-serif;
+            letter-spacing: -0.01em;
         }
         .stMarkdown, .stText, .stCaption, label, p, li, div[data-testid="stMetricValue"] {
             font-family: "Trebuchet MS", "Segoe UI", sans-serif;
@@ -559,25 +556,30 @@ def _render_styles() -> None:
             color: #0f172a;
         }
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
         }
         [data-testid="stSidebar"] * {
-            color: #e5eefb;
+            color: #cbd5e1;
+        }
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: #f1f5f9 !important;
         }
         .mas-panel {
-            border: 1px solid rgba(148, 163, 184, 0.18);
-            background: rgba(255, 255, 255, 0.92);
-            border-radius: 18px;
-            padding: 1rem 1.1rem;
-            box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
-            margin-bottom: 0.8rem;
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 0.9rem 1rem;
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+            margin-bottom: 0.7rem;
         }
         .mas-accent {
-            color: #0f766e;
+            color: #1d4ed8;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
-            font-size: 0.75rem;
+            letter-spacing: 0.06em;
+            font-size: 0.72rem;
         }
         .mas-status {
             display: inline-block;
@@ -613,19 +615,20 @@ def _render_styles() -> None:
         div[data-testid="stButton"] > button,
         div[data-testid="stDownloadButton"] > button,
         div[data-testid="stLinkButton"] a {
-            background: linear-gradient(135deg, #0f766e 0%, #0f4c81 100%) !important;
+            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%) !important;
             color: #f8fafc !important;
-            border: 1px solid rgba(15, 118, 110, 0.22) !important;
-            border-radius: 12px !important;
-            font-weight: 700 !important;
-            box-shadow: 0 8px 20px rgba(15, 118, 110, 0.16);
+            border: 1px solid rgba(29, 78, 216, 0.20) !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            box-shadow: 0 2px 8px rgba(29, 78, 216, 0.18);
         }
         div[data-testid="stButton"] > button:hover,
         div[data-testid="stDownloadButton"] > button:hover,
         div[data-testid="stLinkButton"] a:hover {
-            background: linear-gradient(135deg, #115e59 0%, #1d4ed8 100%) !important;
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%) !important;
             color: #ffffff !important;
-            border-color: rgba(29, 78, 216, 0.30) !important;
+            border-color: rgba(29, 78, 216, 0.40) !important;
+            box-shadow: 0 4px 12px rgba(29, 78, 216, 0.28) !important;
         }
         div[data-testid="stButton"] > button p,
         div[data-testid="stDownloadButton"] > button p,
@@ -666,10 +669,10 @@ def _render_styles() -> None:
             border: 1px solid rgba(148, 163, 184, 0.35) !important;
         }
         div[data-testid="stMetric"] {
-            background: rgba(255, 255, 255, 0.88);
-            border: 1px solid rgba(148, 163, 184, 0.18);
-            border-radius: 16px;
-            padding: 0.8rem 0.9rem;
+            background: rgba(255, 255, 255, 0.90);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 10px;
+            padding: 0.7rem 0.85rem;
         }
         div[data-testid="stMetric"] label,
         div[data-testid="stMetric"] p,
@@ -691,16 +694,16 @@ def _render_styles() -> None:
             color: #0f172a !important;
         }
         div[data-testid="stExpander"] summary {
-            background: #111827 !important;
-            border-radius: 12px !important;
-            padding: 0.4rem 0.75rem !important;
+            background: #1e293b !important;
+            border-radius: 8px !important;
+            padding: 0.35rem 0.7rem !important;
         }
         div[data-testid="stExpander"] summary *,
         div[data-testid="stExpander"] summary span,
         div[data-testid="stExpander"] summary p,
         div[data-testid="stExpander"] summary svg {
-            color: #f8fafc !important;
-            fill: #f8fafc !important;
+            color: #e2e8f0 !important;
+            fill: #e2e8f0 !important;
         }
         div[data-testid="stTextArea"] label,
         div[data-testid="stSelectbox"] label,
@@ -923,29 +926,6 @@ def _render_sidebar() -> None:
 
     st.sidebar.markdown(_status_badge(heartbeat["status"]), unsafe_allow_html=True)
     st.sidebar.caption(_t("processed_jobs", count=heartbeat["processed_jobs"]))
-    extraction_metrics = heartbeat.get("extraction_metrics") or {}
-    graph_metrics = heartbeat.get("graph_metrics") or {}
-    graph_alerts = heartbeat.get("graph_alerts") or []
-    graph_alert_trend = heartbeat.get("graph_alert_trend") or {}
-    operational_health = heartbeat.get("operational_health") or {}
-    st.sidebar.caption(_t("extraction_attempts", count=extraction_metrics.get("attempts", 0)))
-    st.sidebar.caption(_t("extraction_success", count=extraction_metrics.get("success_count", 0)))
-    st.sidebar.caption(_t("extraction_failures", count=extraction_metrics.get("failure_count", 0)))
-    st.sidebar.caption(_t("extraction_success_rate", value=extraction_metrics.get("success_rate_percent", 0.0)))
-    st.sidebar.caption(_t("extraction_avg_total_ms", value=extraction_metrics.get("avg_total_ms", 0.0)))
-    st.sidebar.caption(_t("graph_resume_count", count=graph_metrics.get("resume_count", 0)))
-    st.sidebar.caption(_t("graph_replan_count", count=graph_metrics.get("replan_pass_count", 0)))
-    st.sidebar.caption(_t("graph_tie_break_count", count=graph_metrics.get("tie_break_pass_count", 0)))
-    st.sidebar.caption(_t("graph_analyze_count", count=graph_metrics.get("analyze_pass_count", 0)))
-    _render_operational_health(operational_health, scope_key="sidebar", enable_ack=False)
-    if graph_alerts:
-        with st.sidebar.expander(_t("graph_alerts"), expanded=True):
-            _render_graph_alerts(graph_alerts)
-    if graph_alert_trend:
-        with st.sidebar.expander(_t("graph_alert_trend"), expanded=False):
-            _render_graph_alert_trend(graph_alert_trend)
-    with st.sidebar.expander(_t("graph_step_metrics"), expanded=False):
-        _render_graph_step_metrics(graph_metrics)
     st.sidebar.caption(_t("last_seen", timestamp=_format_timestamp(heartbeat["last_seen_at"])))
     heartbeat_is_recent = _is_recent_timestamp(heartbeat.get("last_seen_at"))
     heartbeat_status = (heartbeat.get("status") or "").strip().lower()
@@ -1440,13 +1420,15 @@ def _render_queue_overview() -> None:
     bottom[2].metric(_t("dead_finalize"), metrics["dead_letter_finalize_jobs"])
 
     extraction = metrics.get("extraction_metrics") or {}
-    extraction_row = st.columns(3)
-    extraction_row[0].metric(_t("queue_extraction_attempts"), extraction.get("attempts", 0))
-    extraction_row[1].metric(_t("queue_extraction_success"), extraction.get("success_count", 0))
-    extraction_row[2].metric(_t("queue_extraction_failures"), extraction.get("failure_count", 0))
-    derived_row = st.columns(2)
-    derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
-    derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
+    with st.expander(_t("queue_extraction_attempts"), expanded=False):
+        extraction_row = st.columns(3)
+        extraction_row[0].metric(_t("queue_extraction_attempts"), extraction.get("attempts", 0))
+        extraction_row[1].metric(_t("queue_extraction_success"), extraction.get("success_count", 0))
+        extraction_row[2].metric(_t("queue_extraction_failures"), extraction.get("failure_count", 0))
+        derived_row = st.columns(2)
+        derived_row[0].metric(_t("queue_extraction_success_rate"), f"{extraction.get('success_rate_percent', 0.0)}%")
+        derived_row[1].metric(_t("queue_extraction_avg_total_ms"), f"{extraction.get('avg_total_ms', 0.0)} ms")
+
     graph = metrics.get("graph_metrics") or {}
     graph_alerts = metrics.get("graph_alerts") or []
     graph_alert_trend = metrics.get("graph_alert_trend") or {}
@@ -1709,47 +1691,50 @@ def _render_research_details() -> None:
     summary_cols[3].metric(_t("avg_sources_per_task"), average_sources)
     summary_cols[4].metric(_t("finalize_ready"), _t("yes") if finalize_ready else _t("no"))
 
-    extraction_summary_cols = st.columns(4)
-    extraction_summary_cols[0].metric(_t("research_candidates"), total_candidates)
-    extraction_summary_cols[1].metric(_t("research_extractions"), total_extraction_attempts)
-    extraction_summary_cols[2].metric(_t("research_extraction_success"), total_extraction_success)
-    extraction_summary_cols[3].metric(_t("research_selected_sources"), total_selected_sources)
+    with st.expander(_t("queue_extraction_attempts"), expanded=False):
+        extraction_summary_cols = st.columns(4)
+        extraction_summary_cols[0].metric(_t("research_candidates"), total_candidates)
+        extraction_summary_cols[1].metric(_t("research_extractions"), total_extraction_attempts)
+        extraction_summary_cols[2].metric(_t("research_extraction_success"), total_extraction_success)
+        extraction_summary_cols[3].metric(_t("research_selected_sources"), total_selected_sources)
 
     graph_summary = research.get("graph_execution_summary") or {}
-    graph_cols = st.columns(4)
-    graph_cols[0].metric(
-        _t("graph_branching_active"),
-        _t("yes") if graph_summary.get("branching_active") else _t("no"),
-    )
-    graph_cols[1].metric(_t("graph_follow_up_tasks"), int(graph_summary.get("follow_up_task_count") or 0))
-    graph_cols[2].metric(_t("graph_replan_tasks"), int(graph_summary.get("replan_task_count") or 0))
-    graph_cols[3].metric(_t("graph_tie_break_tasks"), int(graph_summary.get("tie_break_task_count") or 0))
-
-    st.markdown(f"**{_t('graph_loop')}**")
-    follow_up_queries = graph_summary.get("follow_up_queries") or []
-    if follow_up_queries:
-        st.code("\n".join(follow_up_queries), language="text")
-    else:
-        st.caption(_t("graph_no_follow_up_queries"))
-
     graph_state = (graph_payload or {}).get("graph_state") or {}
     graph_trail = (graph_payload or {}).get("graph_trail") or []
     recovery_events = [entry for entry in graph_trail if (entry.get("step") or "") == "stale_recovered"]
     latest_recovery_event = recovery_events[-1] if recovery_events else None
-    graph_state_cols = st.columns(4)
-    graph_state_cols[0].metric(_t("graph_last_step"), graph_state.get("step") or "-")
-    graph_state_cols[1].metric(_t("graph_analyze_passes"), int(graph_state.get("analyze_attempts") or 0))
-    graph_state_cols[2].metric(_t("graph_replan_passes"), int(graph_state.get("replan_attempts") or 0))
-    graph_state_cols[3].metric(_t("graph_tie_break_passes"), int(graph_state.get("tie_break_attempts") or 0))
 
-    recovery_cols = st.columns([1, 3])
-    recovery_cols[0].metric(
-        _t("graph_resumed_recovery"),
-        _t("yes") if graph_state.get("resume_after_stale_recovery") else _t("no"),
-    )
-    if latest_recovery_event:
-        recovery_cols[1].caption(_t("graph_recovery_detail"))
-        recovery_cols[1].code(latest_recovery_event.get("detail") or "-", language="text")
+    with st.expander(_t("graph_loop"), expanded=False):
+        graph_cols = st.columns(4)
+        graph_cols[0].metric(
+            _t("graph_branching_active"),
+            _t("yes") if graph_summary.get("branching_active") else _t("no"),
+        )
+        graph_cols[1].metric(_t("graph_follow_up_tasks"), int(graph_summary.get("follow_up_task_count") or 0))
+        graph_cols[2].metric(_t("graph_replan_tasks"), int(graph_summary.get("replan_task_count") or 0))
+        graph_cols[3].metric(_t("graph_tie_break_tasks"), int(graph_summary.get("tie_break_task_count") or 0))
+
+        follow_up_queries = graph_summary.get("follow_up_queries") or []
+        if follow_up_queries:
+            st.code("\n".join(follow_up_queries), language="text")
+        else:
+            st.caption(_t("graph_no_follow_up_queries"))
+
+        graph_state_cols = st.columns(4)
+        graph_state_cols[0].metric(_t("graph_last_step"), graph_state.get("step") or "-")
+        graph_state_cols[1].metric(_t("graph_analyze_passes"), int(graph_state.get("analyze_attempts") or 0))
+        graph_state_cols[2].metric(_t("graph_replan_passes"), int(graph_state.get("replan_attempts") or 0))
+        graph_state_cols[3].metric(_t("graph_tie_break_passes"), int(graph_state.get("tie_break_attempts") or 0))
+
+        if graph_state.get("resume_after_stale_recovery") or latest_recovery_event:
+            recovery_cols = st.columns([1, 3])
+            recovery_cols[0].metric(
+                _t("graph_resumed_recovery"),
+                _t("yes") if graph_state.get("resume_after_stale_recovery") else _t("no"),
+            )
+            if latest_recovery_event:
+                recovery_cols[1].caption(_t("graph_recovery_detail"))
+                recovery_cols[1].code(latest_recovery_event.get("detail") or "-", language="text")
 
     with st.expander(_t("graph_trail"), expanded=False):
         if not graph_trail:
