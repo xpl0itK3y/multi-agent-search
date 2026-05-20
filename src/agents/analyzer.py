@@ -1158,15 +1158,21 @@ class AnalyzerAgent(BaseAgent):
         if stripped.endswith("?"):
             return False
         words = stripped.split()
-        if len(words) < 8:
+        if len(words) < 6:
             return False
-        # Must contain at least one concrete claim signal: number, negation, or strong verb
         lowered = stripped.lower()
         has_number = bool(re.search(r"\b\d+\b", lowered))
         has_negation = any(tok in lowered for tok in self.NEGATION_TOKENS)
         has_claim_verb = any(tok in lowered for tok in (
+            # English
             "will", "would", "could", "replace", "eliminate", "reduce", "increase",
+            "exceed", "exceeds", "surpass", "outpace", "claim", "claims", "argue",
+            "argues", "versus", "compared",
+            # Russian — future / present claim verbs
             "заменит", "сократит", "исчезнут", "появятся", "вырастет", "снизится",
+            "превышает", "превысил", "уступает", "опережает", "составляет",
+            "достигает", "достиг", "утверждает", "считает", "планирует",
+            "против", "тогда как", "в отличие",
         ))
         return has_number or has_negation or has_claim_verb
 
@@ -1176,7 +1182,8 @@ class AnalyzerAgent(BaseAgent):
 
         substantive = [
             c for c in conflicts
-            if all(self._is_substantive_conflict_sentence(s) for s in c.get("sentences", []))
+            # at least one of the two sentences must be a concrete claim
+            if any(self._is_substantive_conflict_sentence(s) for s in c.get("sentences", []))
         ]
         if not substantive:
             return report
