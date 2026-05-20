@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     job_max_attempts: int = 3
     worker_heartbeat_ttl_seconds: int = 30
     search_job_timeout_seconds: int = 300
-    finalize_job_timeout_seconds: int = 300
+    finalize_job_timeout_seconds: int = 600
     search_job_retention_seconds: int = 86400
     finalize_job_retention_seconds: int = 86400
     search_extraction_concurrency: int = 4
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     analyzer_payload_char_budget: int = 28000
     analyzer_conflict_source_limit: int = 12
     analyzer_evidence_source_limit: int = 12
-    analyzer_local_repair_issue_threshold: int = 2
+    analyzer_local_repair_issue_threshold: int = 5
     use_langgraph_finalize_graph: bool = True
     langgraph_replan_max_loops: int = 1
     langgraph_verification_max_retries: int = 1

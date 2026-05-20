@@ -160,7 +160,7 @@ def test_analyzer_agent_repairs_weakly_supported_citations():
     )
 
     assert len(llm.calls) == 2
-    assert "Likely weakly-supported cited lines" in llm.calls[1]["user_prompt"]
+    assert "Lines with weak or mismatched citations to fix" in llm.calls[1]["user_prompt"]
     assert "AsyncIO event loop behavior is central here [S1]." in result
 
 

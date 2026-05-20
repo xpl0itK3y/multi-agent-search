@@ -725,24 +725,30 @@ class AnalyzerAgent(BaseAgent):
         uncited_lines: list[str],
         unsupported_lines: list[str],
     ) -> str:
-        valid_source_ids = ", ".join(item["source_id"] for item in input_data.get("gathered_data", []))
-        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:6]) or "- none"
-        unsupported_feedback = "\n".join(f"- {line}" for line in unsupported_lines[:6]) or "- none"
+        sources = input_data.get("gathered_data") or []
+        source_table_lines = []
+        for item in sources:
+            sid = item.get("source_id", "")
+            title = (item.get("title") or "")[:80]
+            snippet = (item.get("content") or "")[:120].replace("\n", " ")
+            source_table_lines.append(f"{sid}: {title} — {snippet}")
+        source_table = "\n".join(source_table_lines)
+        feedback_lines = "\n".join(f"- {line}" for line in uncited_lines[:8]) or "- none"
+        unsupported_feedback = "\n".join(f"- {line}" for line in unsupported_lines[:8]) or "- none"
         return (
             f"{self._language_instruction(language)} "
             "Rewrite only the report body so that every factual paragraph or bullet includes inline citations. "
             "Do not include a Sources section in your answer. "
             "Use only the available source IDs, do not invent citations, and preserve markdown headings. "
             "Every citation should support the sentence it is attached to; remove weak or mismatched citations.\n\n"
-            f"Available source IDs: {valid_source_ids}\n\n"
-            "Likely uncited lines:\n"
+            "Available sources (ID: title — excerpt):\n"
+            f"{source_table}\n\n"
+            "Lines that need citations added:\n"
             f"{feedback_lines}\n\n"
-            "Likely weakly-supported cited lines:\n"
+            "Lines with weak or mismatched citations to fix:\n"
             f"{unsupported_feedback}\n\n"
             "Current report body:\n"
-            f"{report_body}\n\n"
-            "Research payload:\n"
-            f"{json.dumps(input_data, ensure_ascii=False)}"
+            f"{report_body}"
         )
 
     def _extract_used_source_ids(self, report_body: str) -> list[str]:
