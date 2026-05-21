@@ -843,11 +843,13 @@ class AnalyzerAgent(BaseAgent):
         valid_sources = {item["source_id"]: item for item in aggregated_data}
         sanitized = self._sanitize_citations(without_sources, set(valid_sources))
         used_source_ids = self._extract_used_source_ids(sanitized)
+        _QUALITY_ALLOWLIST = {"high", "medium"}
         additional_source_ids = [
             item["source_id"]
             for item in aggregated_data
             if item["source_id"] not in set(used_source_ids)
-        ]
+            and item.get("source_quality") in _QUALITY_ALLOWLIST
+        ][:8]  # cap to avoid bloated sources section
 
         lines = [self._sources_heading(language)]
         if used_source_ids:
@@ -1300,7 +1302,7 @@ class AnalyzerAgent(BaseAgent):
             try:
                 meta["source_summary"] = source_summary.model_dump()
             except Exception:
-                pass
+                logger.warning("analyzer_source_summary_dump_failed", exc_info=True)
         if conflicts:
             meta["detected_conflicts"] = conflicts
         if evidence_groups:
@@ -1355,7 +1357,7 @@ class AnalyzerAgent(BaseAgent):
             if section_done_callback:
                 section_done_callback(idx, draft)
 
-        with ThreadPoolExecutor(max_workers=n) as executor:
+        with ThreadPoolExecutor(max_workers=min(n, 4)) as executor:
             futures = [executor.submit(_run_section, i, chunk) for i, chunk in enumerate(chunks)]
             for future in as_completed(futures):
                 future.result()  # surface any exceptions

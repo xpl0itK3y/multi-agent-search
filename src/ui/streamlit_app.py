@@ -154,9 +154,9 @@ TRANSLATIONS = {
         "disable_finalize_reason": "Finalize is blocked until all tasks are in `completed` or `failed` state.",
         "showing_sources_preview": "Showing {shown} of {total} sources",
         "requeue_dead_search_job": "Requeue Dead Search Job",
-        "graph_loop": "Цикл графа",
-        "graph_branching_active": "Ветвление активно",
-        "graph_follow_up_tasks": "Follow-up задачи",
+        "graph_loop": "Graph Loop",
+        "graph_branching_active": "Branching active",
+        "graph_follow_up_tasks": "Follow-up tasks",
         "graph_replan_tasks": "Replan задачи",
         "graph_tie_break_tasks": "Tie-break задачи",
         "graph_follow_up_queries": "Follow-up Queries",
@@ -919,8 +919,6 @@ def _sync_query_params() -> None:
     st.query_params["lang"] = language
 
 
-def _render_auto_refresh() -> None:
-    return
 
 
 _TERMINAL_STATUSES = {"completed", "failed"}
@@ -1898,32 +1896,50 @@ def _render_research_details() -> None:
     _prompt  = research.get("prompt", "")
     _depth   = research.get("depth", "")
     _created = research.get("created_at", "")
+    _cache_key = f"_export_{research_id}_{research.get('updated_at', '')}"
 
-    col_pdf, col_docx = st.columns(2)
-    with col_pdf:
+    # generate PDF/DOCX once per report version, cache in session_state
+    if _cache_key not in st.session_state:
+        _pdf_bytes = _docx_bytes = None
         try:
-            pdf_bytes = generate_pdf(final_report, _prompt, _depth, _created)
+            _pdf_bytes = generate_pdf(final_report, _prompt, _depth, _created)
+        except Exception as _exc:
+            st.error(f"PDF error: {_exc}")
+        try:
+            _docx_bytes = generate_docx(final_report, _prompt, _depth, _created)
+        except Exception as _exc:
+            st.error(f"DOCX error: {_exc}")
+        st.session_state[_cache_key] = (_pdf_bytes, _docx_bytes)
+    else:
+        _pdf_bytes, _docx_bytes = st.session_state[_cache_key]
+
+    col_pdf, col_docx, col_md = st.columns(3)
+    with col_pdf:
+        if _pdf_bytes:
             st.download_button(
                 label=_t("download_pdf"),
-                data=pdf_bytes,
+                data=_pdf_bytes,
                 file_name="research_report.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
-        except Exception as _exc:
-            st.error(f"PDF error: {_exc}")
     with col_docx:
-        try:
-            docx_bytes = generate_docx(final_report, _prompt, _depth, _created)
+        if _docx_bytes:
             st.download_button(
                 label=_t("download_docx"),
-                data=docx_bytes,
+                data=_docx_bytes,
                 file_name="research_report.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
             )
-        except Exception as _exc:
-            st.error(f"DOCX error: {_exc}")
+    with col_md:
+        st.download_button(
+            label="⬇ Markdown",
+            data=final_report.encode("utf-8"),
+            file_name="research_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
 
 def main() -> None:
@@ -1934,7 +1950,6 @@ def main() -> None:
     )
     _initialize_state()
     _render_styles()
-    _render_auto_refresh()
     _render_header()
     _render_sidebar()
     research_interval = _get_live_refresh_interval()

@@ -1,13 +1,25 @@
 import argparse
 import os
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+_shutdown = threading.Event()
+
+
+def _handle_signal(signum, frame):  # noqa: ARG001
+    print(f"job-worker: received signal {signum}, shutting down gracefully…")
+    _shutdown.set()
+
+
+signal.signal(signal.SIGTERM, _handle_signal)
+signal.signal(signal.SIGINT,  _handle_signal)
 
 
 def run_once() -> int:
@@ -38,9 +50,12 @@ def main() -> int:
         run_once()
         return 0
 
-    while True:
+    while not _shutdown.is_set():
         run_once()
-        time.sleep(args.interval)
+        _shutdown.wait(timeout=args.interval)
+
+    print("job-worker: shutdown complete")
+    return 0
 
 
 if __name__ == "__main__":

@@ -146,7 +146,7 @@ class DecomposeResponse(BaseModel):
     depth: SearchDepth
 
 class ResearchRequest(BaseModel):
-    prompt: str = Field(..., description="The goal or topic of the research")
+    prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=2000)
     depth: SearchDepth = Field(default=SearchDepth.EASY)
 
 class ResearchRecord(BaseModel):
