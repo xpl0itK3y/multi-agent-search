@@ -1394,3 +1394,7 @@ class AnalyzerAgent(BaseAgent):
             use_parallel,
         )
         return final_report
+
+    def run(self, input_data: str) -> str:
+        """Satisfy BaseAgent abstract interface; delegates to run_analysis with no tasks."""
+        return self.run_analysis(prompt=input_data, tasks=[], depth=None)
