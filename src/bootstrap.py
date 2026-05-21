@@ -46,10 +46,10 @@ def create_research_service() -> ResearchService:
     agent_optimizer = None
     agent_orchestrator = None
     agent_analyzer = None
+    replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
     claim_verifier = ClaimVerifierAgent()
-    replan_agent = ReplanAgent()
 
     if settings.smoke_analyzer_report:
         agent_analyzer = StaticAnalyzerAgent(settings.smoke_analyzer_report)
@@ -58,6 +58,7 @@ def create_research_service() -> ResearchService:
         llm = DeepSeekProvider(api_key=settings.deepseek_api_key, model=settings.deepseek_model)
         agent_optimizer = PromptOptimizerAgent(llm)
         agent_orchestrator = OrchestratorAgent(llm)
+        replan_agent = ReplanAgent(llm=llm)            # Q-4: LLM-backed gap queries
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,

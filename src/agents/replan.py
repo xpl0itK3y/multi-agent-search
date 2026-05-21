@@ -1,6 +1,18 @@
+import json
+import logging
 from collections import Counter
+from typing import Optional
 
 from src.api.schemas import ReplanRecommendation, SearchDepth, SearchTask, SourceCriticSummary
+from src.core.llm import LLMProvider
+
+logger = logging.getLogger(__name__)
+
+_SYSTEM_PROMPT = """You are a Search Gap Analyst.
+Given a research topic and a specific coverage gap, generate exactly 3 targeted search queries to fill that gap.
+The queries must be distinct, concrete, and more specific than a generic topic search.
+Return ONLY a valid JSON array of 3 strings. No explanation, no markdown, no extra keys.
+Example: ["query one here", "query two here", "query three here"]"""
 
 
 class ReplanAgent:
@@ -20,6 +32,55 @@ class ReplanAgent:
         "smartphone": ["manufacturer specification", "benchmark report", "independent review"],
     }
 
+    def __init__(self, llm: Optional[LLMProvider] = None) -> None:
+        self.llm = llm
+
+    # ── LLM-based query generation ────────────────────────────────────────────
+
+    def _llm_queries(
+        self,
+        prompt: str,
+        reason: str,
+        task_descriptions: list[str],
+        fallback: list[str],
+    ) -> list[str]:
+        """Ask the LLM for gap-specific queries; fall back to templates on any failure."""
+        if self.llm is None:
+            return fallback
+
+        already_searched = "; ".join(task_descriptions[:6]) if task_descriptions else "none"
+        user_prompt = (
+            f"Research topic: {prompt}\n"
+            f"Coverage gap: {reason}\n"
+            f"Already searched: {already_searched}\n"
+            "Generate 3 highly specific queries to fill this gap."
+        )
+        try:
+            raw = self.llm.generate(
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+            )
+            clean = raw.strip()
+            # Strip optional markdown fences
+            if clean.startswith("```"):
+                clean = clean.split("```")[1]
+                if clean.startswith("json"):
+                    clean = clean[4:]
+                clean = clean.strip()
+            queries = json.loads(clean)
+            if isinstance(queries, list) and queries:
+                valid = [str(q).strip() for q in queries if str(q).strip()]
+                if valid:
+                    logger.info(
+                        "replan_llm_queries generated count=%d reason=%r", len(valid), reason
+                    )
+                    return valid[:3]
+        except Exception as exc:
+            logger.warning("replan_llm_queries_failed reason=%r error=%s", reason, exc)
+        return fallback
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
     def _topic_policy_hints(self, prompt: str) -> list[str]:
         lowered = prompt.lower()
         hints: list[str] = []
@@ -31,6 +92,8 @@ class ReplanAgent:
             if hint not in deduped:
                 deduped.append(hint)
         return deduped[:3]
+
+    # ── public API ────────────────────────────────────────────────────────────
 
     def suggest_follow_up(
         self,
@@ -51,42 +114,50 @@ class ReplanAgent:
 
         minimum_sources = self.MIN_SELECTED_SOURCES_BY_DEPTH[depth]
         topic_hints = self._topic_policy_hints(prompt)
+        task_descriptions = [t.description for t in tasks if t.description]
+
         if selected_sources < minimum_sources:
+            reason = "coverage is thinner than expected for the selected depth"
+            fallback = [
+                f"{prompt} official sources",
+                f"{prompt} primary data",
+                f"{prompt} expert analysis",
+                *[f"{prompt} {hint}" for hint in topic_hints],
+            ]
             recommendations.append(
                 ReplanRecommendation(
-                    reason="coverage is thinner than expected for the selected depth",
-                    suggested_queries=[
-                        f"{prompt} official sources",
-                        f"{prompt} primary data",
-                        f"{prompt} expert analysis",
-                        *[f"{prompt} {hint}" for hint in topic_hints],
-                    ],
+                    reason=reason,
+                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
                 )
             )
 
         if failed_tasks:
+            reason = "some task branches returned weak or empty evidence"
+            fallback = [
+                f"{prompt} site:gov",
+                f"{prompt} site:edu",
+                f"{prompt} documentation OR report",
+                *[f"{prompt} {hint}" for hint in topic_hints],
+            ]
             recommendations.append(
                 ReplanRecommendation(
-                    reason="some task branches returned weak or empty evidence",
-                    suggested_queries=[
-                        f"{prompt} site:gov",
-                        f"{prompt} site:edu",
-                        f"{prompt} documentation OR report",
-                        *[f"{prompt} {hint}" for hint in topic_hints],
-                    ],
+                    reason=reason,
+                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
                 )
             )
 
         if source_summary and source_summary.primary_sources == 0 and depth != SearchDepth.EASY:
+            reason = "the current source pool lacks strong primary-source coverage"
+            fallback = [
+                f"{prompt} official announcement",
+                f"{prompt} original report",
+                f"{prompt} primary source",
+                *[f"{prompt} {hint}" for hint in topic_hints],
+            ]
             recommendations.append(
                 ReplanRecommendation(
-                    reason="the current source pool lacks strong primary-source coverage",
-                    suggested_queries=[
-                        f"{prompt} official announcement",
-                        f"{prompt} original report",
-                        f"{prompt} primary source",
-                        *[f"{prompt} {hint}" for hint in topic_hints],
-                    ],
+                    reason=reason,
+                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
                 )
             )
 
@@ -94,17 +165,19 @@ class ReplanAgent:
             dominant_domain, dominant_count = domain_counter.most_common(1)[0]
             total_source_count = sum(domain_counter.values())
             if total_source_count and dominant_count / total_source_count >= 0.4:
+                reason = f"evidence is concentrated in a narrow domain set (dominant: {dominant_domain})"
+                fallback = [
+                    f"{prompt} alternative sources",
+                    f"{prompt} independent review",
+                    f"{prompt} comparison analysis",
+                    *[f"{prompt} {hint}" for hint in topic_hints],
+                ]
                 recommendations.append(
                     ReplanRecommendation(
-                        reason="evidence is concentrated in a narrow domain set",
-                    suggested_queries=[
-                        f"{prompt} alternative sources",
-                        f"{prompt} independent review",
-                        f"{prompt} comparison analysis",
-                        *[f"{prompt} {hint}" for hint in topic_hints],
-                    ],
+                        reason=reason,
+                        suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    )
                 )
-            )
 
         return recommendations[:3]
 
@@ -120,28 +193,32 @@ class ReplanAgent:
 
         for conflict in conflicts[:2]:
             topic = conflict.get("topic") or "disputed point"
+            reason = f"resolve conflicting evidence about {topic}"
+            fallback = [
+                f"{prompt} {topic} official source",
+                f"{prompt} {topic} primary source",
+                f"{prompt} {topic} expert analysis",
+                *[f"{prompt} {topic} {hint}" for hint in topic_hints],
+            ]
             recommendations.append(
                 ReplanRecommendation(
-                    reason=f"resolve conflicting evidence about {topic}",
-                    suggested_queries=[
-                        f"{prompt} {topic} official source",
-                        f"{prompt} {topic} primary source",
-                        f"{prompt} {topic} expert analysis",
-                        *[f"{prompt} {topic} {hint}" for hint in topic_hints],
-                    ],
+                    reason=reason,
+                    suggested_queries=self._llm_queries(prompt, reason, [], fallback),
                 )
             )
 
         if weak_support:
+            reason = "strengthen weakly supported claims with narrower evidence"
+            fallback = [
+                f"{prompt} source-backed analysis",
+                f"{prompt} official report",
+                f"{prompt} documentation evidence",
+                *[f"{prompt} {hint}" for hint in topic_hints],
+            ]
             recommendations.append(
                 ReplanRecommendation(
-                    reason="strengthen weakly supported claims with narrower evidence",
-                    suggested_queries=[
-                        f"{prompt} source-backed analysis",
-                        f"{prompt} official report",
-                        f"{prompt} documentation evidence",
-                        *[f"{prompt} {hint}" for hint in topic_hints],
-                    ],
+                    reason=reason,
+                    suggested_queries=self._llm_queries(prompt, reason, [], fallback),
                 )
             )
 

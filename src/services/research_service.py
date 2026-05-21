@@ -343,13 +343,20 @@ class ResearchService:
         )
 
     def _build_research_source_pool(self, tasks: list[SearchTask]) -> list[dict]:
+        """Aggregate sources across all tasks, deduplicating by URL (Q-6)."""
         aggregated_sources: list[dict] = []
+        seen_urls: set[str] = set()
         for task in tasks:
             for result in task.result or []:
                 url = result.get("url")
                 content = result.get("content")
                 if not url or not content:
                     continue
+                # Normalise: strip trailing slash, lowercase scheme+host
+                normalised = url.rstrip("/").lower().split("?")[0].split("#")[0]
+                if normalised in seen_urls:
+                    continue
+                seen_urls.add(normalised)
                 aggregated_sources.append(
                     {
                         "url": url,

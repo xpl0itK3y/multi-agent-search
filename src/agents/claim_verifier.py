@@ -9,15 +9,15 @@ class ClaimVerifierAgent:
         "en": "Based on the available sources, ",
         "es": "Según las fuentes disponibles, ",
     }
+    # Only replace genuinely absolute / unqualified certainty words.
+    # We intentionally exclude "clearly→apparently" and "always→typically" because
+    # those replacements break factual meaning and produce awkward sentences.
+    # "полностью" is also excluded — it means "fully/completely" which is often correct.
     ABSOLUTE_PATTERNS = (
         (re.compile(r"(?i)\b(однозначно|безусловно)\b"), "по всей видимости"),
-        (re.compile(r"(?i)\bвсегда\b"), "как правило"),
-        (re.compile(r"(?i)\bполностью\b"), "в значительной мере"),
         (re.compile(r"(?i)\b(definitely|certainly)\b"), "generally"),
-        (re.compile(r"(?i)\bclearly\b"), "apparently"),
-        (re.compile(r"(?i)\balways\b"), "typically"),
         (re.compile(r"(?i)\b(siempre)\b"), "generalmente"),
-        (re.compile(r"(?i)\b(claramente|sin duda)\b"), "aparentemente"),
+        (re.compile(r"(?i)\b(sin duda)\b"), "aparentemente"),
     )
     NOTE_MESSAGES = {
         "ru": {
@@ -54,9 +54,17 @@ class ClaimVerifierAgent:
         return self.SOFTENER_BY_LANGUAGE.get(language, self.SOFTENER_BY_LANGUAGE["en"])
 
     def _soften_absolute_terms(self, line: str) -> str:
-        """Replace absolute-language tokens (однозначно, clearly, etc.) in any line."""
+        """Replace absolute-language tokens in uncited or weakly-cited lines.
+
+        Lines already backed by ≥ 2 inline source references are considered
+        sufficiently supported — we leave their wording intact to avoid
+        degrading clear, well-cited analytical language.
+        """
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            return line
+        # Skip well-cited lines — two or more [Sn] references is adequate support.
+        if len(re.findall(r"\[S\d+\]", stripped)) >= 2:
             return line
         softened = stripped
         for pattern, replacement in self.ABSOLUTE_PATTERNS:
