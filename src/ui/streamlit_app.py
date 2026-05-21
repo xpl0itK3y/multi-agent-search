@@ -286,12 +286,6 @@ TRANSLATIONS = {
         "download_preparing": "Preparing file…",
         "partial_report_banner": "Generating report… (streaming live preview)",
         "partial_report_sections_banner": "Analyzing sections in parallel… (live preview)",
-        "queue_research": "🕒 Queue research",
-        "queue_already": "⏳ Already queued — waiting for current research to finish",
-        "queue_banner": "A research is already running — your query is queued and will start automatically when it completes.",
-        "queue_badge": "⏳ Queued",
-        "queue_cancel": "✕ Cancel",
-        "queue_auto_launched": "Queued research started automatically.",
     },
     "ru": {
         "research_console": "Консоль исследований",
@@ -564,12 +558,6 @@ TRANSLATIONS = {
         "download_preparing": "Подготовка файла…",
         "partial_report_banner": "Формируем отчёт… (предпросмотр в реальном времени)",
         "partial_report_sections_banner": "Параллельный анализ секций… (предпросмотр)",
-        "queue_research": "🕒 В очередь",
-        "queue_already": "⏳ Запрос в очереди — запустится после завершения текущего",
-        "queue_banner": "Уже идёт другое исследование — запрос поставлен в очередь и запустится автоматически.",
-        "queue_badge": "⏳ В очереди",
-        "queue_cancel": "✕ Отменить",
-        "queue_auto_launched": "Исследование из очереди запущено автоматически.",
     },
 }
 
@@ -1052,12 +1040,6 @@ _TERMINAL_STATUSES = {"completed", "failed"}
 _ACTIVE_STATUSES = {"processing", "analyzing"}
 
 
-def _get_active_research_count() -> int:
-    """Count researches currently in an active (non-terminal) state using the history cache."""
-    history = st.session_state.get("_history_cache") or []
-    return sum(1 for item in history if (item.get("status") or "") in _ACTIVE_STATUSES)
-
-
 def _get_live_refresh_interval() -> int | None:
     """Adaptive interval: fast during active work, stops on terminal state."""
     research_id = st.session_state.get("selected_research_id", "").strip()
@@ -1269,47 +1251,15 @@ def _render_sidebar() -> None:
 def _render_create_research() -> None:
     st.subheader(_t("start_research"))
     depth_options = [SearchDepth.EASY.value, SearchDepth.MEDIUM.value, SearchDepth.HARD.value]
-
-    # ── 1. Apply staged prompt BEFORE the widget is rendered (Streamlit rule) ──
+    # Apply any pending prompt that was staged by the repeat button or post-submit handler.
+    # Must happen BEFORE the widget with key="_form_prompt" is rendered; Streamlit forbids
+    # writing to a widget-bound session_state key after the widget has been instantiated.
     if "_pending_form_prompt" in st.session_state:
         st.session_state["_form_prompt"] = st.session_state.pop("_pending_form_prompt")
-
-    # ── 2. Queue state ────────────────────────────────────────────────────────
-    active_count = _get_active_research_count()
-    queued: dict | None = st.session_state.get("_queued_research")
-
-    # Race condition: something was queued but the active research already finished
-    # before the live fragment noticed the transition → auto-launch immediately.
-    if queued and active_count == 0:
-        q_result = _safe_api_call(_api_post, "/v1/research", queued)
-        st.session_state.pop("_queued_research", None)
-        if q_result:
-            st.session_state["selected_research_id"] = q_result["research_id"]
-            st.session_state.pop("_history_cache", None)
-            st.toast(_t("queue_auto_launched"), icon="🚀")
-            st.rerun()
-        queued = None  # launch failed — clear local variable so banner doesn't show
-
-    # ── 3. Queue status banner + cancel button ────────────────────────────────
-    if queued:
-        _q_msg, _q_cancel = st.columns([5, 1])
-        _q_msg.info(f"**{_t('queue_badge')}** — _{queued.get('prompt', '')[:80]}_")
-        if _q_cancel.button(_t("queue_cancel"), use_container_width=True, key="_queue_cancel_btn"):
-            st.session_state.pop("_queued_research", None)
-            st.rerun()
-
-    # ── 4. Button label & disabled state (computed before the form) ──────────
+    # pre-populate depth index from repeat button (F-4)
     _repeat_depth = st.session_state.pop("_form_depth", None)
     _depth_index  = depth_options.index(_repeat_depth) if _repeat_depth in depth_options else 1
 
-    if queued:
-        _submit_label, _submit_disabled = _t("queue_already"), True
-    elif active_count > 0:
-        _submit_label, _submit_disabled = _t("queue_research"), False
-    else:
-        _submit_label, _submit_disabled = _t("launch_research"), False
-
-    # ── 5. Form ───────────────────────────────────────────────────────────────
     with st.form("start_research_form", clear_on_submit=False):
         prompt = st.text_area(
             _t("research_prompt"),
@@ -1341,16 +1291,11 @@ def _render_create_research() -> None:
                 help="POST {research_id, status} when research completes.",
                 key="_form_webhook",
             )
-        submitted = st.form_submit_button(
-            _submit_label,
-            use_container_width=True,
-            disabled=_submit_disabled,
-        )
+        submitted = st.form_submit_button(_t("launch_research"), use_container_width=True)
 
     if not submitted:
         return
 
-    # ── 6. Submit handler ─────────────────────────────────────────────────────
     payload: dict = {"prompt": prompt.strip(), "depth": depth}
     if not payload["prompt"]:
         st.warning(_t("research_prompt_required"))
@@ -1358,22 +1303,15 @@ def _render_create_research() -> None:
     if webhook_url and webhook_url.strip().startswith("http"):
         payload["webhook_url"] = webhook_url.strip()
 
-    # Re-check at submit time — state may have changed since the last render.
-    if _get_active_research_count() > 0:
-        # Queue the research; auto-launch fires when the live fragment detects completion.
-        st.session_state["_queued_research"] = payload
+    result = _safe_api_call(_api_post, "/v1/research", payload)
+    if result:
+        st.session_state["selected_research_id"] = result["research_id"]
+        st.session_state.pop("_history_cache", None)  # force history refresh
+        # Stage prompt so it is applied before the widget renders on the next run (F-6).
         st.session_state["_pending_form_prompt"] = prompt.strip()
         _sync_query_params()
+        st.success(_t("research_created", research_id=result["research_id"]))
         st.rerun()
-    else:
-        result = _safe_api_call(_api_post, "/v1/research", payload)
-        if result:
-            st.session_state["selected_research_id"] = result["research_id"]
-            st.session_state.pop("_history_cache", None)
-            st.session_state["_pending_form_prompt"] = prompt.strip()
-            _sync_query_params()
-            st.success(_t("research_created", research_id=result["research_id"]))
-            st.rerun()
 
 
 def _run_queue_action(label: str, path: str) -> None:
@@ -1953,14 +1891,6 @@ def _render_research_details() -> None:
     prev_status = st.session_state.get(f"_rs_{research_id}", "")
     st.session_state[f"_rs_{research_id}"] = research_status
     if research_status in _TERMINAL_STATUSES and prev_status not in _TERMINAL_STATUSES and prev_status:
-        # Auto-launch any queued research now that the current one has finished.
-        _queued = st.session_state.pop("_queued_research", None)
-        if _queued:
-            _q_result = _safe_api_call(_api_post, "/v1/research", _queued)
-            if _q_result:
-                st.session_state["selected_research_id"] = _q_result["research_id"]
-                st.session_state.pop("_history_cache", None)
-                st.toast(_t("queue_auto_launched"), icon="🚀")
         st.rerun(scope="app")  # full-page rerun so _get_live_refresh_interval() returns None
 
     st.markdown(
