@@ -379,10 +379,6 @@ class AnalyzerAgent(BaseAgent):
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
 
-    def run(self, input_data: str) -> str:
-        # Dummy implementation to satisfy abstract base class
-        return ""
-
     def _normalize_text(self, value: str | None) -> str:
         return rust_accel.normalize_text(value)
 

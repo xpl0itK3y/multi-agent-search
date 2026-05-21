@@ -142,6 +142,7 @@ TRANSLATIONS = {
         "progress": "Progress",
         "progress_caption": "{completed}/{total} tasks completed",
         "all_tasks_completed": "All search tasks are complete. Finalize can be started.",
+        "finalize_with_failed_tasks": "⚠️ {failed} task(s) failed. Finalize will use results from {completed} successful task(s) only.",
         "finalize_waiting": "Finalize is unavailable until all search tasks finish.",
         "task_status_breakdown": "Task status breakdown",
         "pending_tasks": "Pending",
@@ -403,6 +404,7 @@ TRANSLATIONS = {
         "progress": "Прогресс",
         "progress_caption": "Завершено задач: {completed}/{total}",
         "all_tasks_completed": "Все search tasks завершены. Можно запускать finalize.",
+        "finalize_with_failed_tasks": "⚠️ {failed} задач(и) завершились с ошибкой. Finalize использует результаты {completed} успешных задач.",
         "finalize_waiting": "Finalize недоступен, пока search tasks не завершатся.",
         "task_status_breakdown": "Срез по статусам задач",
         "pending_tasks": "В ожидании",
@@ -897,26 +899,37 @@ def _safe_api_call(method, *args, ignore_status_codes: set[int] | None = None, *
 
 def _initialize_state() -> None:
     query_research_id = st.query_params.get("research_id", "")
-    query_language = st.query_params.get("lang", "en")
+    query_language    = st.query_params.get("lang", "en")
+    query_prompt      = st.query_params.get("prompt", "")
     if isinstance(query_research_id, list):
         query_research_id = query_research_id[0] if query_research_id else ""
     if isinstance(query_language, list):
         query_language = query_language[0] if query_language else "en"
+    if isinstance(query_prompt, list):
+        query_prompt = query_prompt[0] if query_prompt else ""
 
     st.session_state.setdefault("selected_research_id", query_research_id)
     st.session_state.setdefault("ui_language", query_language if query_language in LANGUAGE_OPTIONS else "en")
     st.session_state.setdefault("auto_refresh_enabled", False)
     st.session_state.setdefault("auto_refresh_seconds", 10)
+    # Pre-populate form prompt from URL on first load (F-6)
+    if query_prompt and "_form_prompt" not in st.session_state:
+        st.session_state["_form_prompt"] = query_prompt
 
 
 def _sync_query_params() -> None:
     research_id = st.session_state.get("selected_research_id", "").strip()
-    language = st.session_state.get("ui_language", "en")
+    language    = st.session_state.get("ui_language", "en")
+    draft       = st.session_state.get("_form_prompt", "").strip()
     if research_id:
         st.query_params["research_id"] = research_id
     elif "research_id" in st.query_params:
         del st.query_params["research_id"]
     st.query_params["lang"] = language
+    if draft:
+        st.query_params["prompt"] = draft
+    elif "prompt" in st.query_params:
+        del st.query_params["prompt"]
 
 
 
@@ -1053,7 +1066,7 @@ def _render_sidebar_history() -> None:
                     st.rerun(scope="app")
             else:
                 btn_label = f"{icon} {prompt_short}\n{ago}"
-                col_btn, col_del = st.columns([7, 1])
+                col_btn, col_repeat, col_del = st.columns([6, 1, 1])
                 if col_btn.button(
                     btn_label,
                     key=f"hist-{rid}",
@@ -1061,6 +1074,13 @@ def _render_sidebar_history() -> None:
                     type="primary" if is_selected else "secondary",
                 ):
                     st.session_state["selected_research_id"] = rid
+                    _sync_query_params()
+                    st.rerun(scope="app")
+                if col_repeat.button("🔁", key=f"hist-repeat-{rid}", use_container_width=True,
+                                     help="Repeat this research"):
+                    st.session_state["_form_prompt"] = prompt
+                    st.session_state["_form_depth"]  = item.get("depth", "medium")
+                    st.session_state["selected_research_id"] = ""
                     _sync_query_params()
                     st.rerun(scope="app")
                 if col_del.button("🗑", key=f"hist-trash-{rid}", use_container_width=True):
@@ -1114,17 +1134,22 @@ def _render_sidebar() -> None:
 
 def _render_create_research() -> None:
     st.subheader(_t("start_research"))
+    depth_options = [SearchDepth.EASY.value, SearchDepth.MEDIUM.value, SearchDepth.HARD.value]
+    # pre-populate depth index from repeat button (F-4)
+    _repeat_depth = st.session_state.pop("_form_depth", None)
+    _depth_index  = depth_options.index(_repeat_depth) if _repeat_depth in depth_options else 1
+
     with st.form("start_research_form", clear_on_submit=False):
         prompt = st.text_area(
             _t("research_prompt"),
             height=140,
             placeholder=_t("research_placeholder"),
+            key="_form_prompt",    # bound to session_state — persists to URL (F-6) and re-run (F-4)
         )
-        depth_options = [SearchDepth.EASY.value, SearchDepth.MEDIUM.value, SearchDepth.HARD.value]
         depth = st.selectbox(
             _t("search_level"),
             options=depth_options,
-            index=1,
+            index=_depth_index,
             format_func=lambda value: (
                 f"{_t(SEARCH_DEPTH_PROFILES[SearchDepth(value)]['label'].lower().replace(' ', '_'))} ({value})"
             ),
@@ -1152,6 +1177,8 @@ def _render_create_research() -> None:
     if result:
         st.session_state["selected_research_id"] = result["research_id"]
         st.session_state.pop("_history_cache", None)  # force history refresh
+        # save prompt to URL so it survives a page reload (F-6)
+        st.session_state["_form_prompt"] = prompt.strip()
         _sync_query_params()
         st.success(_t("research_created", research_id=result["research_id"]))
         st.rerun()
@@ -1699,46 +1726,7 @@ def _render_latest_finalize_job(latest_finalize_job: dict | None) -> None:
     return latest_finalize_job
 
 
-def _fix_source_links(report: str) -> str:
-    """Patch reports stored in DB before the analyzer fixes:
-
-    1. Convert '- [S2] https://url' to proper markdown links (fixes 'bullet' text).
-    2. Strip LLM meta-commentary preamble before the first heading.
-    3. Remove the '## Примечания к отчёту / Report Notes' section.
-    """
-    import re as _re
-
-    # 1. Strip LLM meta-commentary before the first # heading
-    _PREAMBLE = _re.compile(
-        r"(?i)^(ниже\s+представлен|ниже\s+приведён|below\s+is\s+(the|a)\s+|"
-        r"the\s+following\s+is|вот\s+синтезирован|данный\s+отчёт\s+объединяет|"
-        r"here\s+is\s+(the|a)\s+)[^\n]*\n+",
-    )
-    report = _PREAMBLE.sub("", report).strip()
-
-    # 2. Remove Report Notes section
-    _NOTES_SECTION = _re.compile(
-        r"\n+##\s+(Примечания к отчёту|Примечания к отчету|Report Notes)\s*\n.*?(?=\n## |\Z)",
-        _re.DOTALL,
-    )
-    report = _NOTES_SECTION.sub("", report)
-
-    # 3. Convert old bare-URL source lines to clickable markdown links
-    _OLD_SOURCE = _re.compile(
-        r"^- \[S(\d+)\] (https?://\S+)$",
-        _re.MULTILINE,
-    )
-    def _replace(m: _re.Match) -> str:
-        sid = f"S{m.group(1)}"
-        url = m.group(2)
-        try:
-            from urllib.parse import urlparse as _up
-            label = _up(url).netloc.removeprefix("www.") or url
-        except Exception:
-            label = url
-        return f"- **\\[{sid}\\]** [{label}]({url})"
-
-    return _OLD_SOURCE.sub(_replace, report)
+from src.ui.report_utils import clean_report as _fix_source_links  # noqa: E402
 
 
 def _render_research_details() -> None:
@@ -1818,6 +1806,9 @@ def _render_research_details() -> None:
         st.info(_t("finalize_pending"))
     elif finalize_ready and not latest_finalize_job:
         st.success(_t("all_tasks_completed"))
+
+    if finalize_ready and failed_tasks > 0:
+        st.warning(_t("finalize_with_failed_tasks", failed=failed_tasks, completed=completed_tasks))
 
     # Graph trail — live execution log of the finalize graph
     if latest_finalize_job or research_status in _ACTIVE_STATUSES | _TERMINAL_STATUSES:

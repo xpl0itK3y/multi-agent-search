@@ -14,43 +14,7 @@ from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Language detection
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _detect_lang(text: str) -> str:
-    """Return 'ru' if text contains significant Cyrillic content, else 'en'."""
-    if not text:
-        return "en"
-    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
-    return "ru" if cyrillic / len(text) > 0.15 else "en"
-
-
-_EXPORT_PREAMBLE = re.compile(
-    r"(?i)^(ниже\s+представлен|ниже\s+приведён|below\s+is\s+(the|a)\s+(synthesized|final|complete)|"
-    r"the\s+following\s+is\s+(a|the)\s+(synthesized|final)|вот\s+синтезирован|"
-    r"данный\s+отчёт\s+объединяет|синтезирую\s+все|"
-    r"i\s+have\s+(combined|merged|synthesized)|here\s+is\s+(the|a)\s+(synthesized|final))[^\n]*\n+"
-)
-_EXPORT_NOTES_SECTION = re.compile(
-    r"\n+##\s+(Примечания\s+к\s+отчёту|Report\s+Notes|Notas\s+del\s+informe)\s*\n.*?(?=\n## |\Z)",
-    re.DOTALL | re.IGNORECASE,
-)
-
-
-_OLD_SOURCE_LINE = re.compile(r"^- \[S(\d+)\] (https?://\S+)$", re.MULTILINE)
-
-
-def _clean_report_for_export(report: str) -> str:
-    """Strip LLM meta-commentary, quality notes, and fix legacy bare-URL source lines."""
-    report = _EXPORT_PREAMBLE.sub("", report).strip()
-    report = _EXPORT_NOTES_SECTION.sub("", report)
-    # upgrade old format "- [S1] https://..." to new clickable format
-    report = _OLD_SOURCE_LINE.sub(
-        lambda m: f"- **\\[S{m.group(1)}\\]** [{m.group(2)}]({m.group(2)})",
-        report,
-    )
-    return report
+from src.ui.report_utils import clean_report as _clean_report_for_export  # noqa: F401
 
 
 _LABELS: dict[str, dict[str, str]] = {
