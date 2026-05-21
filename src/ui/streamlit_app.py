@@ -831,6 +831,26 @@ def _render_styles() -> None:
         [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button:hover {
             opacity: 1;
         }
+
+        /* ── Suppress rerun / fragment-refresh visual noise ─────────────────
+           Streamlit dims content in two situations:
+           1. Full reruns  — top progress bar + toolbar spinner.
+           2. Fragment reruns (run_every) — [data-stale="true"] opacity fade.
+           Hiding these keeps the UI stable while data refreshes silently.   */
+        [data-testid="stDecoration"] {
+            display: none !important;
+        }
+        [data-testid="stStatusWidget"] {
+            display: none !important;
+        }
+        [data-stale="true"] {
+            opacity: 1 !important;
+            transition: none !important;
+        }
+        .element-container {
+            transition: none !important;
+            animation: none !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
