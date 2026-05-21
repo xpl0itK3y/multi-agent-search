@@ -122,13 +122,19 @@ def _link_display(label: str, url: str) -> str:
     return (label[:70] + "…") if len(label) > 70 else label
 
 
-_H2   = re.compile(r"^## (.+)$")
-_H3   = re.compile(r"^### (.+)$")
-_H4   = re.compile(r"^#### (.+)$")
-_BULL = re.compile(r"^[-*] (.+)$")
-_ENUM = re.compile(r"^\d+\. .+$")
+_H2       = re.compile(r"^## (.+)$")
+_H3       = re.compile(r"^### (.+)$")
+_H4       = re.compile(r"^#### (.+)$")
+_BULL     = re.compile(r"^[-*] (.+)$")
+_ENUM     = re.compile(r"^\d+\. .+$")
 _ENUM_CAP = re.compile(r"^\d+\. (.+)$")
-_HR   = re.compile(r"^---+$")
+_HR       = re.compile(r"^---+$")
+_TABLE_ROW = re.compile(r"^\|.+\|$")
+_TABLE_SEP = re.compile(r"^\|[-:| ]+\|$")
+
+
+def _split_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
 def _parse_blocks(markdown: str) -> list[dict]:
@@ -167,13 +173,29 @@ def _parse_blocks(markdown: str) -> list[dict]:
                 i += 1
             blocks.append({"type": "ordered", "items": items})
             continue
+        elif _TABLE_ROW.match(stripped):
+            raw_rows: list[str] = []
+            while i < len(lines):
+                ln = lines[i].strip()
+                if not _TABLE_ROW.match(ln):
+                    break
+                raw_rows.append(ln)
+                i += 1
+            # filter out separator rows (|---|---|)
+            content_rows = [r for r in raw_rows if not _TABLE_SEP.match(r)]
+            if len(content_rows) >= 1:
+                headers = _split_table_row(content_rows[0])
+                rows    = [_split_table_row(r) for r in content_rows[1:]]
+                blocks.append({"type": "table", "headers": headers, "rows": rows})
+            continue
         elif stripped:
             parts: list[str] = []
             while i < len(lines):
                 ln = lines[i].strip()
                 if (not ln or _H2.match(ln) or _H3.match(ln)
                         or _H4.match(ln) or _HR.match(ln)
-                        or _BULL.match(ln) or _ENUM.match(ln)):
+                        or _BULL.match(ln) or _ENUM.match(ln)
+                        or _TABLE_ROW.match(ln)):
                     break
                 parts.append(lines[i])
                 i += 1
@@ -397,6 +419,39 @@ def generate_pdf(
             story.append(ListFlowable(items, bulletType="1",
                                       leftIndent=12, spaceBefore=2, spaceAfter=4))
 
+        elif btype == "table":
+            headers  = block["headers"]
+            tbl_rows = block["rows"]
+            col_n    = max(len(headers), max((len(r) for r in tbl_rows), default=0), 1)
+
+            def _pad(row: list[str], n: int) -> list[str]:
+                return (row + [""] * n)[:n]
+
+            S_TH = ParagraphStyle("th", fontName=FB, fontSize=9,
+                                   textColor=C_WHITE, leading=12)
+            S_TD = ParagraphStyle("td", fontName=F,  fontSize=9,
+                                   textColor=C_DARK,  leading=12)
+
+            tbl_data = [[Paragraph(_md_to_rl(h), S_TH) for h in _pad(headers, col_n)]]
+            for row in tbl_rows:
+                tbl_data.append([Paragraph(_md_to_rl(c), S_TD) for c in _pad(row, col_n)])
+
+            col_w = doc.width / col_n
+            pdf_tbl = Table(tbl_data, colWidths=[col_w] * col_n, repeatRows=1)
+            pdf_tbl.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1,  0),  C_BLUE),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1),  [C_WHITE, C_LIGHT]),
+                ("GRID",          (0, 0), (-1, -1),  0.4, C_GRAY),
+                ("TOPPADDING",    (0, 0), (-1, -1),  4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1),  4),
+                ("LEFTPADDING",   (0, 0), (-1, -1),  6),
+                ("RIGHTPADDING",  (0, 0), (-1, -1),  6),
+                ("VALIGN",        (0, 0), (-1, -1),  "TOP"),
+            ]))
+            story.append(Spacer(1, 6))
+            story.append(pdf_tbl)
+            story.append(Spacer(1, 8))
+
     doc.build(story)
     return buf.getvalue()
 
@@ -592,6 +647,45 @@ def generate_docx(
                 p.paragraph_format.left_indent = Cm(0.5)
                 p.paragraph_format.space_after = Pt(2)
                 _add_inline(p, item)
+
+        elif btype == "table":
+            headers  = block["headers"]
+            tbl_rows = block["rows"]
+            col_n    = max(len(headers), max((len(r) for r in tbl_rows), default=0), 1)
+
+            def _pad(row: list[str], n: int) -> list[str]:
+                return (row + [""] * n)[:n]
+
+            tbl = doc.add_table(rows=1 + len(tbl_rows), cols=col_n)
+            tbl.style = "Table Grid"
+
+            # header row — blue background, white bold text
+            for j, h in enumerate(_pad(headers, col_n)):
+                cell = tbl.rows[0].cells[j]
+                cell.text = ""
+                run = cell.paragraphs[0].add_run(h)
+                run.bold = True
+                run.font.color.rgb = hex_rgb("FFFFFF")
+                tc_pr = cell._tc.get_or_add_tcPr()
+                shd = OxmlElement("w:shd")
+                shd.set(qn("w:val"),   "clear")
+                shd.set(qn("w:color"), "auto")
+                shd.set(qn("w:fill"),  "1d4ed8")
+                tc_pr.append(shd)
+
+            # data rows — alternating fill
+            for i_r, row in enumerate(tbl_rows):
+                fill = "F1F5F9" if i_r % 2 == 0 else "FFFFFF"
+                for j, cell_text in enumerate(_pad(row, col_n)):
+                    cell = tbl.rows[i_r + 1].cells[j]
+                    cell.text = ""
+                    _add_inline(cell.paragraphs[0], cell_text)
+                    tc_pr = cell._tc.get_or_add_tcPr()
+                    shd = OxmlElement("w:shd")
+                    shd.set(qn("w:val"),   "clear")
+                    shd.set(qn("w:color"), "auto")
+                    shd.set(qn("w:fill"),  fill)
+                    tc_pr.append(shd)
 
     buf = io.BytesIO()
     doc.save(buf)
