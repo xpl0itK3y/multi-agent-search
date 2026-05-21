@@ -7,6 +7,7 @@ from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
+from src.agents.language_utils import LANGUAGE_HINTS
 from src.agents.source_critic import SourceCriticAgent
 from src.core.agent import BaseAgent
 from src.core import rust_accel
@@ -32,11 +33,8 @@ class AnalyzerAgent(BaseAgent):
     REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту)\s*$")
     INTRODUCTION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Introduction|Введение)\s*$")
     CONCLUSION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conclusion|Заключение)\s*$")
-    LANGUAGE_HINTS = {
-        "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
-        "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
-        "en": {"the", "and", "for", "with", "that", "from", "this", "into", "small"},
-    }
+    # Single source of truth lives in src/agents/language_utils.py (A-6).
+    LANGUAGE_HINTS = LANGUAGE_HINTS
     STOPWORDS = {
         "the", "and", "for", "with", "that", "this", "from", "into", "their", "there", "about",
         "have", "has", "had", "were", "was", "will", "would", "could", "should", "than", "then",

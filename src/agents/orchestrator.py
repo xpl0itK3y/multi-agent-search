@@ -3,6 +3,7 @@ import re
 import uuid
 from src.core.agent import BaseAgent
 from src.api.schemas import SearchDepth, TaskStatus
+from src.agents.language_utils import LANGUAGE_HINTS
 from src.observability import maybe_traceable
 from src.search_depth_profiles import get_depth_profile
 from src.source_quality_policy import combined_topics
@@ -98,12 +99,9 @@ class OrchestratorAgent(BaseAgent):
         "сравнен", "compare", "comparison", "performance", "выбор", "choose", "vs", "versus",
     )
 
-    LANGUAGE_HINTS = {
-        "ru": {"и", "в", "не", "что", "для", "как", "это", "на", "по"},
-        "es": {"el", "la", "los", "las", "para", "como", "una", "con", "del"},
-        "en": {"the", "and", "for", "with", "that", "from", "this", "into", "small"},
-    }
-    
+    # Single source of truth lives in src/agents/language_utils.py (A-6).
+    LANGUAGE_HINTS = LANGUAGE_HINTS
+
     SYSTEM_PROMPT = """
                         You are a Search Orchestrator. Your job is to decompose a complex user query into independent search tasks for automated bots.
 

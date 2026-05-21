@@ -2,22 +2,13 @@ from collections import Counter
 from urllib.parse import urlparse
 
 from src.api.schemas import SourceCriticSummary
+from src.source_quality_policy import PRIMARY_DOMAINS
 
 
 class SourceCriticAgent:
     PRIMARY_DOMAIN_SUFFIXES = (".gov", ".edu")
-    PRIMARY_DOMAIN_EXACT_MATCHES = {
-        "apple.com",
-        "support.apple.com",
-        "developer.apple.com",
-        "google.com",
-        "blog.google",
-        "openai.com",
-        "platform.openai.com",
-        "docs.python.org",
-        "developer.mozilla.org",
-        "wikipedia.org",
-    }
+    # Single source of truth lives in src/source_quality_policy.py (A-5).
+    PRIMARY_DOMAIN_EXACT_MATCHES = PRIMARY_DOMAINS
     COMMUNITY_DOMAIN_EXACT_MATCHES = {
         "reddit.com",
         "news.ycombinator.com",

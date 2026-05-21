@@ -451,6 +451,23 @@ TOPIC_POLICIES = {
     "news_current": NEWS_CURRENT_POLICY,
 }
 
+# Domains that are always treated as authoritative "primary" sources regardless of topic.
+# SourceCriticAgent imports this so the list lives in exactly one place.
+PRIMARY_DOMAINS: frozenset[str] = frozenset(
+    {
+        "apple.com",
+        "support.apple.com",
+        "developer.apple.com",
+        "google.com",
+        "blog.google",
+        "openai.com",
+        "platform.openai.com",
+        "docs.python.org",
+        "developer.mozilla.org",
+        "wikipedia.org",
+    }
+)
+
 
 def detect_topics(text: str) -> set[str]:
     normalized = " ".join(text.lower().split())
