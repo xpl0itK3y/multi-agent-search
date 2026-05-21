@@ -40,7 +40,7 @@ TRANSLATIONS = {
         "research_prompt": "Research prompt",
         "research_placeholder": "Compare the latest battery storage trends, costs, and deployment constraints.",
         "search_level": "Search Level",
-        "launch_research": "Launch Research",
+        "launch_research": "🚀 Launch Research",
         "research_prompt_required": "Research prompt is required.",
         "research_created": "Research created: {research_id}",
         "quick_scan": "Quick Scan",
@@ -312,7 +312,7 @@ TRANSLATIONS = {
         "research_prompt": "Исследовательский запрос",
         "research_placeholder": "Сравни последние тренды в battery storage, стоимость и ограничения внедрения.",
         "search_level": "Уровень поиска",
-        "launch_research": "Запустить исследование",
+        "launch_research": "🚀 Запустить исследование",
         "research_prompt_required": "Нужно заполнить исследовательский запрос.",
         "research_created": "Исследование создано: {research_id}",
         "quick_scan": "Быстрый проход",
@@ -830,6 +830,35 @@ def _render_styles() -> None:
         }
         [data-testid="stSidebar"] [data-testid="column"]:last-child .stButton > button:hover {
             opacity: 1;
+        }
+
+        /* ── Form submit button (stFormSubmitButton ≠ stButton — needs own rule) */
+        div[data-testid="stFormSubmitButton"] > button {
+            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%) !important;
+            color: #f8fafc !important;
+            border: 1px solid rgba(29, 78, 216, 0.20) !important;
+            border-radius: 8px !important;
+            font-weight: 700 !important;
+            font-size: 1rem !important;
+            letter-spacing: 0.01em !important;
+            box-shadow: 0 2px 8px rgba(29, 78, 216, 0.22) !important;
+            transition: box-shadow 0.15s ease !important;
+        }
+        div[data-testid="stFormSubmitButton"] > button:hover {
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%) !important;
+            box-shadow: 0 4px 14px rgba(29, 78, 216, 0.32) !important;
+        }
+        div[data-testid="stFormSubmitButton"] > button:disabled {
+            background: #94a3b8 !important;
+            color: #f8fafc !important;
+            box-shadow: none !important;
+            cursor: not-allowed !important;
+        }
+        div[data-testid="stFormSubmitButton"] > button *,
+        div[data-testid="stFormSubmitButton"] > button p,
+        div[data-testid="stFormSubmitButton"] > button span {
+            color: #f8fafc !important;
+            -webkit-text-fill-color: #f8fafc !important;
         }
 
         /* ── Suppress rerun / fragment-refresh visual noise ─────────────────
