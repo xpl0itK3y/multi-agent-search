@@ -352,14 +352,15 @@ class FinalizeGraphRunner:
             return "tie_break"
         return "analyze" if state.get("should_retry_analysis") else END
 
-    def _run_fallback(self, state: FinalizeGraphState) -> str:
-        resume_from_step = state.get("resume_from_step")
-        if resume_from_step == "complete":
-            logger.info("langgraph_finalize_resume_complete_noop")
-            return state.get("report", "")
-        if resume_from_step:
-            return self._resume_fallback(state, resume_from_step)
+    # ── pipeline helpers (A-7: single source of truth for step ordering) ─────
 
+    def _run_pipeline(self, state: FinalizeGraphState) -> FinalizeGraphState:
+        """Execute the full finalize pipeline sequentially (fresh run, no resume).
+
+        Both ``_run_fallback`` and ``_run_langgraph`` ultimately express the same
+        graph topology; keeping it in one place means adding a new step only
+        requires touching this method (plus the LangGraph wiring below).
+        """
         state = self._collect_context(state)
         if state.get("should_replan"):
             state = self._apply_replan(state)
@@ -372,12 +373,16 @@ class FinalizeGraphRunner:
             state = self._verify(state)
         if state.get("should_retry_analysis"):
             state = self._analyze(state)
+        return state
+
+    def _complete_run(self, state: FinalizeGraphState, *, used_langgraph: bool) -> str:
+        """Log completion metrics, write a final checkpoint, and return the report."""
         logger.info(
             "langgraph_finalize_runner_completed replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s used_langgraph=%s",
             state.get("replan_attempts", 0),
             state.get("tie_break_attempts", 0),
             state.get("analyze_attempts", 0),
-            False,
+            used_langgraph,
         )
         self._checkpoint(
             state,
@@ -387,7 +392,20 @@ class FinalizeGraphRunner:
         record_graph_completed_run()
         return state["report"]
 
+    # ── execution paths ───────────────────────────────────────────────────────
+
+    def _run_fallback(self, state: FinalizeGraphState) -> str:
+        resume_from_step = state.get("resume_from_step")
+        if resume_from_step == "complete":
+            logger.info("langgraph_finalize_resume_complete_noop")
+            return state.get("report", "")
+        if resume_from_step:
+            return self._resume_fallback(state, resume_from_step)
+        state = self._run_pipeline(state)
+        return self._complete_run(state, used_langgraph=False)
+
     def _resume_fallback(self, state: FinalizeGraphState, resume_from_step: str) -> str:
+        """Continue execution from a previously checkpointed step."""
         if resume_from_step == "collect_context":
             if state.get("should_replan"):
                 state = self._apply_replan(state)
@@ -423,11 +441,7 @@ class FinalizeGraphRunner:
             state = self._analyze(state)
             state = self._verify(state)
         else:
-            state = self._collect_context(state)
-            if state.get("should_replan"):
-                state = self._apply_replan(state)
-            state = self._analyze(state)
-            state = self._verify(state)
+            state = self._run_pipeline(state)
 
         logger.info(
             "langgraph_finalize_runner_resumed step=%s replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s",
@@ -436,13 +450,7 @@ class FinalizeGraphRunner:
             state.get("tie_break_attempts", 0),
             state.get("analyze_attempts", 0),
         )
-        self._checkpoint(
-            state,
-            "complete",
-            f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
-        )
-        record_graph_completed_run()
-        return state["report"]
+        return self._complete_run(state, used_langgraph=False)
 
     def _run_langgraph(self, state: FinalizeGraphState) -> str:  # pragma: no cover - optional dependency
         workflow = StateGraph(FinalizeGraphState)
@@ -459,17 +467,4 @@ class FinalizeGraphRunner:
         workflow.add_conditional_edges("verify", self._next_after_verify, {"tie_break": "tie_break", "analyze": "analyze", END: END})
         compiled = workflow.compile()
         result = compiled.invoke(state)
-        logger.info(
-            "langgraph_finalize_runner_completed replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s used_langgraph=%s",
-            result.get("replan_attempts", 0),
-            result.get("tie_break_attempts", 0),
-            result.get("analyze_attempts", 0),
-            True,
-        )
-        self._checkpoint(
-            result,
-            "complete",
-            f"Finalize graph completed with {result.get('analyze_attempts', 0)} analyze passes",
-        )
-        record_graph_completed_run()
-        return result["report"]
+        return self._complete_run(result, used_langgraph=True)

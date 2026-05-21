@@ -84,5 +84,13 @@ def create_research_service() -> ResearchService:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.research_service = create_research_service()
+    service = create_research_service()
+    app.state.research_service = service
+    # Recover any decompositions that were lost when the previous process terminated (R-1).
+    try:
+        recovered = service.recover_pending_decompositions()
+        if recovered:
+            print(f"Startup: recovered {recovered} pending decomposition(s)")
+    except Exception as exc:
+        print(f"Warning: startup decomposition recovery failed: {exc}")
     yield

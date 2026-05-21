@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     redis_url: Optional[str] = None
     use_redis_broker: bool = False
     redis_broker_pop_timeout_seconds: int = 2
+    decompose_recovery_minutes: int = 10
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

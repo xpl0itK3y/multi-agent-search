@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from configparser import ConfigParser
 from dataclasses import asdict, dataclass
 from typing import List, Dict, Optional
@@ -37,30 +38,50 @@ class SearchProvider:
         self.max_results = max_results
 
     def search(self, query: str) -> List[Dict[str, str]]:
+        """Run all DuckDuckGo backends concurrently; return the first successful result.
+
+        Worst-case latency drops from ~60 s (three sequential 20 s timeouts) to ~20 s
+        (a single timeout shared across all backends running in parallel).
+
+        Note: SuppressStderrFD is intentionally omitted from the per-backend worker because
+        it manipulates OS-level file descriptors via os.dup2 and is not thread-safe.
+        The curl_cffi Python logger is already silenced at module level.
         """
-        Perform a search and return a list of result dictionaries with 'title', 'href', and 'body'.
-        """
-        results = []
         backends = ["api", "html", "lite"]
-        
-        for backend in backends:
-            try:
-                with SuppressStderrFD():
-                    with DDGS(timeout=20) as ddgs:
-                        ddgs_gen = ddgs.text(query, max_results=self.max_results, backend=backend)
-                        if ddgs_gen:
-                            for r in ddgs_gen:
-                                results.append({
-                                    "title": r.get("title", ""),
-                                    "url": r.get("href", ""),
-                                    "snippet": r.get("body", "")
-                                })
-                            return results # Return early if successful
-            except Exception as e:
-                logger.warning(f"DuckDuckGo search failed with backend {backend}: {e}")
-                
-        logger.error(f"All DuckDuckGo backends failed for query: {query}")
-        return results
+
+        def _try_backend(backend: str) -> List[Dict[str, str]]:
+            with DDGS(timeout=20) as ddgs:
+                ddgs_gen = ddgs.text(query, max_results=self.max_results, backend=backend)
+                if ddgs_gen:
+                    return [
+                        {
+                            "title": r.get("title", ""),
+                            "url": r.get("href", ""),
+                            "snippet": r.get("body", ""),
+                        }
+                        for r in ddgs_gen
+                    ]
+            return []
+
+        with ThreadPoolExecutor(max_workers=len(backends)) as executor:
+            futures = {executor.submit(_try_backend, b): b for b in backends}
+            for future in as_completed(futures):
+                backend = futures[future]
+                try:
+                    results = future.result()
+                    if results:
+                        logger.info(
+                            "ddg_search_success backend=%s results=%d query_prefix=%r",
+                            backend,
+                            len(results),
+                            query[:50],
+                        )
+                        return results
+                except Exception as exc:
+                    logger.warning("ddg_backend_failed backend=%s error=%s", backend, exc)
+
+        logger.error("ddg_all_backends_failed query=%r", query[:80])
+        return []
 
 
 @dataclass

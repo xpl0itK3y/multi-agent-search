@@ -153,11 +153,15 @@ class ResearchService:
         """Create research record immediately and return. Decompose runs in background."""
         research = self.task_store.add_research(request, task_ids=[])
         logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
-        # store webhook_url in graph_state so workers can access it (F-1)
+        # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
+        # update_research_graph_state replaces the entire dict, so merge everything in one call.
+        graph_state: dict = {
+            "decompose_pending": True,
+            "decompose_payload": request.model_dump(mode="json"),
+        }
         if request.webhook_url:
-            self.task_store.update_research_graph_state(
-                research.id, {"webhook_url": str(request.webhook_url)}
-            )
+            graph_state["webhook_url"] = str(request.webhook_url)
+        self.task_store.update_research_graph_state(research.id, graph_state)
         return ResearchResponse(
             research_id=research.id,
             status="success",
@@ -183,6 +187,8 @@ class ResearchService:
                         job = self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
                         if self.broker:
                             self.broker.push_search_job(job.id)
+                # Clear crash-recovery marker now that decompose succeeded.
+                self._clear_decompose_pending(research_id)
                 logger.info(
                     "research_decomposed research_id=%s task_count=%s depth=%s",
                     research_id,
@@ -192,6 +198,76 @@ class ResearchService:
             except Exception as exc:
                 logger.error("research_decompose_failed research_id=%s error=%s", research_id, str(exc))
                 self.task_store.update_research_status(research_id, ResearchStatus.FAILED, str(exc))
+
+    def _clear_decompose_pending(self, research_id: str) -> None:
+        """Remove the crash-recovery marker from graph_state after decompose completes."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            return
+        state = dict(research.graph_state or {})
+        state.pop("decompose_pending", None)
+        state.pop("decompose_payload", None)
+        self.task_store.update_research_graph_state(research_id, state)
+
+    def recover_pending_decompositions(self) -> int:
+        """Re-schedule decompositions lost during a process crash.
+
+        Scans recent PROCESSING researches for those that have ``decompose_pending=True``
+        in graph_state, have no tasks yet, and were created more than
+        ``settings.decompose_recovery_minutes`` minutes ago.  For each such research a
+        fresh daemon thread is launched to replay ``decompose_and_enqueue``.
+
+        Returns the number of researches for which recovery was triggered.
+        """
+        import threading as _threading
+
+        stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=settings.decompose_recovery_minutes)
+        recent = self.task_store.list_researches(limit=50)
+        recovered = 0
+
+        for item in recent:
+            research = self.task_store.get_research(item.id)
+            if not research:
+                continue
+            graph_state = research.graph_state or {}
+            if not graph_state.get("decompose_pending"):
+                continue
+            # Tasks already exist — decompose ran; the flag is just stale.
+            if research.task_ids:
+                self._clear_decompose_pending(research.id)
+                continue
+            # Too recent — the background task may still be running.
+            created_at = research.created_at
+            if isinstance(created_at, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+            if created_at and created_at > stale_threshold:
+                continue
+            payload = graph_state.get("decompose_payload")
+            if not payload:
+                continue
+            try:
+                req = ResearchRequest.model_validate(payload)
+            except Exception as exc:
+                logger.warning(
+                    "decompose_recovery_invalid_payload research_id=%s error=%s",
+                    research.id, exc,
+                )
+                continue
+            logger.info("decompose_recovery_triggered research_id=%s", research.id)
+            _threading.Thread(
+                target=self.decompose_and_enqueue,
+                args=(research.id, req),
+                daemon=True,
+                name=f"decompose-recovery-{research.id[:8]}",
+            ).start()
+            recovered += 1
+
+        if recovered:
+            logger.info("decompose_recovery_completed count=%d", recovered)
+        return recovered
 
     def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
         return self.task_store.list_researches(limit=limit)
@@ -762,6 +838,7 @@ class ResearchService:
         return compacted_worker_names, compacted_research_ids
 
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
+        self.recover_pending_decompositions()
         search_recovery = self.recover_stale_search_task_jobs()
         finalize_recovery = self.recover_stale_research_finalize_jobs()
         search_cleanup = self.cleanup_old_search_task_jobs()
