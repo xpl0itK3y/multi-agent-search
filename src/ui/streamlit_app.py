@@ -271,6 +271,10 @@ TRANSLATIONS = {
         "history_delete_confirm": "Delete this research?",
         "history_delete_yes": "Yes, delete",
         "history_delete_no": "Cancel",
+        "history_search": "Search history",
+        "history_search_placeholder": "Filter by prompt…",
+        "history_no_match": "No researches match your filter.",
+        "running_tasks_detail": "Currently running tasks",
         "download_pdf": "⬇ Download PDF",
         "download_docx": "⬇ Download Word",
         "download_preparing": "Preparing file…",
@@ -533,6 +537,10 @@ TRANSLATIONS = {
         "history_delete_confirm": "Удалить это исследование?",
         "history_delete_yes": "Да, удалить",
         "history_delete_no": "Отмена",
+        "history_search": "Поиск по истории",
+        "history_search_placeholder": "Фильтр по запросу…",
+        "history_no_match": "Нет исследований по заданному фильтру.",
+        "running_tasks_detail": "Задачи в работе прямо сейчас",
         "download_pdf": "⬇ Скачать PDF",
         "download_docx": "⬇ Скачать Word",
         "download_preparing": "Подготовка файла…",
@@ -1039,6 +1047,19 @@ def _render_sidebar_history() -> None:
         if not history:
             st.caption(_t("history_empty"))
             return
+
+        hist_filter = st.text_input(
+            _t("history_search"),
+            value="",
+            placeholder=_t("history_search_placeholder"),
+            label_visibility="collapsed",
+        ).strip().lower()
+        if hist_filter:
+            history = [h for h in history if hist_filter in (h.get("prompt") or "").lower()]
+        if not history:
+            st.caption(_t("history_no_match"))
+            return
+
         current_id = st.session_state.get("selected_research_id", "").strip()
         confirm_id = st.session_state.get("_hist_confirm_delete", "")
         for item in history:
@@ -1794,6 +1815,26 @@ def _render_research_details() -> None:
         progress_value,
         text=_t("progress_caption", completed=completed_tasks + failed_tasks, total=progress_total),
     )
+
+    if progress_total:
+        pending_tasks = progress_total - completed_tasks - failed_tasks - sum(
+            1 for t in tasks if (t.get("status") or "") == "running"
+        )
+        running_count = sum(1 for t in tasks if (t.get("status") or "") == "running")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(_t("completed_tasks_short"), completed_tasks)
+        m2.metric(_t("running_tasks"), running_count)
+        m3.metric(_t("pending_tasks"), max(pending_tasks, 0))
+        m4.metric(_t("failed_tasks"), failed_tasks)
+
+        running_task_names = [
+            t.get("description") or t.get("id", "?")
+            for t in tasks if (t.get("status") or "") == "running"
+        ]
+        if running_task_names:
+            with st.expander(_t("running_tasks_detail"), expanded=True):
+                for name in running_task_names:
+                    st.caption(f"⏳ {name}")
 
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button(_t("refresh_research"), use_container_width=True):
