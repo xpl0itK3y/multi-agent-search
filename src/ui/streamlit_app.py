@@ -1163,15 +1163,24 @@ def _render_create_research() -> None:
                 source_limit=profile["source_limit"],
             )
         )
+        with st.expander("🔔 Webhook (optional)"):
+            webhook_url = st.text_input(
+                "Webhook URL",
+                placeholder="https://your-server.com/webhook",
+                help="POST {research_id, status} when research completes.",
+                key="_form_webhook",
+            )
         submitted = st.form_submit_button(_t("launch_research"), use_container_width=True)
 
     if not submitted:
         return
 
-    payload = {"prompt": prompt.strip(), "depth": depth}
+    payload: dict = {"prompt": prompt.strip(), "depth": depth}
     if not payload["prompt"]:
         st.warning(_t("research_prompt_required"))
         return
+    if webhook_url and webhook_url.strip().startswith("http"):
+        payload["webhook_url"] = webhook_url.strip()
 
     result = _safe_api_call(_api_post, "/v1/research", payload)
     if result:
@@ -1881,6 +1890,18 @@ def _render_research_details() -> None:
         st.markdown(_fix_source_links(final_report))
     with raw_tab:
         st.code(final_report, language="markdown")
+
+    # ── token usage (U-3) ─────────────────────────────────────────────────────
+    _usage = research.get("llm_token_usage") or {}
+    if _usage and _usage.get("total_tokens"):
+        _pt   = _usage.get("prompt_tokens", 0)
+        _ct   = _usage.get("completion_tokens", 0)
+        _cost = _usage.get("estimated_cost_usd", 0)
+        st.caption(
+            f"🔢 **Tokens:** {_pt:,} input · {_ct:,} output · "
+            f"{_pt + _ct:,} total &nbsp;|&nbsp; "
+            f"💰 **~${_cost:.4f}** (DeepSeek estimate)"
+        )
 
     # ── download buttons ─────────────────────────────────────────────────────
     st.divider()

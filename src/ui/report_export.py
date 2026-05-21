@@ -30,7 +30,32 @@ _LABELS: dict[str, dict[str, str]] = {
         "generated": "Создан",
         "page":      "Стр.",
     },
+    "es": {
+        "title":     "Informe de investigación",
+        "depth":     "Profundidad",
+        "generated": "Generado",
+        "page":      "Pág.",
+    },
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Language detection
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _detect_lang(text: str) -> str:
+    """Detect prompt language: 'ru', 'es', or 'en'."""
+    if not text:
+        return "en"
+    # Russian: significant Cyrillic ratio
+    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
+    if cyrillic / len(text) > 0.15:
+        return "ru"
+    # Spanish: ñ / ¿ / ¡ are uniquely Spanish markers
+    spanish = sum(1 for c in text if c in "ñÑ¿¡")
+    if spanish >= 2 or (len(text) > 20 and spanish / len(text) > 0.003):
+        return "es"
+    return "en"
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Font resolution (DejaVu → Unicode/Cyrillic; Helvetica → ASCII fallback)

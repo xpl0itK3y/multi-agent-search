@@ -148,6 +148,10 @@ class DecomposeResponse(BaseModel):
 class ResearchRequest(BaseModel):
     prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=2000)
     depth: SearchDepth = Field(default=SearchDepth.EASY)
+    webhook_url: Optional[str] = Field(
+        default=None,
+        description="Optional URL to POST when research completes (JSON: {research_id, status})",
+    )
 
 class ResearchRecord(BaseModel):
     id: str
@@ -192,6 +196,7 @@ class ResearchSummary(BaseModel):
     graph_execution_summary: GraphExecutionSummary = Field(default_factory=GraphExecutionSummary)
     latest_finalize_job: Optional["ResearchFinalizeJob"] = None
     tasks: List[SearchTaskSummary] = Field(default_factory=list)
+    llm_token_usage: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchReportResponse(BaseModel):

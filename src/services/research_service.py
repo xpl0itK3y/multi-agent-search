@@ -2,6 +2,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -152,6 +153,11 @@ class ResearchService:
         """Create research record immediately and return. Decompose runs in background."""
         research = self.task_store.add_research(request, task_ids=[])
         logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
+        # store webhook_url in graph_state so workers can access it (F-1)
+        if request.webhook_url:
+            self.task_store.update_research_graph_state(
+                research.id, {"webhook_url": str(request.webhook_url)}
+            )
         return ResearchResponse(
             research_id=research.id,
             status="success",
@@ -282,6 +288,7 @@ class ResearchService:
             graph_execution_summary=graph_execution_summary,
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             tasks=task_summaries,
+            llm_token_usage=(research.graph_state or {}).get("llm_token_usage", {}),
         )
 
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
@@ -511,6 +518,15 @@ class ResearchService:
 
         return research
 
+    def _fire_webhook(self, url: str, research_id: str, payload: dict[str, Any]) -> None:
+        """POST completion notification to user-supplied webhook URL (best-effort)."""
+        try:
+            import httpx
+            httpx.post(url, json=payload, timeout=10.0)
+            logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+        except Exception as exc:
+            logger.warning("webhook_failed url=%s error=%s", url, exc)
+
     def complete_research_finalization(self, research_id: str) -> ResearchRecord:
         with bind_observability_context(research_id=research_id):
             research = self.task_store.get_research(research_id)
@@ -519,6 +535,11 @@ class ResearchService:
 
             tasks = self.task_store.get_tasks_by_research(research_id)
             analyzer = self.require_agent(self.analyzer, "Analyzer")
+
+            # reset token counter before this analysis run
+            if hasattr(analyzer.llm, "reset_usage"):
+                analyzer.llm.reset_usage()
+
             if settings.use_langgraph_finalize_graph:
                 report = self.finalize_graph_runner.run(research_id, research.prompt, tasks, research.depth)
             else:
@@ -529,7 +550,31 @@ class ResearchService:
                 ResearchStatus.COMPLETED,
                 report,
             )
+
+            # persist token usage into graph_state (U-3)
+            if hasattr(analyzer.llm, "token_usage"):
+                usage = analyzer.llm.token_usage
+                logger.info(
+                    "research_token_usage prompt=%d completion=%d cost_usd=%.4f",
+                    usage.get("prompt_tokens", 0),
+                    usage.get("completion_tokens", 0),
+                    usage.get("estimated_cost_usd", 0),
+                )
+                gs = (research.graph_state or {}).copy()
+                gs["llm_token_usage"] = usage
+                self.task_store.update_research_graph_state(research_id, gs)
+
             logger.info("research_finalize_completed")
+
+            # fire webhook if configured (F-1)
+            gs = (research.graph_state or {})
+            webhook_url = gs.get("webhook_url")
+            if webhook_url:
+                self._fire_webhook(
+                    webhook_url,
+                    research_id,
+                    {"research_id": research_id, "status": "completed"},
+                )
 
             return self.task_store.get_research(research_id)
 
