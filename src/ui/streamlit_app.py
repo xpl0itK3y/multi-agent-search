@@ -1193,7 +1193,8 @@ def _render_sidebar_history() -> None:
                     st.rerun(scope="app")
                 if col_repeat.button("🔁", key=f"hist-repeat-{rid}", use_container_width=True,
                                      help="Repeat this research"):
-                    st.session_state["_form_prompt"] = prompt
+                    # Stage the value — applied before the widget renders on the next run.
+                    st.session_state["_pending_form_prompt"] = prompt
                     st.session_state["_form_depth"]  = item.get("depth", "medium")
                     st.session_state["selected_research_id"] = ""
                     _sync_query_params()
@@ -1250,6 +1251,11 @@ def _render_sidebar() -> None:
 def _render_create_research() -> None:
     st.subheader(_t("start_research"))
     depth_options = [SearchDepth.EASY.value, SearchDepth.MEDIUM.value, SearchDepth.HARD.value]
+    # Apply any pending prompt that was staged by the repeat button or post-submit handler.
+    # Must happen BEFORE the widget with key="_form_prompt" is rendered; Streamlit forbids
+    # writing to a widget-bound session_state key after the widget has been instantiated.
+    if "_pending_form_prompt" in st.session_state:
+        st.session_state["_form_prompt"] = st.session_state.pop("_pending_form_prompt")
     # pre-populate depth index from repeat button (F-4)
     _repeat_depth = st.session_state.pop("_form_depth", None)
     _depth_index  = depth_options.index(_repeat_depth) if _repeat_depth in depth_options else 1
@@ -1301,8 +1307,8 @@ def _render_create_research() -> None:
     if result:
         st.session_state["selected_research_id"] = result["research_id"]
         st.session_state.pop("_history_cache", None)  # force history refresh
-        # save prompt to URL so it survives a page reload (F-6)
-        st.session_state["_form_prompt"] = prompt.strip()
+        # Stage prompt so it is applied before the widget renders on the next run (F-6).
+        st.session_state["_pending_form_prompt"] = prompt.strip()
         _sync_query_params()
         st.success(_t("research_created", research_id=result["research_id"]))
         st.rerun()
