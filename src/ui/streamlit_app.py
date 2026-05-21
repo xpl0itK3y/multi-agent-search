@@ -275,6 +275,12 @@ TRANSLATIONS = {
         "history_search_placeholder": "Filter by prompt…",
         "history_no_match": "No researches match your filter.",
         "running_tasks_detail": "Currently running tasks",
+        "eta_remaining": "⏱ ~{minutes}m remaining",
+        "eta_seconds": "⏱ ~{seconds}s remaining",
+        "eta_analyzing": "⏱ Writing final report…",
+        "report_sections_toggle": "📑 Collapsible sections",
+        "copy_report": "📋 Copy",
+        "copy_report_tooltip": "Copy full report text to clipboard",
         "download_pdf": "⬇ Download PDF",
         "download_docx": "⬇ Download Word",
         "download_preparing": "Preparing file…",
@@ -541,6 +547,12 @@ TRANSLATIONS = {
         "history_search_placeholder": "Фильтр по запросу…",
         "history_no_match": "Нет исследований по заданному фильтру.",
         "running_tasks_detail": "Задачи в работе прямо сейчас",
+        "eta_remaining": "⏱ ~{minutes} мин. осталось",
+        "eta_seconds": "⏱ ~{seconds}с осталось",
+        "eta_analyzing": "⏱ Пишем финальный отчёт…",
+        "report_sections_toggle": "📑 Свернуть секции",
+        "copy_report": "📋 Копировать",
+        "copy_report_tooltip": "Скопировать полный текст отчёта в буфер",
         "download_pdf": "⬇ Скачать PDF",
         "download_docx": "⬇ Скачать Word",
         "download_preparing": "Подготовка файла…",
@@ -889,6 +901,88 @@ def _task_source_count(task: dict) -> int:
 
 def _research_source_count(tasks: list[dict]) -> int:
     return sum(_task_source_count(task) for task in tasks)
+
+
+# ── U-5: ETA ─────────────────────────────────────────────────────────────────
+
+def _compute_eta(created_at: str, completed: int, total: int, research_status: str) -> str | None:
+    """Return a short ETA string or None when not applicable."""
+    if research_status in _TERMINAL_STATUSES:
+        return None
+    if research_status == "analyzing":
+        return _t("eta_analyzing")
+    if total <= 0 or completed <= 0:
+        return None
+    try:
+        created = datetime.fromisoformat((created_at or "").replace("Z", "+00:00"))
+        elapsed = (datetime.now(timezone.utc) - created).total_seconds()
+        avg_per_task = elapsed / completed
+        remaining = max(0, total - completed)
+        if remaining == 0:
+            return None
+        eta_s = avg_per_task * remaining
+        if eta_s < 60:
+            return _t("eta_seconds", seconds=max(1, int(eta_s)))
+        return _t("eta_remaining", minutes=max(1, int(eta_s / 60)))
+    except Exception:
+        return None
+
+
+# ── U-11: smart export filename ───────────────────────────────────────────────
+
+def _export_filename(prompt: str, created_at: str, ext: str) -> str:
+    """Build a descriptive filename like 2026-05-21-iphone-vs-samsung.pdf."""
+    import re as _re
+    date = (created_at or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    slug = _re.sub(r"[^\w\s-]", "", (prompt or "").lower())
+    slug = _re.sub(r"[\s_]+", "-", slug).strip("-")[:45].rstrip("-")
+    return f"{date}-{slug}.{ext}" if slug else f"{date}-report.{ext}"
+
+
+# ── U-7: collapsible report sections ─────────────────────────────────────────
+
+def _render_report_collapsible(report_text: str) -> None:
+    """Render markdown report with ## headings as collapsible st.expanders."""
+    import re as _re
+    cleaned = _fix_source_links(report_text)
+    parts = _re.split(r"(?m)^(#{1,2} .+)$", cleaned)
+    if len(parts) <= 1:
+        st.markdown(cleaned)
+        return
+    if parts[0].strip():
+        st.markdown(parts[0])
+    _auto_open = {
+        "introduction", "введение", "introducción",
+        "conclusion", "заключение", "conclusión",
+        "key findings", "основные выводы", "hallazgos clave",
+        "summary", "резюме", "resumen",
+    }
+    for i in range(1, len(parts), 2):
+        heading = parts[i]
+        content = parts[i + 1] if i + 1 < len(parts) else ""
+        title = _re.sub(r"^#+\s*", "", heading).strip()
+        expanded = i <= 3 or title.lower() in _auto_open
+        with st.expander(title, expanded=expanded):
+            st.markdown(content)
+
+
+# ── U-10: copy-to-clipboard button ───────────────────────────────────────────
+
+def _copy_button(text: str, label: str, tooltip: str) -> None:
+    """Render a small JS clipboard button inside an HTML component."""
+    import json as _json
+    escaped = _json.dumps(text)
+    html = f"""
+    <button title="{tooltip}"
+      onclick="var b=this;navigator.clipboard.writeText({escaped})
+        .then(function(){{b.textContent='✅';setTimeout(function(){{b.textContent='{label}'}},2000)}})
+        .catch(function(){{b.textContent='❌'}})"
+      style="cursor:pointer;padding:5px 14px;border-radius:6px;
+             border:1px solid #bbb;background:#f0f2f6;font-size:13px;
+             font-family:sans-serif;white-space:nowrap">
+      {label}
+    </button>"""
+    st.components.v1.html(html, height=38)
 
 
 def _safe_api_call(method, *args, ignore_status_codes: set[int] | None = None, **kwargs) -> Any | None:
@@ -1836,6 +1930,16 @@ def _render_research_details() -> None:
                 for name in running_task_names:
                     st.caption(f"⏳ {name}")
 
+        # U-5: ETA
+        _eta = _compute_eta(
+            research.get("created_at", ""),
+            completed_tasks + failed_tasks,
+            progress_total,
+            research_status,
+        )
+        if _eta:
+            st.caption(_eta)
+
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button(_t("refresh_research"), use_container_width=True):
         st.rerun()
@@ -1926,9 +2030,27 @@ def _render_research_details() -> None:
         st.info(_t("final_report_not_ready"))
         return
 
+    # U-10: copy button + U-7: collapsible toggle — top action bar
+    _act_copy, _act_toggle, _act_spacer = st.columns([1, 1.4, 4])
+    with _act_copy:
+        _copy_button(
+            final_report,
+            _t("copy_report"),
+            _t("copy_report_tooltip"),
+        )
+    with _act_toggle:
+        _use_sections = st.toggle(
+            _t("report_sections_toggle"),
+            value=st.session_state.get("_report_sections", False),
+            key="_report_sections",
+        )
+
     rendered_tab, raw_tab = st.tabs([_t("rendered"), _t("raw_markdown")])
     with rendered_tab:
-        st.markdown(_fix_source_links(final_report))
+        if _use_sections:
+            _render_report_collapsible(final_report)
+        else:
+            st.markdown(_fix_source_links(final_report))
     with raw_tab:
         st.code(final_report, language="markdown")
 
@@ -1966,13 +2088,17 @@ def _render_research_details() -> None:
     else:
         _pdf_bytes, _docx_bytes = st.session_state[_cache_key]
 
+    _fn_pdf  = _export_filename(_prompt, _created, "pdf")
+    _fn_docx = _export_filename(_prompt, _created, "docx")
+    _fn_md   = _export_filename(_prompt, _created, "md")
+
     col_pdf, col_docx, col_md = st.columns(3)
     with col_pdf:
         if _pdf_bytes:
             st.download_button(
                 label=_t("download_pdf"),
                 data=_pdf_bytes,
-                file_name="research_report.pdf",
+                file_name=_fn_pdf,
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -1981,7 +2107,7 @@ def _render_research_details() -> None:
             st.download_button(
                 label=_t("download_docx"),
                 data=_docx_bytes,
-                file_name="research_report.docx",
+                file_name=_fn_docx,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
             )
@@ -1989,7 +2115,7 @@ def _render_research_details() -> None:
         st.download_button(
             label="⬇ Markdown",
             data=final_report.encode("utf-8"),
-            file_name="research_report.md",
+            file_name=_fn_md,
             mime="text/markdown",
             use_container_width=True,
         )
