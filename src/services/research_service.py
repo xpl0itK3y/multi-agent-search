@@ -50,6 +50,7 @@ from src.api.schemas import (
 )
 from src.config import settings
 from src.graph import FinalizeGraphRunner
+from src.model_catalog import resolve_model_id
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context, set_queue_metrics
 from src.providers.search import get_extraction_metrics_snapshot
@@ -158,6 +159,8 @@ class ResearchService:
         graph_state: dict = {
             "decompose_pending": True,
             "decompose_payload": request.model_dump(mode="json"),
+            # Persist the validated model choice (falls back to default if unknown/unsafe).
+            "model": resolve_model_id(request.model, settings.deepseek_model),
         }
         if request.webhook_url:
             graph_state["webhook_url"] = str(request.webhook_url)

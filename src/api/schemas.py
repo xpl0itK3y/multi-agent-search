@@ -152,6 +152,10 @@ class ResearchRequest(BaseModel):
         default=None,
         description="Optional URL to POST when research completes (JSON: {research_id, status})",
     )
+    model: Optional[str] = Field(
+        default=None,
+        description="Optional model id from the catalog (GET /v1/models); validated server-side, falls back to default",
+    )
 
 class ResearchRecord(BaseModel):
     id: str

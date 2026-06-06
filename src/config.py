@@ -19,6 +19,8 @@ class Settings(BaseSettings):
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False
+    # Comma-separated list of allowed CORS origins for the Vue SPA (dev: Vite 5173 / preview 4173).
+    cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
     task_store_backend: str = "postgres"
     allow_memory_task_store: bool = False
     smoke_analyzer_report: Optional[str] = None

@@ -3,7 +3,9 @@ import time
 from typing import List
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from src.api.dependencies import get_research_service
+from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     DecomposeRequest,
     DecomposeResponse,
@@ -37,6 +39,15 @@ from src.observability import bind_observability_context, observe_api_request, r
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+
+    allowed_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.middleware("http")
     async def correlation_middleware(request: Request, call_next):
@@ -104,6 +115,10 @@ def register_routes(app: FastAPI) -> None:
         if not heartbeat:
             raise HTTPException(status_code=404, detail="Worker heartbeat not found")
         return heartbeat
+
+    @app.get("/v1/models")
+    async def list_models():
+        return list_model_catalog()
 
     @app.post("/v1/optimize", response_model=OptimizeResponse)
     async def optimize_prompt(request: Request, payload: OptimizeRequest):
