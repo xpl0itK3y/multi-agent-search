@@ -14,7 +14,7 @@ onMounted(() => {
 <template>
   <div class="flex h-screen w-screen overflow-hidden bg-bg text-ink">
     <AppSidebar />
-    <main class="flex-1 overflow-y-auto">
+    <main class="min-h-0 flex-1 overflow-hidden">
       <router-view />
     </main>
   </div>

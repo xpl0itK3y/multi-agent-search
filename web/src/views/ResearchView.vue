@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { api } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
-import MarkdownView from "@/components/MarkdownView.vue";
+import ArtifactPanel from "@/components/ArtifactPanel.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
+const prompt = ref<string>("");
 const status = ref<string>("processing");
 const report = ref<string>("");
 const isFinal = ref(false);
@@ -31,7 +33,14 @@ function statusLabel(s: string): string {
   return map[s] ?? s;
 }
 
-onMounted(() => {
+onMounted(async () => {
+  try {
+    const s = await api.getStatus(props.id);
+    prompt.value = s.prompt;
+    status.value = s.status;
+  } catch {
+    // Non-fatal — the SSE stream still drives status/report.
+  }
   close = openResearchStream(props.id, {
     onStatus: (s) => (status.value = s),
     onTrace: (step, detail) => trace.value.push({ step, detail }),
@@ -52,43 +61,46 @@ onBeforeUnmount(() => close?.());
 </script>
 
 <template>
-  <div class="mx-auto max-w-3xl px-6 py-10">
-    <button class="mb-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
-      ← На главную
-    </button>
+  <div class="flex h-full flex-col lg:flex-row">
+    <!-- Thread -->
+    <section
+      class="flex w-full flex-col overflow-y-auto border-b border-bd lg:w-[400px] lg:shrink-0 lg:border-b-0 lg:border-r"
+    >
+      <div class="px-6 py-6">
+        <button class="mb-5 text-sm text-muted hover:text-ink" @click="router.push('/')">
+          ← На главную
+        </button>
 
-    <div class="mb-6 flex items-center gap-3">
-      <span
-        class="h-2 w-2 rounded-full"
-        :class="{
-          'bg-emerald-400': status === 'completed',
-          'bg-red-400': status === 'failed',
-          'bg-accent animate-pulse': !DONE.has(status),
-        }"
-      />
-      <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
-    </div>
+        <h1 v-if="prompt" class="mb-4 font-serif text-xl leading-snug text-ink">
+          {{ prompt }}
+        </h1>
 
-    <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
+        <div class="mb-5 flex items-center gap-2">
+          <span
+            class="h-2 w-2 rounded-full"
+            :class="{
+              'bg-emerald-400': status === 'completed',
+              'bg-red-400': status === 'failed',
+              'bg-accent animate-pulse': !DONE.has(status),
+            }"
+          />
+          <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
+        </div>
 
-    <ProgressTrace
-      v-if="trace.length || reasoning"
-      :entries="trace"
-      :reasoning="reasoning"
-      :live="!done"
-      class="mb-6"
-    />
+        <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
 
-    <MarkdownView
-      v-if="report"
-      :source="report"
-      :class="{ 'opacity-80': !isFinal }"
-    />
-    <span v-if="report && !isFinal" class="ml-0.5 inline-block animate-pulse text-accent">▍</span>
+        <ProgressTrace
+          v-if="trace.length || reasoning"
+          :entries="trace"
+          :reasoning="reasoning"
+          :live="!done"
+        />
+      </div>
+    </section>
 
-    <p v-else-if="!DONE.has(status)" class="text-muted">
-      Отчёт формируется — он появится здесь в реальном времени.
-    </p>
-    <p v-else-if="status === 'failed'" class="text-muted">Не удалось сформировать отчёт.</p>
+    <!-- Artifact -->
+    <section class="min-h-0 flex-1">
+      <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" />
+    </section>
   </div>
 </template>

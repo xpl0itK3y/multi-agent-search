@@ -31,6 +31,7 @@ from src.api.schemas import (
     ResearchStatusSummary,
     SearchTaskJob,
     SearchTask,
+    SearchSourcePreview,
     SearchTaskSummary,
     TaskUpdate,
     WorkerHeartbeat,
@@ -276,6 +277,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse)
     async def get_research_report(research_id: str, request: Request):
         return get_research_service(request).get_research_report(research_id)
+
+    @app.get("/v1/research/{research_id}/sources", response_model=List[SearchSourcePreview])
+    async def get_research_sources(research_id: str, request: Request):
+        return get_research_service(request).get_research_sources(research_id)
 
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
     async def get_research_graph(research_id: str, request: Request):

@@ -410,6 +410,25 @@ class ResearchService:
             llm_token_usage=graph_state.get("llm_token_usage", {}),
         )
 
+    def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
+        """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        pool = self._build_research_source_pool(tasks)
+        return [
+            SearchSourcePreview(
+                url=item.get("url", ""),
+                title=item.get("title"),
+                domain=item.get("domain"),
+                source_quality=item.get("source_quality"),
+                snippet=((item.get("content") or "")[:280] or None),
+            )
+            for item in pool
+            if item.get("url")
+        ]
+
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)
         if not research:

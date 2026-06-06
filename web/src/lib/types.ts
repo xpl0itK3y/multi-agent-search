@@ -30,3 +30,37 @@ export interface ResearchReport {
   status: string;
   final_report: string | null;
 }
+
+export interface ResearchStatusSummary {
+  id: string;
+  prompt: string;
+  depth: Depth;
+  status: string;
+  task_count: number;
+  completed_tasks: number;
+  collected_sources: number;
+  finalize_ready: boolean;
+  has_final_report: boolean;
+}
+
+export interface SourcePreview {
+  url: string;
+  title?: string | null;
+  domain?: string | null;
+  source_quality?: string | null;
+  extraction_status?: string | null;
+  snippet?: string | null;
+}
+
+export interface GraphTrailEntry {
+  step?: string;
+  detail?: string;
+  timestamp?: string;
+}
+
+export interface ResearchGraph {
+  research_id: string;
+  status: string;
+  graph_state: Record<string, unknown>;
+  graph_trail: GraphTrailEntry[];
+}

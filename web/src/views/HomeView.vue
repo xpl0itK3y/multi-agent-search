@@ -42,7 +42,7 @@ function onPick(template: string) {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col items-center justify-center px-6">
+  <div class="flex h-full flex-col items-center justify-center overflow-y-auto px-6 py-10">
     <div class="mb-8 flex items-center gap-3">
       <SparkLogo :size="34" />
       <h1 class="font-serif text-4xl font-medium tracking-tight text-ink">{{ greeting }}</h1>

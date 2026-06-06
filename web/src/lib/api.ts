@@ -2,8 +2,11 @@ import type {
   CreateResearchResponse,
   Depth,
   ModelOption,
+  ResearchGraph,
   ResearchHistoryItem,
   ResearchReport,
+  ResearchStatusSummary,
+  SourcePreview,
 } from "./types";
 
 // Empty base => same origin => Vite dev-proxy forwards /v1 to the backend.
@@ -38,6 +41,15 @@ export const api = {
 
   getReport: (id: string) =>
     request<ResearchReport>(`/v1/research/${id}/report`),
+
+  getStatus: (id: string) =>
+    request<ResearchStatusSummary>(`/v1/research/${id}/status`),
+
+  getSources: (id: string) =>
+    request<SourcePreview[]>(`/v1/research/${id}/sources`),
+
+  getGraph: (id: string) =>
+    request<ResearchGraph>(`/v1/research/${id}/graph`),
 
   deleteResearch: (id: string) =>
     request<void>(`/v1/research/${id}`, { method: "DELETE" }),
