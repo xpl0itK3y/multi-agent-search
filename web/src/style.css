@@ -2,13 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theme palettes as space-separated RGB channels so Tailwind alpha modifiers
+   (e.g. bg-surface/50) work. Light = default; .dark on <html> switches. */
 :root {
+  --c-bg: 250 249 245;
+  --c-rail: 240 238 230;
+  --c-surface: 255 255 255;
+  --c-surface-hover: 240 238 230;
+  --c-bd: 226 223 214;
+  --c-ink: 43 42 39;
+  --c-muted: 117 114 107;
+  --c-accent: 193 95 60;
+  --c-accent-soft: 201 138 110;
+  color-scheme: light;
+}
+
+.dark {
+  --c-bg: 38 38 36;
+  --c-rail: 31 30 29;
+  --c-surface: 48 48 46;
+  --c-surface-hover: 58 58 55;
+  --c-bd: 64 63 60;
+  --c-ink: 236 234 227;
+  --c-muted: 154 152 144;
+  --c-accent: 217 119 87;
+  --c-accent-soft: 224 162 136;
   color-scheme: dark;
 }
 
 /* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */
 .md-citation {
-  color: theme("colors.accent");
+  color: rgb(var(--c-accent));
   font-weight: 600;
   font-size: 0.7em;
   padding: 0 0.15em;
@@ -22,23 +46,23 @@ body,
 
 body {
   margin: 0;
-  background: theme("colors.bg");
-  color: theme("colors.ink");
+  background: rgb(var(--c-bg));
+  color: rgb(var(--c-ink));
   font-family: theme("fontFamily.sans");
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Thin, unobtrusive scrollbars to match the dark surfaces */
+/* Thin, unobtrusive scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgb(var(--c-muted) / 0.4) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgb(var(--c-muted) / 0.35);
   border-radius: 9999px;
 }

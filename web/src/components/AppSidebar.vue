@@ -60,6 +60,13 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
       <span class="font-serif text-xl tracking-tight text-ink">Research</span>
       <div class="flex items-center gap-1 text-muted">
         <button class="icon-btn" title="Поиск">⌕</button>
+        <button
+          class="icon-btn"
+          :title="ui.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'"
+          @click="ui.toggleTheme()"
+        >
+          {{ ui.theme === "dark" ? "☀" : "☾" }}
+        </button>
         <button class="icon-btn" title="Свернуть" @click="ui.toggleSidebar()">⌗</button>
       </div>
     </div>
@@ -128,11 +135,11 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
   height: 2.25rem;
   width: 2.25rem;
   border-radius: 0.5rem;
-  color: theme("colors.muted");
+  color: rgb(var(--c-muted));
 }
 .rail-btn:hover {
-  background: theme("colors.surface");
-  color: theme("colors.ink");
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-ink));
 }
 .icon-btn {
   display: grid;
@@ -142,7 +149,7 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
   border-radius: 0.5rem;
 }
 .icon-btn:hover {
-  background: theme("colors.surface");
-  color: theme("colors.ink");
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-ink));
 }
 </style>

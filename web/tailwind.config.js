@@ -7,15 +7,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: "#262624",
-        rail: "#1f1e1d",
-        surface: "#30302e",
-        surfaceHover: "#3a3a37",
-        bd: "rgba(255,255,255,0.08)",
-        ink: "#ECEAE3",
-        muted: "#9A9890",
-        accent: "#D97757",
-        accentSoft: "#e0a288",
+        bg: "rgb(var(--c-bg) / <alpha-value>)",
+        rail: "rgb(var(--c-rail) / <alpha-value>)",
+        surface: "rgb(var(--c-surface) / <alpha-value>)",
+        surfaceHover: "rgb(var(--c-surface-hover) / <alpha-value>)",
+        bd: "rgb(var(--c-bd) / <alpha-value>)",
+        ink: "rgb(var(--c-ink) / <alpha-value>)",
+        muted: "rgb(var(--c-muted) / <alpha-value>)",
+        accent: "rgb(var(--c-accent) / <alpha-value>)",
+        accentSoft: "rgb(var(--c-accent-soft) / <alpha-value>)",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
