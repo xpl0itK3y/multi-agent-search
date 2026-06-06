@@ -203,6 +203,31 @@ class ResearchSummary(BaseModel):
     llm_token_usage: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ResearchStatusSummary(BaseModel):
+    """Cheap status snapshot — no source-critic/evidence/claim/replan/LLM work.
+
+    Use this for polling; the full ResearchSummary runs heavy analysis on demand.
+    """
+    id: str
+    prompt: str
+    depth: SearchDepth
+    status: ResearchStatus = ResearchStatus.PROCESSING
+    created_at: datetime
+    updated_at: datetime
+    has_final_report: bool = False
+    partial_report: Optional[str] = None
+    task_count: int = 0
+    completed_tasks: int = 0
+    pending_tasks: int = 0
+    running_tasks: int = 0
+    failed_tasks: int = 0
+    collected_sources: int = 0
+    avg_sources_per_task: float = 0.0
+    finalize_ready: bool = False
+    latest_finalize_job: Optional["ResearchFinalizeJob"] = None
+    llm_token_usage: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ResearchReportResponse(BaseModel):
     research_id: str
     status: ResearchStatus

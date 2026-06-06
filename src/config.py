@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     debug: bool = False
     # Comma-separated list of allowed CORS origins for the Vue SPA (dev: Vite 5173 / preview 4173).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
+    # SSRF guard: when False, user webhooks must resolve to public IPs only.
+    # Set True only for trusted internal deployments that intentionally call private hosts.
+    webhook_allow_private_targets: bool = False
     task_store_backend: str = "postgres"
     allow_memory_task_store: bool = False
     smoke_analyzer_report: Optional[str] = None

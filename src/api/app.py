@@ -28,6 +28,7 @@ from src.api.schemas import (
     ResearchRequest,
     ResearchResponse,
     ResearchSummary,
+    ResearchStatusSummary,
     SearchTaskJob,
     SearchTask,
     SearchTaskSummary,
@@ -266,6 +267,11 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary)
     async def get_research_summary(research_id: str, request: Request):
         return get_research_service(request).get_research_summary(research_id)
+
+    @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary)
+    async def get_research_status_summary(research_id: str, request: Request):
+        # Cheap polling endpoint: no heavy analysis/LLM (unlike /summary).
+        return get_research_service(request).get_research_status_summary(research_id)
 
     @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse)
     async def get_research_report(research_id: str, request: Request):

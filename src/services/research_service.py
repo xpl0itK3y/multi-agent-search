@@ -35,6 +35,7 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchReportResponse,
     ResearchSummary,
+    ResearchStatusSummary,
     ResearchStatus,
     ResearchFinalizeJob,
     SearchJobStatus,
@@ -370,6 +371,45 @@ class ResearchService:
             llm_token_usage=(research.graph_state or {}).get("llm_token_usage", {}),
         )
 
+    def get_research_status_summary(self, research_id: str) -> ResearchStatusSummary:
+        """Cheap status snapshot for polling — no source-critic/evidence/claim/replan/LLM."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        completed = sum(1 for task in tasks if task.status == TaskStatus.COMPLETED)
+        pending = sum(1 for task in tasks if task.status == TaskStatus.PENDING)
+        running = sum(1 for task in tasks if task.status == TaskStatus.RUNNING)
+        failed = sum(1 for task in tasks if task.status == TaskStatus.FAILED)
+        collected = sum(len(task.result or []) for task in tasks)
+        task_count = len(tasks)
+        avg_sources = round(collected / task_count, 1) if task_count else 0.0
+        finalize_ready = task_count > 0 and pending == 0 and running == 0
+        graph_state = research.graph_state or {}
+        partial_report = graph_state.get("partial_report") if not research.final_report else None
+
+        return ResearchStatusSummary(
+            id=research.id,
+            prompt=research.prompt,
+            depth=research.depth,
+            status=research.status,
+            created_at=research.created_at,
+            updated_at=research.updated_at,
+            has_final_report=bool(research.final_report),
+            partial_report=partial_report,
+            task_count=task_count,
+            completed_tasks=completed,
+            pending_tasks=pending,
+            running_tasks=running,
+            failed_tasks=failed,
+            collected_sources=collected,
+            avg_sources_per_task=avg_sources,
+            finalize_ready=finalize_ready,
+            latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
+            llm_token_usage=graph_state.get("llm_token_usage", {}),
+        )
+
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)
         if not research:
@@ -605,7 +645,20 @@ class ResearchService:
         return research
 
     def _fire_webhook(self, url: str, research_id: str, payload: dict[str, Any]) -> None:
-        """POST completion notification to user-supplied webhook URL (best-effort)."""
+        """POST completion notification to user-supplied webhook URL (best-effort).
+
+        Guards against SSRF: by default the URL must resolve to a public IP, so a
+        user cannot make the server reach internal/loopback/metadata endpoints.
+        """
+        if not settings.webhook_allow_private_targets:
+            from src.net_safety import is_safe_public_url
+
+            ok, reason = is_safe_public_url(url)
+            if not ok:
+                logger.warning(
+                    "webhook_blocked_unsafe_url research_id=%s reason=%s", research_id, reason
+                )
+                return
         try:
             import httpx
             httpx.post(url, json=payload, timeout=10.0)
