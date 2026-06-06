@@ -292,11 +292,16 @@ class ResearchGraphResponse(BaseModel):
 class ResearchHistoryItem(BaseModel):
     id: str
     prompt: str
+    title: Optional[str] = None
     depth: SearchDepth
     status: ResearchStatus
     created_at: datetime
     updated_at: datetime
     has_final_report: bool = False
+
+
+class ResearchRename(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
 
 
 class ResearchResponse(BaseModel):

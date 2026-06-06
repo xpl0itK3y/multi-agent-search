@@ -45,6 +45,10 @@ const ru = {
     expand: "Развернуть",
     themeLight: "Светлая тема",
     themeDark: "Тёмная тема",
+    searchPlaceholder: "Поиск по истории…",
+    rename: "Переименовать",
+    delete: "Удалить",
+    confirmDelete: "Удалить это исследование?",
   },
   nav: { researches: "Исследования", collections: "Коллекции", templates: "Шаблоны", customize: "Настроить" },
   status: {
@@ -143,6 +147,10 @@ const en: typeof ru = {
     expand: "Expand",
     themeLight: "Light theme",
     themeDark: "Dark theme",
+    searchPlaceholder: "Search history…",
+    rename: "Rename",
+    delete: "Delete",
+    confirmDelete: "Delete this research?",
   },
   nav: { researches: "Researches", collections: "Collections", templates: "Templates", customize: "Customize" },
   status: {
@@ -241,6 +249,10 @@ const es: typeof ru = {
     expand: "Expandir",
     themeLight: "Tema claro",
     themeDark: "Tema oscuro",
+    searchPlaceholder: "Buscar en el historial…",
+    rename: "Renombrar",
+    delete: "Eliminar",
+    confirmDelete: "¿Eliminar esta investigación?",
   },
   nav: { researches: "Investigaciones", collections: "Colecciones", templates: "Plantillas", customize: "Personalizar" },
   status: {

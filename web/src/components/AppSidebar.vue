@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+import type { ResearchHistoryItem } from "@/lib/types";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
 
@@ -8,8 +10,64 @@ const ui = useUiStore();
 const store = useResearchStore();
 const router = useRouter();
 const route = useRoute();
+const { t } = useI18n();
 
 const collapsed = computed(() => ui.sidebarCollapsed);
+
+const searchOpen = ref(false);
+const searchQuery = ref("");
+const searchInput = ref<HTMLInputElement | null>(null);
+const editingId = ref<string | null>(null);
+const editValue = ref("");
+
+async function toggleSearch() {
+  searchOpen.value = !searchOpen.value;
+  if (searchOpen.value) {
+    await nextTick();
+    searchInput.value?.focus();
+  } else {
+    searchQuery.value = "";
+  }
+}
+
+function rawTitle(item: ResearchHistoryItem): string {
+  return (item.title?.trim() || item.prompt || "").replace(/\s+/g, " ");
+}
+function displayTitle(item: ResearchHistoryItem): string {
+  const value = rawTitle(item);
+  return value.length > 30 ? value.slice(0, 30) + "…" : value;
+}
+
+const filteredHistory = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return store.history;
+  return store.history.filter((item) => rawTitle(item).toLowerCase().includes(q));
+});
+
+function startRename(item: ResearchHistoryItem) {
+  editingId.value = item.id;
+  editValue.value = rawTitle(item);
+}
+async function commitRename(id: string) {
+  const value = editValue.value.trim();
+  editingId.value = null;
+  if (value) {
+    try {
+      await store.renameResearch(id, value);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+async function onDelete(item: ResearchHistoryItem) {
+  if (!window.confirm(t("sidebar.confirmDelete"))) return;
+  try {
+    await store.deleteResearch(item.id);
+    if (currentId.value === item.id) router.push("/");
+  } catch {
+    /* ignore */
+  }
+}
 
 const nav = [
   { key: "researches", active: true },
@@ -25,11 +83,6 @@ function cycleLocale() {
   ui.setLocale(next);
 }
 
-function title(prompt: string): string {
-  const t = prompt.trim().replace(/\s+/g, " ");
-  return t.length > 30 ? t.slice(0, 30) + "…" : t;
-}
-
 function statusColor(status: string): string {
   if (status === "completed") return "bg-emerald-400";
   if (status === "failed") return "bg-red-400";
@@ -42,6 +95,11 @@ function openResearch(id: string) {
 }
 
 const currentId = computed(() => (route.name === "research" ? route.params.id : null));
+
+// Local directive: autofocus the rename input when it mounts.
+const vFocus = {
+  mounted: (el: HTMLInputElement) => el.focus(),
+};
 </script>
 
 <template>
@@ -66,7 +124,7 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
     <div class="flex items-center justify-between px-4 pt-4 pb-3">
       <span class="font-serif text-xl tracking-tight text-ink">{{ $t("sidebar.brand") }}</span>
       <div class="flex items-center gap-1 text-muted">
-        <button class="icon-btn" :title="$t('sidebar.search')">⌕</button>
+        <button class="icon-btn" :title="$t('sidebar.search')" @click="toggleSearch()">⌕</button>
         <button class="icon-btn text-[11px] font-medium" :title="LOCALE_LABEL[ui.locale]" @click="cycleLocale()">
           {{ LOCALE_LABEL[ui.locale] }}
         </button>
@@ -107,23 +165,63 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
     <!-- Recents -->
     <div class="mt-4 flex min-h-0 flex-1 flex-col">
       <div class="px-5 pb-1 text-xs uppercase tracking-wide text-muted">{{ $t("sidebar.recents") }}</div>
+
+      <div v-if="searchOpen" class="px-3 pb-2">
+        <input
+          ref="searchInput"
+          v-model="searchQuery"
+          :placeholder="$t('sidebar.searchPlaceholder')"
+          class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
+          @keydown.esc="toggleSearch()"
+        />
+      </div>
+
       <div class="min-h-0 flex-1 overflow-y-auto px-2">
         <div v-if="store.loadingHistory" class="space-y-2 px-3 py-2">
           <div v-for="i in 5" :key="i" class="h-4 animate-pulse rounded bg-surface" :style="{ width: 70 + ((i * 7) % 25) + '%' }" />
         </div>
-        <p v-else-if="!store.history.length" class="px-3 py-2 text-sm text-muted">
+        <p v-else-if="!filteredHistory.length" class="px-3 py-2 text-sm text-muted">
           {{ $t("sidebar.empty") }}
         </p>
-        <button
-          v-for="item in store.history"
+        <div
+          v-for="item in filteredHistory"
           :key="item.id"
-          class="flex w-full items-center gap-2 truncate rounded-lg px-3 py-2 text-left text-sm hover:bg-surface"
+          class="group flex items-center gap-1 rounded-lg pr-1 text-sm hover:bg-surface"
           :class="currentId === item.id ? 'bg-surface text-ink' : 'text-muted'"
-          @click="openResearch(item.id)"
         >
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusColor(item.status)" />
-          <span class="truncate">{{ title(item.prompt) }}</span>
-        </button>
+          <input
+            v-if="editingId === item.id"
+            v-model="editValue"
+            class="min-w-0 flex-1 rounded bg-transparent px-3 py-2 text-ink focus:outline-none"
+            @keydown.enter="commitRename(item.id)"
+            @keydown.esc="editingId = null"
+            @blur="commitRename(item.id)"
+            v-focus
+          />
+          <template v-else>
+            <button
+              class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+              @click="openResearch(item.id)"
+            >
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusColor(item.status)" />
+              <span class="truncate">{{ displayTitle(item) }}</span>
+            </button>
+            <button
+              class="hidden shrink-0 rounded p-1 text-muted hover:text-ink group-hover:block"
+              :title="$t('sidebar.rename')"
+              @click.stop="startRename(item)"
+            >
+              ✎
+            </button>
+            <button
+              class="hidden shrink-0 rounded p-1 text-muted hover:text-red-400 group-hover:block"
+              :title="$t('sidebar.delete')"
+              @click.stop="onDelete(item)"
+            >
+              ✕
+            </button>
+          </template>
+        </div>
       </div>
     </div>
 

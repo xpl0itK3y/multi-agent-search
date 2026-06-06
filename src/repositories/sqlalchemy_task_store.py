@@ -100,6 +100,7 @@ class SQLAlchemyTaskStore:
                 ResearchHistoryItem(
                     id=r.id,
                     prompt=r.prompt,
+                    title=(r.graph_state or {}).get("title"),
                     depth=r.depth,
                     status=r.status,
                     created_at=r.created_at,

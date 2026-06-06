@@ -314,6 +314,15 @@ class ResearchService:
     def delete_research(self, research_id: str) -> bool:
         return self.task_store.delete_research(research_id)
 
+    def rename_research(self, research_id: str, title: str) -> ResearchRecord:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        state = dict(research.graph_state or {})
+        state["title"] = title.strip()
+        self.task_store.update_research_graph_state(research_id, state)
+        return self.task_store.get_research(research_id)
+
     def get_research_status(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:

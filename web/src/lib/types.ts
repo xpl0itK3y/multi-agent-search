@@ -12,6 +12,7 @@ export interface ModelOption {
 export interface ResearchHistoryItem {
   id: string;
   prompt: string;
+  title?: string | null;
   depth: Depth;
   status: string;
   created_at?: string;

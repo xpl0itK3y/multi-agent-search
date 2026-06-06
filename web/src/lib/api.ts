@@ -89,4 +89,10 @@ export const api = {
 
   deleteResearch: (id: string) =>
     request<void>(`/v1/research/${id}`, { method: "DELETE" }),
+
+  renameResearch: (id: string, title: string) =>
+    request<{ id: string }>(`/v1/research/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
 };

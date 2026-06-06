@@ -39,6 +39,17 @@ export const useResearchStore = defineStore("research", () => {
     return res.research_id;
   }
 
+  async function deleteResearch(id: string) {
+    await api.deleteResearch(id);
+    history.value = history.value.filter((h) => h.id !== id);
+  }
+
+  async function renameResearch(id: string, title: string) {
+    await api.renameResearch(id, title);
+    const item = history.value.find((h) => h.id === id);
+    if (item) item.title = title;
+  }
+
   return {
     models,
     history,
@@ -48,5 +59,7 @@ export const useResearchStore = defineStore("research", () => {
     fetchModels,
     fetchHistory,
     createResearch,
+    deleteResearch,
+    renameResearch,
   };
 });

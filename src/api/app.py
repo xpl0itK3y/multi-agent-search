@@ -24,6 +24,7 @@ from src.api.schemas import (
     ResearchGraphResponse,
     ResearchHistoryItem,
     ResearchRecord,
+    ResearchRename,
     ResearchReportResponse,
     ResearchRequest,
     ChatAsk,
@@ -267,6 +268,10 @@ def register_routes(app: FastAPI) -> None:
         deleted = get_research_service(request).delete_research(research_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Research not found")
+
+    @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
+    async def rename_research(research_id: str, payload: ResearchRename, request: Request):
+        return get_research_service(request).rename_research(research_id, payload.title)
 
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
     async def get_research_status(research_id: str, request: Request):
