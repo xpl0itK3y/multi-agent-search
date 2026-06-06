@@ -2388,6 +2388,46 @@ def test_research_plan_first_flow_awaits_approval_then_enqueues():
     assert tasks[0].queries == ["new query"]
 
 
+def test_research_chat_grounded_answer_and_persistence():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic about widgets", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.update_research_status(research.id, ResearchStatus.COMPLETED, "## Report\nFindings [S1].")
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "d",
+            "queries": ["q"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "http://a.com", "title": "A", "content": "Widgets are blue and fast."}],
+        }
+    )
+
+    captured = {}
+
+    class FakeChat:
+        def answer(self, question, report, sources, history, model=None, streaming_callback=None):
+            captured["sources"] = sources
+            captured["report"] = report
+            return "Widgets are blue [S1]."
+
+    service = ResearchService(task_store=task_store, chat_agent=FakeChat())
+
+    answer = service.generate_research_answer(research.id, "What color?")
+    service.append_research_message(research.id, "user", "What color?")
+    service.append_research_message(research.id, "assistant", answer)
+
+    assert answer == "Widgets are blue [S1]."
+    assert captured["sources"][0]["source_id"] == "S1"
+    assert "Widgets are blue and fast." in captured["sources"][0]["content"]
+    messages = service.list_research_messages(research.id)
+    assert [m.role for m in messages] == ["user", "assistant"]
+    assert messages[1].content == "Widgets are blue [S1]."
+
+
 def test_research_plan_approve_rejects_when_not_in_review():
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

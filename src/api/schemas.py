@@ -256,6 +256,15 @@ class ResearchPlanUpdate(BaseModel):
     items: List[ResearchPlanItem]
 
 
+class ChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class ChatAsk(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
 class ResearchReportResponse(BaseModel):
     research_id: str
     status: ResearchStatus

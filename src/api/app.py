@@ -26,6 +26,8 @@ from src.api.schemas import (
     ResearchRecord,
     ResearchReportResponse,
     ResearchRequest,
+    ChatAsk,
+    ChatMessage,
     ResearchConflict,
     ResearchPlan,
     ResearchPlanUpdate,
@@ -300,6 +302,19 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord)
     async def approve_research_plan(research_id: str, request: Request):
         return get_research_service(request).approve_research_plan(research_id)
+
+    @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage])
+    async def list_research_messages(research_id: str, request: Request):
+        return get_research_service(request).list_research_messages(research_id)
+
+    @app.post("/v1/research/{research_id}/messages", response_model=ChatMessage)
+    def ask_research(research_id: str, payload: ChatAsk, request: Request):
+        # sync def -> runs in a threadpool so the blocking LLM call doesn't stall the event loop
+        service = get_research_service(request)
+        answer = service.generate_research_answer(research_id, payload.question)
+        service.append_research_message(research_id, "user", payload.question)
+        service.append_research_message(research_id, "assistant", answer)
+        return ChatMessage(role="assistant", content=answer)
 
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
     async def get_research_graph(research_id: str, request: Request):

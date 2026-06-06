@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.agents.analyzer import AnalyzerAgent
+from src.agents.chat import ChatAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
@@ -46,6 +47,7 @@ def create_research_service() -> ResearchService:
     agent_optimizer = None
     agent_orchestrator = None
     agent_analyzer = None
+    chat_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -59,6 +61,7 @@ def create_research_service() -> ResearchService:
         agent_optimizer = PromptOptimizerAgent(llm)
         agent_orchestrator = OrchestratorAgent(llm)
         replan_agent = ReplanAgent(llm=llm)            # Q-4: LLM-backed gap queries
+        chat_agent = ChatAgent(llm)                    # grounded follow-up Q&A
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -78,6 +81,7 @@ def create_research_service() -> ResearchService:
         evidence_mapper=evidence_mapper,
         claim_verifier=claim_verifier,
         replan_agent=replan_agent,
+        chat_agent=chat_agent,
         broker=_create_broker(),
     )
 

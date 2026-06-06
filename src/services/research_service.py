@@ -34,6 +34,7 @@ from src.api.schemas import (
     ResearchRequest,
     ResearchResponse,
     ResearchReportResponse,
+    ChatMessage,
     ResearchConflict,
     ResearchPlan,
     ResearchPlanItem,
@@ -102,6 +103,7 @@ class ResearchService:
         evidence_mapper: EvidenceMapperAgent | None = None,
         claim_verifier: ClaimVerifierAgent | None = None,
         replan_agent: ReplanAgent | None = None,
+        chat_agent=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -112,6 +114,7 @@ class ResearchService:
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
         self.replan_agent = replan_agent or ReplanAgent()
+        self.chat_agent = chat_agent
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
@@ -496,6 +499,58 @@ class ResearchService:
                     self.broker.push_search_job(job.id)
         logger.info("research_plan_approved research_id=%s task_count=%s", research_id, len(registered_tasks))
         return self.task_store.get_research(research_id)
+
+    def list_research_messages(self, research_id: str) -> list[ChatMessage]:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        messages = (research.graph_state or {}).get("messages") or []
+        return [ChatMessage.model_validate(message) for message in messages]
+
+    def append_research_message(self, research_id: str, role: str, content: str) -> None:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            return
+        state = dict(research.graph_state or {})
+        messages = list(state.get("messages") or [])
+        messages.append({"role": role, "content": content})
+        state["messages"] = messages[-40:]  # cap conversation history
+        self.task_store.update_research_graph_state(research_id, state)
+
+    def generate_research_answer(
+        self,
+        research_id: str,
+        question: str,
+        streaming_callback=None,
+    ) -> str:
+        """Grounded follow-up answer over this research's report + source pool (no new search)."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        chat = self.require_agent(self.chat_agent, "Chat")
+
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        pool = self._build_research_source_pool(tasks)[:12]
+        sources = [
+            {
+                "source_id": f"S{index}",
+                "title": item.get("title"),
+                "domain": item.get("domain"),
+                "url": item.get("url"),
+                "content": (item.get("content") or "")[:800],
+            }
+            for index, item in enumerate(pool, start=1)
+        ]
+        history = list((research.graph_state or {}).get("messages") or [])
+        model = (research.graph_state or {}).get("model")
+        return chat.answer(
+            question,
+            research.final_report or "",
+            sources,
+            history,
+            model=model,
+            streaming_callback=streaming_callback,
+        )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
         """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
