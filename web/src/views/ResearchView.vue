@@ -1,34 +1,22 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { api } from "@/lib/api";
+import { openResearchStream } from "@/lib/stream";
+import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
 const status = ref<string>("processing");
-const report = ref<string | null>(null);
-const loading = ref(true);
+const report = ref<string>("");
+const isFinal = ref(false);
+const trace = ref<TraceEntry[]>([]);
 const errorMsg = ref<string | null>(null);
-let timer: number | undefined;
+const done = ref(false);
 
-const DONE = new Set(["completed", "failed"]);
+let close: (() => void) | undefined;
 
-async function poll() {
-  try {
-    const res = await api.getReport(props.id);
-    status.value = res.status;
-    report.value = res.final_report;
-    loading.value = false;
-    if (DONE.has(res.status) && timer) {
-      window.clearInterval(timer);
-      timer = undefined;
-    }
-  } catch (e) {
-    errorMsg.value = (e as Error).message;
-    loading.value = false;
-  }
-}
+const DONE = new Set(["completed", "failed", "timeout"]);
 
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
@@ -36,17 +24,28 @@ function statusLabel(s: string): string {
     analyzing: "Синтез отчёта…",
     completed: "Готово",
     failed: "Ошибка",
+    timeout: "Превышено время ожидания",
   };
   return map[s] ?? s;
 }
 
 onMounted(() => {
-  poll();
-  timer = window.setInterval(poll, 3000);
+  close = openResearchStream(props.id, {
+    onStatus: (s) => (status.value = s),
+    onTrace: (step, detail) => trace.value.push({ step, detail }),
+    onReport: (r, final) => {
+      report.value = r;
+      isFinal.value = final;
+    },
+    onDone: (s) => {
+      status.value = s;
+      done.value = true;
+    },
+    onError: (m) => (errorMsg.value = m),
+  });
 });
-onBeforeUnmount(() => {
-  if (timer) window.clearInterval(timer);
-});
+
+onBeforeUnmount(() => close?.());
 </script>
 
 <template>
@@ -61,23 +60,30 @@ onBeforeUnmount(() => {
         :class="{
           'bg-emerald-400': status === 'completed',
           'bg-red-400': status === 'failed',
-          'bg-accent animate-pulse': status !== 'completed' && status !== 'failed',
+          'bg-accent animate-pulse': !DONE.has(status),
         }"
       />
       <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
     </div>
 
-    <p v-if="errorMsg" class="text-sm text-red-400">{{ errorMsg }}</p>
+    <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
 
-    <p v-else-if="loading" class="text-muted">Загрузка…</p>
+    <ProgressTrace
+      v-if="trace.length"
+      :entries="trace"
+      :live="!done"
+      class="mb-6"
+    />
 
     <div
-      v-else-if="report"
+      v-if="report"
       class="whitespace-pre-wrap font-sans text-[15px] leading-relaxed text-ink"
+      :class="{ 'opacity-80': !isFinal }"
     >{{ report }}</div>
 
-    <p v-else class="text-muted">
-      Отчёт ещё формируется. Эта страница обновится автоматически.
+    <p v-else-if="!DONE.has(status)" class="text-muted">
+      Отчёт формируется — он появится здесь в реальном времени.
     </p>
+    <p v-else-if="status === 'failed'" class="text-muted">Не удалось сформировать отчёт.</p>
   </div>
 </template>
