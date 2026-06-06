@@ -41,3 +41,69 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
 
   return () => es.close();
 }
+
+export interface ChatStreamHandlers {
+  onDelta?: (answer: string) => void;
+  onDone?: (answer: string) => void;
+  onError?: (message: string) => void;
+}
+
+// Chat answers stream over a POST (question in body), which EventSource can't do —
+// so we parse the SSE stream manually over a fetch ReadableStream.
+export async function streamChatAnswer(
+  id: string,
+  question: string,
+  h: ChatStreamHandlers,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/v1/research/${id}/messages/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ question }),
+    });
+  } catch (e) {
+    h.onError?.((e as Error).message);
+    return;
+  }
+  if (!res.ok || !res.body) {
+    h.onError?.(`${res.status} ${await res.text().catch(() => res.statusText)}`);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      let event = "message";
+      let data = "";
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+        // lines starting with ":" are keep-alive comments — ignore
+      }
+      if (!data) continue;
+
+      const parsed = JSON.parse(data);
+      if (event === "delta") h.onDelta?.(parsed.answer ?? "");
+      else if (event === "done") {
+        h.onDone?.(parsed.answer ?? "");
+        return;
+      } else if (event === "stream_error") {
+        h.onError?.(parsed.detail ?? "stream error");
+        return;
+      }
+    }
+  }
+}

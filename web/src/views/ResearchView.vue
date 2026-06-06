@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "@/lib/api";
-import { openResearchStream } from "@/lib/stream";
+import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import type { ChatMessage, PlanItem, ResearchPlan } from "@/lib/types";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
@@ -30,6 +30,10 @@ const chatBusy = ref(false);
 const threadScroll = ref<HTMLElement | null>(null);
 
 const canChat = computed(() => status.value === "completed");
+const awaitingAnswer = computed(() => {
+  const last = messages.value[messages.value.length - 1];
+  return chatBusy.value && (!last || last.role !== "assistant" || !last.content);
+});
 
 let close: (() => void) | undefined;
 
@@ -80,18 +84,26 @@ async function sendChat() {
   if (!question || chatBusy.value) return;
   chatInput.value = "";
   messages.value.push({ role: "user", content: question });
+  const assistantIndex = messages.value.push({ role: "assistant", content: "" }) - 1;
   chatBusy.value = true;
   errorMsg.value = null;
   scrollThreadToBottom();
-  try {
-    const answer = await api.askResearch(props.id, question);
-    messages.value.push(answer);
-  } catch (e) {
-    errorMsg.value = (e as Error).message;
-  } finally {
-    chatBusy.value = false;
-    scrollThreadToBottom();
-  }
+  await streamChatAnswer(props.id, question, {
+    onDelta: (answer) => {
+      messages.value[assistantIndex].content = answer;
+      scrollThreadToBottom();
+    },
+    onDone: (answer) => {
+      messages.value[assistantIndex].content = answer;
+      chatBusy.value = false;
+      scrollThreadToBottom();
+    },
+    onError: (m) => {
+      errorMsg.value = m;
+      messages.value.splice(assistantIndex, 1);
+      chatBusy.value = false;
+    },
+  });
 }
 
 onMounted(async () => {
@@ -177,14 +189,14 @@ onBeforeUnmount(() => close?.());
         />
 
         <!-- Follow-up conversation -->
-        <div v-if="messages.length || chatBusy" class="mt-6 space-y-4 border-t border-bd pt-5">
+        <div v-if="messages.length" class="mt-6 space-y-4 border-t border-bd pt-5">
           <template v-for="(m, i) in messages" :key="i">
             <div v-if="m.role === 'user'" class="ml-6 rounded-lg bg-surface px-3 py-2 text-sm text-ink">
               {{ m.content }}
             </div>
-            <MarkdownView v-else :source="m.content" />
+            <MarkdownView v-else-if="m.content" :source="m.content" />
           </template>
-          <div v-if="chatBusy" class="flex items-center gap-2 text-sm text-muted">
+          <div v-if="awaitingAnswer" class="flex items-center gap-2 text-sm text-muted">
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> Думаю…
           </div>
         </div>

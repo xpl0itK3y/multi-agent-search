@@ -316,6 +316,54 @@ def register_routes(app: FastAPI) -> None:
         service.append_research_message(research_id, "assistant", answer)
         return ChatMessage(role="assistant", content=answer)
 
+    @app.post("/v1/research/{research_id}/messages/stream")
+    def ask_research_stream(research_id: str, payload: ChatAsk, request: Request):
+        """Stream a grounded follow-up answer token-by-token via SSE, then persist the turn."""
+        service = get_research_service(request)
+        question = payload.question
+
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def event_stream():
+            import queue
+            import threading
+
+            channel: "queue.Queue" = queue.Queue()
+
+            def on_delta(partial: str) -> None:
+                channel.put(("delta", partial))
+
+            def worker() -> None:
+                try:
+                    answer = service.generate_research_answer(research_id, question, streaming_callback=on_delta)
+                    channel.put(("final", answer))
+                except HTTPException as exc:
+                    channel.put(("error", str(exc.detail)))
+                except Exception as exc:  # pragma: no cover - defensive
+                    channel.put(("error", str(exc)))
+
+            threading.Thread(target=worker, daemon=True, name=f"chat-{research_id[:8]}").start()
+            yield ": connected\n\n"
+            while True:
+                kind, value = channel.get()
+                if kind == "delta":
+                    yield sse("delta", {"answer": value})
+                elif kind == "final":
+                    service.append_research_message(research_id, "user", question)
+                    service.append_research_message(research_id, "assistant", value)
+                    yield sse("done", {"answer": value})
+                    return
+                else:
+                    yield sse("stream_error", {"detail": value})
+                    return
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
     async def get_research_graph(research_id: str, request: Request):
         return get_research_service(request).get_research_graph(research_id)
