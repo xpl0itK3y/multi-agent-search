@@ -57,6 +57,13 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface Clarification {
+  research_id: string;
+  status: string;
+  questions: string[];
+  answers: string[];
+}
+
 export interface PlanItem {
   id: string;
   description: string;

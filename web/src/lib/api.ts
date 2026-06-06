@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  Clarification,
   Conflict,
   CreateResearchResponse,
   Depth,
@@ -41,6 +42,15 @@ export const api = {
     request<CreateResearchResponse>("/v1/research", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+
+  getClarifications: (id: string) =>
+    request<Clarification>(`/v1/research/${id}/clarifications`),
+
+  submitClarify: (id: string, answers: string[]) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/clarify`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
     }),
 
   getPlan: (id: string) => request<ResearchPlan>(`/v1/research/${id}/plan`),

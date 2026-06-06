@@ -3,10 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
-import type { ChatMessage, PlanItem, ResearchPlan } from "@/lib/types";
+import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
 import PlanCard from "@/components/PlanCard.vue";
+import ClarifyCard from "@/components/ClarifyCard.vue";
 import MarkdownView from "@/components/MarkdownView.vue";
 
 const props = defineProps<{ id: string }>();
@@ -23,6 +24,9 @@ const done = ref(false);
 
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
+
+const clarification = ref<Clarification | null>(null);
+const clarifyBusy = ref(false);
 
 const messages = ref<ChatMessage[]>([]);
 const chatInput = ref("");
@@ -56,6 +60,28 @@ async function loadPlan() {
     plan.value = await api.getPlan(props.id);
   } catch (e) {
     errorMsg.value = (e as Error).message;
+  }
+}
+
+async function loadClarifications() {
+  try {
+    clarification.value = await api.getClarifications(props.id);
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  }
+}
+
+async function onSubmitClarify(answers: string[]) {
+  clarifyBusy.value = true;
+  errorMsg.value = null;
+  try {
+    await api.submitClarify(props.id, answers);
+    clarification.value = null;
+    status.value = "processing";
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    clarifyBusy.value = false;
   }
 }
 
@@ -111,6 +137,7 @@ onMounted(async () => {
     const s = await api.getStatus(props.id);
     prompt.value = s.prompt;
     status.value = s.status;
+    if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
   } catch {
     // Non-fatal — the SSE stream still drives status/report.
@@ -123,6 +150,8 @@ onMounted(async () => {
   close = openResearchStream(props.id, {
     onStatus: (s) => {
       status.value = s;
+      if (s === "clarifying" && !clarification.value) loadClarifications();
+      if (s !== "clarifying") clarification.value = null;
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
@@ -144,8 +173,22 @@ onBeforeUnmount(() => close?.());
 </script>
 
 <template>
+  <!-- Clarifying questions before planning -->
+  <div v-if="status === 'clarifying' && clarification" class="h-full overflow-y-auto">
+    <button class="px-6 pt-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
+      ← На главную
+    </button>
+    <ClarifyCard
+      :prompt="prompt"
+      :questions="clarification.questions"
+      :busy="clarifyBusy"
+      @submit="onSubmitClarify"
+    />
+    <p v-if="errorMsg" class="px-6 pb-6 text-sm text-red-400">{{ errorMsg }}</p>
+  </div>
+
   <!-- Plan review: editable plan before search starts -->
-  <div v-if="status === 'plan_review' && plan" class="h-full overflow-y-auto">
+  <div v-else-if="status === 'plan_review' && plan" class="h-full overflow-y-auto">
     <button class="px-6 pt-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
       ← На главную
     </button>
