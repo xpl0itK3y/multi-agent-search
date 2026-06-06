@@ -1,9 +1,11 @@
+import json
 import uuid
 import time
 from typing import List
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from src.api.dependencies import get_research_service
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
@@ -272,6 +274,70 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
     async def get_research_graph(research_id: str, request: Request):
         return get_research_service(request).get_research_graph(research_id)
+
+    @app.get("/v1/research/{research_id}/events")
+    def research_events(research_id: str, request: Request):
+        """Server-Sent Events stream: live status, graph trace and report deltas (F1)."""
+        service = get_research_service(request)
+
+        def sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def event_stream():
+            last_status: str | None = None
+            last_report: str | None = None
+            last_trail_len = 0
+            idle_ticks = 0
+            deadline = time.monotonic() + 900  # 10-minute safety cap
+            yield ": connected\n\n"
+            while time.monotonic() < deadline:
+                research = service.task_store.get_research(research_id)
+                if research is None:
+                    yield sse("stream_error", {"detail": "Research not found"})
+                    yield sse("done", {"status": "failed"})
+                    return
+
+                graph_state = research.graph_state or {}
+                status = getattr(research.status, "value", str(research.status))
+                if status != last_status:
+                    last_status = status
+                    idle_ticks = 0
+                    yield sse("status_change", {"status": status})
+
+                trail = research.graph_trail or []
+                if len(trail) > last_trail_len:
+                    for entry in trail[last_trail_len:]:
+                        yield sse("trace_step", {"step": entry.get("step"), "detail": entry.get("detail")})
+                    last_trail_len = len(trail)
+                    idle_ticks = 0
+
+                report = research.final_report or graph_state.get("partial_report")
+                if report and report != last_report:
+                    last_report = report
+                    idle_ticks = 0
+                    yield sse("report", {"report": report, "final": bool(research.final_report)})
+
+                if status in ("completed", "failed"):
+                    yield sse("done", {"status": status})
+                    return
+
+                idle_ticks += 1
+                if idle_ticks >= 15:  # keep-alive comment so proxies don't drop the stream
+                    idle_ticks = 0
+                    yield ": ping\n\n"
+                time.sleep(1.0)
+
+            yield sse("done", {"status": "timeout"})
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
     async def finalize_research(research_id: str, request: Request):
