@@ -6,7 +6,9 @@ import type { Depth } from "@/lib/types";
 const prompt = defineModel<string>("prompt", { default: "" });
 
 const props = defineProps<{ busy?: boolean }>();
-const emit = defineEmits<{ submit: [{ prompt: string; depth: Depth; model: string }] }>();
+const emit = defineEmits<{
+  submit: [{ prompt: string; depth: Depth; model: string; planFirst: boolean }];
+}>();
 
 const store = useResearchStore();
 
@@ -16,6 +18,7 @@ const depths: { value: Depth; label: string }[] = [
   { value: "hard", label: "Глубоко" },
 ];
 const depth = ref<Depth>("medium");
+const planFirst = ref(true);
 
 const model = ref<string>("");
 watch(
@@ -30,7 +33,12 @@ const canSubmit = computed(() => prompt.value.trim().length >= 5 && !props.busy)
 
 function submit() {
   if (!canSubmit.value) return;
-  emit("submit", { prompt: prompt.value.trim(), depth: depth.value, model: model.value });
+  emit("submit", {
+    prompt: prompt.value.trim(),
+    depth: depth.value,
+    model: model.value,
+    planFirst: planFirst.value,
+  });
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -52,9 +60,19 @@ function onKeydown(e: KeyboardEvent) {
     />
 
     <div class="mt-2 flex items-center justify-between gap-2">
-      <button class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" title="Прикрепить URL/файл">
-        +
-      </button>
+      <div class="flex items-center gap-2">
+        <button class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" title="Прикрепить URL/файл">
+          +
+        </button>
+        <button
+          class="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition"
+          :class="planFirst ? 'border-accent/40 bg-accent/15 text-accentSoft' : 'border-bd text-muted hover:text-ink'"
+          :title="planFirst ? 'Сначала покажу план для правки' : 'Запуск сразу, без плана'"
+          @click="planFirst = !planFirst"
+        >
+          <span>◳</span> План
+        </button>
+      </div>
 
       <div class="flex items-center gap-2">
         <!-- Model selector -->

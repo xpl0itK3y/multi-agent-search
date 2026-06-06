@@ -33,8 +33,8 @@ export const useResearchStore = defineStore("research", () => {
     }
   }
 
-  async function createResearch(prompt: string, depth: Depth, model?: string) {
-    const res = await api.createResearch({ prompt, depth, model });
+  async function createResearch(prompt: string, depth: Depth, model?: string, planFirst?: boolean) {
+    const res = await api.createResearch({ prompt, depth, model, plan_first: planFirst });
     await fetchHistory();
     return res.research_id;
   }

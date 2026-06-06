@@ -23,11 +23,11 @@ const greeting = computed(() => {
   return `${part}, ${ui.userName}`;
 });
 
-async function onSubmit(payload: { prompt: string; depth: Depth; model: string }) {
+async function onSubmit(payload: { prompt: string; depth: Depth; model: string; planFirst: boolean }) {
   busy.value = true;
   errorMsg.value = null;
   try {
-    const id = await store.createResearch(payload.prompt, payload.depth, payload.model);
+    const id = await store.createResearch(payload.prompt, payload.depth, payload.model, payload.planFirst);
     router.push({ name: "research", params: { id } });
   } catch (e) {
     errorMsg.value = (e as Error).message;

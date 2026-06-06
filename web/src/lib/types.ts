@@ -52,6 +52,18 @@ export interface SourcePreview {
   snippet?: string | null;
 }
 
+export interface PlanItem {
+  id: string;
+  description: string;
+  queries: string[];
+}
+
+export interface ResearchPlan {
+  research_id: string;
+  status: string;
+  items: PlanItem[];
+}
+
 export interface Conflict {
   topic: string;
   reason?: string | null;

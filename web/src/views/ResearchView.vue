@@ -3,8 +3,10 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
+import type { PlanItem, ResearchPlan } from "@/lib/types";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
+import PlanCard from "@/components/PlanCard.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -18,12 +20,16 @@ const reasoning = ref<string>("");
 const errorMsg = ref<string | null>(null);
 const done = ref(false);
 
+const plan = ref<ResearchPlan | null>(null);
+const planBusy = ref(false);
+
 let close: (() => void) | undefined;
 
 const DONE = new Set(["completed", "failed", "timeout"]);
 
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
+    plan_review: "Ожидает подтверждения плана",
     processing: "Декомпозиция и поиск…",
     analyzing: "Синтез отчёта…",
     completed: "Готово",
@@ -33,16 +39,44 @@ function statusLabel(s: string): string {
   return map[s] ?? s;
 }
 
+async function loadPlan() {
+  try {
+    plan.value = await api.getPlan(props.id);
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  }
+}
+
+async function onApprove(items: PlanItem[]) {
+  planBusy.value = true;
+  errorMsg.value = null;
+  try {
+    await api.updatePlan(props.id, items);
+    await api.approvePlan(props.id);
+    plan.value = null;
+    status.value = "processing";
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    planBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     const s = await api.getStatus(props.id);
     prompt.value = s.prompt;
     status.value = s.status;
+    if (s.status === "plan_review") loadPlan();
   } catch {
     // Non-fatal — the SSE stream still drives status/report.
   }
   close = openResearchStream(props.id, {
-    onStatus: (s) => (status.value = s),
+    onStatus: (s) => {
+      status.value = s;
+      if (s === "plan_review" && !plan.value) loadPlan();
+      if (s !== "plan_review") plan.value = null;
+    },
     onTrace: (step, detail) => trace.value.push({ step, detail }),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
@@ -61,8 +95,17 @@ onBeforeUnmount(() => close?.());
 </script>
 
 <template>
-  <div class="flex h-full flex-col lg:flex-row">
-    <!-- Thread -->
+  <!-- Plan review: editable plan before search starts -->
+  <div v-if="status === 'plan_review' && plan" class="h-full overflow-y-auto">
+    <button class="px-6 pt-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
+      ← На главную
+    </button>
+    <PlanCard :prompt="prompt" :items="plan.items" :busy="planBusy" @approve="onApprove" />
+    <p v-if="errorMsg" class="px-6 pb-6 text-sm text-red-400">{{ errorMsg }}</p>
+  </div>
+
+  <!-- Active research: thread + artifact panel -->
+  <div v-else class="flex h-full flex-col lg:flex-row">
     <section
       class="flex w-full flex-col overflow-y-auto border-b border-bd lg:w-[400px] lg:shrink-0 lg:border-b-0 lg:border-r"
     >
@@ -98,7 +141,6 @@ onBeforeUnmount(() => close?.());
       </div>
     </section>
 
-    <!-- Artifact -->
     <section class="min-h-0 flex-1">
       <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" />
     </section>

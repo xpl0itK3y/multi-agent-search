@@ -3,8 +3,10 @@ import type {
   CreateResearchResponse,
   Depth,
   ModelOption,
+  PlanItem,
   ResearchGraph,
   ResearchHistoryItem,
+  ResearchPlan,
   ResearchReport,
   ResearchStatusSummary,
   SourcePreview,
@@ -34,11 +36,22 @@ export const api = {
   listResearch: (limit = 30) =>
     request<ResearchHistoryItem[]>(`/v1/research?limit=${limit}`),
 
-  createResearch: (body: { prompt: string; depth: Depth; model?: string }) =>
+  createResearch: (body: { prompt: string; depth: Depth; model?: string; plan_first?: boolean }) =>
     request<CreateResearchResponse>("/v1/research", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  getPlan: (id: string) => request<ResearchPlan>(`/v1/research/${id}/plan`),
+
+  updatePlan: (id: string, items: PlanItem[]) =>
+    request<ResearchPlan>(`/v1/research/${id}/plan`, {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+    }),
+
+  approvePlan: (id: string) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/plan/approve`, { method: "POST" }),
 
   getReport: (id: string) =>
     request<ResearchReport>(`/v1/research/${id}/report`),
