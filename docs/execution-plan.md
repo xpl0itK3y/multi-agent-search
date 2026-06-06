@@ -21,7 +21,8 @@
 - ✅ **Вкладка Conflicts:** `GET /v1/research/{id}/conflicts` (читает `graph_state.detected_conflicts`, иначе пересчитывает из пула источников — без LLM) + панель «Противоречия» (тема, причина, спорные цитаты с `[Sn]`).
 - ⬜ Остаток F2: экспорт PDF/DOCX через API (2.3), мобильная адаптация.
 - ⬜ Остаток Wave 0: eval-харнесс (0.5), `user_id` миграция (0.6).
-- ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
+- ✅ **P0 цикл + бюджет (1.1, 1.2):** ветвление графа оживлено (`langgraph_*_max_loops` 0→1: replan/tie-break/verify-retry), но **бюджет-гард** (`finalize_budget_max_seconds=240`, `finalize_budget_max_analyze_passes=3`, дедлайн в state) не даёт раздуть стоимость/латентность; `_budget_ok` гейтит все ветвления. Suite зелёный (237). reasoning_content passthrough + per-research model — сделаны ранее (часть 1.3).
+- ⬜ Остаток P0: детектор «нет прогресса» (1.4), gap-анализ на reasoning-модели / planner-роль (1.5, 1.3).
 
 ---
 
