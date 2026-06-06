@@ -10,9 +10,11 @@
 
 - ✅ **Wave 0:** CORS-middleware (0.1).
 - ✅ **Wave 1 / P0-задел:** `src/model_catalog.py`, `GET /v1/models`, `ResearchRequest.model` (валидация + persist в `graph_state`) (1.10).
-- ✅ **Wave 1 / F0:** `web/` поднят (Vite+Vue3+TS+Tailwind+Pinia+Router); home-экран (spark + serif-приветствие, композер с селекторами модели/глубины, чипы), сайдбар collapsed↔expanded с «Недавними», создание ресёрча и страница отчёта с поллингом. `npm run build` зелёный (1.6–1.9).
+- ✅ **Wave 1 / F0:** `web/` поднят (Vite+Vue3+TS+Tailwind+Pinia+Router); home-экран (spark + serif-приветствие, композер с селекторами модели/глубины, чипы), сайдбар collapsed↔expanded с «Недавними», создание ресёрча и страница отчёта. `npm run build` зелёный (1.6–1.9).
+- ✅ **Wave 2 / F1 (частично):** SSE-эндпоинт `GET /v1/research/{id}/events` (status/trace/report-дельты) и live-вью с панелью «Ход работы» + потоковым отчётом — поллинг заменён стримом (2.1, 2.4).
+- ⬜ Остаток Wave 2: проброс `reasoning_content` (2.2 — нужна reasoning-модель + P0-цикл), экспорт-роут PDF/DOCX (2.3).
 - ⬜ Остаток Wave 0: SSRF-фикс (0.2), split `/summary` (0.3), тесты/native (0.4), eval (0.5), `user_id` (0.6).
-- ⬜ Дальше: P0-цикл (1.1–1.5) и **Wave 2 (SSE + reasoning, F1)**.
+- ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
 
 ---
 
