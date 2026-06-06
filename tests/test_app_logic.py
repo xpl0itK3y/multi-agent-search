@@ -2428,6 +2428,67 @@ def test_research_chat_grounded_answer_and_persistence():
     assert messages[1].content == "Widgets are blue [S1]."
 
 
+def test_research_clarify_first_stores_questions():
+    class FakeClarifier:
+        def generate_questions(self, prompt):
+            return ["What time period?", "Which region?"]
+
+    class FakeOrchestrator:
+        def run_decompose(self, prompt, depth):
+            return [{"id": "t1", "description": "d", "queries": ["q1"], "status": TaskStatus.PENDING}]
+
+    task_store = InMemoryTaskStore()
+    service = ResearchService(
+        task_store=task_store, orchestrator=FakeOrchestrator(), clarifier=FakeClarifier()
+    )
+    request = ResearchRequest(prompt="study trends", depth=SearchDepth.EASY, plan_first=True)
+    _, research_id = service.start_research(request)
+    service.decompose_and_enqueue(research_id, request)
+
+    research = task_store.get_research(research_id)
+    assert research.status == ResearchStatus.CLARIFYING
+    assert task_store.get_tasks_by_research(research_id) == []
+    clar = service.get_research_clarifications(research_id)
+    assert clar.questions == ["What time period?", "Which region?"]
+
+
+def test_research_decompose_incorporates_clarification_answers():
+    class FakeOrchestrator:
+        def __init__(self):
+            self.last_prompt = None
+
+        def run_decompose(self, prompt, depth):
+            self.last_prompt = prompt
+            return [{"id": "t1", "description": "d", "queries": ["q1"], "status": TaskStatus.PENDING}]
+
+    task_store = InMemoryTaskStore()
+    orchestrator = FakeOrchestrator()
+    # clarifier present but answers already provided -> clarifier must be skipped
+    service = ResearchService(
+        task_store=task_store,
+        orchestrator=orchestrator,
+        clarifier=type("Boom", (), {"generate_questions": lambda self, p: (_ for _ in ()).throw(AssertionError("clarifier should be skipped"))})(),
+    )
+    request = ResearchRequest(prompt="study trends", depth=SearchDepth.EASY, plan_first=True)
+    _, research_id = service.start_research(request)
+    # Simulate state after the user answered clarifying questions.
+    state = dict(task_store.get_research(research_id).graph_state or {})
+    state["clarified"] = True
+    state["clarifications"] = {
+        "questions": ["When?"],
+        "answers": ["2024"],
+        "qa": [{"question": "When?", "answer": "2024"}],
+    }
+    task_store.update_research_graph_state(research_id, state)
+
+    service.decompose_and_enqueue(research_id, request)
+
+    assert "2024" in orchestrator.last_prompt
+    research = task_store.get_research(research_id)
+    assert research.status == ResearchStatus.PLAN_REVIEW
+    assert (research.graph_state or {}).get("plan")
+
+
 def test_research_plan_approve_rejects_when_not_in_review():
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

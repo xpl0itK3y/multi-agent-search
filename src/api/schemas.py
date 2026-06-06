@@ -15,6 +15,7 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 class ResearchStatus(str, Enum):
+    CLARIFYING = "clarifying"
     PLAN_REVIEW = "plan_review"
     PROCESSING = "processing"
     ANALYZING = "analyzing"
@@ -263,6 +264,17 @@ class ChatMessage(BaseModel):
 
 class ChatAsk(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+
+
+class Clarification(BaseModel):
+    research_id: str
+    status: ResearchStatus
+    questions: List[str] = Field(default_factory=list)
+    answers: List[str] = Field(default_factory=list)
+
+
+class ClarifyAnswers(BaseModel):
+    answers: List[str] = Field(default_factory=list)
 
 
 class ResearchReportResponse(BaseModel):

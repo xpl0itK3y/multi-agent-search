@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.chat import ChatAgent
+from src.agents.clarifier import ClarifierAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
@@ -48,6 +49,7 @@ def create_research_service() -> ResearchService:
     agent_orchestrator = None
     agent_analyzer = None
     chat_agent = None
+    clarifier_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -62,6 +64,7 @@ def create_research_service() -> ResearchService:
         agent_orchestrator = OrchestratorAgent(llm)
         replan_agent = ReplanAgent(llm=llm)            # Q-4: LLM-backed gap queries
         chat_agent = ChatAgent(llm)                    # grounded follow-up Q&A
+        clarifier_agent = ClarifierAgent(llm)          # pre-plan clarifying questions
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -82,6 +85,7 @@ def create_research_service() -> ResearchService:
         claim_verifier=claim_verifier,
         replan_agent=replan_agent,
         chat_agent=chat_agent,
+        clarifier=clarifier_agent,
         broker=_create_broker(),
     )
 

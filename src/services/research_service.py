@@ -35,6 +35,7 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchReportResponse,
     ChatMessage,
+    Clarification,
     ResearchConflict,
     ResearchPlan,
     ResearchPlanItem,
@@ -104,6 +105,7 @@ class ResearchService:
         claim_verifier: ClaimVerifierAgent | None = None,
         replan_agent: ReplanAgent | None = None,
         chat_agent=None,
+        clarifier=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -115,6 +117,7 @@ class ResearchService:
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
         self.replan_agent = replan_agent or ReplanAgent()
         self.chat_agent = chat_agent
+        self.clarifier = clarifier
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
@@ -184,7 +187,24 @@ class ResearchService:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
         with bind_observability_context(research_id=research_id):
             try:
-                tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
+                research = self.task_store.get_research(research_id)
+                graph_state = (research.graph_state if research else None) or {}
+                # Clarify step (plan-first only, once): ask up to 3 questions before planning.
+                if (
+                    request.plan_first
+                    and self.clarifier is not None
+                    and not graph_state.get("clarified")
+                ):
+                    questions = self.clarifier.generate_questions(request.prompt)
+                    if questions:
+                        self._store_clarifications_for_review(research_id, questions)
+                        logger.info(
+                            "research_clarify_ready research_id=%s question_count=%s",
+                            research_id, len(questions),
+                        )
+                        return
+                effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
+                tasks_raw = orchestrator.run_decompose(effective_prompt, request.depth)
                 if request.plan_first:
                     # Store an editable plan and wait for user approval (no tasks/jobs yet).
                     self._store_plan_for_review(research_id, tasks_raw)
@@ -424,6 +444,78 @@ class ResearchService:
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             llm_token_usage=graph_state.get("llm_token_usage", {}),
         )
+
+    def _store_clarifications_for_review(self, research_id: str, questions: list[str]) -> None:
+        """Persist clarifying questions and set status CLARIFYING (awaiting user answers)."""
+        research = self.task_store.get_research(research_id)
+        state = dict((research.graph_state if research else None) or {})
+        state.pop("decompose_pending", None)  # wait for user; keep decompose_payload for the re-run
+        state["clarifications"] = {"questions": list(questions), "answers": []}
+        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.update_research_status(research_id, ResearchStatus.CLARIFYING)
+
+    def _augment_prompt_with_clarifications(self, prompt: str, graph_state: dict) -> str:
+        qa = (graph_state.get("clarifications") or {}).get("qa") or []
+        answered = [
+            f"- {item.get('question')}: {item.get('answer')}"
+            for item in qa
+            if item.get("answer")
+        ]
+        if not answered:
+            return prompt
+        return prompt + "\n\nClarifications from the user:\n" + "\n".join(answered)
+
+    def get_research_clarifications(self, research_id: str) -> Clarification:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        clar = (research.graph_state or {}).get("clarifications") or {}
+        return Clarification(
+            research_id=research.id,
+            status=research.status,
+            questions=clar.get("questions") or [],
+            answers=clar.get("answers") or [],
+        )
+
+    def submit_clarifications(self, research_id: str, answers: list[str]) -> ResearchRecord:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        if research.status != ResearchStatus.CLARIFYING:
+            raise HTTPException(status_code=409, detail="Research is not awaiting clarification")
+
+        state = dict(research.graph_state or {})
+        clar = dict(state.get("clarifications") or {})
+        questions = clar.get("questions") or []
+        answers = list(answers or [])
+        clar["answers"] = answers
+        clar["qa"] = [
+            {"question": question, "answer": (answers[i] if i < len(answers) else "")}
+            for i, question in enumerate(questions)
+        ]
+        state["clarifications"] = clar
+        state["clarified"] = True
+        state["decompose_pending"] = True
+        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
+
+        payload = state.get("decompose_payload")
+        try:
+            request = ResearchRequest.model_validate(payload) if payload else ResearchRequest(
+                prompt=research.prompt, depth=research.depth, plan_first=True
+            )
+        except Exception:
+            request = ResearchRequest(prompt=research.prompt, depth=research.depth, plan_first=True)
+
+        import threading
+
+        threading.Thread(
+            target=self.decompose_and_enqueue,
+            args=(research_id, request),
+            daemon=True,
+            name=f"clarify-decompose-{research_id[:8]}",
+        ).start()
+        return self.task_store.get_research(research_id)
 
     def _store_plan_for_review(self, research_id: str, tasks_raw: list[dict]) -> None:
         """Persist a decomposed plan into graph_state and set status PLAN_REVIEW."""

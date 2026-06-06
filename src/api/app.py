@@ -28,6 +28,8 @@ from src.api.schemas import (
     ResearchRequest,
     ChatAsk,
     ChatMessage,
+    Clarification,
+    ClarifyAnswers,
     ResearchConflict,
     ResearchPlan,
     ResearchPlanUpdate,
@@ -290,6 +292,14 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict])
     async def get_research_conflicts(research_id: str, request: Request):
         return get_research_service(request).get_research_conflicts(research_id)
+
+    @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification)
+    async def get_research_clarifications(research_id: str, request: Request):
+        return get_research_service(request).get_research_clarifications(research_id)
+
+    @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord)
+    async def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
+        return get_research_service(request).submit_clarifications(research_id, payload.answers)
 
     @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan)
     async def get_research_plan(research_id: str, request: Request):
