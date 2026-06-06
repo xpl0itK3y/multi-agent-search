@@ -286,6 +286,7 @@ def register_routes(app: FastAPI) -> None:
         def event_stream():
             last_status: str | None = None
             last_report: str | None = None
+            last_reasoning: str | None = None
             last_trail_len = 0
             idle_ticks = 0
             deadline = time.monotonic() + 900  # 10-minute safety cap
@@ -310,6 +311,12 @@ def register_routes(app: FastAPI) -> None:
                         yield sse("trace_step", {"step": entry.get("step"), "detail": entry.get("detail")})
                     last_trail_len = len(trail)
                     idle_ticks = 0
+
+                reasoning = graph_state.get("partial_reasoning")
+                if reasoning and reasoning != last_reasoning:
+                    last_reasoning = reasoning
+                    idle_ticks = 0
+                    yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
 
                 report = research.final_report or graph_state.get("partial_report")
                 if report and report != last_report:

@@ -47,6 +47,8 @@ class TaskStore(Protocol):
 
     def save_partial_report(self, research_id: str, partial: str) -> None: ...
 
+    def save_partial_reasoning(self, research_id: str, partial: str) -> None: ...
+
     def append_research_graph_event(
         self,
         research_id: str,

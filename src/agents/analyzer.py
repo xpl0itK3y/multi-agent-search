@@ -1103,12 +1103,14 @@ class AnalyzerAgent(BaseAgent):
         retry: bool = False,
         depth: SearchDepth | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
+        reasoning_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         user_prompt = self._build_user_prompt(input_data, language, retry=retry, depth=depth)
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
             streaming_callback=streaming_callback,
+            reasoning_callback=reasoning_callback,
             temperature=0.3,
         )
 
@@ -1230,6 +1232,7 @@ class AnalyzerAgent(BaseAgent):
         tasks: List[SearchTask],
         depth: SearchDepth | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
+        reasoning_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
@@ -1292,6 +1295,7 @@ class AnalyzerAgent(BaseAgent):
             result = self._generate_report(
                 input_data, prompt_language, depth=depth,
                 streaming_callback=streaming_callback,
+                reasoning_callback=reasoning_callback,
             )
             # Skip language retry for HARD (avoids an extra multi-minute LLM call).
             if not is_hard and prompt_language != "unknown":

@@ -21,7 +21,7 @@ class StaticAnalyzerAgent:
     def __init__(self, report: str):
         self.report = report
 
-    def run_analysis(self, prompt: str, tasks, depth=None) -> str:
+    def run_analysis(self, prompt: str, tasks, depth=None, **kwargs) -> str:
         return self.report
 
 

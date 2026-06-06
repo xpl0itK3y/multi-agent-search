@@ -123,6 +123,14 @@ class InMemoryTaskStore:
         state["partial_report"] = partial
         research.graph_state = state
 
+    def save_partial_reasoning(self, research_id: str, partial: str) -> None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return
+        state = dict(research.graph_state or {})
+        state["partial_reasoning"] = partial
+        research.graph_state = state
+
     def append_research_graph_event(
         self,
         research_id: str,

@@ -65,8 +65,19 @@ class DeepSeekProvider(LLMProvider):
 
     # ── generate ──────────────────────────────────────────────────────────────
 
-    def generate(self, system_prompt: str, user_prompt: str, streaming_callback=None, **kwargs) -> str:
-        use_stream = streaming_callback is not None
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        streaming_callback=None,
+        reasoning_callback=None,
+        **kwargs,
+    ) -> str:
+        # Per-call model override (e.g. a reasoner for planning); pop so it doesn't
+        # collide with the explicit model= below.
+        model = kwargs.pop("model", None) or self.model
+        # Streaming is also needed when we only want reasoning tokens.
+        use_stream = streaming_callback is not None or reasoning_callback is not None
         if use_stream:
             # ask DeepSeek to include usage in the final streaming chunk
             kwargs.setdefault("stream_options", {"include_usage": True})
@@ -76,7 +87,7 @@ class DeepSeekProvider(LLMProvider):
         for attempt in range(_MAX_ATTEMPTS):
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
+                    model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_prompt},
@@ -94,6 +105,7 @@ class DeepSeekProvider(LLMProvider):
                     return response.choices[0].message.content
 
                 accumulated = ""
+                reasoning_accumulated = ""
                 for chunk in response:
                     # final usage chunk (stream_options include_usage)
                     if chunk.usage:
@@ -101,10 +113,20 @@ class DeepSeekProvider(LLMProvider):
                             chunk.usage.prompt_tokens,
                             chunk.usage.completion_tokens,
                         )
-                    delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
-                    accumulated += delta
-                    if delta:
-                        streaming_callback(accumulated)
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    # Reasoning models expose a separate reasoning_content field on the delta.
+                    reasoning_piece = getattr(delta, "reasoning_content", None) or ""
+                    if reasoning_piece:
+                        reasoning_accumulated += reasoning_piece
+                        if reasoning_callback:
+                            reasoning_callback(reasoning_accumulated)
+                    content_piece = delta.content or ""
+                    if content_piece:
+                        accumulated += content_piece
+                        if streaming_callback:
+                            streaming_callback(accumulated)
                 return accumulated
 
             except _RETRYABLE as exc:

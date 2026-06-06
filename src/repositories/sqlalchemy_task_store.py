@@ -191,6 +191,16 @@ class SQLAlchemyTaskStore:
             research.graph_state = state
             session.flush()
 
+    def save_partial_reasoning(self, research_id: str, partial: str) -> None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return
+            state = dict(research.graph_state or {})
+            state["partial_reasoning"] = partial
+            research.graph_state = state
+            session.flush()
+
     def append_research_graph_event(
         self,
         research_id: str,
