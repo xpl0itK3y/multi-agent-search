@@ -16,7 +16,8 @@
 - ✅ **Per-research модель в финализации:** выбранная в композере модель (из `graph_state["model"]`) прокинута через state графа → `_analyze` → все `generate`-вызовы анализатора (report/секции/синтез/починка); reasoner-модель → блок «Размышления» наполняется. Покрыто `tests/test_model_selection.py`.
 - ⬜ Остаток Wave 2: экспорт-роут PDF/DOCX (2.3).
 - ✅ **Wave 0 hardening:** SSRF-гард на webhook (`src/net_safety.py`, блок private/loopback/link-local/metadata; флаг `webhook_allow_private_targets`) (0.2); cheap `GET /v1/research/{id}/status` без тяжёлых агентов/LLM — `/summary` остаётся для on-demand (0.3). Покрыто `tests/test_net_safety.py`.
-- ⬜ Остаток Wave 0: тесты/native fallback (0.4), eval-харнесс (0.5), `user_id` миграция (0.6).
+- ✅ **Wave 0 тесты (0.4):** suite зелёный (237 passed, 0 failed). Причина была НЕ в native-fallback/Python 3.14, а в рассинхроне тестов с осознанными изменениями + 1 регрессия + 3 «протухших» по времени теста. Починено: (код) low-источники снова в «Additional», возвращена инъекция «Report Notes», безопасный доступ к `analyzer.llm`, граф передаёт в `run_analysis` только поддерживаемые kwargs; (тесты) относительные timestamps в graph/health-тестах, формат кликабельных markdown-ссылок.
+- ⬜ Остаток Wave 0: eval-харнесс (0.5), `user_id` миграция (0.6).
 - ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
 
 ---
