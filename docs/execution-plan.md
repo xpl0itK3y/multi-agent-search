@@ -1,0 +1,156 @@
+# Execution Plan — единый порядок работ
+
+Сводит [`deep-research-roadmap.md`](./deep-research-roadmap.md) (backend P0–P3) и [`frontend-roadmap.md`](./frontend-roadmap.md) (frontend F0–F4) в один упорядоченный план с зависимостями.
+
+> Принятые решения (из обсуждения): reasoning-видимость — headline-фича; auth делаем (JWT/cookie, dev-bypass); i18n ru/en/es с переключателем; **Streamlit убираем полностью**, ops → Grafana; **Admin-панель пока не делаем**; дизайн — аналог home-экрана Claude (frontend §4.2).
+
+---
+
+## Карта зависимостей
+
+```
+Wave 0  Гигиена/фундамент ─────────────┐ (разблокирует всё, делается сразу)
+                                        ▼
+Wave 1  Backend P0 (цикл)  ∥  Frontend F0 (каркас + home-экран)
+                                        ▼
+Wave 2  Backend SSE        →  Frontend F1 (стрим + reasoning)      ← «момент Claude»
+                                        ▼
+Wave 3  Backend P2 (поиск) ∥  Frontend F2 (3-панель + артефакт)  →  выпил Streamlit
+                                        ▼
+Wave 4  Backend P1 (план)  →  Frontend F3 (clarify + plan card)
+                                        ▼
+Wave 5  Backend P3 (writer)∥  Frontend F4 (темы, i18n, auth, polish)
+
+∥ = параллелится   → = жёсткая зависимость
+```
+
+**Критический путь до демо «выглядит как Claude и показывает рассуждение»:** Wave 0 → 1 → 2.
+
+---
+
+## Wave 0 — Гигиена и фундамент (сразу, параллельно)
+
+Независимые задачи, нужные при любом сценарии. Снимают долги до публичного релиза.
+
+| # | Задача | Где | Тип |
+|---|---|---|---|
+| 0.1 | **CORS-middleware** | `src/api/app.py` | S |
+| 0.2 | **Закрыть SSRF** в `webhook_url` (allowlist + блок приватных диапазонов) | `research_service.py` | S |
+| 0.3 | **Разделить `/summary`** на дешёвый `/status` + ленивый `/insights`; убрать LLM-replan из read-пути | `research_service.py`, `app.py` | M |
+| 0.4 | **Починить тесты/native fallback** (собрать Rust-модуль или выровнять pure-Python) | `core/rust_accel.py`, CI | M |
+| 0.5 | **Eval-харнесс** (золотой набор 15–25 запросов + метрики) | `scripts/eval_*.py` | M |
+| 0.6 | **Ранняя миграция `user_id`** (nullable) в `researches` | `db/models.py`, alembic | S |
+
+**Done:** тесты зелёные; `/status` дешёвый; webhook безопасен; есть бейзлайн-метрики на eval-наборе.
+
+---
+
+## Wave 1 — Агентное ядро (P0) ∥ Каркас фронта (F0)
+
+### Backend P0 — оживить цикл
+| # | Задача | Тип |
+|---|---|---|
+| 1.1 | Развыключить ветвление графа (лимиты > 0, конфигурируемо) | M |
+| 1.2 | **Бюджет-менеджер** (итерации/источники/токены/время + авто-стоп) | M |
+| 1.3 | Гибридная маршрутизация моделей `planner/writer/repair` **+ проброс `reasoning_content`** | M |
+| 1.4 | Детектор «нет прогресса» (стоп без новых уникальных источников) | S |
+| 1.5 | Gap-анализ (`ReplanAgent`) на reasoning-модели | S |
+
+### Frontend F0 — каркас + home-экран (дизайн §4.2)
+| # | Задача | Тип |
+|---|---|---|
+| 1.6 | Скаффолд `web/`: Vite + Vue3 + TS + Tailwind + shadcn-vue + Router + Pinia + Vue Query | M |
+| 1.7 | Typed API-клиент (генерация из `/openapi.json`) | S |
+| 1.8 | **Home-экран** = аналог Claude (icon-rail, spark + serif-приветствие, композер с селектором глубины, чипы-шаблоны) | M |
+| 1.9 | История (`GET /v1/research`), создание (`POST`), просмотр отчёта (read-only), удаление; поллинг статуса | M |
+| 1.10 | **Выбор модели**: `GET /v1/models` + `ResearchRequest.model` (per-research, валидация `model_catalog`) + селектор в композере (V4 Pro / V4 Flash) | M |
+
+**Done:** HARD делает 2–4 итерации со стопом по бюджету; SPA создаёт ресёрч и показывает готовый отчёт; home-экран визуально совпадает с референсом.
+
+---
+
+## Wave 2 — Стриминг (Backend SSE → Frontend F1)
+
+«Момент Claude»: живой прогресс + видимое рассуждение.
+
+| # | Задача | Где | Тип |
+|---|---|---|---|
+| 2.1 | **SSE-эндпоинт** `GET /v1/research/{id}/events` (события: status/plan/trace/**reasoning**/report_delta/source/budget/done) | backend | M |
+| 2.2 | Проброс `reasoning_content` reasoning-модели в поток | `deepseek.py`, graph | M |
+| 2.3 | **Экспорт через API** `GET /v1/research/{id}/export?format=pdf\|docx` | backend | M |
+| 2.4 | F1: `streamStore` на EventSource; `ProgressTrace` (narrative + сворачиваемый reasoning-блок); стрим отчёта; `SourceChips`; бюджет/ETA | frontend | L |
+
+**Done:** отчёт «печатается» в реальном времени; сворачиваемый блок «Размышления» показывает ход мысли модели; источники появляются по ходу.
+
+---
+
+## Wave 3 — Глубокий поиск (P2) ∥ Полная раскладка (F2) → выпил Streamlit
+
+### Backend P2
+| # | Задача | Тип |
+|---|---|---|
+| 3.1 | Абстракция `SearchBackend` + Tavily/Exa рядом с DDG (фолбэк) | M |
+| 3.2 | Кэш поиска/извлечений (Postgres + TTL) | M |
+| 3.3 | **pgvector NotesStore**: эмбеддинги конспектов, дедуп, retrieval | L |
+| 3.4 | Researcher конспектирует источник → notes (дешёвая модель) | M |
+
+### Frontend F2
+| # | Задача | Тип |
+|---|---|---|
+| 3.5 | Трёхпанельная раскладка + **артефакт-панель** (вкладки Report/Sources/Conflicts/Trail) | L |
+| 3.6 | `MarkdownView` (markdown-it + Shiki) + кликабельные `[S1]` | M |
+| 3.7 | `SourceCard` с грейдами качества; экспорт PDF/DOCX | M |
+| 3.8 | Заглушки `ClarifyCard`/`PlanCard` (под Wave 4) | S |
+
+| 3.9 | **Декомиссия Streamlit**: убрать сервис `ui` из compose; ops остаётся в Grafana | S |
+
+**Done:** медиана 40–100 уникальных источников на HARD без бана; продуктовый Claude-вид; Streamlit удалён.
+
+---
+
+## Wave 4 — Планирование (P1 → F3)
+
+| # | Задача | Где | Тип |
+|---|---|---|---|
+| 4.1 | `ClarifierAgent` (0–3 уточнения, пропускаемо) | backend | M |
+| 4.2 | `PlannerAgent` (sub-questions) + статусы `CLARIFYING/PLANNING/AWAITING_APPROVAL` | backend + alembic | M |
+| 4.3 | Эндпоинты `clarify` / `plan` (get/put) / `plan/approve` | backend | M |
+| 4.4 | F3: `ClarifyCard` + редактируемый `PlanCard` + «Approve & Run»; наполнить `ProgressTrace` нарративом | frontend | L |
+
+**Done:** пользователь правит план до запуска; уточнения поднимают релевантность на eval-наборе.
+
+---
+
+## Wave 5 — Writer/Verifier (P3) ∥ Polish (F4)
+
+### Backend P3
+| # | Задача | Тип |
+|---|---|---|
+| 5.1 | Writer `outline → секции → сшивка` для всех глубин | L |
+| 5.2 | Per-claim confidence + блок «что не удалось подтвердить» | M |
+| 5.3 | Финальный critic-проход (покрытие плана vs отчёт) | M |
+
+### Frontend F4
+| # | Задача | Тип |
+|---|---|---|
+| 5.4 | Темы light/dark; **переключатель языка** (ru/en/es, порт словарей из Streamlit) | M |
+| 5.5 | **Auth** (JWT/httpOnly-cookie, email+password, dev-bypass `AUTH_DISABLED`) + scoping по `user_id` | L |
+| 5.6 | Responsive, пустые/ошибочные/loading-состояния, a11y, горячие клавиши | M |
+
+**Done:** продукт готов к публичному релизу (auth, i18n, темы, мобайл).
+
+---
+
+## Поперечные треки (идут всё время)
+
+- **Eval** (с Wave 0): прогонять после каждой backend-волны, сравнивать с бейзлайном и публичным Gemini Deep Research.
+- **Бюджет/стоимость**: телеметрия токенов/стоимости в каждом отчёте (база уже есть).
+- **Документация**: держать роадмапы как источник правды при изменениях.
+
+---
+
+## Остаточные решения (дефолты, если не возразите)
+
+- UI-кит — **shadcn-vue**; хостинг — **static-SPA на nginx**; транспорт — **SSE**; вёрстка — **desktop-first** (мобайл в F4).
+- Модель: базовая **`deepseek-v4-pro`** (уже переключено в `.env`/`config.py`); reasoner для planner/gap — вариант с `reasoning_content` (**проверить, есть ли он у v4-pro**, иначе задать `DEEPSEEK_REASONER_MODEL`).
+- Платный поиск (Tavily/Exa, Wave 3) — нужен бюджет; если нет — P2 работает на DDG с меньшей глубиной.
