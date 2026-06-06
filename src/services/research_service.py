@@ -35,6 +35,9 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchReportResponse,
     ResearchConflict,
+    ResearchPlan,
+    ResearchPlanItem,
+    ResearchPlanUpdate,
     ResearchSummary,
     ResearchStatusSummary,
     ResearchStatus,
@@ -179,6 +182,14 @@ class ResearchService:
         with bind_observability_context(research_id=research_id):
             try:
                 tasks_raw = orchestrator.run_decompose(request.prompt, request.depth)
+                if request.plan_first:
+                    # Store an editable plan and wait for user approval (no tasks/jobs yet).
+                    self._store_plan_for_review(research_id, tasks_raw)
+                    logger.info(
+                        "research_plan_ready research_id=%s item_count=%s depth=%s",
+                        research_id, len(tasks_raw), request.depth.value,
+                    )
+                    return
                 task_ids = []
                 registered_tasks = []
                 for task_dict in tasks_raw:
@@ -410,6 +421,81 @@ class ResearchService:
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             llm_token_usage=graph_state.get("llm_token_usage", {}),
         )
+
+    def _store_plan_for_review(self, research_id: str, tasks_raw: list[dict]) -> None:
+        """Persist a decomposed plan into graph_state and set status PLAN_REVIEW."""
+        plan = [
+            {
+                "id": item.get("id") or str(uuid.uuid4()),
+                "description": item.get("description", ""),
+                "queries": list(item.get("queries") or []),
+            }
+            for item in tasks_raw
+        ]
+        research = self.task_store.get_research(research_id)
+        state = dict((research.graph_state if research else None) or {})
+        state.pop("decompose_pending", None)
+        state.pop("decompose_payload", None)
+        state["plan"] = plan
+        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.update_research_status(research_id, ResearchStatus.PLAN_REVIEW)
+
+    def get_research_plan(self, research_id: str) -> ResearchPlan:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        items = (research.graph_state or {}).get("plan") or []
+        return ResearchPlan(
+            research_id=research.id,
+            status=research.status,
+            items=[ResearchPlanItem.model_validate(item) for item in items],
+        )
+
+    def update_research_plan(self, research_id: str, update: ResearchPlanUpdate) -> ResearchPlan:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        if research.status != ResearchStatus.PLAN_REVIEW:
+            raise HTTPException(status_code=409, detail="Plan can only be edited while awaiting approval")
+        state = dict(research.graph_state or {})
+        state["plan"] = [item.model_dump() for item in update.items]
+        self.task_store.update_research_graph_state(research_id, state)
+        return self.get_research_plan(research_id)
+
+    def approve_research_plan(self, research_id: str) -> ResearchRecord:
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        if research.status != ResearchStatus.PLAN_REVIEW:
+            raise HTTPException(status_code=409, detail="Research is not awaiting plan approval")
+        plan = (research.graph_state or {}).get("plan") or []
+        if not plan:
+            raise HTTPException(status_code=409, detail="No plan to approve")
+
+        registered_tasks = []
+        task_ids = []
+        for item in plan:
+            queries = [query for query in (item.get("queries") or []) if query]
+            task = self.task_store.add_task(
+                {
+                    "id": item.get("id") or str(uuid.uuid4()),
+                    "research_id": research_id,
+                    "description": item.get("description", ""),
+                    "queries": queries,
+                    "status": TaskStatus.PENDING,
+                }
+            )
+            registered_tasks.append(task)
+            task_ids.append(task.id)
+        self.task_store.set_research_task_ids(research_id, task_ids)
+        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
+        for task in registered_tasks:
+            if task.status == TaskStatus.PENDING and task.queries:
+                job = self.task_store.add_search_task_job(task.id, research.depth.value, settings.job_max_attempts)
+                if self.broker:
+                    self.broker.push_search_job(job.id)
+        logger.info("research_plan_approved research_id=%s task_count=%s", research_id, len(registered_tasks))
+        return self.task_store.get_research(research_id)
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
         """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""

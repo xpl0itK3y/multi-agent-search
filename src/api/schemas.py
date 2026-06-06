@@ -15,6 +15,7 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 class ResearchStatus(str, Enum):
+    PLAN_REVIEW = "plan_review"
     PROCESSING = "processing"
     ANALYZING = "analyzing"
     COMPLETED = "completed"
@@ -156,6 +157,10 @@ class ResearchRequest(BaseModel):
         default=None,
         description="Optional model id from the catalog (GET /v1/models); validated server-side, falls back to default",
     )
+    plan_first: bool = Field(
+        default=False,
+        description="If true, generate an editable research plan and wait for approval before searching",
+    )
 
 class ResearchRecord(BaseModel):
     id: str
@@ -233,6 +238,22 @@ class ResearchConflict(BaseModel):
     reason: Optional[str] = None
     source_ids: List[str] = Field(default_factory=list)
     sentences: List[str] = Field(default_factory=list)
+
+
+class ResearchPlanItem(BaseModel):
+    id: str
+    description: str = ""
+    queries: List[str] = Field(default_factory=list)
+
+
+class ResearchPlan(BaseModel):
+    research_id: str
+    status: ResearchStatus
+    items: List[ResearchPlanItem] = Field(default_factory=list)
+
+
+class ResearchPlanUpdate(BaseModel):
+    items: List[ResearchPlanItem]
 
 
 class ResearchReportResponse(BaseModel):

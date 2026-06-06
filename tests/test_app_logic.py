@@ -2346,3 +2346,57 @@ def test_finalize_research_rejects_incomplete_tasks():
         service.finalize_research(research.id)
 
     assert exc_info.value.status_code == 409
+
+
+def test_research_plan_first_flow_awaits_approval_then_enqueues():
+    from src.api.schemas import ResearchPlanItem, ResearchPlanUpdate
+
+    class FakeOrchestrator:
+        def run_decompose(self, prompt, depth):
+            return [
+                {"id": "t1", "description": "Sub-question one", "queries": ["q1", "q2"], "status": TaskStatus.PENDING},
+                {"id": "t2", "description": "Sub-question two", "queries": ["q3"], "status": TaskStatus.PENDING},
+            ]
+
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store, orchestrator=FakeOrchestrator())
+    request = ResearchRequest(prompt="research something deep", depth=SearchDepth.EASY, plan_first=True)
+
+    _, research_id = service.start_research(request)
+    service.decompose_and_enqueue(research_id, request)
+
+    # Plan is staged for review; no tasks/jobs created yet.
+    research = task_store.get_research(research_id)
+    assert research.status == ResearchStatus.PLAN_REVIEW
+    assert task_store.get_tasks_by_research(research_id) == []
+
+    plan = service.get_research_plan(research_id)
+    assert [item.description for item in plan.items] == ["Sub-question one", "Sub-question two"]
+
+    # Edit the plan down to a single, reworded sub-question.
+    updated = service.update_research_plan(
+        research_id,
+        ResearchPlanUpdate(items=[ResearchPlanItem(id="t1", description="Edited", queries=["new query"])]),
+    )
+    assert len(updated.items) == 1
+
+    # Approve -> tasks created from the edited plan and research starts processing.
+    record = service.approve_research_plan(research_id)
+    assert record.status == ResearchStatus.PROCESSING
+    tasks = task_store.get_tasks_by_research(research_id)
+    assert len(tasks) == 1
+    assert tasks[0].queries == ["new query"]
+
+
+def test_research_plan_approve_rejects_when_not_in_review():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic here", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    service = ResearchService(task_store=task_store)
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.approve_research_plan(research.id)
+
+    assert exc_info.value.status_code == 409
