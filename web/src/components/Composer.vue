@@ -1,0 +1,92 @@
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { useResearchStore } from "@/stores/research";
+import type { Depth } from "@/lib/types";
+
+const prompt = defineModel<string>("prompt", { default: "" });
+
+const props = defineProps<{ busy?: boolean }>();
+const emit = defineEmits<{ submit: [{ prompt: string; depth: Depth; model: string }] }>();
+
+const store = useResearchStore();
+
+const depths: { value: Depth; label: string }[] = [
+  { value: "easy", label: "Быстро" },
+  { value: "medium", label: "Сбалансировано" },
+  { value: "hard", label: "Глубоко" },
+];
+const depth = ref<Depth>("medium");
+
+const model = ref<string>("");
+watch(
+  () => store.defaultModelId,
+  (id) => {
+    if (!model.value && id) model.value = id;
+  },
+  { immediate: true },
+);
+
+const canSubmit = computed(() => prompt.value.trim().length >= 5 && !props.busy);
+
+function submit() {
+  if (!canSubmit.value) return;
+  emit("submit", { prompt: prompt.value.trim(), depth: depth.value, model: model.value });
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    submit();
+  }
+}
+</script>
+
+<template>
+  <div class="w-full max-w-composer rounded-card border border-bd bg-surface px-4 py-3 shadow-lg">
+    <textarea
+      v-model="prompt"
+      rows="2"
+      placeholder="О чём провести исследование?"
+      class="block w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink placeholder:text-muted focus:outline-none"
+      @keydown="onKeydown"
+    />
+
+    <div class="mt-2 flex items-center justify-between gap-2">
+      <button class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" title="Прикрепить URL/файл">
+        +
+      </button>
+
+      <div class="flex items-center gap-2">
+        <!-- Model selector -->
+        <select
+          v-model="model"
+          class="cursor-pointer rounded-lg border border-bd bg-transparent px-2 py-1.5 text-sm text-muted hover:text-ink focus:outline-none"
+          title="Модель"
+        >
+          <option v-if="!store.models.length" :value="''">Модель</option>
+          <option v-for="m in store.models" :key="m.id" :value="m.id">{{ m.label }}</option>
+        </select>
+
+        <!-- Depth selector -->
+        <select
+          v-model="depth"
+          class="cursor-pointer rounded-lg border border-bd bg-transparent px-2 py-1.5 text-sm text-muted hover:text-ink focus:outline-none"
+          title="Глубина"
+        >
+          <option v-for="d in depths" :key="d.value" :value="d.value">{{ d.label }}</option>
+        </select>
+
+        <!-- Send -->
+        <button
+          class="grid h-8 w-8 place-items-center rounded-full bg-accent text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
+          :disabled="!canSubmit"
+          title="Запустить (⌘/Ctrl + Enter)"
+          @click="submit"
+        >
+          <span v-if="props.busy" class="animate-pulse">…</span>
+          <span v-else>↑</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</template>

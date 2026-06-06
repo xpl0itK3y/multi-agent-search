@@ -1,0 +1,44 @@
+import type {
+  CreateResearchResponse,
+  Depth,
+  ModelOption,
+  ResearchHistoryItem,
+  ResearchReport,
+} from "./types";
+
+// Empty base => same origin => Vite dev-proxy forwards /v1 to the backend.
+// Set VITE_API_BASE (e.g. http://localhost:8000) for a non-proxied build.
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    ...init,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status} ${detail}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export const api = {
+  listModels: () => request<ModelOption[]>("/v1/models"),
+
+  listResearch: (limit = 30) =>
+    request<ResearchHistoryItem[]>(`/v1/research?limit=${limit}`),
+
+  createResearch: (body: { prompt: string; depth: Depth; model?: string }) =>
+    request<CreateResearchResponse>("/v1/research", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getReport: (id: string) =>
+    request<ResearchReport>(`/v1/research/${id}/report`),
+
+  deleteResearch: (id: string) =>
+    request<void>(`/v1/research/${id}`, { method: "DELETE" }),
+};
