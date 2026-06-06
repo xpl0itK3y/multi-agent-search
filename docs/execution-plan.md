@@ -15,7 +15,8 @@
 - ✅ **Reasoning-срез (2.2 плумбинг + 1.3 частично):** провайдер захватывает `reasoning_content` (stream), SSE шлёт `reasoning_delta`, в UI — сворачиваемый блок «Размышления»; добавлен per-call override модели (`kwargs["model"]`) и попутно исправлен латентный баг дублирования `model=` при заданном `repair_model`. **Активируется, когда модель отдаёт reasoning** (подтвердить у v4-pro или задать reasoner-модель).
 - ✅ **Per-research модель в финализации:** выбранная в композере модель (из `graph_state["model"]`) прокинута через state графа → `_analyze` → все `generate`-вызовы анализатора (report/секции/синтез/починка); reasoner-модель → блок «Размышления» наполняется. Покрыто `tests/test_model_selection.py`.
 - ⬜ Остаток Wave 2: экспорт-роут PDF/DOCX (2.3).
-- ⬜ Остаток Wave 0: SSRF-фикс (0.2), split `/summary` (0.3), тесты/native (0.4), eval (0.5), `user_id` (0.6).
+- ✅ **Wave 0 hardening:** SSRF-гард на webhook (`src/net_safety.py`, блок private/loopback/link-local/metadata; флаг `webhook_allow_private_targets`) (0.2); cheap `GET /v1/research/{id}/status` без тяжёлых агентов/LLM — `/summary` остаётся для on-demand (0.3). Покрыто `tests/test_net_safety.py`.
+- ⬜ Остаток Wave 0: тесты/native fallback (0.4), eval-харнесс (0.5), `user_id` миграция (0.6).
 - ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
 
 ---
