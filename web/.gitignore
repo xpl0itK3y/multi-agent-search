@@ -4,3 +4,8 @@ dist-ssr
 *.local
 .vite
 .DS_Store
+
+# TypeScript / vue-tsc emit artifacts (we type-check with --noEmit)
+*.tsbuildinfo
+/vite.config.js
+src/**/*.js
