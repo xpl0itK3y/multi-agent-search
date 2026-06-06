@@ -17,6 +17,8 @@
 - ⬜ Остаток Wave 2: экспорт-роут PDF/DOCX (2.3).
 - ✅ **Wave 0 hardening:** SSRF-гард на webhook (`src/net_safety.py`, блок private/loopback/link-local/metadata; флаг `webhook_allow_private_targets`) (0.2); cheap `GET /v1/research/{id}/status` без тяжёлых агентов/LLM — `/summary` остаётся для on-demand (0.3). Покрыто `tests/test_net_safety.py`.
 - ✅ **Wave 0 тесты (0.4):** suite зелёный (237 passed, 0 failed). Причина была НЕ в native-fallback/Python 3.14, а в рассинхроне тестов с осознанными изменениями + 1 регрессия + 3 «протухших» по времени теста. Починено: (код) low-источники снова в «Additional», возвращена инъекция «Report Notes», безопасный доступ к `analyzer.llm`, граф передаёт в `run_analysis` только поддерживаемые kwargs; (тесты) относительные timestamps в graph/health-тестах, формат кликабельных markdown-ссылок.
+- ✅ **Wave 3 / F2 (начато):** отчёт рендерится как markdown (`MarkdownView`, markdown-it + @tailwindcss/typography) — кликабельные ссылки (новая вкладка, XSS-safe `html:false`), serif-заголовки, бейджи цитат `[S1]`, курсор-индикатор при стриминге (3.6).
+- ⬜ Остаток Wave 3 / F2: трёхпанельная раскладка + артефакт-панель с вкладками (Report/Sources/Conflicts/Trail), `SourceCard` с грейдами, экспорт PDF/DOCX (3.5, 3.7).
 - ⬜ Остаток Wave 0: eval-харнесс (0.5), `user_id` миграция (0.6).
 - ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
 
