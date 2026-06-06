@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
-import type { PlanItem, ResearchPlan } from "@/lib/types";
+import type { ChatMessage, PlanItem, ResearchPlan } from "@/lib/types";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
 import PlanCard from "@/components/PlanCard.vue";
+import MarkdownView from "@/components/MarkdownView.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -22,6 +23,13 @@ const done = ref(false);
 
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
+
+const messages = ref<ChatMessage[]>([]);
+const chatInput = ref("");
+const chatBusy = ref(false);
+const threadScroll = ref<HTMLElement | null>(null);
+
+const canChat = computed(() => status.value === "completed");
 
 let close: (() => void) | undefined;
 
@@ -62,6 +70,30 @@ async function onApprove(items: PlanItem[]) {
   }
 }
 
+async function scrollThreadToBottom() {
+  await nextTick();
+  threadScroll.value?.scrollTo({ top: threadScroll.value.scrollHeight, behavior: "smooth" });
+}
+
+async function sendChat() {
+  const question = chatInput.value.trim();
+  if (!question || chatBusy.value) return;
+  chatInput.value = "";
+  messages.value.push({ role: "user", content: question });
+  chatBusy.value = true;
+  errorMsg.value = null;
+  scrollThreadToBottom();
+  try {
+    const answer = await api.askResearch(props.id, question);
+    messages.value.push(answer);
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    chatBusy.value = false;
+    scrollThreadToBottom();
+  }
+}
+
 onMounted(async () => {
   try {
     const s = await api.getStatus(props.id);
@@ -70,6 +102,11 @@ onMounted(async () => {
     if (s.status === "plan_review") loadPlan();
   } catch {
     // Non-fatal — the SSE stream still drives status/report.
+  }
+  try {
+    messages.value = await api.getMessages(props.id);
+  } catch {
+    // ignore — no messages yet
   }
   close = openResearchStream(props.id, {
     onStatus: (s) => {
@@ -104,12 +141,12 @@ onBeforeUnmount(() => close?.());
     <p v-if="errorMsg" class="px-6 pb-6 text-sm text-red-400">{{ errorMsg }}</p>
   </div>
 
-  <!-- Active research: thread + artifact panel -->
+  <!-- Active / completed research: thread (+ chat) on the left, artifact on the right -->
   <div v-else class="flex h-full flex-col lg:flex-row">
     <section
-      class="flex w-full flex-col overflow-y-auto border-b border-bd lg:w-[400px] lg:shrink-0 lg:border-b-0 lg:border-r"
+      class="flex w-full flex-col overflow-hidden border-b border-bd lg:w-[420px] lg:shrink-0 lg:border-b-0 lg:border-r"
     >
-      <div class="px-6 py-6">
+      <div ref="threadScroll" class="flex-1 overflow-y-auto px-6 py-6">
         <button class="mb-5 text-sm text-muted hover:text-ink" @click="router.push('/')">
           ← На главную
         </button>
@@ -138,6 +175,39 @@ onBeforeUnmount(() => close?.());
           :reasoning="reasoning"
           :live="!done"
         />
+
+        <!-- Follow-up conversation -->
+        <div v-if="messages.length || chatBusy" class="mt-6 space-y-4 border-t border-bd pt-5">
+          <template v-for="(m, i) in messages" :key="i">
+            <div v-if="m.role === 'user'" class="ml-6 rounded-lg bg-surface px-3 py-2 text-sm text-ink">
+              {{ m.content }}
+            </div>
+            <MarkdownView v-else :source="m.content" />
+          </template>
+          <div v-if="chatBusy" class="flex items-center gap-2 text-sm text-muted">
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> Думаю…
+          </div>
+        </div>
+      </div>
+
+      <!-- Pinned chat composer (available once the report is ready) -->
+      <div v-if="canChat" class="shrink-0 border-t border-bd p-3">
+        <div class="flex items-end gap-2 rounded-xl border border-bd bg-surface px-3 py-2">
+          <textarea
+            v-model="chatInput"
+            rows="1"
+            placeholder="Спросить по исследованию…"
+            class="max-h-32 flex-1 resize-none bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
+            @keydown.enter.exact.prevent="sendChat"
+          />
+          <button
+            class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent text-bg disabled:opacity-40"
+            :disabled="!chatInput.trim() || chatBusy"
+            @click="sendChat"
+          >
+            ↑
+          </button>
+        </div>
       </div>
     </section>
 

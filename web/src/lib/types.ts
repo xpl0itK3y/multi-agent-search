@@ -52,6 +52,11 @@ export interface SourcePreview {
   snippet?: string | null;
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface PlanItem {
   id: string;
   description: string;
