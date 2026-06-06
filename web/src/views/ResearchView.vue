@@ -11,6 +11,7 @@ const status = ref<string>("processing");
 const report = ref<string>("");
 const isFinal = ref(false);
 const trace = ref<TraceEntry[]>([]);
+const reasoning = ref<string>("");
 const errorMsg = ref<string | null>(null);
 const done = ref(false);
 
@@ -33,6 +34,7 @@ onMounted(() => {
   close = openResearchStream(props.id, {
     onStatus: (s) => (status.value = s),
     onTrace: (step, detail) => trace.value.push({ step, detail }),
+    onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;
       isFinal.value = final;
@@ -69,8 +71,9 @@ onBeforeUnmount(() => close?.());
     <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
 
     <ProgressTrace
-      v-if="trace.length"
+      v-if="trace.length || reasoning"
       :entries="trace"
+      :reasoning="reasoning"
       :live="!done"
       class="mb-6"
     />

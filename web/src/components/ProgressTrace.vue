@@ -6,9 +6,10 @@ export interface TraceEntry {
   detail: string;
 }
 
-defineProps<{ entries: TraceEntry[]; live?: boolean }>();
+defineProps<{ entries: TraceEntry[]; reasoning?: string; live?: boolean }>();
 
 const open = ref(true);
+const reasoningOpen = ref(false);
 
 // Friendly RU labels for graph step names.
 const STEP_LABELS: Record<string, string> = {
@@ -44,6 +45,22 @@ function label(step: string): string {
     </button>
 
     <div v-if="open" class="border-t border-bd px-4 py-3">
+      <!-- Raw model reasoning (extended-thinking style), collapsed by default -->
+      <div v-if="reasoning" class="mb-3 rounded-lg border border-bd bg-bg/40">
+        <button
+          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted hover:text-ink"
+          @click="reasoningOpen = !reasoningOpen"
+        >
+          <span class="text-accentSoft">✶</span>
+          Размышления
+          <span class="ml-auto">{{ reasoningOpen ? "▾" : "▸" }}</span>
+        </button>
+        <div
+          v-if="reasoningOpen"
+          class="max-h-72 overflow-y-auto whitespace-pre-wrap border-t border-bd px-3 py-2 font-sans text-[13px] leading-relaxed text-muted"
+        >{{ reasoning }}</div>
+      </div>
+
       <ol class="space-y-3">
         <li
           v-for="(entry, i) in entries"

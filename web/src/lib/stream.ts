@@ -6,6 +6,7 @@ const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 export interface StreamHandlers {
   onStatus?: (status: string) => void;
   onTrace?: (step: string, detail: string) => void;
+  onReasoning?: (reasoning: string) => void;
   onReport?: (report: string, final: boolean) => void;
   onDone?: (status: string) => void;
   onError?: (message: string) => void;
@@ -23,6 +24,7 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
     const d = parse(e);
     h.onTrace?.(d.step ?? "", d.detail ?? "");
   });
+  es.addEventListener("reasoning_delta", (e) => h.onReasoning?.(parse(e).reasoning ?? ""));
   es.addEventListener("report", (e) => {
     const d = parse(e);
     h.onReport?.(d.report ?? "", Boolean(d.final));
