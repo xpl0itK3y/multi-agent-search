@@ -13,7 +13,8 @@
 - ✅ **Wave 1 / F0:** `web/` поднят (Vite+Vue3+TS+Tailwind+Pinia+Router); home-экран (spark + serif-приветствие, композер с селекторами модели/глубины, чипы), сайдбар collapsed↔expanded с «Недавними», создание ресёрча и страница отчёта. `npm run build` зелёный (1.6–1.9).
 - ✅ **Wave 2 / F1:** SSE-эндпоинт `GET /v1/research/{id}/events` (status/trace/reasoning/report-дельты) и live-вью с панелью «Ход работы» + потоковым отчётом — поллинг заменён стримом (2.1, 2.4).
 - ✅ **Reasoning-срез (2.2 плумбинг + 1.3 частично):** провайдер захватывает `reasoning_content` (stream), SSE шлёт `reasoning_delta`, в UI — сворачиваемый блок «Размышления»; добавлен per-call override модели (`kwargs["model"]`) и попутно исправлен латентный баг дублирования `model=` при заданном `repair_model`. **Активируется, когда модель отдаёт reasoning** (подтвердить у v4-pro или задать reasoner-модель).
-- ⬜ Остаток Wave 2: применять выбранную per-research модель в финализации (сейчас финализация на `settings.deepseek_model`), экспорт-роут PDF/DOCX (2.3).
+- ✅ **Per-research модель в финализации:** выбранная в композере модель (из `graph_state["model"]`) прокинута через state графа → `_analyze` → все `generate`-вызовы анализатора (report/секции/синтез/починка); reasoner-модель → блок «Размышления» наполняется. Покрыто `tests/test_model_selection.py`.
+- ⬜ Остаток Wave 2: экспорт-роут PDF/DOCX (2.3).
 - ⬜ Остаток Wave 0: SSRF-фикс (0.2), split `/summary` (0.3), тесты/native (0.4), eval (0.5), `user_id` (0.6).
 - ⬜ Дальше: **P0-цикл (1.1–1.5)** — оживить ветвление графа, тогда трасса и reasoning наполнятся содержанием; затем **Wave 3 / F2** (артефакт-панель + markdown/Shiki).
 
