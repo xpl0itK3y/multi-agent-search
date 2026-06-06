@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
@@ -47,6 +48,7 @@ class FinalizeGraphRunner:
             "analyze_attempts": 0,
             "replan_attempts": 0,
             "tie_break_attempts": 0,
+            "finalize_deadline": time.time() + settings.finalize_budget_max_seconds,
             "should_replan": False,
             "should_tie_break": False,
             "should_retry_analysis": False,
@@ -124,6 +126,11 @@ class FinalizeGraphRunner:
         logger.info("langgraph_finalize_step_completed step=%s elapsed_ms=%.2f", step_name, elapsed_ms)
         return result
 
+    def _budget_ok(self, state: FinalizeGraphState) -> bool:
+        """True while the finalize budget (wall-clock) still has room for another branch/pass."""
+        deadline = state.get("finalize_deadline")
+        return deadline is None or time.time() < deadline
+
     def _collect_context(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
             aggregated_sources = self.service._build_research_source_pool(state["tasks"])
@@ -148,7 +155,11 @@ class FinalizeGraphRunner:
                 state["tasks"],
                 source_summary=source_summary,
             ) if self._supports_graph_branching(analyzer) else []
-            should_replan = bool(recommendations) and state["replan_attempts"] < settings.langgraph_replan_max_loops
+            should_replan = (
+                bool(recommendations)
+                and state["replan_attempts"] < settings.langgraph_replan_max_loops
+                and self._budget_ok(state)
+            )
             next_state = {
                 **state,
                 "detected_conflicts": conflicts,
@@ -331,6 +342,7 @@ class FinalizeGraphRunner:
                 self._supports_graph_branching(self.service.analyzer)
                 and state["tie_break_attempts"] < settings.langgraph_tie_break_max_loops
                 and (weak_support or has_conflicts)
+                and self._budget_ok(state)
             ):
                 should_tie_break = True
             tie_break_recommendations = self.service.replan_agent.suggest_tie_breakers(
@@ -338,7 +350,11 @@ class FinalizeGraphRunner:
                 conflicts=state.get("detected_conflicts") or [],
                 weak_support=weak_support,
             ) if should_tie_break else []
-            if state["analyze_attempts"] <= settings.langgraph_verification_max_retries:
+            if (
+                state["analyze_attempts"] <= settings.langgraph_verification_max_retries
+                and state["analyze_attempts"] < settings.finalize_budget_max_analyze_passes
+                and self._budget_ok(state)
+            ):
                 should_retry = weak_support
             if should_retry:
                 effective_prompt = (

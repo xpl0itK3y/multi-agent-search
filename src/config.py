@@ -46,9 +46,14 @@ class Settings(BaseSettings):
     analyzer_evidence_source_limit: int = 12
     analyzer_local_repair_issue_threshold: int = 20
     use_langgraph_finalize_graph: bool = True
-    langgraph_replan_max_loops: int = 0
-    langgraph_verification_max_retries: int = 0
-    langgraph_tie_break_max_loops: int = 0
+    # Deep-research loop is on by default but bounded by the finalize budget below.
+    # Set any of these to 0 to disable that branch (faster, shallower finalize).
+    langgraph_replan_max_loops: int = 1
+    langgraph_verification_max_retries: int = 1
+    langgraph_tie_break_max_loops: int = 1
+    # Budget guard so the revived loop can't run away on cost/latency.
+    finalize_budget_max_seconds: int = 240
+    finalize_budget_max_analyze_passes: int = 3
     graph_step_event_history_limit: int = 250
     graph_step_event_retention_seconds: int = 86400
     graph_trail_history_limit: int = 200
