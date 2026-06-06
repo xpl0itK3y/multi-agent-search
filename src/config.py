@@ -5,8 +5,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-v4-pro"
     deepseek_repair_model: Optional[str] = None
+    # Reasoning-capable model for planner/gap-analysis steps; must expose `reasoning_content`
+    # so the "thinking" stream (frontend §4.1) can be shown. Falls back to deepseek_model if unset.
+    deepseek_reasoner_model: Optional[str] = None
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
