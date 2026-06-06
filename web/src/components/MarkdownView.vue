@@ -17,11 +17,30 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
 
+// Map Sn -> url, parsed from the report's own "Sources" section so inline
+// citations become clickable links to the actual source (correct numbering).
+function sourceUrlMap(source: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of source.split("\n")) {
+    const idMatch = line.match(/\[S(\d+)\\?\]/);
+    if (!idMatch) continue;
+    const urlMatch = line.match(/\((https?:\/\/[^)\s]+)\)/) || line.match(/(https?:\/\/[^)\s]+)/);
+    if (urlMatch) map.set(idMatch[1], urlMatch[1]);
+  }
+  return map;
+}
+
 const html = computed(() => {
-  const rendered = md.render(props.source || "");
-  // Style inline source citations like [S1] as small accent badges.
-  // Safe: hrefs are URLs and never contain the [Sn] pattern.
-  return rendered.replace(/\[S(\d+)\]/g, '<sup class="md-citation">[S$1]</sup>');
+  const source = props.source || "";
+  const urls = sourceUrlMap(source);
+  const rendered = md.render(source);
+  // Inline [Sn] -> clickable link to the source when known, else a styled badge.
+  return rendered.replace(/\[S(\d+)\]/g, (_full, n: string) => {
+    const url = urls.get(n);
+    return url
+      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="md-citation">[S${n}]</a>`
+      : `<sup class="md-citation">[S${n}]</sup>`;
+  });
 });
 </script>
 

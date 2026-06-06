@@ -21,6 +21,7 @@ const trace = ref<TraceEntry[]>([]);
 const reasoning = ref<string>("");
 const errorMsg = ref<string | null>(null);
 const done = ref(false);
+const usage = ref<Record<string, number> | null>(null);
 
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
@@ -37,6 +38,14 @@ const canChat = computed(() => status.value === "completed");
 const awaitingAnswer = computed(() => {
   const last = messages.value[messages.value.length - 1];
   return chatBusy.value && (!last || last.role !== "assistant" || !last.content);
+});
+const costLabel = computed(() => {
+  const u = usage.value;
+  if (!u || !u.total_tokens) return null;
+  const parts: string[] = [];
+  if (typeof u.estimated_cost_usd === "number") parts.push(`≈ $${u.estimated_cost_usd.toFixed(4)}`);
+  if (typeof u.total_tokens === "number") parts.push(`${u.total_tokens.toLocaleString()} токенов`);
+  return parts.join(" · ");
 });
 
 let close: (() => void) | undefined;
@@ -137,6 +146,7 @@ onMounted(async () => {
     const s = await api.getStatus(props.id);
     prompt.value = s.prompt;
     status.value = s.status;
+    usage.value = s.llm_token_usage ?? null;
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
   } catch {
@@ -164,6 +174,12 @@ onMounted(async () => {
     onDone: (s) => {
       status.value = s;
       done.value = true;
+      if (s === "completed") {
+        api
+          .getStatus(props.id)
+          .then((st) => (usage.value = st.llm_token_usage ?? null))
+          .catch(() => {});
+      }
     },
     onError: (m) => (errorMsg.value = m),
   });
@@ -220,6 +236,10 @@ onBeforeUnmount(() => close?.());
             }"
           />
           <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
+        </div>
+
+        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted" title="Оценка расхода LLM">
+          {{ costLabel }}
         </div>
 
         <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>

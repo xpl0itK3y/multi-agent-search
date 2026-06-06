@@ -41,6 +41,7 @@ export interface ResearchStatusSummary {
   collected_sources: number;
   finalize_ready: boolean;
   has_final_report: boolean;
+  llm_token_usage?: Record<string, number>;
 }
 
 export interface SourcePreview {
