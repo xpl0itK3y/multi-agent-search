@@ -52,6 +52,13 @@ export interface SourcePreview {
   snippet?: string | null;
 }
 
+export interface Conflict {
+  topic: string;
+  reason?: string | null;
+  source_ids: string[];
+  sentences: string[];
+}
+
 export interface GraphTrailEntry {
   step?: string;
   detail?: string;

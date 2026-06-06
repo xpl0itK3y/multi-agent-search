@@ -1,4 +1,5 @@
 import type {
+  Conflict,
   CreateResearchResponse,
   Depth,
   ModelOption,
@@ -47,6 +48,9 @@ export const api = {
 
   getSources: (id: string) =>
     request<SourcePreview[]>(`/v1/research/${id}/sources`),
+
+  getConflicts: (id: string) =>
+    request<Conflict[]>(`/v1/research/${id}/conflicts`),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),

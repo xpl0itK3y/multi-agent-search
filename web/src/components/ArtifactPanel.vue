@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { api } from "@/lib/api";
-import type { GraphTrailEntry, SourcePreview } from "@/lib/types";
+import type { Conflict, GraphTrailEntry, SourcePreview } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
-type Tab = "report" | "sources" | "trail";
+type Tab = "report" | "sources" | "conflicts" | "trail";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
+const conflicts = ref<Conflict[] | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -41,14 +42,29 @@ async function ensureTrail() {
   }
 }
 
+async function ensureConflicts() {
+  if (conflicts.value || loading.value) return;
+  loading.value = true;
+  error.value = null;
+  try {
+    conflicts.value = await api.getConflicts(props.id);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    loading.value = false;
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") ensureSources();
+  if (t === "conflicts") ensureConflicts();
   if (t === "trail") ensureTrail();
 });
 
 const tabs: { key: Tab; label: string }[] = [
   { key: "report", label: "Отчёт" },
   { key: "sources", label: "Источники" },
+  { key: "conflicts", label: "Противоречия" },
   { key: "trail", label: "Трасса" },
 ];
 
@@ -89,6 +105,32 @@ const STEP_LABELS: Record<string, string> = {
         <p v-else-if="sources && !sources.length" class="text-muted">Источников пока нет.</p>
         <div v-else class="space-y-2">
           <SourceCard v-for="(s, i) in sources" :key="s.url" :source="s" :index="i + 1" />
+        </div>
+      </template>
+
+      <template v-else-if="tab === 'conflicts'">
+        <p v-if="loading" class="text-muted">Загрузка…</p>
+        <p v-else-if="error" class="text-red-400">{{ error }}</p>
+        <p v-else-if="conflicts && !conflicts.length" class="text-muted">
+          Противоречий между источниками не обнаружено.
+        </p>
+        <div v-else class="space-y-4">
+          <div
+            v-for="(c, i) in conflicts"
+            :key="i"
+            class="rounded-lg border border-bd bg-surface/50 p-4"
+          >
+            <div class="mb-1 text-sm font-medium text-ink">{{ c.topic || "Спорный момент" }}</div>
+            <div v-if="c.reason" class="mb-3 text-xs text-muted">{{ c.reason }}</div>
+            <div class="space-y-2">
+              <div v-for="(s, j) in c.sentences" :key="j" class="flex gap-2 text-sm">
+                <span class="shrink-0 text-xs font-semibold text-accent">
+                  {{ c.source_ids[j] ? "[" + c.source_ids[j] + "]" : "" }}
+                </span>
+                <span class="text-muted">«{{ s }}»</span>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
 

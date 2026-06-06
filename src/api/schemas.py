@@ -228,6 +228,13 @@ class ResearchStatusSummary(BaseModel):
     llm_token_usage: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ResearchConflict(BaseModel):
+    topic: str = ""
+    reason: Optional[str] = None
+    source_ids: List[str] = Field(default_factory=list)
+    sentences: List[str] = Field(default_factory=list)
+
+
 class ResearchReportResponse(BaseModel):
     research_id: str
     status: ResearchStatus

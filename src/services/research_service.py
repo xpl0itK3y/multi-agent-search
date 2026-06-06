@@ -34,6 +34,7 @@ from src.api.schemas import (
     ResearchRequest,
     ResearchResponse,
     ResearchReportResponse,
+    ResearchConflict,
     ResearchSummary,
     ResearchStatusSummary,
     ResearchStatus,
@@ -428,6 +429,39 @@ class ResearchService:
             for item in pool
             if item.get("url")
         ]
+
+    def get_research_conflicts(self, research_id: str) -> list[ResearchConflict]:
+        """Structured source conflicts for the artifact panel (no LLM).
+
+        Prefers the conflicts computed during finalization (graph_state); if absent,
+        recomputes from the source pool when a full AnalyzerAgent is available.
+        """
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+
+        raw = (research.graph_state or {}).get("detected_conflicts")
+        if raw is None:
+            analyzer = self.analyzer
+            if isinstance(analyzer, AnalyzerAgent):
+                tasks = self.task_store.get_tasks_by_research(research_id)
+                pool = self._build_research_source_pool(tasks)
+                conflict_pool = [
+                    {
+                        "source_id": f"S{index}",
+                        "content": item.get("content", ""),
+                        "url": item.get("url"),
+                        "domain": item.get("domain"),
+                        "title": item.get("title"),
+                        "source_quality": item.get("source_quality"),
+                    }
+                    for index, item in enumerate(pool, start=1)
+                    if item.get("content")
+                ]
+                raw = analyzer._detect_conflicts(conflict_pool) if conflict_pool else []
+            else:
+                raw = []
+        return [ResearchConflict.model_validate(item) for item in (raw or [])]
 
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)

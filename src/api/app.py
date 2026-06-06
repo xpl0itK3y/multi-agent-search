@@ -26,6 +26,7 @@ from src.api.schemas import (
     ResearchRecord,
     ResearchReportResponse,
     ResearchRequest,
+    ResearchConflict,
     ResearchResponse,
     ResearchSummary,
     ResearchStatusSummary,
@@ -281,6 +282,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/sources", response_model=List[SearchSourcePreview])
     async def get_research_sources(research_id: str, request: Request):
         return get_research_service(request).get_research_sources(research_id)
+
+    @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict])
+    async def get_research_conflicts(research_id: str, request: Request):
+        return get_research_service(request).get_research_conflicts(research_id)
 
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
     async def get_research_graph(research_id: str, request: Request):
