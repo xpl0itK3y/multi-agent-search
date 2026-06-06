@@ -390,19 +390,24 @@ async def test_queue_health_includes_operational_health_meta_alerts(client):
 
 @pytest.mark.anyio
 async def test_queue_health_includes_operational_recovery_alert(client):
+    # Recent timestamps so maintenance isn't flagged stale (which would degrade the
+    # current health and suppress the recovery alert this test checks for).
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
     app_service = client._transport.app.state.research_service
     app_service.task_store.upsert_worker_heartbeat(
         "maintenance",
         processed_jobs=1,
         status="idle",
         maintenance_summary={
-            "last_run_at": "2026-04-05T12:10:00+00:00",
+            "last_run_at": now.isoformat(),
             "recent_operational_health": [
-                {"status": "critical", "score": 40, "timestamp": "2026-04-05T12:00:00+00:00"},
-                {"status": "warning", "score": 72, "timestamp": "2026-04-05T12:05:00+00:00"},
+                {"status": "critical", "score": 40, "timestamp": (now - timedelta(minutes=10)).isoformat()},
+                {"status": "warning", "score": 72, "timestamp": (now - timedelta(minutes=5)).isoformat()},
             ],
             "recent_runs": [
-                {"total_count": 1, "compacted_count": 0, "last_run_at": "2026-04-05T12:00:00+00:00"},
+                {"total_count": 1, "compacted_count": 0, "last_run_at": (now - timedelta(minutes=10)).isoformat()},
             ],
         },
     )

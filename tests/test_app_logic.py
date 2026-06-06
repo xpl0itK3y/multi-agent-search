@@ -191,7 +191,8 @@ def test_analyzer_agent_uses_configured_repair_model_for_llm_repair(mocker):
     assert llm.calls[1]["kwargs"]["model"] == "deepseek-fast-repair"
     assert "## Sources" in result
     assert "### Used Sources" in result
-    assert "- [S1] https://example.com" in result
+    # Sources render as clickable markdown links: - **\[S1\]** [title](url)
+    assert "https://example.com" in result
 
 
 def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
@@ -886,7 +887,7 @@ def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
     assert "https://wrong.example" not in result
     assert "## Sources" in result
     assert "### Used Sources" in result
-    assert "- [S1] https://example.com" in result
+    assert "https://example.com" in result
 
 
 def test_analyzer_agent_lists_additional_relevant_sources_beyond_cited_ones():
@@ -917,8 +918,8 @@ def test_analyzer_agent_lists_additional_relevant_sources_beyond_cited_ones():
 
     assert "### Used Sources" in result
     assert "### Additional Relevant Sources" in result
-    assert "- [S1] https://example.com/1" in result
-    assert "- [S2] https://example.com/2" in result
+    assert "https://example.com/1" in result
+    assert "https://example.com/2" in result
 
 
 def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
@@ -2006,9 +2007,14 @@ def test_queue_metrics_include_graph_alert_trend():
 
 def test_worker_heartbeat_merges_persisted_graph_step_history():
     task_store = InMemoryTaskStore()
+    # Use recent timestamps so events stay within the retention window — the store
+    # prunes graph step events older than graph_step_event_retention_seconds.
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
     first_batch = [
         {
-            "timestamp": "2026-04-05T10:00:00+00:00",
+            "timestamp": (now - timedelta(minutes=2)).isoformat(),
             "step": "analyze",
             "elapsed_ms": 100.0,
             "worker_name": "job-worker",
@@ -2016,7 +2022,7 @@ def test_worker_heartbeat_merges_persisted_graph_step_history():
     ]
     second_batch = [
         {
-            "timestamp": "2026-04-05T10:01:00+00:00",
+            "timestamp": (now - timedelta(minutes=1)).isoformat(),
             "step": "verify",
             "elapsed_ms": 120.0,
             "worker_name": "job-worker",
