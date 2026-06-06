@@ -9,6 +9,7 @@ class FinalizeGraphState(TypedDict, total=False):
     effective_prompt: str
     depth: SearchDepth
     tasks: list[SearchTask]
+    model: str | None
     report: str
     replan_recommendations: list[dict[str, Any]]
     tie_break_recommendations: list[dict[str, Any]]

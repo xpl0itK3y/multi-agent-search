@@ -52,6 +52,8 @@ class FinalizeGraphRunner:
         }
         research = self.service.task_store.get_research(research_id)
         graph_state = (research.graph_state if research else None) or {}
+        # User-selected model (persisted at creation); carried through the graph runtime.
+        state["model"] = graph_state.get("model")
         step = graph_state.get("step")
         if not step:
             return state
@@ -89,6 +91,7 @@ class FinalizeGraphRunner:
             "prompt": state.get("prompt"),
             "effective_prompt": state.get("effective_prompt"),
             "depth": getattr(state.get("depth"), "value", state.get("depth")),
+            "model": state.get("model"),
             "task_ids": [task.id for task in state.get("tasks", [])],
             "analyze_attempts": state.get("analyze_attempts", 0),
             "replan_attempts": state.get("replan_attempts", 0),
@@ -238,6 +241,7 @@ class FinalizeGraphRunner:
                 state["effective_prompt"],
                 state["tasks"],
                 depth=state["depth"],
+                model=state.get("model"),
                 streaming_callback=_streaming_callback,
                 reasoning_callback=_reasoning_callback,
             )

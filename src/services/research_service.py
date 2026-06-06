@@ -629,7 +629,12 @@ class ResearchService:
             if settings.use_langgraph_finalize_graph:
                 report = self.finalize_graph_runner.run(research_id, research.prompt, tasks, research.depth)
             else:
-                report = analyzer.run_analysis(research.prompt, tasks, depth=research.depth)
+                report = analyzer.run_analysis(
+                    research.prompt,
+                    tasks,
+                    depth=research.depth,
+                    model=(research.graph_state or {}).get("model"),
+                )
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,

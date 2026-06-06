@@ -843,6 +843,7 @@ class AnalyzerAgent(BaseAgent):
         report_body: str,
         uncited_lines: list[str],
         unsupported_lines: list[str],
+        model: str | None = None,
     ) -> str:
         repair_prompt = self._build_repair_prompt(
             input_data,
@@ -852,8 +853,10 @@ class AnalyzerAgent(BaseAgent):
             unsupported_lines,
         )
         kwargs = {"temperature": 0.2}
-        if settings.deepseek_repair_model:
-            kwargs["model"] = settings.deepseek_repair_model
+        # Dedicated repair model wins; otherwise reuse the run's selected model.
+        repair_model = settings.deepseek_repair_model or model
+        if repair_model:
+            kwargs["model"] = repair_model
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=repair_prompt,
@@ -1102,6 +1105,7 @@ class AnalyzerAgent(BaseAgent):
         language: str,
         retry: bool = False,
         depth: SearchDepth | None = None,
+        model: str | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
@@ -1111,6 +1115,7 @@ class AnalyzerAgent(BaseAgent):
             user_prompt=user_prompt,
             streaming_callback=streaming_callback,
             reasoning_callback=reasoning_callback,
+            model=model,
             temperature=0.3,
         )
 
@@ -1183,6 +1188,7 @@ class AnalyzerAgent(BaseAgent):
         conflicts: list[dict] | None = None,
         evidence_groups: list[dict] | None = None,
         source_summary=None,
+        model: str | None = None,
     ) -> str:
         chunk_size = self._PARALLEL_SECTION_CHUNK
         chunks = [
@@ -1199,6 +1205,7 @@ class AnalyzerAgent(BaseAgent):
             draft = self.llm.generate(
                 system_prompt=self.SECTION_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
+                model=model,
                 temperature=0.3,
             )
             section_drafts[idx] = draft
@@ -1222,6 +1229,7 @@ class AnalyzerAgent(BaseAgent):
         return self.llm.generate(
             system_prompt=self.SYNTHESIS_SYSTEM_PROMPT,
             user_prompt=synthesis_prompt,
+            model=model,
             temperature=0.3,
         )
 
@@ -1231,6 +1239,7 @@ class AnalyzerAgent(BaseAgent):
         prompt: str,
         tasks: List[SearchTask],
         depth: SearchDepth | None = None,
+        model: str | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
@@ -1278,6 +1287,7 @@ class AnalyzerAgent(BaseAgent):
                 conflicts=conflicts,
                 evidence_groups=evidence_groups,
                 source_summary=source_summary,
+                model=model,
             )
             # Stream the synthesis result too once it's done
             if streaming_callback:
@@ -1293,7 +1303,7 @@ class AnalyzerAgent(BaseAgent):
             }
             logger.info("AnalyzerAgent starting generation. Aggregated %d sources.", len(aggregated_data))
             result = self._generate_report(
-                input_data, prompt_language, depth=depth,
+                input_data, prompt_language, depth=depth, model=model,
                 streaming_callback=streaming_callback,
                 reasoning_callback=reasoning_callback,
             )
@@ -1306,7 +1316,7 @@ class AnalyzerAgent(BaseAgent):
                         prompt_language,
                         report_language,
                     )
-                    result = self._generate_report(input_data, prompt_language, retry=True, depth=depth)
+                    result = self._generate_report(input_data, prompt_language, retry=True, depth=depth, model=model)
         llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
         normalized = self._post_process_report(result, prompt_language)
@@ -1349,6 +1359,7 @@ class AnalyzerAgent(BaseAgent):
                     report_body,
                     uncited_lines,
                     unsupported_lines,
+                    model=model,
                 )
                 repair_ms = (time.perf_counter() - repair_started_at) * 1000
                 normalized = self._post_process_report(repaired, prompt_language)
