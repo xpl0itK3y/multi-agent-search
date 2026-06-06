@@ -20,6 +20,7 @@ class FinalizeGraphState(TypedDict, total=False):
     replan_attempts: int
     tie_break_attempts: int
     finalize_deadline: float
+    branch_stalled: bool
     resume_from_step: str
     should_replan: bool
     should_tie_break: bool

@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Optional
 
 from src.api.schemas import ReplanRecommendation, SearchDepth, SearchTask, SourceCriticSummary
+from src.config import settings
 from src.core.llm import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,16 @@ class ReplanAgent:
             f"Already searched: {already_searched}\n"
             "Generate 3 highly specific queries to fill this gap."
         )
+        # Gap analysis ("what to search next") benefits from a reasoning model — route to
+        # it when configured (opt-in; falls back to the base model when unset).
+        generate_kwargs = {}
+        if settings.deepseek_reasoner_model:
+            generate_kwargs["model"] = settings.deepseek_reasoner_model
         try:
             raw = self.llm.generate(
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
+                **generate_kwargs,
             )
             clean = raw.strip()
             # Strip optional markdown fences

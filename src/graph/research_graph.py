@@ -131,6 +131,10 @@ class FinalizeGraphRunner:
         deadline = state.get("finalize_deadline")
         return deadline is None or time.time() < deadline
 
+    def _pool_size(self, tasks) -> int:
+        """Count of unique (deduped-by-URL) sources across tasks — for no-progress detection."""
+        return len(self.service._build_research_source_pool(tasks))
+
     def _collect_context(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
             aggregated_sources = self.service._build_research_source_pool(state["tasks"])
@@ -159,6 +163,7 @@ class FinalizeGraphRunner:
                 bool(recommendations)
                 and state["replan_attempts"] < settings.langgraph_replan_max_loops
                 and self._budget_ok(state)
+                and not state.get("branch_stalled")
             )
             next_state = {
                 **state,
@@ -215,12 +220,16 @@ class FinalizeGraphRunner:
                     for recommendation in recommendations
                 ],
             )
+            combined_tasks = state["tasks"] + created_tasks
+            # No-progress: if the follow-up wave added no new unique sources, stop further branching.
+            stalled = self._pool_size(combined_tasks) <= self._pool_size(state["tasks"])
             next_state = {
                 **state,
                 "effective_prompt": effective_prompt,
                 "replan_attempts": state["replan_attempts"] + 1,
                 "should_replan": False,
-                "tasks": state["tasks"] + created_tasks,
+                "tasks": combined_tasks,
+                "branch_stalled": stalled,
             }
             self._checkpoint(
                 next_state,
@@ -314,12 +323,15 @@ class FinalizeGraphRunner:
                 state["depth"],
                 [ReplanRecommendation.model_validate(recommendation) for recommendation in recommendations],
             )
+            combined_tasks = state["tasks"] + created_tasks
+            stalled = self._pool_size(combined_tasks) <= self._pool_size(state["tasks"])
             next_state = {
                 **state,
                 "effective_prompt": effective_prompt,
                 "tie_break_attempts": state["tie_break_attempts"] + 1,
                 "should_tie_break": False,
-                "tasks": state["tasks"] + created_tasks,
+                "tasks": combined_tasks,
+                "branch_stalled": stalled,
             }
             self._checkpoint(
                 next_state,
@@ -343,6 +355,7 @@ class FinalizeGraphRunner:
                 and state["tie_break_attempts"] < settings.langgraph_tie_break_max_loops
                 and (weak_support or has_conflicts)
                 and self._budget_ok(state)
+                and not state.get("branch_stalled")
             ):
                 should_tie_break = True
             tie_break_recommendations = self.service.replan_agent.suggest_tie_breakers(
