@@ -676,8 +676,10 @@ class ResearchService:
             analyzer = self.require_agent(self.analyzer, "Analyzer")
 
             # reset token counter before this analysis run
-            if hasattr(analyzer.llm, "reset_usage"):
-                analyzer.llm.reset_usage()
+            # (analyzers may have no .llm — e.g. stub/static report agents)
+            analyzer_llm = getattr(analyzer, "llm", None)
+            if analyzer_llm is not None and hasattr(analyzer_llm, "reset_usage"):
+                analyzer_llm.reset_usage()
 
             if settings.use_langgraph_finalize_graph:
                 report = self.finalize_graph_runner.run(research_id, research.prompt, tasks, research.depth)
@@ -696,8 +698,8 @@ class ResearchService:
             )
 
             # persist token usage into graph_state (U-3)
-            if hasattr(analyzer.llm, "token_usage"):
-                usage = analyzer.llm.token_usage
+            if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
+                usage = analyzer_llm.token_usage
                 logger.info(
                     "research_token_usage prompt=%d completion=%d cost_usd=%.4f",
                     usage.get("prompt_tokens", 0),

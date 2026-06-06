@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from time import perf_counter
 
@@ -220,6 +221,21 @@ class FinalizeGraphRunner:
 
         return self._run_timed_step("replan", action, state["research_id"])
 
+    def _supported_analysis_kwargs(self, candidate: dict) -> dict:
+        """Filter ``candidate`` kwargs down to those ``run_analysis`` accepts.
+
+        AnalyzerAgent accepts all of them; minimal analyzers (stub/static) may not.
+        """
+        run = getattr(self.service.analyzer, "run_analysis", None)
+        try:
+            params = inspect.signature(run).parameters
+        except (TypeError, ValueError):
+            return {}
+        accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if accepts_var_kw:
+            return dict(candidate)
+        return {key: value for key, value in candidate.items() if key in params}
+
     def _analyze(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
             _last_len = [0]
@@ -237,13 +253,20 @@ class FinalizeGraphRunner:
                     if save is not None:
                         save(state["research_id"], partial)
 
+            # Only pass kwargs the analyzer actually accepts — keeps the runner
+            # compatible with minimal analyzers (stub/static) that omit them.
+            call_kwargs = self._supported_analysis_kwargs(
+                {
+                    "depth": state["depth"],
+                    "model": state.get("model"),
+                    "streaming_callback": _streaming_callback,
+                    "reasoning_callback": _reasoning_callback,
+                }
+            )
             report = self.service.analyzer.run_analysis(
                 state["effective_prompt"],
                 state["tasks"],
-                depth=state["depth"],
-                model=state.get("model"),
-                streaming_callback=_streaming_callback,
-                reasoning_callback=_reasoning_callback,
+                **call_kwargs,
             )
             next_state = {
                 **state,

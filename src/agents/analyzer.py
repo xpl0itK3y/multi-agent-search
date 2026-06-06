@@ -690,12 +690,14 @@ class AnalyzerAgent(BaseAgent):
         valid_sources = {item["source_id"]: item for item in aggregated_data}
         sanitized = self._sanitize_citations(without_sources, set(valid_sources))
         used_source_ids = self._extract_used_source_ids(sanitized)
-        _QUALITY_ALLOWLIST = {"high", "medium"}
+        # List every gathered-but-uncited source (capped) so the Sources section is
+        # never empty when evidence exists; reliability is conveyed via inline citations
+        # and the source-critic annotations rather than by dropping low-quality sources.
+        used_set = set(used_source_ids)
         additional_source_ids = [
             item["source_id"]
             for item in aggregated_data
-            if item["source_id"] not in set(used_source_ids)
-            and item.get("source_quality") in _QUALITY_ALLOWLIST
+            if item["source_id"] not in used_set
         ][:8]  # cap to avoid bloated sources section
 
         lines = [self._sources_heading(language)]
@@ -1382,11 +1384,12 @@ class AnalyzerAgent(BaseAgent):
             for note in verification_summary.verification_notes
             if note not in final_notes
         )
-        # Quality notes are logged for debugging but not injected into the report —
-        # they expose internal citation-audit internals which is confusing for users.
+        # Inject a transparency "Report Notes" section when (and only when) there are
+        # genuine quality issues — well-formed reports get no notes. Supports the
+        # verifiable-research goal and is asserted by the analyzer test contract.
         if final_notes:
             logger.info("analyzer_quality_notes count=%d notes=%s", len(final_notes), final_notes)
-        final_report = verified_report
+        final_report = self._inject_report_notes(verified_report, final_notes, prompt_language)
         total_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
             "analyzer_finalize_completed source_count=%s chars_sent=%s conflict_count=%s evidence_group_count=%s "
