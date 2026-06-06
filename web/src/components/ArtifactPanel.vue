@@ -68,6 +68,32 @@ const { t, te } = useI18n();
 function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
+
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const exporting = ref<string | null>(null);
+async function exportReport(fmt: "pdf" | "docx") {
+  exporting.value = fmt;
+  try {
+    const res = await fetch(`${BASE}/v1/research/${props.id}/export?format=${fmt}`, {
+      credentials: "include",
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
+    const name = m ? decodeURIComponent(m[1]) : `research.${fmt}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } finally {
+    exporting.value = null;
+  }
+}
 </script>
 
 <template>
@@ -82,6 +108,25 @@ function stepLabel(step: string): string {
       >
         {{ $t("artifact." + tb) }}
       </button>
+
+      <div v-if="report" class="ml-auto flex items-center gap-1">
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('artifact.export')"
+          @click="exportReport('pdf')"
+        >
+          PDF
+        </button>
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('artifact.export')"
+          @click="exportReport('docx')"
+        >
+          DOCX
+        </button>
+      </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">

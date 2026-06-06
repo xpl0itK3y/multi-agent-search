@@ -88,6 +88,7 @@ const ru = {
     conflictsEmpty: "Противоречий между источниками не обнаружено.",
     trailEmpty: "Трасса пуста.",
     disputedPoint: "Спорный момент",
+    export: "Экспорт",
   },
   trace: {
     title: "Ход работы",
@@ -190,6 +191,7 @@ const en: typeof ru = {
     conflictsEmpty: "No conflicts between sources detected.",
     trailEmpty: "Trail is empty.",
     disputedPoint: "Disputed point",
+    export: "Export",
   },
   trace: {
     title: "Progress",
@@ -292,6 +294,7 @@ const es: typeof ru = {
     conflictsEmpty: "No se detectaron conflictos entre fuentes.",
     trailEmpty: "La traza está vacía.",
     disputedPoint: "Punto en disputa",
+    export: "Exportar",
   },
   trace: {
     title: "Progreso",

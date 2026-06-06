@@ -705,6 +705,37 @@ class ResearchService:
                 raw = []
         return [ResearchConflict.model_validate(item) for item in (raw or [])]
 
+    def _export_filename(self, title: str, ext: str) -> str:
+        base = "".join(c if (c.isalnum() or c in "-_") else "-" for c in (title or "").strip())
+        base = "-".join(filter(None, base.split("-")))[:60] or "research"
+        return f"{base}.{ext}"
+
+    def export_research_report(self, research_id: str, fmt: str) -> tuple[bytes, str, str]:
+        """Render the final report to PDF/DOCX bytes. Returns (data, media_type, filename)."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        if not research.final_report:
+            raise HTTPException(status_code=409, detail="Report is not ready yet")
+
+        from src.ui.report_export import generate_docx, generate_pdf
+
+        depth = getattr(research.depth, "value", str(research.depth))
+        created_at = research.created_at.isoformat() if research.created_at else None
+        title = (research.graph_state or {}).get("title") or research.prompt
+        normalized = (fmt or "").lower()
+        if normalized == "pdf":
+            data = generate_pdf(research.final_report, research.prompt, depth, created_at)
+            return data, "application/pdf", self._export_filename(title, "pdf")
+        if normalized == "docx":
+            data = generate_docx(research.final_report, research.prompt, depth, created_at)
+            return (
+                data,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                self._export_filename(title, "docx"),
+            )
+        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf or docx)")
+
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)
         if not research:
