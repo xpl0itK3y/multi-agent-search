@@ -6,6 +6,14 @@
   color-scheme: dark;
 }
 
+/* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */
+.md-citation {
+  color: theme("colors.accent");
+  font-weight: 600;
+  font-size: 0.7em;
+  padding: 0 0.15em;
+}
+
 html,
 body,
 #app {

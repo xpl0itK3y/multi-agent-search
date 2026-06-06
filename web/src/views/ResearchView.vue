@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { openResearchStream } from "@/lib/stream";
 import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
+import MarkdownView from "@/components/MarkdownView.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -78,11 +79,12 @@ onBeforeUnmount(() => close?.());
       class="mb-6"
     />
 
-    <div
+    <MarkdownView
       v-if="report"
-      class="whitespace-pre-wrap font-sans text-[15px] leading-relaxed text-ink"
+      :source="report"
       :class="{ 'opacity-80': !isFinal }"
-    >{{ report }}</div>
+    />
+    <span v-if="report && !isFinal" class="ml-0.5 inline-block animate-pulse text-accent">▍</span>
 
     <p v-else-if="!DONE.has(status)" class="text-muted">
       Отчёт формируется — он появится здесь в реальном времени.
