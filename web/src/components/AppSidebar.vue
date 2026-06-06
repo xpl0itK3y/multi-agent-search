@@ -12,11 +12,18 @@ const route = useRoute();
 const collapsed = computed(() => ui.sidebarCollapsed);
 
 const nav = [
-  { key: "researches", label: "Исследования", active: true },
-  { key: "collections", label: "Коллекции", active: false },
-  { key: "templates", label: "Шаблоны", active: false },
-  { key: "customize", label: "Настроить", active: false },
+  { key: "researches", active: true },
+  { key: "collections", active: false },
+  { key: "templates", active: false },
+  { key: "customize", active: false },
 ];
+
+const LOCALE_LABEL: Record<string, string> = { ru: "RU", en: "EN", es: "ES" };
+function cycleLocale() {
+  const order = ["ru", "en", "es"] as const;
+  const next = order[(order.indexOf(ui.locale as "ru") + 1) % order.length];
+  ui.setLocale(next);
+}
 
 function title(prompt: string): string {
   const t = prompt.trim().replace(/\s+/g, " ");
@@ -43,8 +50,8 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
     v-if="collapsed"
     class="flex h-full w-16 flex-col items-center gap-2 border-r border-bd bg-rail py-3"
   >
-    <button class="rail-btn" title="Развернуть" @click="ui.toggleSidebar()">⌗</button>
-    <button class="rail-btn" title="Новое исследование" @click="router.push('/')">+</button>
+    <button class="rail-btn" :title="$t('sidebar.expand')" @click="ui.toggleSidebar()">⌗</button>
+    <button class="rail-btn" :title="$t('sidebar.newResearch')" @click="router.push('/')">+</button>
     <div class="mt-auto grid h-9 w-9 place-items-center rounded-full bg-surface text-sm">
       {{ ui.userName.charAt(0).toUpperCase() }}
     </div>
@@ -57,17 +64,20 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
   >
     <!-- Brand -->
     <div class="flex items-center justify-between px-4 pt-4 pb-3">
-      <span class="font-serif text-xl tracking-tight text-ink">Research</span>
+      <span class="font-serif text-xl tracking-tight text-ink">{{ $t("sidebar.brand") }}</span>
       <div class="flex items-center gap-1 text-muted">
-        <button class="icon-btn" title="Поиск">⌕</button>
+        <button class="icon-btn" :title="$t('sidebar.search')">⌕</button>
+        <button class="icon-btn text-[11px] font-medium" :title="LOCALE_LABEL[ui.locale]" @click="cycleLocale()">
+          {{ LOCALE_LABEL[ui.locale] }}
+        </button>
         <button
           class="icon-btn"
-          :title="ui.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'"
+          :title="ui.theme === 'dark' ? $t('sidebar.themeLight') : $t('sidebar.themeDark')"
           @click="ui.toggleTheme()"
         >
           {{ ui.theme === "dark" ? "☀" : "☾" }}
         </button>
-        <button class="icon-btn" title="Свернуть" @click="ui.toggleSidebar()">⌗</button>
+        <button class="icon-btn" :title="$t('sidebar.collapse')" @click="ui.toggleSidebar()">⌗</button>
       </div>
     </div>
 
@@ -78,7 +88,7 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
         @click="router.push('/')"
       >
         <span class="grid h-6 w-6 place-items-center rounded-full border border-bd text-base leading-none">+</span>
-        Новое исследование
+        {{ $t("sidebar.newResearch") }}
       </button>
     </div>
 
@@ -90,17 +100,19 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
         class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-surface"
         :class="item.active ? 'bg-surface text-ink' : 'text-muted'"
       >
-        {{ item.label }}
+        {{ $t("nav." + item.key) }}
       </button>
     </nav>
 
     <!-- Recents -->
     <div class="mt-4 flex min-h-0 flex-1 flex-col">
-      <div class="px-5 pb-1 text-xs uppercase tracking-wide text-muted">Недавние</div>
+      <div class="px-5 pb-1 text-xs uppercase tracking-wide text-muted">{{ $t("sidebar.recents") }}</div>
       <div class="min-h-0 flex-1 overflow-y-auto px-2">
-        <p v-if="store.loadingHistory" class="px-3 py-2 text-sm text-muted">Загрузка…</p>
+        <div v-if="store.loadingHistory" class="space-y-2 px-3 py-2">
+          <div v-for="i in 5" :key="i" class="h-4 animate-pulse rounded bg-surface" :style="{ width: 70 + ((i * 7) % 25) + '%' }" />
+        </div>
         <p v-else-if="!store.history.length" class="px-3 py-2 text-sm text-muted">
-          Пока нет исследований.
+          {{ $t("sidebar.empty") }}
         </p>
         <button
           v-for="item in store.history"
@@ -122,7 +134,7 @@ const currentId = computed(() => (route.name === "research" ? route.params.id : 
       </div>
       <div class="min-w-0">
         <div class="truncate text-sm text-ink">{{ ui.userName }}</div>
-        <div class="text-xs text-muted">Free plan</div>
+        <div class="text-xs text-muted">{{ $t("sidebar.plan") }}</div>
       </div>
     </div>
   </aside>

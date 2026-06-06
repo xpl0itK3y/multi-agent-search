@@ -11,19 +11,11 @@ defineProps<{ entries: TraceEntry[]; reasoning?: string; live?: boolean }>();
 const open = ref(true);
 const reasoningOpen = ref(false);
 
-// Friendly RU labels for graph step names.
-const STEP_LABELS: Record<string, string> = {
-  collect_context: "Сбор источников",
-  replan: "Дополнительный поиск",
-  analyze: "Синтез отчёта",
-  verify: "Проверка фактов",
-  tie_break: "Разрешение противоречий",
-  complete: "Готово",
-  stale_recovered: "Восстановление",
-};
+import { useI18n } from "vue-i18n";
+const { t, te } = useI18n();
 
 function label(step: string): string {
-  return STEP_LABELS[step] ?? step;
+  return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
 </script>
 
@@ -38,7 +30,7 @@ function label(step: string): string {
           v-if="live"
           class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
         />
-        Ход работы
+        {{ $t("trace.title") }}
         <span class="text-muted">· {{ entries.length }}</span>
       </span>
       <span class="text-muted">{{ open ? "▾" : "▸" }}</span>
@@ -52,7 +44,7 @@ function label(step: string): string {
           @click="reasoningOpen = !reasoningOpen"
         >
           <span class="text-accentSoft">✶</span>
-          Размышления
+          {{ $t("trace.reasoning") }}
           <span class="ml-auto">{{ reasoningOpen ? "▾" : "▸" }}</span>
         </button>
         <div

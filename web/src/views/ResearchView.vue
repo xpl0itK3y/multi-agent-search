@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
@@ -12,6 +13,7 @@ import MarkdownView from "@/components/MarkdownView.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
+const { t, te } = useI18n();
 
 const prompt = ref<string>("");
 const status = ref<string>("processing");
@@ -44,7 +46,7 @@ const costLabel = computed(() => {
   if (!u || !u.total_tokens) return null;
   const parts: string[] = [];
   if (typeof u.estimated_cost_usd === "number") parts.push(`≈ $${u.estimated_cost_usd.toFixed(4)}`);
-  if (typeof u.total_tokens === "number") parts.push(`${u.total_tokens.toLocaleString()} токенов`);
+  if (typeof u.total_tokens === "number") parts.push(`${u.total_tokens.toLocaleString()} ${t("research.tokens")}`);
   return parts.join(" · ");
 });
 
@@ -53,15 +55,7 @@ let close: (() => void) | undefined;
 const DONE = new Set(["completed", "failed", "timeout"]);
 
 function statusLabel(s: string): string {
-  const map: Record<string, string> = {
-    plan_review: "Ожидает подтверждения плана",
-    processing: "Декомпозиция и поиск…",
-    analyzing: "Синтез отчёта…",
-    completed: "Готово",
-    failed: "Ошибка",
-    timeout: "Превышено время ожидания",
-  };
-  return map[s] ?? s;
+  return te(`status.${s}`) ? t(`status.${s}`) : s;
 }
 
 async function loadPlan() {
@@ -192,7 +186,7 @@ onBeforeUnmount(() => close?.());
   <!-- Clarifying questions before planning -->
   <div v-if="status === 'clarifying' && clarification" class="h-full overflow-y-auto">
     <button class="px-6 pt-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
-      ← На главную
+      {{ $t("common.back") }}
     </button>
     <ClarifyCard
       :prompt="prompt"
@@ -206,7 +200,7 @@ onBeforeUnmount(() => close?.());
   <!-- Plan review: editable plan before search starts -->
   <div v-else-if="status === 'plan_review' && plan" class="h-full overflow-y-auto">
     <button class="px-6 pt-6 text-sm text-muted hover:text-ink" @click="router.push('/')">
-      ← На главную
+      {{ $t("common.back") }}
     </button>
     <PlanCard :prompt="prompt" :items="plan.items" :busy="planBusy" @approve="onApprove" />
     <p v-if="errorMsg" class="px-6 pb-6 text-sm text-red-400">{{ errorMsg }}</p>
@@ -219,7 +213,7 @@ onBeforeUnmount(() => close?.());
     >
       <div ref="threadScroll" class="flex-1 overflow-y-auto px-6 py-6">
         <button class="mb-5 text-sm text-muted hover:text-ink" @click="router.push('/')">
-          ← На главную
+          {{ $t("common.back") }}
         </button>
 
         <h1 v-if="prompt" class="mb-4 font-serif text-xl leading-snug text-ink">
@@ -238,7 +232,7 @@ onBeforeUnmount(() => close?.());
           <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
         </div>
 
-        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted" title="Оценка расхода LLM">
+        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted" :title="$t('research.costTitle')">
           {{ costLabel }}
         </div>
 
@@ -260,7 +254,7 @@ onBeforeUnmount(() => close?.());
             <MarkdownView v-else-if="m.content" :source="m.content" />
           </template>
           <div v-if="awaitingAnswer" class="flex items-center gap-2 text-sm text-muted">
-            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> Думаю…
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> {{ $t("common.thinking") }}
           </div>
         </div>
       </div>
@@ -271,7 +265,7 @@ onBeforeUnmount(() => close?.());
           <textarea
             v-model="chatInput"
             rows="1"
-            placeholder="Спросить по исследованию…"
+            :placeholder="$t('chat.placeholder')"
             class="max-h-32 flex-1 resize-none bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
             @keydown.enter.exact.prevent="sendChat"
           />

@@ -51,11 +51,11 @@ function approve() {
 <template>
   <div class="mx-auto w-full max-w-2xl px-6 py-10">
     <div class="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
-      <span class="text-accent">✶</span> План исследования
+      <span class="text-accent">✶</span> {{ $t("plan.tag") }}
     </div>
     <h1 v-if="prompt" class="mb-2 font-serif text-2xl leading-snug text-ink">{{ prompt }}</h1>
     <p class="mb-6 text-sm text-muted">
-      Проверьте и при необходимости отредактируйте под-вопросы и запросы, затем запустите.
+      {{ $t("plan.subtitle") }}
     </p>
 
     <div class="space-y-3">
@@ -68,22 +68,22 @@ function approve() {
           <span class="text-xs text-muted">{{ i + 1 }}</span>
           <input
             v-model="row.description"
-            placeholder="Под-вопрос"
+            :placeholder="$t('plan.subquestion')"
             class="flex-1 bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
           />
-          <button class="text-muted hover:text-red-400" title="Удалить" @click="removeRow(i)">✕</button>
+          <button class="text-muted hover:text-red-400" :title="$t('plan.delete')" @click="removeRow(i)">✕</button>
         </div>
         <textarea
           v-model="row.queriesText"
           rows="2"
-          placeholder="Поисковые запросы (по одному на строку)"
+          :placeholder="$t('plan.queries')"
           class="block w-full resize-none rounded-lg border border-bd bg-bg/40 px-3 py-2 text-xs text-muted placeholder:text-muted focus:text-ink focus:outline-none"
         />
       </div>
     </div>
 
     <button class="mt-3 text-sm text-muted hover:text-ink" @click="addRow">
-      + Добавить под-вопрос
+      {{ $t("plan.add") }}
     </button>
 
     <div class="mt-6 flex justify-end">
@@ -92,8 +92,8 @@ function approve() {
         :disabled="busy || !rows.length"
         @click="approve"
       >
-        <span v-if="busy">Запуск…</span>
-        <span v-else>🚀 Запустить исследование</span>
+        <span v-if="busy">{{ $t("plan.busy") }}</span>
+        <span v-else>{{ $t("plan.run") }}</span>
       </button>
     </div>
   </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import SparkLogo from "@/components/SparkLogo.vue";
 import Composer from "@/components/Composer.vue";
 import SuggestionChips from "@/components/SuggestionChips.vue";
@@ -11,6 +12,7 @@ import type { Depth } from "@/lib/types";
 const router = useRouter();
 const store = useResearchStore();
 const ui = useUiStore();
+const { t } = useI18n();
 
 const prompt = ref("");
 const busy = ref(false);
@@ -18,9 +20,8 @@ const errorMsg = ref<string | null>(null);
 
 const greeting = computed(() => {
   const h = new Date().getHours();
-  const part =
-    h < 6 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : "Добрый вечер";
-  return `${part}, ${ui.userName}`;
+  const partKey = h < 6 ? "night" : h < 12 ? "morning" : h < 18 ? "day" : "evening";
+  return t("home.greeting", { part: t(`home.${partKey}`), name: ui.userName });
 });
 
 async function onSubmit(payload: { prompt: string; depth: Depth; model: string; planFirst: boolean }) {
