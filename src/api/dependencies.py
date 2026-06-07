@@ -32,3 +32,11 @@ def scope_user_id(request: Request) -> str | None:
     if settings.auth_disabled:
         return None
     return get_current_user(request).id
+
+
+def verify_research_access(research_id: str, request: Request) -> None:
+    """Route guard: 404 if the research belongs to another user (no-op when auth is off)."""
+    if settings.auth_disabled:
+        return
+    user_id = get_current_user(request).id
+    get_research_service(request)._ensure_research_access(research_id, user_id)

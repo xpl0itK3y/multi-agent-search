@@ -7,7 +7,12 @@ from urllib.parse import quote
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from src.api.dependencies import get_current_user, get_research_service, scope_user_id
+from src.api.dependencies import (
+    get_current_user,
+    get_research_service,
+    scope_user_id,
+    verify_research_access,
+)
 from src.auth.security import create_token
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
@@ -104,6 +109,9 @@ def _set_auth_cookie(response: Response, user_id: str) -> None:
 
 
 def register_routes(app: FastAPI) -> None:
+    # Ownership guard for per-research routes (no-op when auth is disabled).
+    research_guard = [Depends(verify_research_access)]
+
     @app.get("/health")
     async def health_check(request: Request):
         return get_research_service(request).get_health_status()
@@ -288,7 +296,7 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job
 
-    @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob)
+    @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob, dependencies=research_guard)
     async def get_latest_finalize_job(research_id: str, request: Request):
         job = get_research_service(request).get_latest_research_finalize_job(research_id)
         if not job:
@@ -319,28 +327,28 @@ def register_routes(app: FastAPI) -> None:
     ):
         return get_research_service(request).rename_research(research_id, payload.title, user_id=owner)
 
-    @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
+    @app.get("/v1/research/{research_id}", response_model=ResearchRecord, dependencies=research_guard)
     async def get_research_status(research_id: str, request: Request):
         return get_research_service(request).get_research_status(research_id)
 
-    @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary)
+    @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary, dependencies=research_guard)
     async def get_research_summary(research_id: str, request: Request):
         return get_research_service(request).get_research_summary(research_id)
 
-    @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary)
+    @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary, dependencies=research_guard)
     async def get_research_status_summary(research_id: str, request: Request):
         # Cheap polling endpoint: no heavy analysis/LLM (unlike /summary).
         return get_research_service(request).get_research_status_summary(research_id)
 
-    @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse)
+    @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse, dependencies=research_guard)
     async def get_research_report(research_id: str, request: Request):
         return get_research_service(request).get_research_report(research_id)
 
-    @app.get("/v1/research/{research_id}/sources", response_model=List[SearchSourcePreview])
+    @app.get("/v1/research/{research_id}/sources", response_model=List[SearchSourcePreview], dependencies=research_guard)
     async def get_research_sources(research_id: str, request: Request):
         return get_research_service(request).get_research_sources(research_id)
 
-    @app.get("/v1/research/{research_id}/export")
+    @app.get("/v1/research/{research_id}/export", dependencies=research_guard)
     def export_research(research_id: str, request: Request, format: str = "pdf"):
         # sync def -> threadpool (PDF/DOCX generation is blocking)
         data, media_type, filename = get_research_service(request).export_research_report(research_id, format)
@@ -348,35 +356,35 @@ def register_routes(app: FastAPI) -> None:
         disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
         return Response(content=data, media_type=media_type, headers={"Content-Disposition": disposition})
 
-    @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict])
+    @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict], dependencies=research_guard)
     async def get_research_conflicts(research_id: str, request: Request):
         return get_research_service(request).get_research_conflicts(research_id)
 
-    @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification)
+    @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
     async def get_research_clarifications(research_id: str, request: Request):
         return get_research_service(request).get_research_clarifications(research_id)
 
-    @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord)
+    @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord, dependencies=research_guard)
     async def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
         return get_research_service(request).submit_clarifications(research_id, payload.answers)
 
-    @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan)
+    @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
     async def get_research_plan(research_id: str, request: Request):
         return get_research_service(request).get_research_plan(research_id)
 
-    @app.put("/v1/research/{research_id}/plan", response_model=ResearchPlan)
+    @app.put("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
     async def update_research_plan(research_id: str, payload: ResearchPlanUpdate, request: Request):
         return get_research_service(request).update_research_plan(research_id, payload)
 
-    @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord)
+    @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord, dependencies=research_guard)
     async def approve_research_plan(research_id: str, request: Request):
         return get_research_service(request).approve_research_plan(research_id)
 
-    @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage])
+    @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage], dependencies=research_guard)
     async def list_research_messages(research_id: str, request: Request):
         return get_research_service(request).list_research_messages(research_id)
 
-    @app.post("/v1/research/{research_id}/messages", response_model=ChatMessage)
+    @app.post("/v1/research/{research_id}/messages", response_model=ChatMessage, dependencies=research_guard)
     def ask_research(research_id: str, payload: ChatAsk, request: Request):
         # sync def -> runs in a threadpool so the blocking LLM call doesn't stall the event loop
         service = get_research_service(request)
@@ -385,7 +393,7 @@ def register_routes(app: FastAPI) -> None:
         service.append_research_message(research_id, "assistant", answer)
         return ChatMessage(role="assistant", content=answer)
 
-    @app.post("/v1/research/{research_id}/messages/stream")
+    @app.post("/v1/research/{research_id}/messages/stream", dependencies=research_guard)
     def ask_research_stream(research_id: str, payload: ChatAsk, request: Request):
         """Stream a grounded follow-up answer token-by-token via SSE, then persist the turn."""
         service = get_research_service(request)
@@ -433,11 +441,11 @@ def register_routes(app: FastAPI) -> None:
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
 
-    @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse)
+    @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse, dependencies=research_guard)
     async def get_research_graph(research_id: str, request: Request):
         return get_research_service(request).get_research_graph(research_id)
 
-    @app.get("/v1/research/{research_id}/events")
+    @app.get("/v1/research/{research_id}/events", dependencies=research_guard)
     def research_events(research_id: str, request: Request):
         """Server-Sent Events stream: live status, graph trace and report deltas (F1)."""
         service = get_research_service(request)
@@ -508,7 +516,7 @@ def register_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse)
+    @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse, dependencies=research_guard)
     async def finalize_research(research_id: str, request: Request):
         research, job = get_research_service(request).enqueue_research_finalization(research_id)
         return ResearchFinalizeResponse(

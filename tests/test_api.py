@@ -1109,3 +1109,24 @@ async def test_auth_register_login_me_flow(client, mocker):
     assert out.status_code == 200
     after = await client.get("/v1/auth/me")
     assert after.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_research_access_scoped_to_owner(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+
+    # User A registers and creates a research.
+    await client.post("/v1/auth/register", json={"email": "a@x.com", "password": "secret12"})
+    created = await client.post("/v1/research", json={"prompt": "alpha topic", "depth": "easy"})
+    research_id = created.json()["research_id"]
+    assert (await client.get(f"/v1/research/{research_id}")).status_code == 200
+
+    # Switch to user B.
+    await client.post("/v1/auth/logout")
+    await client.post("/v1/auth/register", json={"email": "b@x.com", "password": "secret12"})
+
+    # B cannot see or open A's research.
+    assert (await client.get("/v1/research")).json() == []
+    assert (await client.get(f"/v1/research/{research_id}")).status_code == 404
+    assert (await client.get(f"/v1/research/{research_id}/status")).status_code == 404
+    assert (await client.get(f"/v1/research/{research_id}/report")).status_code == 404
