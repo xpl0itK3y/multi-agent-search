@@ -36,5 +36,24 @@ export const useUiStore = defineStore("ui", () => {
     sidebarCollapsed.value = !sidebarCollapsed.value;
   }
 
-  return { sidebarCollapsed, userName, theme, locale, toggleSidebar, toggleTheme, setLocale };
+  const mobileOpen = ref(false);
+  function toggleMobile() {
+    mobileOpen.value = !mobileOpen.value;
+  }
+  function closeMobile() {
+    mobileOpen.value = false;
+  }
+
+  return {
+    sidebarCollapsed,
+    userName,
+    theme,
+    locale,
+    mobileOpen,
+    toggleSidebar,
+    toggleTheme,
+    setLocale,
+    toggleMobile,
+    closeMobile,
+  };
 });

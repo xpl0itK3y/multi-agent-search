@@ -209,7 +209,7 @@ onBeforeUnmount(() => close?.());
   <!-- Active / completed research: thread (+ chat) on the left, artifact on the right -->
   <div v-else class="flex h-full flex-col lg:flex-row">
     <section
-      class="flex w-full flex-col overflow-hidden border-b border-bd lg:w-[420px] lg:shrink-0 lg:border-b-0 lg:border-r"
+      class="flex max-h-[45vh] w-full shrink-0 flex-col overflow-hidden border-b border-bd lg:max-h-none lg:w-[420px] lg:border-b-0 lg:border-r"
     >
       <div ref="threadScroll" class="flex-1 overflow-y-auto px-6 py-6">
         <button class="mb-5 text-sm text-muted hover:text-ink" @click="router.push('/')">
