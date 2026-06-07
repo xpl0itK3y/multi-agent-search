@@ -1084,3 +1084,28 @@ def test_search_agent_integration(mocker):
     assert final_task.status == TaskStatus.COMPLETED
     assert final_task.result[0]["content"] == "Full page content"
     assert "Search completed" in final_task.logs[-1]
+
+
+@pytest.mark.anyio
+async def test_auth_register_login_me_flow(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+
+    # Unauthenticated /me is rejected.
+    unauth = await client.get("/v1/auth/me")
+    assert unauth.status_code == 401
+
+    # Register sets the session cookie.
+    reg = await client.post("/v1/auth/register", json={"email": "x@y.com", "password": "secret12"})
+    assert reg.status_code == 200
+    assert reg.json()["email"] == "x@y.com"
+
+    # The httpx client persists the cookie, so /me now works.
+    me = await client.get("/v1/auth/me")
+    assert me.status_code == 200
+    assert me.json()["email"] == "x@y.com"
+
+    # Logout clears the cookie.
+    out = await client.post("/v1/auth/logout")
+    assert out.status_code == 200
+    after = await client.get("/v1/auth/me")
+    assert after.status_code == 401

@@ -19,6 +19,12 @@ class Settings(BaseSettings):
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False
+    # Auth (off by default — flip AUTH_DISABLED=false for a public deployment).
+    auth_disabled: bool = True
+    auth_secret_key: str = "dev-insecure-secret-change-in-production"
+    auth_token_ttl_seconds: int = 604800  # 7 days
+    auth_cookie_name: str = "access_token"
+    auth_cookie_secure: bool = False  # set True when served over HTTPS
     # Comma-separated list of allowed CORS origins for the Vue SPA (dev: Vite 5173 / preview 4173).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
     # SSRF guard: when False, user webhooks must resolve to public IPs only.

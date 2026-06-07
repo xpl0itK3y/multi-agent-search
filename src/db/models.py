@@ -11,11 +11,25 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+
 class ResearchORM(Base):
     __tablename__ = "researches"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)

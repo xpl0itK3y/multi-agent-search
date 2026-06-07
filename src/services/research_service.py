@@ -16,6 +16,7 @@ from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.brokers.redis_broker import RedisBroker
 from src.api.schemas import (
+    AuthUser,
     JobCleanupResponse,
     MaintenanceSummary,
     OperationalHealth,
@@ -121,6 +122,30 @@ class ResearchService:
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
+    # ── auth ──────────────────────────────────────────────────────────────────
+    def register_user(self, email: str, password: str) -> AuthUser:
+        from src.auth.security import hash_password
+
+        normalized = email.strip().lower()
+        if "@" not in normalized or "." not in normalized.split("@")[-1]:
+            raise HTTPException(status_code=422, detail="Invalid email address")
+        if self.task_store.get_user_by_email(normalized) is not None:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        user = self.task_store.create_user(str(uuid.uuid4()), normalized, hash_password(password))
+        return AuthUser(id=user.id, email=user.email)
+
+    def authenticate_user(self, email: str, password: str) -> AuthUser:
+        from src.auth.security import verify_password
+
+        user = self.task_store.get_user_by_email(email.strip().lower())
+        if user is None or not verify_password(password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        return AuthUser(id=user.id, email=user.email)
+
+    def get_auth_user(self, user_id: str) -> AuthUser | None:
+        user = self.task_store.get_user_by_id(user_id)
+        return AuthUser(id=user.id, email=user.email) if user else None
+
     def require_agent(self, agent, agent_name: str):
         if agent is None:
             raise HTTPException(
@@ -161,9 +186,11 @@ class ResearchService:
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
-    def start_research(self, request: ResearchRequest) -> tuple["ResearchResponse", str]:
+    def start_research(
+        self, request: ResearchRequest, user_id: str | None = None
+    ) -> tuple["ResearchResponse", str]:
         """Create research record immediately and return. Decompose runs in background."""
-        research = self.task_store.add_research(request, task_ids=[])
+        research = self.task_store.add_research(request, task_ids=[], user_id=user_id)
         logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
         # update_research_graph_state replaces the entire dict, so merge everything in one call.
@@ -308,14 +335,23 @@ class ResearchService:
             logger.info("decompose_recovery_completed count=%d", recovered)
         return recovered
 
-    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
-        return self.task_store.list_researches(limit=limit)
+    def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
+        return self.task_store.list_researches(limit=limit, user_id=user_id)
 
-    def delete_research(self, research_id: str) -> bool:
+    def _ensure_research_access(self, research_id: str, user_id: str | None) -> ResearchRecord:
+        """Load a research and 404 if it belongs to a different user (when scoping is on)."""
+        research = self.task_store.get_research(research_id)
+        if not research or (user_id is not None and research.user_id not in (None, user_id)):
+            raise HTTPException(status_code=404, detail="Research not found")
+        return research
+
+    def delete_research(self, research_id: str, user_id: str | None = None) -> bool:
+        if user_id is not None:
+            self._ensure_research_access(research_id, user_id)
         return self.task_store.delete_research(research_id)
 
-    def rename_research(self, research_id: str, title: str) -> ResearchRecord:
-        research = self.task_store.get_research(research_id)
+    def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
+        research = self._ensure_research_access(research_id, user_id)
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
         state = dict(research.graph_state or {})

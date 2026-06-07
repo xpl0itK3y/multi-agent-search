@@ -17,6 +17,7 @@ from src.api.schemas import (
     ResearchStatus,
     SearchTask,
     TaskUpdate,
+    UserRecord,
 )
 
 
@@ -28,17 +29,33 @@ class InMemoryTaskStore:
         self.search_jobs: dict[str, SearchTaskJob] = {}
         self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
         self.worker_graph_step_events: dict[str, list[dict]] = {}
+        self.users: dict[str, UserRecord] = {}
 
-    def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
+    def add_research(
+        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+    ) -> ResearchRecord:
         research_id = str(uuid.uuid4())
         record = ResearchRecord(
             id=research_id,
             prompt=request.prompt,
+            user_id=user_id,
             depth=request.depth,
             task_ids=task_ids,
         )
         self.researches[research_id] = record
         return record
+
+    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord:
+        user = UserRecord(id=user_id, email=email, password_hash=password_hash)
+        self.users[user_id] = user
+        return user
+
+    def get_user_by_email(self, email: str) -> UserRecord | None:
+        target = email.strip().lower()
+        return next((u for u in self.users.values() if u.email.lower() == target), None)
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        return self.users.get(user_id)
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)
@@ -52,9 +69,12 @@ class InMemoryTaskStore:
             del self.tasks[tid]
         return True
 
-    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
+    def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
+        records = self.researches.values()
+        if user_id is not None:
+            records = [r for r in records if r.user_id == user_id]
         sorted_records = sorted(
-            self.researches.values(),
+            records,
             key=lambda r: r.created_at,
             reverse=True,
         )

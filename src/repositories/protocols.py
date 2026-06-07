@@ -14,17 +14,27 @@ from src.api.schemas import (
     ResearchStatus,
     SearchTask,
     TaskUpdate,
+    UserRecord,
 )
 
 
 class TaskStore(Protocol):
-    def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord: ...
+    def add_research(
+        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+    ) -> ResearchRecord: ...
 
     def get_research(self, research_id: str) -> ResearchRecord | None: ...
 
-    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]: ...
+    def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]: ...
 
     def delete_research(self, research_id: str) -> bool: ...
+
+    # ── users (auth) ──────────────────────────────────────────────────────────
+    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord: ...
+
+    def get_user_by_email(self, email: str) -> UserRecord | None: ...
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None: ...
 
     def update_research_status(
         self,

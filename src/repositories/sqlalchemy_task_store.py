@@ -21,12 +21,14 @@ from src.api.schemas import (
     ResearchStatus,
     SearchTask,
     TaskUpdate,
+    UserRecord,
 )
 from src.db.models import (
     ResearchFinalizeJobORM,
     ResearchORM,
     SearchTaskJobORM,
     SearchTaskORM,
+    UserORM,
     WorkerHeartbeatORM,
 )
 from src.graph.history import compact_graph_step_events, compact_graph_trail
@@ -56,10 +58,13 @@ class SQLAlchemyTaskStore:
         finally:
             session.close()
 
-    def add_research(self, request: ResearchRequest, task_ids: list[str]) -> ResearchRecord:
+    def add_research(
+        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+    ) -> ResearchRecord:
         research = ResearchORM(
             id=str(uuid.uuid4()),
             prompt=request.prompt,
+            user_id=user_id,
             depth=request.depth.value,
             status=ResearchStatus.PROCESSING.value,
             task_ids=task_ids,
@@ -69,6 +74,29 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(research)
             return research_orm_to_record(research)
+
+    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord:
+        user = UserORM(id=user_id, email=email.strip().lower(), password_hash=password_hash)
+        with self.session_scope() as session:
+            session.add(user)
+            session.flush()
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+
+    def get_user_by_email(self, email: str) -> UserRecord | None:
+        with self.session_scope() as session:
+            user = session.execute(
+                select(UserORM).where(UserORM.email == email.strip().lower())
+            ).scalar_one_or_none()
+            if user is None:
+                return None
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        with self.session_scope() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                return None
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         with self.session_scope() as session:
@@ -85,17 +113,12 @@ class SQLAlchemyTaskStore:
             session.delete(research)
             return True
 
-    def list_researches(self, limit: int = 20) -> list[ResearchHistoryItem]:
+    def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
-            rows = (
-                session.execute(
-                    select(ResearchORM)
-                    .order_by(ResearchORM.created_at.desc())
-                    .limit(max(1, min(limit, 100)))
-                )
-                .scalars()
-                .all()
-            )
+            stmt = select(ResearchORM).order_by(ResearchORM.created_at.desc())
+            if user_id is not None:
+                stmt = stmt.where(ResearchORM.user_id == user_id)
+            rows = session.execute(stmt.limit(max(1, min(limit, 100)))).scalars().all()
             return [
                 ResearchHistoryItem(
                     id=r.id,

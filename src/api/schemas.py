@@ -163,9 +163,31 @@ class ResearchRequest(BaseModel):
         description="If true, generate an editable research plan and wait for approval before searching",
     )
 
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=6, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+class AuthUser(BaseModel):
+    id: str
+    email: str
+
+
+class UserRecord(BaseModel):
+    id: str
+    email: str
+    password_hash: str
+
+
 class ResearchRecord(BaseModel):
     id: str
     prompt: str
+    user_id: Optional[str] = None
     depth: SearchDepth
     status: ResearchStatus = ResearchStatus.PROCESSING
     task_ids: List[str] = Field(default_factory=list)

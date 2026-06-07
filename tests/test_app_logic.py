@@ -2501,3 +2501,51 @@ def test_research_plan_approve_rejects_when_not_in_review():
         service.approve_research_plan(research.id)
 
     assert exc_info.value.status_code == 409
+
+
+def test_auth_password_hash_and_verify():
+    from src.auth.security import hash_password, verify_password
+
+    hashed = hash_password("secret123")
+    assert hashed != "secret123"
+    assert verify_password("secret123", hashed)
+    assert not verify_password("wrong-password", hashed)
+
+
+def test_auth_token_roundtrip_and_tamper():
+    from src.auth.security import create_token, verify_token
+
+    token = create_token("user-1")
+    assert verify_token(token) == "user-1"
+    assert verify_token(token + "x") is None
+    assert verify_token("garbage") is None
+    assert verify_token(create_token("user-2", ttl_seconds=-1)) is None  # expired
+
+
+def test_auth_register_and_authenticate():
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+
+    user = service.register_user("A@Example.com", "password1")
+    assert user.email == "a@example.com"
+
+    with pytest.raises(HTTPException) as dup:
+        service.register_user("a@example.com", "password1")
+    assert dup.value.status_code == 409
+
+    assert service.authenticate_user("a@example.com", "password1").id == user.id
+    with pytest.raises(HTTPException) as bad:
+        service.authenticate_user("a@example.com", "nope")
+    assert bad.value.status_code == 401
+
+
+def test_research_scoping_filters_by_user():
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+
+    service.start_research(ResearchRequest(prompt="alpha research", depth=SearchDepth.EASY), user_id="u1")
+    service.start_research(ResearchRequest(prompt="beta research", depth=SearchDepth.EASY), user_id="u2")
+
+    assert len(service.list_researches(user_id="u1")) == 1
+    assert len(service.list_researches(user_id="u2")) == 1
+    assert len(service.list_researches()) == 2  # no scoping when user_id is None

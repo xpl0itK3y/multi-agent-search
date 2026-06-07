@@ -112,6 +112,7 @@ def research_orm_to_record(research: ResearchORM) -> ResearchRecord:
     return ResearchRecord(
         id=research.id,
         prompt=research.prompt,
+        user_id=research.user_id,
         depth=research.depth,
         status=ResearchStatus(research.status),
         task_ids=research.task_ids,

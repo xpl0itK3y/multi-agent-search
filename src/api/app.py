@@ -4,14 +4,18 @@ import time
 from typing import List
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from src.api.dependencies import get_research_service
+from src.api.dependencies import get_current_user, get_research_service, scope_user_id
+from src.auth.security import create_token
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
+    AuthUser,
     DecomposeRequest,
     DecomposeResponse,
+    LoginRequest,
+    RegisterRequest,
     JobCleanupResponse,
     JobRecoveryResponse,
     OperationalHealth,
@@ -87,10 +91,43 @@ def create_app() -> FastAPI:
     return app
 
 
+def _set_auth_cookie(response: Response, user_id: str) -> None:
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=create_token(user_id),
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=settings.auth_token_ttl_seconds,
+        path="/",
+    )
+
+
 def register_routes(app: FastAPI) -> None:
     @app.get("/health")
     async def health_check(request: Request):
         return get_research_service(request).get_health_status()
+
+    @app.post("/v1/auth/register", response_model=AuthUser)
+    async def register(payload: RegisterRequest, response: Response, request: Request):
+        user = get_research_service(request).register_user(payload.email, payload.password)
+        _set_auth_cookie(response, user.id)
+        return user
+
+    @app.post("/v1/auth/login", response_model=AuthUser)
+    async def login(payload: LoginRequest, response: Response, request: Request):
+        user = get_research_service(request).authenticate_user(payload.email, payload.password)
+        _set_auth_cookie(response, user.id)
+        return user
+
+    @app.post("/v1/auth/logout")
+    async def logout(response: Response):
+        response.delete_cookie(settings.auth_cookie_name, path="/")
+        return {"status": "ok"}
+
+    @app.get("/v1/auth/me", response_model=AuthUser)
+    async def me(user: AuthUser = Depends(get_current_user)):
+        return user
 
     @app.get("/metrics")
     async def metrics_endpoint():
@@ -214,14 +251,19 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).cleanup_old_search_task_jobs()
 
     @app.get("/v1/research", response_model=List[ResearchHistoryItem])
-    async def list_researches(request: Request, limit: int = 20):
-        return get_research_service(request).list_researches(limit=limit)
+    async def list_researches(request: Request, limit: int = 20, owner: str | None = Depends(scope_user_id)):
+        return get_research_service(request).list_researches(limit=limit, user_id=owner)
 
     @app.post("/v1/research", response_model=ResearchResponse)
-    async def start_research(request: Request, payload: ResearchRequest, background_tasks: BackgroundTasks):
+    async def start_research(
+        request: Request,
+        payload: ResearchRequest,
+        background_tasks: BackgroundTasks,
+        owner: str | None = Depends(scope_user_id),
+    ):
         try:
             service = get_research_service(request)
-            response, research_id = service.start_research(payload)
+            response, research_id = service.start_research(payload, user_id=owner)
             # LLM decompose runs after response is sent — user gets research_id instantly
             background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
             return response
@@ -266,14 +308,16 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 
     @app.delete("/v1/research/{research_id}", status_code=204)
-    async def delete_research(research_id: str, request: Request):
-        deleted = get_research_service(request).delete_research(research_id)
+    async def delete_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+        deleted = get_research_service(request).delete_research(research_id, user_id=owner)
         if not deleted:
             raise HTTPException(status_code=404, detail="Research not found")
 
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
-    async def rename_research(research_id: str, payload: ResearchRename, request: Request):
-        return get_research_service(request).rename_research(research_id, payload.title)
+    async def rename_research(
+        research_id: str, payload: ResearchRename, request: Request, owner: str | None = Depends(scope_user_id)
+    ):
+        return get_research_service(request).rename_research(research_id, payload.title, user_id=owner)
 
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord)
     async def get_research_status(research_id: str, request: Request):
