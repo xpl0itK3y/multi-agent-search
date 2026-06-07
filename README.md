@@ -92,7 +92,7 @@ This starts:
 - `worker`
 - `worker_2`
 - `worker_3`
-- `ui`
+- `web`
 - `redis`
 - `prometheus`
 - `loki`
@@ -101,7 +101,7 @@ This starts:
 
 The API will be available at `http://localhost:8000`.
 
-The Streamlit UI will be available at `http://localhost:8501`.
+The Vue web UI will be available at `http://localhost:8501`.
 
 Prometheus will be available at `http://localhost:9090`.
 
@@ -156,10 +156,12 @@ uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 python scripts/run_finalize_worker.py
 ```
 
-6. Optional: start the Streamlit UI:
+6. Optional: start the Vue web UI (dev server with API proxy):
 
 ```bash
-streamlit run src/ui/streamlit_app.py
+cd web
+npm install
+npm run dev   # http://localhost:5173
 ```
 
 Run the worker once:
