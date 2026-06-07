@@ -33,7 +33,8 @@
 
 ---
 
-- ✅ **Auth (F4):** email/password аккаунты (`users` таблица + миграция), PBKDF2-хеши, HMAC-подписанные session-cookie (stdlib, без новых зависимостей); эндпоинты `register/login/logout/me`; зависимости `get_current_user`/`scope_user_id`; **per-user скоупинг ресёрчей** (`researches.user_id`, фильтр истории, ownership-чек на delete/rename). **Выключено по умолчанию** (`AUTH_DISABLED=true` → `scope_user_id=None`, нулевое влияние на текущие тесты/поведение; включается `AUTH_DISABLED=false`). Фронт: `LoginView` (вход/регистрация), route-guard, logout в сайдбаре, прозрачно в single-tenant. 247 тестов зелёные (+5 auth/scoping). ⬜ Остаток: ownership-чек на остальных per-research GET-эндпоинтах (сейчас на list/create/delete/rename), rotate `AUTH_SECRET_KEY` в проде.
+- ✅ **Auth (F4):** email/password аккаунты (`users` таблица + миграция), PBKDF2-хеши, HMAC-подписанные session-cookie (stdlib, без новых зависимостей); эндпоинты `register/login/logout/me`; зависимости `get_current_user`/`scope_user_id`; **per-user скоупинг ресёрчей** (`researches.user_id`, фильтр истории, ownership-чек на delete/rename). **Выключено по умолчанию** (`AUTH_DISABLED=true` → `scope_user_id=None`, нулевое влияние на текущие тесты/поведение; включается `AUTH_DISABLED=false`). Фронт: `LoginView` (вход/регистрация), route-guard, logout в сайдбаре, прозрачно в single-tenant. 248 тестов зелёные (+6 auth/scoping).
+- ✅ **IDOR закрыт:** route-level зависимость `verify_research_access` на **всех** per-research эндпоинтах (summary/report/graph/sources/conflicts/plan/messages/export/events/finalize/…) — чужой ресёрч по прямому ID отдаёт 404; покрыто тестом. ⬜ Остаток: rotate `AUTH_SECRET_KEY` в проде; прогнать миграцию на Postgres.
 
 ---
 
