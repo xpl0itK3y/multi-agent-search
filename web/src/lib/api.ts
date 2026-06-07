@@ -1,4 +1,5 @@
 import type {
+  AuthUser,
   ChatMessage,
   Clarification,
   Conflict,
@@ -33,6 +34,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  me: () => request<AuthUser>("/v1/auth/me"),
+
+  register: (email: string, password: string) =>
+    request<AuthUser>("/v1/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
+
+  login: (email: string, password: string) =>
+    request<AuthUser>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+
+  logout: () => request<{ status: string }>("/v1/auth/logout", { method: "POST" }),
+
   listModels: () => request<ModelOption[]>("/v1/models"),
 
   listResearch: (limit = 30) =>

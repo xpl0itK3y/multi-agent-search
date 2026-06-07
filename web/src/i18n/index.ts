@@ -108,6 +108,17 @@ const ru = {
     reportForming: "Отчёт формируется — он появится здесь в реальном времени.",
     failed: "Не удалось сформировать отчёт.",
   },
+  auth: {
+    loginTitle: "Вход",
+    registerTitle: "Регистрация",
+    email: "Email",
+    password: "Пароль",
+    login: "Войти",
+    register: "Создать аккаунт",
+    toRegister: "Нет аккаунта? Зарегистрироваться",
+    toLogin: "Уже есть аккаунт? Войти",
+    logout: "Выйти",
+  },
 };
 
 const en: typeof ru = {
@@ -211,6 +222,17 @@ const en: typeof ru = {
     reportForming: "The report is being generated — it will stream in here.",
     failed: "Could not generate the report.",
   },
+  auth: {
+    loginTitle: "Sign in",
+    registerTitle: "Sign up",
+    email: "Email",
+    password: "Password",
+    login: "Sign in",
+    register: "Create account",
+    toRegister: "No account? Sign up",
+    toLogin: "Have an account? Sign in",
+    logout: "Log out",
+  },
 };
 
 const es: typeof ru = {
@@ -313,6 +335,17 @@ const es: typeof ru = {
     tokens: "tokens",
     reportForming: "El informe se está generando — aparecerá aquí en tiempo real.",
     failed: "No se pudo generar el informe.",
+  },
+  auth: {
+    loginTitle: "Iniciar sesión",
+    registerTitle: "Registrarse",
+    email: "Email",
+    password: "Contraseña",
+    login: "Entrar",
+    register: "Crear cuenta",
+    toRegister: "¿Sin cuenta? Regístrate",
+    toLogin: "¿Ya tienes cuenta? Inicia sesión",
+    logout: "Salir",
   },
 };
 

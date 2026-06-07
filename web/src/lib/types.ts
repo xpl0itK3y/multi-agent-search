@@ -1,5 +1,10 @@
 export type Depth = "easy" | "medium" | "hard";
 
+export interface AuthUser {
+  id: string;
+  email: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;

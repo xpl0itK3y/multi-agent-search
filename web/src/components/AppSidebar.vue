@@ -5,8 +5,17 @@ import { useI18n } from "vue-i18n";
 import type { ResearchHistoryItem } from "@/lib/types";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
+import { useAuthStore } from "@/stores/auth";
 
 const ui = useUiStore();
+const auth = useAuthStore();
+
+const displayName = computed(() => auth.user?.email ?? ui.userName);
+
+async function logout() {
+  await auth.logout();
+  router.push({ name: "login" });
+}
 const store = useResearchStore();
 const router = useRouter();
 const route = useRoute();
@@ -227,13 +236,16 @@ const vFocus = {
 
     <!-- User card -->
     <div class="mt-auto flex items-center gap-3 border-t border-bd px-4 py-3">
-      <div class="grid h-9 w-9 place-items-center rounded-full bg-surface text-sm">
-        {{ ui.userName.charAt(0).toUpperCase() }}
+      <div class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm">
+        {{ displayName.charAt(0).toUpperCase() }}
       </div>
-      <div class="min-w-0">
-        <div class="truncate text-sm text-ink">{{ ui.userName }}</div>
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-sm text-ink">{{ displayName }}</div>
         <div class="text-xs text-muted">{{ $t("sidebar.plan") }}</div>
       </div>
+      <button class="shrink-0 rounded p-1 text-muted hover:text-ink" :title="$t('auth.logout')" @click="logout">
+        ⏻
+      </button>
     </div>
   </aside>
 </template>

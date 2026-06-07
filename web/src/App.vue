@@ -19,7 +19,12 @@ watch(() => route.fullPath, () => ui.closeMobile());
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden bg-bg text-ink">
+  <!-- Login screen: no app shell -->
+  <div v-if="route.name === 'login'" class="h-screen w-screen overflow-hidden bg-bg text-ink">
+    <router-view />
+  </div>
+
+  <div v-else class="flex h-screen w-screen overflow-hidden bg-bg text-ink">
     <!-- Sidebar: static on lg+, off-canvas drawer on mobile -->
     <div
       class="fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0"
