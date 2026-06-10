@@ -1,9 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useResearchStore } from "@/stores/research";
 import type { Depth } from "@/lib/types";
 
 const prompt = defineModel<string>("prompt", { default: "" });
+
+// Auto-grow the textarea with its content (capped); the user can also drag-resize it.
+const textarea = ref<HTMLTextAreaElement | null>(null);
+const MAX_TEXTAREA_PX = 360;
+function autosize() {
+  const el = textarea.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, MAX_TEXTAREA_PX) + "px";
+}
+watch(prompt, () => nextTick(autosize));
+onMounted(autosize);
 
 const props = defineProps<{ busy?: boolean }>();
 const emit = defineEmits<{
@@ -48,10 +60,12 @@ function onKeydown(e: KeyboardEvent) {
 <template>
   <div class="w-full max-w-composer rounded-card border border-bd bg-surface px-4 py-3 shadow-lg">
     <textarea
+      ref="textarea"
       v-model="prompt"
       rows="2"
       :placeholder="$t('composer.placeholder')"
-      class="block w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink placeholder:text-muted focus:outline-none"
+      class="block w-full resize-y overflow-y-auto bg-transparent text-[15px] leading-relaxed text-ink placeholder:text-muted focus:outline-none max-h-[360px]"
+      @input="autosize"
       @keydown="onKeydown"
     />
 

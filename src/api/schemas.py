@@ -177,7 +177,7 @@ class DecomposeResponse(BaseModel):
     depth: SearchDepth
 
 class ResearchRequest(BaseModel):
-    prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=2000)
+    prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=16000)
     depth: SearchDepth = Field(default=SearchDepth.EASY)
     webhook_url: Optional[str] = Field(
         default=None,
@@ -314,7 +314,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatAsk(BaseModel):
-    question: str = Field(..., min_length=1, max_length=2000)
+    question: str = Field(..., min_length=1, max_length=8000)
 
 
 class Clarification(BaseModel):
