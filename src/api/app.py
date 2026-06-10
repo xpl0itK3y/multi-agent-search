@@ -411,9 +411,14 @@ def register_routes(app: FastAPI) -> None:
             def on_delta(partial: str) -> None:
                 channel.put(("delta", partial))
 
+            def on_status(status: str) -> None:
+                channel.put(("status", status))
+
             def worker() -> None:
                 try:
-                    answer = service.generate_research_answer(research_id, question, streaming_callback=on_delta)
+                    answer = service.generate_research_answer(
+                        research_id, question, streaming_callback=on_delta, status_callback=on_status
+                    )
                     channel.put(("final", answer))
                 except HTTPException as exc:
                     channel.put(("error", str(exc.detail)))
@@ -426,6 +431,8 @@ def register_routes(app: FastAPI) -> None:
                 kind, value = channel.get()
                 if kind == "delta":
                     yield sse("delta", {"answer": value})
+                elif kind == "status":
+                    yield sse("searching", {"status": value})
                 elif kind == "final":
                     service.append_research_message(research_id, "user", question)
                     service.append_research_message(research_id, "assistant", value)

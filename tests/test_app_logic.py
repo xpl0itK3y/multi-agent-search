@@ -2549,3 +2549,44 @@ def test_research_scoping_filters_by_user():
     assert len(service.list_researches(user_id="u1")) == 1
     assert len(service.list_researches(user_id="u2")) == 1
     assert len(service.list_researches()) == 2  # no scoping when user_id is None
+
+
+def test_chat_escalates_search_for_uncovered_question(mocker):
+    task_store = InMemoryTaskStore()
+
+    class FakeChat:
+        def answer(self, question, report, sources, history, model=None, streaming_callback=None):
+            return f"answer:{len(sources)}"
+
+    service = ResearchService(task_store=task_store, chat_agent=FakeChat())
+    research = task_store.add_research(
+        ResearchRequest(prompt="python packaging", depth=SearchDepth.EASY), task_ids=[]
+    )
+    task_store.add_task(
+        {
+            "id": "t1",
+            "research_id": research.id,
+            "description": "d",
+            "queries": ["q"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "http://a.com",
+                    "title": "Packaging",
+                    "content": "python packaging wheel metadata distribution " * 20,
+                }
+            ],
+        }
+    )
+    task_store.set_research_task_ids(research.id, ["t1"])
+
+    escalate = mocker.patch.object(service, "_mini_search_for_chat", return_value=[])
+
+    # Question unrelated to the gathered sources -> escalates to a mini search.
+    service.generate_research_answer(research.id, "What about kubernetes ingress controllers and CNI plugins?")
+    escalate.assert_called_once()
+
+    # Question well covered by the sources -> no escalation.
+    escalate.reset_mock()
+    service.generate_research_answer(research.id, "Explain python packaging wheel metadata distribution")
+    escalate.assert_not_called()

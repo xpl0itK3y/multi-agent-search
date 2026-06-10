@@ -101,7 +101,7 @@ const ru = {
     complete: "Готово",
     stale_recovered: "Восстановление",
   },
-  chat: { placeholder: "Спросить по исследованию…" },
+  chat: { placeholder: "Спросить по исследованию…", searching: "Ищу источники…" },
   research: {
     costTitle: "Оценка расхода LLM",
     tokens: "токенов",
@@ -215,7 +215,7 @@ const en: typeof ru = {
     complete: "Done",
     stale_recovered: "Recovered",
   },
-  chat: { placeholder: "Ask about this research…" },
+  chat: { placeholder: "Ask about this research…", searching: "Searching for sources…" },
   research: {
     costTitle: "Estimated LLM usage",
     tokens: "tokens",
@@ -329,7 +329,7 @@ const es: typeof ru = {
     complete: "Listo",
     stale_recovered: "Recuperado",
   },
-  chat: { placeholder: "Pregunta sobre esta investigación…" },
+  chat: { placeholder: "Pregunta sobre esta investigación…", searching: "Buscando fuentes…" },
   research: {
     costTitle: "Uso estimado de LLM",
     tokens: "tokens",

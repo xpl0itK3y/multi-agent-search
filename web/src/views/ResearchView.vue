@@ -34,6 +34,7 @@ const clarifyBusy = ref(false);
 const messages = ref<ChatMessage[]>([]);
 const chatInput = ref("");
 const chatBusy = ref(false);
+const chatSearching = ref(false);
 const threadScroll = ref<HTMLElement | null>(null);
 
 const canChat = computed(() => status.value === "completed");
@@ -115,19 +116,26 @@ async function sendChat() {
   messages.value.push({ role: "user", content: question });
   const assistantIndex = messages.value.push({ role: "assistant", content: "" }) - 1;
   chatBusy.value = true;
+  chatSearching.value = false;
   errorMsg.value = null;
   scrollThreadToBottom();
   await streamChatAnswer(props.id, question, {
+    onSearching: () => {
+      chatSearching.value = true;
+    },
     onDelta: (answer) => {
+      chatSearching.value = false;
       messages.value[assistantIndex].content = answer;
       scrollThreadToBottom();
     },
     onDone: (answer) => {
+      chatSearching.value = false;
       messages.value[assistantIndex].content = answer;
       chatBusy.value = false;
       scrollThreadToBottom();
     },
     onError: (m) => {
+      chatSearching.value = false;
       errorMsg.value = m;
       messages.value.splice(assistantIndex, 1);
       chatBusy.value = false;
@@ -254,7 +262,8 @@ onBeforeUnmount(() => close?.());
             <MarkdownView v-else-if="m.content" :source="m.content" />
           </template>
           <div v-if="awaitingAnswer" class="flex items-center gap-2 text-sm text-muted">
-            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> {{ $t("common.thinking") }}
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+            {{ chatSearching ? $t("chat.searching") : $t("common.thinking") }}
           </div>
         </div>
       </div>

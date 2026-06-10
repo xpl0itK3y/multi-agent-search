@@ -44,6 +44,7 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
 
 export interface ChatStreamHandlers {
   onDelta?: (answer: string) => void;
+  onSearching?: () => void;
   onDone?: (answer: string) => void;
   onError?: (message: string) => void;
 }
@@ -97,6 +98,7 @@ export async function streamChatAnswer(
 
       const parsed = JSON.parse(data);
       if (event === "delta") h.onDelta?.(parsed.answer ?? "");
+      else if (event === "searching") h.onSearching?.();
       else if (event === "done") {
         h.onDone?.(parsed.answer ?? "");
         return;
