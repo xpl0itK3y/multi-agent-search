@@ -139,12 +139,16 @@ class AnalyzerAgent(BaseAgent):
             ),
         },
         SearchDepth.HARD: {
-            "max_sources": 36,
-            "max_sources_per_domain": 4,
-            "max_sources_per_task": 8,
-            "payload_char_budget": 42000,
-            "conflict_source_limit": 16,
-            "evidence_source_limit": 16,
+            # Deep tier: ~2× the source pool of a standard run. The payload budget is
+            # scaled with it so each source keeps the same content density (the budget
+            # is a *total* split across sources — see _apply_payload_budget — so raising
+            # max_sources without raising the budget would just starve the extra sources).
+            "max_sources": 72,
+            "max_sources_per_domain": 5,
+            "max_sources_per_task": 12,
+            "payload_char_budget": 84000,
+            "conflict_source_limit": 24,
+            "evidence_source_limit": 24,
             "report_instruction": (
                 "Write a very comprehensive deep-dive report. Expand the analysis substantially, "
                 "cover major subtopics in detail, use more year-by-year or category-by-category breakdowns when relevant, "
@@ -218,6 +222,9 @@ class AnalyzerAgent(BaseAgent):
     # Minimum number of sources to activate parallel section mode on HARD depth.
     _PARALLEL_SECTION_MIN_SOURCES = 18
     _PARALLEL_SECTION_CHUNK = 12
+    # Cap HARD writer sections so the deeper pool stays ~6 same-size section calls
+    # (72 sources / chunk 12 = 6); a guard if max_sources is raised further later.
+    _PARALLEL_SECTION_HARD_MAX_SECTIONS = 6
     # MEDIUM also uses the multi-stage writer (outline → sections → stitch) once it
     # has enough evidence, but with tighter bounds than HARD to cap cost/latency:
     # smaller chunks and at most two sections (→ 2 section calls + 1 synthesis).
@@ -1302,7 +1309,10 @@ class AnalyzerAgent(BaseAgent):
                     streaming_callback(combined)
 
             section_chunk = self._PARALLEL_SECTION_CHUNK_MEDIUM if is_medium else self._PARALLEL_SECTION_CHUNK
-            section_cap = self._PARALLEL_SECTION_MEDIUM_MAX_SECTIONS if is_medium else None
+            section_cap = (
+                self._PARALLEL_SECTION_MEDIUM_MAX_SECTIONS if is_medium
+                else self._PARALLEL_SECTION_HARD_MAX_SECTIONS
+            )
             result = self._run_parallel_section_analysis(
                 aggregated_data, prompt, prompt_language, depth,
                 section_done_callback=_section_done,

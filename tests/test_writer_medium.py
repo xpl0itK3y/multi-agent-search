@@ -100,3 +100,27 @@ def test_easy_never_uses_parallel_writer(mocker):
     analyzer.run_analysis("q", [], depth=SearchDepth.EASY)
     assert single.called
     assert not parallel.called
+
+
+def test_hard_uses_parallel_writer_capped_at_six_sections(mocker):
+    analyzer = AnalyzerAgent(RecordingLLM())
+    parallel, single = _build(mocker, analyzer, AnalyzerAgent._PARALLEL_SECTION_MIN_SOURCES)
+    analyzer.run_analysis("q", [], depth=SearchDepth.HARD)
+    assert parallel.called
+    assert not single.called
+    # HARD keeps the full-size chunk but bounds the deeper pool to six sections.
+    assert parallel.call_args.kwargs["chunk_size"] == AnalyzerAgent._PARALLEL_SECTION_CHUNK
+    assert parallel.call_args.kwargs["max_sections"] == AnalyzerAgent._PARALLEL_SECTION_HARD_MAX_SECTIONS
+
+
+def test_deep_hard_pool_yields_six_same_size_sections():
+    # 72 deep-tier sources at chunk 12 → exactly 6 sections of 12 (each the size of a
+    # pre-deepening HARD section), bounded by the section cap.
+    llm = RecordingLLM()
+    AnalyzerAgent(llm)._run_parallel_section_analysis(
+        _sources(72), "q", "en", SearchDepth.HARD,
+        chunk_size=AnalyzerAgent._PARALLEL_SECTION_CHUNK,
+        max_sections=AnalyzerAgent._PARALLEL_SECTION_HARD_MAX_SECTIONS,
+    )
+    assert llm.section_calls == 6
+    assert llm.synth_calls == 1
