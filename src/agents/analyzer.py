@@ -218,6 +218,12 @@ class AnalyzerAgent(BaseAgent):
     # Minimum number of sources to activate parallel section mode on HARD depth.
     _PARALLEL_SECTION_MIN_SOURCES = 18
     _PARALLEL_SECTION_CHUNK = 12
+    # MEDIUM also uses the multi-stage writer (outline → sections → stitch) once it
+    # has enough evidence, but with tighter bounds than HARD to cap cost/latency:
+    # smaller chunks and at most two sections (→ 2 section calls + 1 synthesis).
+    _PARALLEL_SECTION_MIN_SOURCES_MEDIUM = 12
+    _PARALLEL_SECTION_CHUNK_MEDIUM = 8
+    _PARALLEL_SECTION_MEDIUM_MAX_SECTIONS = 2
 
     def __init__(
         self,
@@ -1194,8 +1200,15 @@ class AnalyzerAgent(BaseAgent):
         evidence_groups: list[dict] | None = None,
         source_summary=None,
         model: str | None = None,
+        chunk_size: int | None = None,
+        max_sections: int | None = None,
     ) -> str:
-        chunk_size = self._PARALLEL_SECTION_CHUNK
+        chunk_size = chunk_size or self._PARALLEL_SECTION_CHUNK
+        # When a section cap is given, grow the chunk so we never exceed it
+        # (bounds the number of section LLM calls — used for MEDIUM).
+        if max_sections is not None and aggregated_data:
+            even_chunk = (len(aggregated_data) + max_sections - 1) // max_sections
+            chunk_size = max(chunk_size, even_chunk)
         chunks = [
             aggregated_data[i: i + chunk_size]
             for i in range(0, len(aggregated_data), chunk_size)
@@ -1267,15 +1280,17 @@ class AnalyzerAgent(BaseAgent):
         prompt_language = self._detect_language(prompt)
 
         is_hard = depth == SearchDepth.HARD
+        is_medium = depth == SearchDepth.MEDIUM
         use_parallel = (
-            is_hard
-            and len(aggregated_data) >= self._PARALLEL_SECTION_MIN_SOURCES
+            (is_hard and len(aggregated_data) >= self._PARALLEL_SECTION_MIN_SOURCES)
+            or (is_medium and len(aggregated_data) >= self._PARALLEL_SECTION_MIN_SOURCES_MEDIUM)
         )
 
         llm_started_at = time.perf_counter()
         if use_parallel:
-            # Parallel section generation: 3 concurrent LLM calls on source chunks,
-            # then one synthesis call. Avoids a single 42k-char blocking call.
+            # Multi-stage writer: concurrent section drafts on source chunks, then one
+            # synthesis call. Avoids a single oversized blocking call and yields a more
+            # structured report. MEDIUM uses tighter bounds than HARD.
             partial_sections: list[str] = []
             _section_lock = __import__("threading").Lock()
 
@@ -1286,6 +1301,8 @@ class AnalyzerAgent(BaseAgent):
                     combined = "\n\n---\n\n".join(partial_sections)
                     streaming_callback(combined)
 
+            section_chunk = self._PARALLEL_SECTION_CHUNK_MEDIUM if is_medium else self._PARALLEL_SECTION_CHUNK
+            section_cap = self._PARALLEL_SECTION_MEDIUM_MAX_SECTIONS if is_medium else None
             result = self._run_parallel_section_analysis(
                 aggregated_data, prompt, prompt_language, depth,
                 section_done_callback=_section_done,
@@ -1293,6 +1310,8 @@ class AnalyzerAgent(BaseAgent):
                 evidence_groups=evidence_groups,
                 source_summary=source_summary,
                 model=model,
+                chunk_size=section_chunk,
+                max_sections=section_cap,
             )
             # Stream the synthesis result too once it's done
             if streaming_callback:
