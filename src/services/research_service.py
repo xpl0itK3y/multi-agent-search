@@ -267,7 +267,7 @@ class ResearchService:
                 )
             except Exception as exc:
                 logger.error("research_decompose_failed research_id=%s error=%s", research_id, str(exc))
-                self.task_store.update_research_status(research_id, ResearchStatus.FAILED, str(exc))
+                self.task_store.update_research_status(research_id, ResearchStatus.FAILED, self._failure_message(exc))
 
     def _clear_decompose_pending(self, research_id: str) -> None:
         """Remove the crash-recovery marker from graph_state after decompose completes."""
@@ -1187,6 +1187,26 @@ class ResearchService:
 
             return self.task_store.get_research(research_id)
 
+    @staticmethod
+    def _failure_message(exc: Exception) -> str:
+        """Turn an internal exception into a clean, non-leaky failure reason.
+
+        Avoids dumping raw provider errors (which may carry keys/credentials) into
+        the stored report; classifies the common cases for an actionable message.
+        """
+        text = str(exc)
+        low = text.lower()
+        if "401" in text or "authentication" in low or ("api key" in low and "invalid" in low):
+            return (
+                "Research failed: the language model rejected the request "
+                "(authentication error). Check that a valid API key is configured."
+            )
+        if "429" in text or "rate limit" in low or "rate-limit" in low:
+            return "Research failed: the language model is rate-limited. Please try again shortly."
+        if "timeout" in low or "timed out" in low:
+            return "Research failed: the analysis timed out. Please try again."
+        return "Research failed during analysis. Please try again."
+
     def enqueue_research_finalization(self, research_id: str) -> tuple[ResearchRecord, ResearchFinalizeJob | None]:
         research = self._get_research_for_finalization(research_id)
         if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
@@ -1227,7 +1247,7 @@ class ResearchService:
                     self.task_store.update_research_status(
                         job.research_id,
                         ResearchStatus.FAILED,
-                        f"Analysis failed: {str(exc)}",
+                        self._failure_message(exc),
                     )
                     logger.error("finalize_job_dead_letter")
                 return failed_job
