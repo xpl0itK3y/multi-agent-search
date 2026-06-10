@@ -114,12 +114,12 @@ class AnalyzerAgent(BaseAgent):
     }
     DEPTH_ANALYSIS_PROFILES = {
         SearchDepth.EASY: {
-            "max_sources": 30,
-            "max_sources_per_domain": 3,
-            "max_sources_per_task": 12,
-            "payload_char_budget": 30000,
-            "conflict_source_limit": 12,
-            "evidence_source_limit": 12,
+            "max_sources": 15,
+            "max_sources_per_domain": 2,
+            "max_sources_per_task": 8,
+            "payload_char_budget": 15000,
+            "conflict_source_limit": 8,
+            "evidence_source_limit": 8,
             "report_instruction": (
                 "Write a concise but complete report with a limited number of substantial sections. "
                 "Prioritize the clearest findings and avoid unnecessary expansion."
@@ -139,7 +139,7 @@ class AnalyzerAgent(BaseAgent):
             ),
         },
         SearchDepth.HARD: {
-            # Deep tier — top of the 30/60/120 source ladder (EASY/MEDIUM/HARD). The
+            # Deep tier — top of the 15/60/120 source ladder (EASY/MEDIUM/HARD). The
             # payload budget scales with the pool so each source keeps the same content
             # density (the budget is a *total* split across sources — see
             # _apply_payload_budget — so raising max_sources without raising the budget

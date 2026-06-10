@@ -3,14 +3,15 @@ from src.api.schemas import SearchDepth
 
 SEARCH_DEPTH_PROFILES = {
     # Supply (task_count × source_limit) is sized to fill the analyzer's source
-    # pool of 30 / 60 / 120 (EASY / MEDIUM / HARD) with margin for dedup loss.
+    # pool of 15 / 60 / 120 (EASY / MEDIUM / HARD) with margin for dedup loss.
+    # EASY stays a genuinely quick scan: 2 tasks, single-pass writer.
     SearchDepth.EASY: {
         "label": "Quick Scan",
         "description": "Fast pass for a compact answer.",
-        "task_count": 3,
-        "source_limit": 12,
-        "search_results_per_query": 16,
-        "max_candidate_urls": 24,
+        "task_count": 2,
+        "source_limit": 8,
+        "search_results_per_query": 10,
+        "max_candidate_urls": 16,
     },
     SearchDepth.MEDIUM: {
         "label": "Balanced",

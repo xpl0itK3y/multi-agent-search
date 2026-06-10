@@ -116,7 +116,7 @@ def test_hard_uses_parallel_writer_capped_at_six_sections(mocker):
 
 @pytest.mark.parametrize(
     "depth,expected_pool",
-    [(SearchDepth.EASY, 30), (SearchDepth.MEDIUM, 60), (SearchDepth.HARD, 120)],
+    [(SearchDepth.EASY, 15), (SearchDepth.MEDIUM, 60), (SearchDepth.HARD, 120)],
 )
 def test_source_ladder_is_consistent(depth, expected_pool):
     """30 / 60 / 120 ladder, and the search supply + budget actually support it."""

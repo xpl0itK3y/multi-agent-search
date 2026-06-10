@@ -57,8 +57,10 @@ class Settings(BaseSettings):
     langgraph_replan_max_loops: int = 1
     langgraph_verification_max_retries: int = 1
     langgraph_tie_break_max_loops: int = 1
-    # Budget guard so the revived loop can't run away on cost/latency.
-    finalize_budget_max_seconds: int = 240
+    # Budget guard so the revived loop can't run away on cost/latency. Sized for the
+    # deep HARD tier (120 sources → ~6 writer sections + synthesis per analyze pass);
+    # EASY/MEDIUM finalize well under this, so the larger ceiling only benefits HARD.
+    finalize_budget_max_seconds: int = 480
     finalize_budget_max_analyze_passes: int = 3
     graph_step_event_history_limit: int = 250
     graph_step_event_retention_seconds: int = 86400

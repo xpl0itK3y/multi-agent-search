@@ -1739,7 +1739,7 @@ def test_process_search_task_job_marks_job_completed(mocker):
 @pytest.mark.parametrize(
     ("depth", "expected_limit", "expected_results_per_query", "expected_candidate_urls"),
     [
-        (SearchDepth.EASY, 12, 16, 24),
+        (SearchDepth.EASY, 8, 10, 16),
         (SearchDepth.MEDIUM, 16, 18, 32),
         (SearchDepth.HARD, 24, 24, 48),
     ],
