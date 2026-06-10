@@ -1,0 +1,23 @@
+{
+  "query_id": "smartphones_2026",
+  "prompt": "Лучшие флагманские смартфоны 2026 года: камера, автономность, цена",
+  "depth": "easy",
+  "status": "completed",
+  "report": "# Флагманские смартфоны 2026\n\n## Камера\nЛидеры по камере — Apple iPhone 17 Pro и Google Pixel 11 Pro: оба показывают лучший динамический диапазон в тестах DXOMARK [S1][S2]. Samsung Galaxy S26 Ultra сохраняет преимущество в зуме за счёт перископа 10x [S3].\n\n## Автономность\nПо автономности Galaxy S26 Ultra и iPhone 17 Pro Max держат экранное время свыше 14 часов в смешанном сценарии [S3][S4]. Pixel 11 уступает примерно на час [S2].\n\n## Цена\nСтартовые цены флагманов 2026: iPhone 17 Pro — от $999, Galaxy S26 Ultra — от $1199, Pixel 11 Pro — от $899 [S1][S3][S5]. Бюджетные флагманы (OnePlus, Xiaomi) предлагают близкие камеры дешевле [S6][S7].\n\n## Итог\nДля фото — iPhone и Pixel; для зума и автономности — Galaxy; за соотношение цена/функции — OnePlus [S6].\n\n## Источники\n[S1] https://www.theverge.com/iphone-17-pro-review\n[S2] https://www.dxomark.com/pixel-11-pro-camera\n[S3] https://www.gsmarena.com/galaxy-s26-ultra-review\n[S4] https://www.anandtech.com/iphone-17-battery\n[S5] https://www.apple.com/iphone-17-pro\n[S6] https://www.tomsguide.com/oneplus-15-review\n[S7] https://www.xiaomi.com/global/15-pro\n",
+  "plan_items": [
+    {"description": "Сравнить камеры флагманов iphone galaxy pixel", "queries": ["best camera flagship 2026"]},
+    {"description": "Автономность и время работы батареи", "queries": ["flagship battery life 2026"]},
+    {"description": "Цены и ценовые сегменты", "queries": ["flagship price 2026"]}
+  ],
+  "sources": [
+    {"url": "https://www.theverge.com/iphone-17-pro-review", "domain": "theverge.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.dxomark.com/pixel-11-pro-camera", "domain": "dxomark.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.gsmarena.com/galaxy-s26-ultra-review", "domain": "gsmarena.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.anandtech.com/iphone-17-battery", "domain": "anandtech.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.apple.com/iphone-17-pro", "domain": "apple.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.tomsguide.com/oneplus-15-review", "domain": "tomsguide.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.xiaomi.com/global/15-pro", "domain": "xiaomi.com", "source_quality": "low", "extraction_status": "ok"}
+  ],
+  "token_usage": {"prompt_tokens": 8200, "completion_tokens": 1450, "estimated_cost_usd": 0.021},
+  "latency_seconds": null
+}

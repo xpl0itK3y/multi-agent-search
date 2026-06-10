@@ -1,0 +1,15 @@
+{
+  "n_samples": 6,
+  "unique_sources": 7.0,
+  "unique_domains": 6.166666666666667,
+  "high_quality_rate": 0.94285,
+  "citation_count": 18.166666666666668,
+  "cited_sources": 7.0,
+  "citation_density": 108.80166666666668,
+  "plan_coverage": 0.7222333333333334,
+  "must_mention_rate": 0.9444499999999999,
+  "report_words": 167.0,
+  "cost_usd": 0.043333333333333335,
+  "total_tokens": 19458.333333333332,
+  "latency_seconds": null
+}

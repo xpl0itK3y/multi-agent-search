@@ -1,0 +1,10 @@
+# Gold query set for the research eval harness.
+# One JSON object per line: id, prompt, depth (easy|medium|hard), domain, must_mention.
+# `must_mention` lists facts/terms a good report on this topic is expected to surface;
+# it drives the must_mention_rate metric. Blank lines and `#` comments are ignored.
+{"id": "smartphones_2026", "prompt": "Лучшие флагманские смартфоны 2026 года: камера, автономность, цена", "depth": "easy", "domain": "consumer_tech", "must_mention": ["iphone", "galaxy", "pixel"]}
+{"id": "rust_vs_go", "prompt": "Rust vs Go for backend services: performance, concurrency, and ecosystem trade-offs", "depth": "medium", "domain": "programming", "must_mention": ["goroutine", "ownership", "garbage collection"]}
+{"id": "crispr_therapy", "prompt": "Current state of CRISPR gene therapy approvals and ongoing clinical trials", "depth": "hard", "domain": "biomedical", "must_mention": ["cas9", "clinical trial", "off-target"]}
+{"id": "fed_rates_2026", "prompt": "How are central-bank interest-rate decisions in 2026 affecting mortgage markets?", "depth": "medium", "domain": "economics", "must_mention": ["inflation", "mortgage", "federal reserve"]}
+{"id": "solid_state_batteries", "prompt": "Solid-state battery commercialization timeline and the remaining technical challenges", "depth": "hard", "domain": "energy", "must_mention": ["electrolyte", "dendrite", "energy density"]}
+{"id": "mediterranean_diet", "prompt": "Evidence linking the Mediterranean diet to cardiovascular health outcomes", "depth": "easy", "domain": "health", "must_mention": ["olive oil", "cardiovascular", "cohort"]}

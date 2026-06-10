@@ -1,0 +1,21 @@
+{
+  "query_id": "mediterranean_diet",
+  "prompt": "Evidence linking the Mediterranean diet to cardiovascular health outcomes",
+  "depth": "easy",
+  "status": "completed",
+  "report": "# Mediterranean Diet and Cardiovascular Health\n\n## Trial evidence\nThe PREDIMED randomized trial found that a Mediterranean diet supplemented with extra-virgin olive oil or nuts reduced major cardiovascular events versus a low-fat control [S1][S2]. The effect was driven mainly by fewer strokes [S2].\n\n## Cohort evidence\nLarge prospective cohort studies associate higher adherence to the Mediterranean pattern with lower cardiovascular mortality [S3][S4]. A dose-response is observed across cohort quartiles of adherence [S4].\n\n## Mechanisms\nProposed mechanisms include improved lipid profiles from olive oil monounsaturated fat, lower inflammation, and better endothelial function [S5].\n\n## Bottom line\nConverging trial and cohort evidence supports the Mediterranean diet, rich in olive oil, for cardiovascular risk reduction [S1][S3].\n\n## Sources\n[S1] https://www.nejm.org/predimed\n[S2] https://www.bmj.com/predimed-stroke\n[S3] https://www.thelancet.com/mediterranean-cohort\n[S4] https://www.ahajournals.org/med-diet-mortality\n[S5] https://www.health.harvard.edu/mediterranean-diet\n",
+  "plan_items": [
+    {"description": "Randomized trial evidence olive oil cardiovascular", "queries": ["predimed mediterranean diet trial"]},
+    {"description": "Cohort studies adherence mortality", "queries": ["mediterranean diet cohort mortality"]},
+    {"description": "Biological mechanisms inflammation lipids", "queries": ["mediterranean diet mechanism"]}
+  ],
+  "sources": [
+    {"url": "https://www.nejm.org/predimed", "domain": "nejm.org", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.bmj.com/predimed-stroke", "domain": "bmj.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.thelancet.com/mediterranean-cohort", "domain": "thelancet.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.ahajournals.org/med-diet-mortality", "domain": "ahajournals.org", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.health.harvard.edu/mediterranean-diet", "domain": "health.harvard.edu", "source_quality": "medium", "extraction_status": "ok"}
+  ],
+  "token_usage": {"prompt_tokens": 7600, "completion_tokens": 1300, "estimated_cost_usd": 0.018},
+  "latency_seconds": null
+}

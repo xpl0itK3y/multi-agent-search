@@ -1,0 +1,21 @@
+{
+  "query_id": "fed_rates_2026",
+  "prompt": "How are central-bank interest-rate decisions in 2026 affecting mortgage markets?",
+  "depth": "medium",
+  "status": "completed",
+  "report": "# Central-Bank Rates and Mortgage Markets in 2026\n\n## Rate path\nThrough the first half of 2026 the central bank held its policy rate elevated to keep inflation anchored near the 2% target [S1][S2]. Markets price two cuts in the second half if core inflation continues to ease [S2].\n\n## Mortgage impact\nHigher policy rates feed into the 30-year fixed mortgage, which stayed above 6.5% for most of the period [S3]. Mortgage application volume fell as affordability tightened, and refinancing largely stalled [S3][S4].\n\n## Outlook\nA pivot to cuts would lower the mortgage rate with a lag of one to two quarters; until inflation cools convincingly, the central bank is expected to stay restrictive [S2][S5].\n\n## Sources\n[S1] https://www.reuters.com/markets/central-bank-rate-2026\n[S2] https://www.bloomberg.com/inflation-outlook-2026\n[S3] https://www.freddiemac.com/pmms\n[S4] https://www.mba.org/mortgage-applications\n[S5] https://www.economist.com/rate-path-2026\n",
+  "plan_items": [
+    {"description": "Central bank policy rate decisions inflation", "queries": ["central bank rate decision 2026"]},
+    {"description": "Mortgage rate impact affordability applications", "queries": ["mortgage rate 2026"]},
+    {"description": "Regional housing price effects inventory", "queries": ["housing prices 2026 rates"]}
+  ],
+  "sources": [
+    {"url": "https://www.reuters.com/markets/central-bank-rate-2026", "domain": "reuters.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.bloomberg.com/inflation-outlook-2026", "domain": "bloomberg.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.freddiemac.com/pmms", "domain": "freddiemac.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.mba.org/mortgage-applications", "domain": "mba.org", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.economist.com/rate-path-2026", "domain": "economist.com", "source_quality": "low", "extraction_status": "failed"}
+  ],
+  "token_usage": {"prompt_tokens": 12600, "completion_tokens": 1700, "estimated_cost_usd": 0.032},
+  "latency_seconds": null
+}

@@ -1,0 +1,27 @@
+{
+  "query_id": "crispr_therapy",
+  "prompt": "Current state of CRISPR gene therapy approvals and ongoing clinical trials",
+  "depth": "hard",
+  "status": "completed",
+  "report": "# CRISPR Gene Therapy: Approvals and Trials\n\n## Approved therapies\nThe first CRISPR-Cas9 therapy, Casgevy (exagamglogene autotemcel), was approved by the FDA and MHRA in late 2023 for sickle-cell disease and transfusion-dependent beta-thalassemia [S1][S2]. It edits the BCL11A enhancer to reactivate fetal hemoglobin [S3].\n\n## Ongoing clinical trials\nMultiple clinical trial programs are advancing in-vivo editing: Intellia's NTLA-2001 targets transthyretin amyloidosis with a single infusion [S4][S5], and trials for hereditary angioedema report durable knockdown [S6]. Base- and prime-editing candidates are entering first-in-human clinical trial phases [S7].\n\n## Safety and off-target effects\nThe central safety concern remains off-target edits and large deletions at the Cas9 cut site [S8][S9]. Newer high-fidelity Cas9 variants and off-target screening assays (GUIDE-seq) reduce but do not eliminate the risk [S9][S10].\n\n## Outlook\nApprovals validate ex-vivo CRISPR-Cas9; the frontier is safe in-vivo delivery with minimal off-target activity [S5][S8].\n\n## Sources\n[S1] https://www.fda.gov/casgevy-approval\n[S2] https://www.nejm.org/casgevy-sickle-cell\n[S3] https://www.nature.com/articles/bcl11a-editing\n[S4] https://www.intelliatx.com/ntla-2001\n[S5] https://www.nejm.org/ntla-2001-attr\n[S6] https://clinicaltrials.gov/hereditary-angioedema-crispr\n[S7] https://www.science.org/prime-editing-trial\n[S8] https://www.cell.com/large-deletions-cas9\n[S9] https://www.nature.com/guide-seq-offtarget\n[S10] https://www.broadinstitute.org/high-fidelity-cas9\n",
+  "plan_items": [
+    {"description": "Approved CRISPR therapies casgevy sickle-cell", "queries": ["approved crispr therapy 2024"]},
+    {"description": "Ongoing clinical trial in-vivo editing programs", "queries": ["crispr clinical trials in vivo"]},
+    {"description": "Off-target effects safety screening", "queries": ["crispr off-target safety"]},
+    {"description": "Delivery vectors lipid nanoparticle AAV", "queries": ["crispr delivery lipid nanoparticle"]}
+  ],
+  "sources": [
+    {"url": "https://www.fda.gov/casgevy-approval", "domain": "fda.gov", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.nejm.org/casgevy-sickle-cell", "domain": "nejm.org", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.nature.com/articles/bcl11a-editing", "domain": "nature.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.intelliatx.com/ntla-2001", "domain": "intelliatx.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://www.nejm.org/ntla-2001-attr", "domain": "nejm.org", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://clinicaltrials.gov/hereditary-angioedema-crispr", "domain": "clinicaltrials.gov", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.science.org/prime-editing-trial", "domain": "science.org", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.cell.com/large-deletions-cas9", "domain": "cell.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.nature.com/guide-seq-offtarget", "domain": "nature.com", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.broadinstitute.org/high-fidelity-cas9", "domain": "broadinstitute.org", "source_quality": "medium", "extraction_status": "ok"}
+  ],
+  "token_usage": {"prompt_tokens": 31200, "completion_tokens": 3600, "estimated_cost_usd": 0.079},
+  "latency_seconds": null
+}

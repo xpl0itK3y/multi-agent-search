@@ -1,0 +1,23 @@
+{
+  "query_id": "rust_vs_go",
+  "prompt": "Rust vs Go for backend services: performance, concurrency, and ecosystem trade-offs",
+  "depth": "medium",
+  "status": "completed",
+  "report": "# Rust vs Go for Backend Services\n\n## Performance\nRust generally outperforms Go on CPU-bound workloads because it has no garbage collection pause and compiles to tighter machine code [S1][S2]. Go's garbage collection keeps latency predictable for most services but adds tail-latency jitter under heavy allocation [S3].\n\n## Concurrency\nGo's goroutine model and channels make concurrent code simple and cheap to spawn [S3][S4]. Rust offers fearless concurrency enforced at compile time through its ownership and borrow checker, eliminating data races but with a steeper learning curve [S1][S5].\n\n## Ecosystem\nGo has a more mature standard library for HTTP services and faster compile times [S4]. Rust's async ecosystem (tokio) is powerful but more fragmented [S2][S6].\n\n## Verdict\nChoose Go for fast iteration and simple concurrency via goroutine pools; choose Rust when ownership-guaranteed safety and raw performance justify the ramp-up [S5].\n\n## Sources\n[S1] https://doc.rust-lang.org/book/ch16-00-concurrency.html\n[S2] https://tokio.rs/tokio/tutorial\n[S3] https://go.dev/blog/pipelines\n[S4] https://go.dev/doc/effective_go\n[S5] https://www.infoq.com/articles/rust-vs-go-backend\n[S6] https://blog.rust-lang.org/async-ecosystem\n",
+  "plan_items": [
+    {"description": "Performance benchmarks CPU memory throughput", "queries": ["rust vs go benchmark"]},
+    {"description": "Concurrency model goroutine ownership safety", "queries": ["rust go concurrency model"]},
+    {"description": "Ecosystem libraries tooling maturity", "queries": ["rust go ecosystem comparison"]},
+    {"description": "Deployment binary size container footprint", "queries": ["rust go deployment footprint"]}
+  ],
+  "sources": [
+    {"url": "https://doc.rust-lang.org/book/ch16-00-concurrency.html", "domain": "rust-lang.org", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://tokio.rs/tokio/tutorial", "domain": "tokio.rs", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://go.dev/blog/pipelines", "domain": "go.dev", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://go.dev/doc/effective_go", "domain": "go.dev", "source_quality": "high", "extraction_status": "ok"},
+    {"url": "https://www.infoq.com/articles/rust-vs-go-backend", "domain": "infoq.com", "source_quality": "medium", "extraction_status": "ok"},
+    {"url": "https://blog.rust-lang.org/async-ecosystem", "domain": "rust-lang.org", "source_quality": "medium", "extraction_status": "ok"}
+  ],
+  "token_usage": {"prompt_tokens": 14800, "completion_tokens": 2100, "estimated_cost_usd": 0.038},
+  "latency_seconds": null
+}
