@@ -33,10 +33,29 @@ export const useResearchStore = defineStore("research", () => {
     }
   }
 
-  async function createResearch(prompt: string, depth: Depth, model?: string, planFirst?: boolean) {
-    const res = await api.createResearch({ prompt, depth, model, plan_first: planFirst });
+  // One representative research per conversation thread (most recent first), for the sidebar.
+  const threads = computed(() => {
+    const seen = new Set<string>();
+    const out: ResearchHistoryItem[] = [];
+    for (const item of history.value) {
+      const tid = item.thread_id ?? item.id;
+      if (seen.has(tid)) continue;
+      seen.add(tid);
+      out.push(item);
+    }
+    return out;
+  });
+
+  async function createResearch(
+    prompt: string,
+    depth: Depth,
+    model?: string,
+    planFirst?: boolean,
+    threadId?: string,
+  ) {
+    const res = await api.createResearch({ prompt, depth, model, plan_first: planFirst, thread_id: threadId });
     await fetchHistory();
-    return res.research_id;
+    return res; // { research_id, thread_id }
   }
 
   async function deleteResearch(id: string) {
@@ -53,6 +72,7 @@ export const useResearchStore = defineStore("research", () => {
   return {
     models,
     history,
+    threads,
     loadingHistory,
     error,
     defaultModelId,

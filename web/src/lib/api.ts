@@ -50,11 +50,14 @@ export const api = {
   listResearch: (limit = 30) =>
     request<ResearchHistoryItem[]>(`/v1/research?limit=${limit}`),
 
-  createResearch: (body: { prompt: string; depth: Depth; model?: string; plan_first?: boolean }) =>
+  createResearch: (body: { prompt: string; depth: Depth; model?: string; plan_first?: boolean; thread_id?: string }) =>
     request<CreateResearchResponse>("/v1/research", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  getThread: (threadId: string) =>
+    request<ResearchHistoryItem[]>(`/v1/threads/${threadId}`),
 
   getClarifications: (id: string) =>
     request<Clarification>(`/v1/research/${id}/clarifications`),

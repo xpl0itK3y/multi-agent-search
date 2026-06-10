@@ -112,6 +112,7 @@ const ru = {
     stale_recovered: "Восстановление",
   },
   chat: { placeholder: "Спросить по исследованию…", searching: "Ищу источники…" },
+  thread: { empty: "В этом треде пока нет исследований." },
   research: {
     costTitle: "Оценка расхода LLM",
     tokens: "токенов",
@@ -236,6 +237,7 @@ const en: typeof ru = {
     stale_recovered: "Recovered",
   },
   chat: { placeholder: "Ask about this research…", searching: "Searching for sources…" },
+  thread: { empty: "No researches in this thread yet." },
   research: {
     costTitle: "Estimated LLM usage",
     tokens: "tokens",
@@ -360,6 +362,7 @@ const es: typeof ru = {
     stale_recovered: "Recuperado",
   },
   chat: { placeholder: "Pregunta sobre esta investigación…", searching: "Buscando fuentes…" },
+  thread: { empty: "Aún no hay investigaciones en este hilo." },
   research: {
     costTitle: "Uso estimado de LLM",
     tokens: "tokens",

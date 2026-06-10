@@ -28,8 +28,8 @@ async function onSubmit(payload: { prompt: string; depth: Depth; model: string; 
   busy.value = true;
   errorMsg.value = null;
   try {
-    const id = await store.createResearch(payload.prompt, payload.depth, payload.model, payload.planFirst);
-    router.push({ name: "research", params: { id } });
+    const res = await store.createResearch(payload.prompt, payload.depth, payload.model, payload.planFirst);
+    router.push({ name: "thread", params: { threadId: res.thread_id ?? res.research_id } });
   } catch (e) {
     errorMsg.value = (e as Error).message;
   } finally {

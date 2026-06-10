@@ -18,6 +18,7 @@ export interface ResearchHistoryItem {
   id: string;
   prompt: string;
   title?: string | null;
+  thread_id?: string | null;
   depth: Depth;
   status: string;
   created_at?: string;
@@ -29,6 +30,7 @@ export interface CreateResearchResponse {
   research_id: string;
   status: string;
   message: string;
+  thread_id?: string | null;
 }
 
 export interface ResearchReport {

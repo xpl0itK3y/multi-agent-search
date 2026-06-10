@@ -12,6 +12,12 @@ const router = createRouter({
       component: () => import("@/views/ResearchView.vue"),
       props: true,
     },
+    {
+      path: "/thread/:threadId",
+      name: "thread",
+      component: () => import("@/views/ThreadView.vue"),
+      props: true,
+    },
   ],
 });
 

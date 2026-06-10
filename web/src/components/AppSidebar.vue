@@ -47,10 +47,15 @@ function displayTitle(item: ResearchHistoryItem): string {
   return value.length > 30 ? value.slice(0, 30) + "…" : value;
 }
 
+function threadKey(item: ResearchHistoryItem): string {
+  return item.thread_id ?? item.id;
+}
+
+// Recents are grouped by conversation thread (one representative entry each).
 const filteredHistory = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
-  if (!q) return store.history;
-  return store.history.filter((item) => rawTitle(item).toLowerCase().includes(q));
+  if (!q) return store.threads;
+  return store.threads.filter((item) => rawTitle(item).toLowerCase().includes(q));
 });
 
 function startRename(item: ResearchHistoryItem) {
@@ -72,7 +77,7 @@ async function onDelete(item: ResearchHistoryItem) {
   if (!window.confirm(t("sidebar.confirmDelete"))) return;
   try {
     await store.deleteResearch(item.id);
-    if (currentId.value === item.id) router.push("/");
+    if (currentThreadId.value === threadKey(item)) router.push("/");
   } catch {
     /* ignore */
   }
@@ -99,11 +104,11 @@ function statusColor(status: string): string {
   return "bg-muted";
 }
 
-function openResearch(id: string) {
-  router.push({ name: "research", params: { id } });
+function openThread(item: ResearchHistoryItem) {
+  router.push({ name: "thread", params: { threadId: threadKey(item) } });
 }
 
-const currentId = computed(() => (route.name === "research" ? route.params.id : null));
+const currentThreadId = computed(() => (route.name === "thread" ? route.params.threadId : null));
 
 // Local directive: autofocus the rename input when it mounts.
 const vFocus = {
@@ -196,7 +201,7 @@ const vFocus = {
           v-for="item in filteredHistory"
           :key="item.id"
           class="group flex items-center gap-1 rounded-lg pr-1 text-sm hover:bg-surface"
-          :class="currentId === item.id ? 'bg-surface text-ink' : 'text-muted'"
+          :class="currentThreadId === threadKey(item) ? 'bg-surface text-ink' : 'text-muted'"
         >
           <input
             v-if="editingId === item.id"
@@ -210,7 +215,7 @@ const vFocus = {
           <template v-else>
             <button
               class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
-              @click="openResearch(item.id)"
+              @click="openThread(item)"
             >
               <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusColor(item.status)" />
               <span class="truncate">{{ displayTitle(item) }}</span>
