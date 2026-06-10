@@ -42,6 +42,7 @@ from src.api.schemas import (
     Clarification,
     ClarifyAnswers,
     ResearchConflict,
+    VerificationReport,
     ResearchPlan,
     ResearchPlanUpdate,
     ResearchResponse,
@@ -359,6 +360,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict], dependencies=research_guard)
     async def get_research_conflicts(research_id: str, request: Request):
         return get_research_service(request).get_research_conflicts(research_id)
+
+    @app.get("/v1/research/{research_id}/verification", response_model=VerificationReport, dependencies=research_guard)
+    async def get_research_verification(research_id: str, request: Request):
+        return get_research_service(request).get_research_verification(research_id)
 
     @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
     async def get_research_clarifications(research_id: str, request: Request):

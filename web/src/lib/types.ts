@@ -90,6 +90,34 @@ export interface Conflict {
   sentences: string[];
 }
 
+export interface ConfidenceFinding {
+  statement: string;
+  support_level: "strong" | "medium" | "weak";
+  source_count: number;
+  source_ids: string[];
+}
+
+export interface PlanCoverageItem {
+  question: string;
+  covered: boolean;
+  match_ratio: number;
+}
+
+export interface VerificationReport {
+  research_id: string;
+  findings: ConfidenceFinding[];
+  plan_coverage: PlanCoverageItem[];
+  uncovered_questions: string[];
+  coverage_ratio: number;
+  claim_verification: {
+    uncited_lines: number;
+    unsupported_lines: number;
+    insufficient_evidence_lines: number;
+    downgraded_lines: number;
+    verification_notes: string[];
+  };
+}
+
 export interface GraphTrailEntry {
   step?: string;
   detail?: string;

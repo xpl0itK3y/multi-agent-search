@@ -13,6 +13,7 @@ import type {
   ResearchReport,
   ResearchStatusSummary,
   SourcePreview,
+  VerificationReport,
 } from "./types";
 
 // Empty base => same origin => Vite dev-proxy forwards /v1 to the backend.
@@ -94,6 +95,9 @@ export const api = {
 
   getConflicts: (id: string) =>
     request<Conflict[]>(`/v1/research/${id}/conflicts`),
+
+  getVerification: (id: string) =>
+    request<VerificationReport>(`/v1/research/${id}/verification`),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),

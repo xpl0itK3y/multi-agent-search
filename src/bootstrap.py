@@ -10,6 +10,7 @@ from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
+from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.brokers.redis_broker import RedisBroker
 from src.config import settings
@@ -54,6 +55,7 @@ def create_research_service() -> ResearchService:
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
     claim_verifier = ClaimVerifierAgent()
+    report_critic = ReportCriticAgent()
 
     if settings.smoke_analyzer_report:
         agent_analyzer = StaticAnalyzerAgent(settings.smoke_analyzer_report)
@@ -71,6 +73,7 @@ def create_research_service() -> ResearchService:
                 source_critic=source_critic,
                 evidence_mapper=evidence_mapper,
                 claim_verifier=claim_verifier,
+                report_critic=report_critic,
             )
     except Exception as exc:
         print(f"Warning: Failed to initialize agents: {exc}")
@@ -83,6 +86,7 @@ def create_research_service() -> ResearchService:
         source_critic=source_critic,
         evidence_mapper=evidence_mapper,
         claim_verifier=claim_verifier,
+        report_critic=report_critic,
         replan_agent=replan_agent,
         chat_agent=chat_agent,
         clarifier=clarifier_agent,

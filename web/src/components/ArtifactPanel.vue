@@ -2,17 +2,18 @@
 import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { Conflict, GraphTrailEntry, SourcePreview } from "@/lib/types";
+import type { Conflict, GraphTrailEntry, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
-type Tab = "report" | "sources" | "conflicts" | "trail";
+type Tab = "report" | "sources" | "confidence" | "conflicts" | "trail";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
 const conflicts = ref<Conflict[] | null>(null);
+const verification = ref<VerificationReport | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -56,13 +57,33 @@ async function ensureConflicts() {
   }
 }
 
+async function ensureVerification() {
+  if (verification.value || loading.value) return;
+  loading.value = true;
+  error.value = null;
+  try {
+    verification.value = await api.getVerification(props.id);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    loading.value = false;
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") ensureSources();
+  if (t === "confidence") ensureVerification();
   if (t === "conflicts") ensureConflicts();
   if (t === "trail") ensureTrail();
 });
 
-const tabKeys: Tab[] = ["report", "sources", "conflicts", "trail"];
+const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "trail"];
+
+const levelClass: Record<string, string> = {
+  strong: "text-emerald-500 border-emerald-500/40",
+  medium: "text-amber-500 border-amber-500/40",
+  weak: "text-red-400 border-red-400/40",
+};
 
 const { t, te } = useI18n();
 function stepLabel(step: string): string {
@@ -167,6 +188,54 @@ async function exportReport(fmt: "pdf" | "docx") {
               </div>
             </div>
           </div>
+        </div>
+      </template>
+
+      <template v-else-if="tab === 'confidence'">
+        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
+        <p v-else-if="error" class="text-red-400">{{ error }}</p>
+        <div v-else-if="verification" class="space-y-6">
+          <div>
+            <div class="mb-2 flex items-center justify-between text-sm">
+              <span class="font-medium text-ink">{{ $t("artifact.planCoverage") }}</span>
+              <span class="text-muted">{{ Math.round(verification.coverage_ratio * 100) }}%</span>
+            </div>
+            <div class="h-1.5 w-full overflow-hidden rounded-full bg-surface">
+              <div class="h-full rounded-full bg-accent" :style="{ width: verification.coverage_ratio * 100 + '%' }" />
+            </div>
+            <ul v-if="verification.uncovered_questions.length" class="mt-3 space-y-1">
+              <li class="text-xs font-medium text-muted">{{ $t("artifact.uncovered") }}</li>
+              <li v-for="(q, i) in verification.uncovered_questions" :key="i" class="flex gap-2 text-sm text-muted">
+                <span class="text-red-400">○</span><span>{{ q }}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="verification.findings.length">
+            <div class="mb-2 text-sm font-medium text-ink">{{ $t("artifact.keyFindings") }}</div>
+            <div class="space-y-2">
+              <div
+                v-for="(f, i) in verification.findings"
+                :key="i"
+                class="rounded-lg border border-bd bg-surface/50 p-3"
+              >
+                <div class="mb-1 flex items-center gap-2">
+                  <span
+                    class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                    :class="levelClass[f.support_level] || 'text-muted border-bd'"
+                  >
+                    {{ $t("confidence." + f.support_level) }}
+                  </span>
+                  <span class="text-xs text-muted">{{ f.source_ids.map((s) => "[" + s + "]").join("") }}</span>
+                </div>
+                <div class="text-sm text-ink">{{ f.statement }}</div>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="!verification.findings.length && !verification.uncovered_questions.length" class="text-muted">
+            {{ $t("artifact.confidenceEmpty") }}
+          </p>
         </div>
       </template>
 

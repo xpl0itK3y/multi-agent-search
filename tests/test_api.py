@@ -861,6 +861,47 @@ async def test_research_report_endpoint(client):
 
 
 @pytest.mark.anyio
+async def test_research_verification_endpoint(client):
+    response = await client.post("/v1/research", json={"prompt": "renewable energy growth", "depth": "easy"})
+    research_id = response.json()["research_id"]
+    app_service = client._transport.app.state.research_service
+    tasks = app_service.task_store.get_tasks_by_research(research_id)
+    # Three sources sharing tokens -> a multi-source evidence group (per-claim confidence).
+    app_service.task_store.update_task(
+        tasks[0].id,
+        TaskUpdate(
+            status=TaskStatus.COMPLETED,
+            result=[
+                {"url": "https://a.com", "title": "A", "domain": "a.com", "source_quality": "high",
+                 "content": "Solar photovoltaic capacity expanded rapidly across emerging markets last year according to analysts."},
+                {"url": "https://b.com", "title": "B", "domain": "b.com", "source_quality": "high",
+                 "content": "Solar photovoltaic capacity additions reached record levels as installation costs declined steadily."},
+                {"url": "https://c.com", "title": "C", "domain": "c.com", "source_quality": "medium",
+                 "content": "Wind and solar photovoltaic capacity together now supply a growing share of electricity demand."},
+            ],
+            log="done",
+        ),
+    )
+    app_service.task_store.update_research_status(
+        research_id, ResearchStatus.COMPLETED, "# Report\n\n## Conclusion\nSolar capacity is rising [S1].\n"
+    )
+
+    resp = await client.get(f"/v1/research/{research_id}/verification")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["research_id"] == research_id
+    # The stub plan sub-question ("Search for X") is not addressed by the report.
+    assert payload["uncovered_questions"] == ["Search for X"]
+    assert payload["coverage_ratio"] == 0.0
+    assert len(payload["plan_coverage"]) == 1
+    # A corroborated finding surfaces with its supporting source ids.
+    assert payload["findings"], "expected at least one confidence finding"
+    assert payload["findings"][0]["source_count"] >= 2
+    assert payload["findings"][0]["support_level"] in {"strong", "medium", "weak"}
+
+
+@pytest.mark.anyio
 async def test_research_graph_endpoint(client):
     response = await client.post("/v1/research", json={"prompt": "test research", "depth": "easy"})
     research_id = response.json()["research_id"]

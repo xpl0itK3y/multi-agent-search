@@ -81,6 +81,7 @@ const ru = {
   artifact: {
     report: "Отчёт",
     sources: "Источники",
+    confidence: "Уверенность",
     conflicts: "Противоречия",
     trail: "Трасса",
     reportForming: "Отчёт формируется — он появится здесь.",
@@ -88,7 +89,16 @@ const ru = {
     conflictsEmpty: "Противоречий между источниками не обнаружено.",
     trailEmpty: "Трасса пуста.",
     disputedPoint: "Спорный момент",
+    planCoverage: "Покрытие плана",
+    uncovered: "Без явного покрытия:",
+    keyFindings: "Ключевые выводы",
+    confidenceEmpty: "Данных для оценки уверенности пока нет.",
     export: "Экспорт",
+  },
+  confidence: {
+    strong: "высокая",
+    medium: "средняя",
+    weak: "низкая",
   },
   trace: {
     title: "Ход работы",
@@ -195,6 +205,7 @@ const en: typeof ru = {
   artifact: {
     report: "Report",
     sources: "Sources",
+    confidence: "Confidence",
     conflicts: "Conflicts",
     trail: "Trail",
     reportForming: "The report is being generated — it will appear here.",
@@ -202,7 +213,16 @@ const en: typeof ru = {
     conflictsEmpty: "No conflicts between sources detected.",
     trailEmpty: "Trail is empty.",
     disputedPoint: "Disputed point",
+    planCoverage: "Plan coverage",
+    uncovered: "Not clearly addressed:",
+    keyFindings: "Key findings",
+    confidenceEmpty: "No confidence data yet.",
     export: "Export",
+  },
+  confidence: {
+    strong: "high",
+    medium: "medium",
+    weak: "low",
   },
   trace: {
     title: "Progress",
@@ -309,6 +329,7 @@ const es: typeof ru = {
   artifact: {
     report: "Informe",
     sources: "Fuentes",
+    confidence: "Confianza",
     conflicts: "Conflictos",
     trail: "Traza",
     reportForming: "El informe se está generando — aparecerá aquí.",
@@ -316,7 +337,16 @@ const es: typeof ru = {
     conflictsEmpty: "No se detectaron conflictos entre fuentes.",
     trailEmpty: "La traza está vacía.",
     disputedPoint: "Punto en disputa",
+    planCoverage: "Cobertura del plan",
+    uncovered: "Sin cobertura clara:",
+    keyFindings: "Hallazgos clave",
+    confidenceEmpty: "Aún no hay datos de confianza.",
     export: "Exportar",
+  },
+  confidence: {
+    strong: "alta",
+    medium: "media",
+    weak: "baja",
   },
   trace: {
     title: "Progreso",

@@ -123,6 +123,35 @@ class ClaimVerificationSummary(BaseModel):
     verification_notes: List[str] = Field(default_factory=list)
 
 
+class ConfidenceFinding(BaseModel):
+    """A corroborated finding with its source support level (per-claim confidence)."""
+    statement: str = ""
+    support_level: str = "weak"  # strong | medium | weak
+    source_count: int = 0
+    source_ids: List[str] = Field(default_factory=list)
+
+
+class PlanCoverageItem(BaseModel):
+    """One plan sub-question and whether the final report addresses it."""
+    question: str = ""
+    covered: bool = False
+    match_ratio: float = 0.0
+
+
+class VerificationReport(BaseModel):
+    """P3 verifier output: per-claim confidence, plan coverage, and open gaps.
+
+    Recomputed cheaply (no LLM) from the finalized report, the task plan and the
+    source pool — mirrors how conflicts are derived on demand.
+    """
+    research_id: str
+    findings: List[ConfidenceFinding] = Field(default_factory=list)
+    plan_coverage: List[PlanCoverageItem] = Field(default_factory=list)
+    uncovered_questions: List[str] = Field(default_factory=list)
+    coverage_ratio: float = 0.0
+    claim_verification: ClaimVerificationSummary = Field(default_factory=ClaimVerificationSummary)
+
+
 class ReplanRecommendation(BaseModel):
     reason: str
     suggested_queries: List[str] = Field(default_factory=list)

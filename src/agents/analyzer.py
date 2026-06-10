@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.report_critic import ReportCriticAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.language_utils import LANGUAGE_HINTS
 from src.agents.source_critic import SourceCriticAgent
@@ -224,11 +225,13 @@ class AnalyzerAgent(BaseAgent):
         source_critic: SourceCriticAgent | None = None,
         evidence_mapper: EvidenceMapperAgent | None = None,
         claim_verifier: ClaimVerifierAgent | None = None,
+        report_critic: "ReportCriticAgent | None" = None,
     ):
         super().__init__(llm)
         self.source_critic = source_critic or SourceCriticAgent()
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
+        self.report_critic = report_critic or ReportCriticAgent()
 
     def _normalize_text(self, value: str | None) -> str:
         return rust_accel.normalize_text(value)
@@ -1377,6 +1380,18 @@ class AnalyzerAgent(BaseAgent):
             remaining_uncited_lines,
             remaining_unsupported_lines,
             insufficient_evidence_lines,
+        )
+        # P3 verifier: surface per-claim confidence + plan-vs-report coverage gaps
+        # as inline sections. Deterministic — no extra LLM call.
+        verification_report = self.report_critic.build(
+            "",
+            tasks,
+            evidence_groups,
+            verified_report,
+            claim_summary=verification_summary,
+        )
+        verified_report = self.report_critic.inject(
+            verified_report, verification_report, prompt_language
         )
         final_notes = list(notes)
         final_notes.extend(

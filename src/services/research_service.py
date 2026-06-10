@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.report_critic import ReportCriticAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
@@ -42,6 +43,7 @@ from src.api.schemas import (
     ResearchPlanItem,
     ResearchPlanUpdate,
     ResearchSummary,
+    VerificationReport,
     ResearchStatusSummary,
     ResearchStatus,
     ResearchFinalizeJob,
@@ -104,6 +106,7 @@ class ResearchService:
         source_critic: SourceCriticAgent | None = None,
         evidence_mapper: EvidenceMapperAgent | None = None,
         claim_verifier: ClaimVerifierAgent | None = None,
+        report_critic: ReportCriticAgent | None = None,
         replan_agent: ReplanAgent | None = None,
         chat_agent=None,
         clarifier=None,
@@ -116,6 +119,7 @@ class ResearchService:
         self.source_critic = source_critic or SourceCriticAgent()
         self.evidence_mapper = evidence_mapper or EvidenceMapperAgent()
         self.claim_verifier = claim_verifier or ClaimVerifierAgent()
+        self.report_critic = report_critic or ReportCriticAgent()
         self.replan_agent = replan_agent or ReplanAgent()
         self.chat_agent = chat_agent
         self.clarifier = clarifier
@@ -803,6 +807,40 @@ class ResearchService:
             else:
                 raw = []
         return [ResearchConflict.model_validate(item) for item in (raw or [])]
+
+    def get_research_verification(self, research_id: str) -> VerificationReport:
+        """P3 verifier view (no LLM): per-claim confidence + plan-vs-report coverage.
+
+        Recomputed on demand from the finalized report, the task plan and the
+        source pool — same cheap, deterministic pattern as ``get_research_conflicts``.
+        """
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        pool = self._build_research_source_pool(tasks)
+        evidence_pool = [
+            {"source_id": f"S{index}", "content": item.get("content", "")}
+            for index, item in enumerate(pool, start=1)
+            if item.get("content")
+        ]
+        evidence_groups, _ = self.evidence_mapper.build_evidence_groups(
+            evidence_pool,
+            stopwords=AnalyzerAgent.STOPWORDS,
+            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
+            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
+            max_groups=6,
+        )
+        report = research.final_report or ""
+        language = self._detect_report_language(research.prompt, research.final_report)
+        claim_summary = self.claim_verifier.verify_and_downgrade(report, language, [], [])[1]
+        return self.report_critic.build(
+            research_id,
+            tasks,
+            evidence_groups,
+            report,
+            claim_summary=claim_summary,
+        )
 
     def _export_filename(self, title: str, ext: str) -> str:
         base = "".join(c if (c.isalnum() or c in "-_") else "-" for c in (title or "").strip())
