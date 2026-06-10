@@ -30,6 +30,19 @@ class InMemoryTaskStore:
         self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
+        self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
+
+    def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
+        entry = self.search_cache.get(cache_key)
+        if entry is None:
+            return None
+        created_at, payload = entry
+        if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
+            return None
+        return [dict(item) for item in payload]
+
+    def put_cached_search(self, cache_key: str, payload: list[dict]) -> None:
+        self.search_cache[cache_key] = (datetime.now(timezone.utc), [dict(item) for item in payload])
 
     def add_research(
         self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None

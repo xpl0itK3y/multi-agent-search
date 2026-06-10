@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     tavily_search_depth: str = "advanced"  # "basic" | "advanced"
     tavily_timeout_seconds: float = 20.0
     tavily_include_raw_content: bool = True
+    # Shared TTL cache for search results (P2 / 3.2) — a repeated query within the
+    # TTL reuses stored results instead of re-hitting the (paid) search API.
+    search_cache_enabled: bool = True
+    search_cache_ttl_seconds: int = 86400
     analyzer_max_sources: int = 24
     analyzer_max_sources_per_domain: int = 3
     analyzer_max_sources_per_task: int = 6

@@ -172,3 +172,22 @@ class WorkerHeartbeatORM(Base):
         nullable=False,
         default=utcnow,
     )
+
+
+class SearchCacheORM(Base):
+    """Cached web-search results keyed by backend+query, with a TTL on read.
+
+    Shared across workers so a repeated query doesn't re-hit the (paid) search API
+    or re-fetch pages. Entries are looked up by age; stale rows are ignored.
+    """
+
+    __tablename__ = "search_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        index=True,
+    )

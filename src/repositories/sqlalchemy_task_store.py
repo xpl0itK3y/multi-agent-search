@@ -26,6 +26,7 @@ from src.api.schemas import (
 from src.db.models import (
     ResearchFinalizeJobORM,
     ResearchORM,
+    SearchCacheORM,
     SearchTaskJobORM,
     SearchTaskORM,
     UserORM,
@@ -97,6 +98,26 @@ class SQLAlchemyTaskStore:
             if user is None:
                 return None
             return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+
+    def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
+        with self.session_scope() as session:
+            row = session.get(SearchCacheORM, cache_key)
+            if row is None:
+                return None
+            age = (datetime.now(timezone.utc) - row.created_at).total_seconds()
+            if age > max_age_seconds:
+                return None
+            return [dict(item) for item in (row.payload or [])]
+
+    def put_cached_search(self, cache_key: str, payload: list[dict]) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_scope() as session:
+            row = session.get(SearchCacheORM, cache_key)
+            if row is None:
+                session.add(SearchCacheORM(cache_key=cache_key, payload=payload, created_at=now))
+            else:
+                row.payload = payload
+                row.created_at = now
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         with self.session_scope() as session:

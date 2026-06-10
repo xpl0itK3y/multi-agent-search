@@ -1,8 +1,10 @@
+import hashlib
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
+from src.config import settings
 from src.providers.search import SearchProvider, ContentExtractor
 from src.api.schemas import SearchTaskMetrics, TaskStatus, TaskUpdate
 from src.core import rust_accel
@@ -273,6 +275,28 @@ class SearchAgent:
         )
         return strong_preview_count >= self.max_sources
 
+    def _search_cache_key(self, query: str) -> str:
+        backend = getattr(getattr(self.search_provider, "primary", None), "name", "?")
+        raw = f"{backend}:{self.search_provider.max_results}:{query.strip().lower()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _search_with_cache(self, query: str) -> list[dict]:
+        """Search via the provider, backed by the shared TTL cache when available."""
+        if not settings.search_cache_enabled or not hasattr(self.task_store, "get_cached_search"):
+            return self.search_provider.search(query)
+        key = self._search_cache_key(query)
+        cached = self.task_store.get_cached_search(key, settings.search_cache_ttl_seconds)
+        if cached is not None:
+            logger.info("search_cache_hit query_prefix=%r results=%d", query[:50], len(cached))
+            return cached
+        results = self.search_provider.search(query)
+        if results:
+            try:
+                self.task_store.put_cached_search(key, results)
+            except Exception as exc:  # cache writes must never break a search
+                logger.warning("search_cache_put_failed error=%s", exc)
+        return results
+
     def run_task(self, task_id: str):
         """
         Execute a search task: search for queries, extract content, and update the configured task store.
@@ -297,7 +321,7 @@ class SearchAgent:
         try:
             for query in task.queries:
                 self.task_store.update_task(task_id, TaskUpdate(log=f"Searching for: {query}"))
-                search_results = self.search_provider.search(query)
+                search_results = self._search_with_cache(query)
 
                 for res in search_results:
                     url = res.get("url")
