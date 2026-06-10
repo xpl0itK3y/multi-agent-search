@@ -177,7 +177,7 @@ class DecomposeResponse(BaseModel):
     depth: SearchDepth
 
 class ResearchRequest(BaseModel):
-    prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=16000)
+    prompt: str = Field(..., description="The goal or topic of the research", min_length=5, max_length=100000)
     depth: SearchDepth = Field(default=SearchDepth.EASY)
     webhook_url: Optional[str] = Field(
         default=None,
