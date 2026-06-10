@@ -2585,3 +2585,26 @@ def test_chat_escalates_search_for_uncovered_question(mocker):
     escalate.reset_mock()
     service.generate_research_answer(research.id, "Explain python packaging wheel metadata distribution")
     escalate.assert_not_called()
+
+
+def test_start_research_groups_into_conversation_threads():
+    from src.services.research_service import ResearchService
+    from src.api.schemas import ResearchRequest, SearchDepth
+
+    service = ResearchService(task_store=InMemoryTaskStore())
+    r1, id1 = service.start_research(ResearchRequest(prompt="quantum computing state", depth=SearchDepth.MEDIUM))
+    assert r1.thread_id  # a fresh research opens a new thread
+
+    # A second research attached to the same thread.
+    r2, id2 = service.start_research(
+        ResearchRequest(prompt="redo with more depth", depth=SearchDepth.HARD, thread_id=r1.thread_id)
+    )
+    assert r2.thread_id == r1.thread_id
+
+    # An unrelated research starts its own thread.
+    r3, _ = service.start_research(ResearchRequest(prompt="totally different topic", depth=SearchDepth.EASY))
+    assert r3.thread_id != r1.thread_id
+
+    thread = service.list_thread(r1.thread_id)
+    assert [t.id for t in thread] == [id1, id2]  # chronological within the thread
+    assert all(item.thread_id for item in service.list_researches(limit=10))

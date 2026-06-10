@@ -191,6 +191,10 @@ class ResearchRequest(BaseModel):
         default=False,
         description="If true, generate an editable research plan and wait for approval before searching",
     )
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Optional conversation thread to attach this research to; a new one is created when omitted",
+    )
 
 class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=200)
@@ -344,6 +348,7 @@ class ResearchHistoryItem(BaseModel):
     id: str
     prompt: str
     title: Optional[str] = None
+    thread_id: Optional[str] = None
     depth: SearchDepth
     status: ResearchStatus
     created_at: datetime
@@ -359,6 +364,7 @@ class ResearchResponse(BaseModel):
     research_id: str
     status: str
     message: str
+    thread_id: Optional[str] = None
 
 
 class ResearchFinalizeJob(BaseModel):

@@ -263,6 +263,10 @@ def register_routes(app: FastAPI) -> None:
     async def list_researches(request: Request, limit: int = 20, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).list_researches(limit=limit, user_id=owner)
 
+    @app.get("/v1/threads/{thread_id}", response_model=List[ResearchHistoryItem])
+    async def list_thread(thread_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+        return get_research_service(request).list_thread(thread_id, user_id=owner)
+
     @app.post("/v1/research", response_model=ResearchResponse)
     async def start_research(
         request: Request,

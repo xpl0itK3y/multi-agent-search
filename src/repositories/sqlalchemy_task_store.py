@@ -145,6 +145,34 @@ class SQLAlchemyTaskStore:
                     id=r.id,
                     prompt=r.prompt,
                     title=(r.graph_state or {}).get("title"),
+                    thread_id=(r.graph_state or {}).get("thread_id"),
+                    depth=r.depth,
+                    status=r.status,
+                    created_at=r.created_at,
+                    updated_at=r.updated_at,
+                    has_final_report=bool(r.final_report),
+                )
+                for r in rows
+            ]
+
+    def list_thread_researches(
+        self, thread_id: str, user_id: str | None = None
+    ) -> list[ResearchHistoryItem]:
+        with self.session_scope() as session:
+            stmt = (
+                select(ResearchORM)
+                .where(ResearchORM.graph_state["thread_id"].astext == thread_id)
+                .order_by(ResearchORM.created_at.asc())
+            )
+            if user_id is not None:
+                stmt = stmt.where(ResearchORM.user_id == user_id)
+            rows = session.execute(stmt).scalars().all()
+            return [
+                ResearchHistoryItem(
+                    id=r.id,
+                    prompt=r.prompt,
+                    title=(r.graph_state or {}).get("title"),
+                    thread_id=(r.graph_state or {}).get("thread_id"),
                     depth=r.depth,
                     status=r.status,
                     created_at=r.created_at,

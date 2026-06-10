@@ -96,6 +96,7 @@ class InMemoryTaskStore:
                 id=r.id,
                 prompt=r.prompt,
                 title=(r.graph_state or {}).get("title"),
+                thread_id=(r.graph_state or {}).get("thread_id"),
                 depth=r.depth,
                 status=r.status,
                 created_at=r.created_at,
@@ -103,6 +104,31 @@ class InMemoryTaskStore:
                 has_final_report=bool(r.final_report),
             )
             for r in sorted_records[:max(1, min(limit, 100))]
+        ]
+
+    def list_thread_researches(
+        self, thread_id: str, user_id: str | None = None
+    ) -> list[ResearchHistoryItem]:
+        records = [
+            r for r in self.researches.values()
+            if (r.graph_state or {}).get("thread_id") == thread_id
+        ]
+        if user_id is not None:
+            records = [r for r in records if r.user_id == user_id]
+        records.sort(key=lambda r: r.created_at)  # chronological within the thread
+        return [
+            ResearchHistoryItem(
+                id=r.id,
+                prompt=r.prompt,
+                title=(r.graph_state or {}).get("title"),
+                thread_id=(r.graph_state or {}).get("thread_id"),
+                depth=r.depth,
+                status=r.status,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+                has_final_report=bool(r.final_report),
+            )
+            for r in records
         ]
 
     def update_research_status(

@@ -198,11 +198,14 @@ class ResearchService:
         logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
         # update_research_graph_state replaces the entire dict, so merge everything in one call.
+        # Group researches into a conversation thread; a new id starts a new thread.
+        thread_id = (request.thread_id or "").strip() or str(uuid.uuid4())
         graph_state: dict = {
             "decompose_pending": True,
             "decompose_payload": request.model_dump(mode="json"),
             # Persist the validated model choice (falls back to default if unknown/unsafe).
             "model": resolve_model_id(request.model, settings.deepseek_model),
+            "thread_id": thread_id,
         }
         if request.webhook_url:
             graph_state["webhook_url"] = str(request.webhook_url)
@@ -211,6 +214,7 @@ class ResearchService:
             research_id=research.id,
             status="success",
             message="Research created. Task decomposition in progress…",
+            thread_id=thread_id,
         ), research.id
 
     def decompose_and_enqueue(self, research_id: str, request: ResearchRequest) -> None:
@@ -341,6 +345,10 @@ class ResearchService:
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         return self.task_store.list_researches(limit=limit, user_id=user_id)
+
+    def list_thread(self, thread_id: str, user_id: str | None = None) -> list[ResearchHistoryItem]:
+        """All researches in a conversation thread, oldest first."""
+        return self.task_store.list_thread_researches(thread_id, user_id=user_id)
 
     def _ensure_research_access(self, research_id: str, user_id: str | None) -> ResearchRecord:
         """Load a research and 404 if it belongs to a different user (when scoping is on)."""
