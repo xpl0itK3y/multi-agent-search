@@ -234,7 +234,7 @@ def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     example_sources = [item for item in gathered if item["domain"] == "example.com"]
-    assert len(example_sources) <= 3
+    assert len(example_sources) <= 4  # MEDIUM max_sources_per_domain
 
 
 def test_analyzer_agent_filters_failed_and_duplicate_sources():
@@ -271,9 +271,10 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
 
 
 def test_analyzer_agent_limits_prepared_source_count():
-    llm = RecordingLLM(response="report")
-    agent = AnalyzerAgent(llm)
-
+    # Oversupply distinct, high-quality sources so the MEDIUM pool cap (60) binds.
+    # Assert against _prepare_aggregated_data directly — robust to the writer path,
+    # which now splits the pool into parallel sections at these source counts.
+    agent = AnalyzerAgent(RecordingLLM(response="report"))
     tasks = [
         SearchTask(
             id="task-1",
@@ -282,23 +283,22 @@ def test_analyzer_agent_limits_prepared_source_count():
             status=TaskStatus.COMPLETED,
             result=[
                 {
-                    "url": f"https://example.com/{index}",
+                    "url": f"https://d{index}.example/article",
+                    "domain": f"d{index}.example",
+                    "source_quality": "high",
                     "title": f"Title {index}",
-                    "content": f"Body {index} " * 100,
+                    "content": f"Distinct finding {index} about alpha beta gamma delta epsilon. " * 40,
                 }
-                for index in range(30)
+                for index in range(80)
             ],
         )
     ]
 
-    agent.run_analysis("original prompt", tasks)
+    aggregated, _ = agent._prepare_aggregated_data("original prompt", tasks, SearchDepth.MEDIUM)
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
-    parsed = json.loads(payload)
-    gathered = parsed["gathered_data"]
-    assert len(gathered) == 24
-    assert gathered[0]["source_id"] == "S1"
-    assert gathered[-1]["source_id"] == "S24"
+    assert len(aggregated) == 60  # capped at MEDIUM max_sources
+    assert aggregated[0]["source_id"] == "S1"
+    assert aggregated[-1]["source_id"] == "S60"
 
 
 def test_analyzer_agent_compacts_source_content_before_prompt_payload():
@@ -369,9 +369,9 @@ def test_analyzer_agent_applies_global_payload_budget():
 
 
 def test_analyzer_agent_expands_source_window_for_hard_depth():
-    llm = RecordingLLM(response="report")
-    agent = AnalyzerAgent(llm)
-
+    # HARD's deeper pool (120) draws a wider source window than MEDIUM (60) from the
+    # same oversupplied set. Checked via _prepare_aggregated_data (writer-path agnostic).
+    agent = AnalyzerAgent(RecordingLLM(response="report"))
     tasks = [
         SearchTask(
             id=f"task-{task_index}",
@@ -380,28 +380,23 @@ def test_analyzer_agent_expands_source_window_for_hard_depth():
             status=TaskStatus.COMPLETED,
             result=[
                 {
-                    "url": f"https://source{task_index}-{index}.example/article",
+                    "url": f"https://s{task_index}-{index}.example/article",
+                    "domain": f"s{task_index}-{index}.example",
+                    "source_quality": "high",
                     "title": f"Title {task_index}-{index}",
-                    "content": f"Body {task_index}-{index} " * 60,
+                    "content": f"Distinct finding {task_index}-{index} about alpha beta gamma delta. " * 40,
                 }
-                for index in range(10)
+                for index in range(24)
             ],
         )
         for task_index in range(6)
     ]
 
-    agent.run_analysis("original prompt", tasks, depth=SearchDepth.MEDIUM)
-    medium_payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
-    medium_parsed = json.loads(medium_payload)
-    medium_gathered = medium_parsed["gathered_data"]
+    medium_gathered, _ = agent._prepare_aggregated_data("original prompt", tasks, SearchDepth.MEDIUM)
+    hard_gathered, _ = agent._prepare_aggregated_data("original prompt", tasks, SearchDepth.HARD)
 
-    agent.run_analysis("original prompt", tasks, depth=SearchDepth.HARD)
-    hard_payload = llm.calls[1]["user_prompt"].split("\n\n", maxsplit=1)[1]
-    hard_parsed = json.loads(hard_payload)
-    hard_gathered = hard_parsed["gathered_data"]
-
-    assert len(hard_gathered) >= len(medium_gathered)
-    assert "very comprehensive deep-dive report" in llm.calls[1]["user_prompt"]
+    assert len(hard_gathered) > len(medium_gathered)
+    assert "very comprehensive deep-dive report" in agent._resolve_depth_profile(SearchDepth.HARD)["report_instruction"]
 
 
 def test_analyzer_agent_uses_local_repair_for_small_citation_issues():
@@ -1744,9 +1739,9 @@ def test_process_search_task_job_marks_job_completed(mocker):
 @pytest.mark.parametrize(
     ("depth", "expected_limit", "expected_results_per_query", "expected_candidate_urls"),
     [
-        (SearchDepth.EASY, 5, 8, 12),
-        (SearchDepth.MEDIUM, 12, 12, 24),
-        (SearchDepth.HARD, 20, 16, 36),
+        (SearchDepth.EASY, 12, 16, 24),
+        (SearchDepth.MEDIUM, 16, 18, 32),
+        (SearchDepth.HARD, 24, 24, 48),
     ],
 )
 def test_run_search_task_uses_depth_profile_source_limit(
@@ -1778,7 +1773,7 @@ def test_depth_profiles_keep_medium_as_default_balanced_mode():
 
     assert profile["label"] == "Balanced"
     assert profile["task_count"] == 4
-    assert profile["source_limit"] == 12
+    assert profile["source_limit"] == 16
 
 
 def test_process_finalize_job_marks_missing_job_as_none():

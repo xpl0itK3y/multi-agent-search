@@ -6,6 +6,7 @@ import pytest
 
 from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import SearchDepth, SourceCriticSummary
+from src.search_depth_profiles import SEARCH_DEPTH_PROFILES
 
 
 class RecordingLLM:
@@ -113,12 +114,29 @@ def test_hard_uses_parallel_writer_capped_at_six_sections(mocker):
     assert parallel.call_args.kwargs["max_sections"] == AnalyzerAgent._PARALLEL_SECTION_HARD_MAX_SECTIONS
 
 
-def test_deep_hard_pool_yields_six_same_size_sections():
-    # 72 deep-tier sources at chunk 12 → exactly 6 sections of 12 (each the size of a
-    # pre-deepening HARD section), bounded by the section cap.
+@pytest.mark.parametrize(
+    "depth,expected_pool",
+    [(SearchDepth.EASY, 30), (SearchDepth.MEDIUM, 60), (SearchDepth.HARD, 120)],
+)
+def test_source_ladder_is_consistent(depth, expected_pool):
+    """30 / 60 / 120 ladder, and the search supply + budget actually support it."""
+    profile = AnalyzerAgent.DEPTH_ANALYSIS_PROFILES[depth]
+    search = SEARCH_DEPTH_PROFILES[depth]
+    assert profile["max_sources"] == expected_pool
+    # Search must gather at least the analyzer pool (with margin for dedup).
+    assert search["task_count"] * search["source_limit"] >= expected_pool
+    # Per-task cap × task count must be able to fill the pool.
+    assert profile["max_sources_per_task"] * search["task_count"] >= expected_pool
+    # Budget keeps a sane per-source content density (the budget is split across sources).
+    assert profile["payload_char_budget"] / expected_pool >= 900
+
+
+def test_deep_hard_pool_is_bounded_to_six_sections():
+    # 120 deep-tier sources are bounded to six section calls (chunk grows to ~20),
+    # so cost stays at ~6 sections + synthesis no matter how deep the pool.
     llm = RecordingLLM()
     AnalyzerAgent(llm)._run_parallel_section_analysis(
-        _sources(72), "q", "en", SearchDepth.HARD,
+        _sources(120), "q", "en", SearchDepth.HARD,
         chunk_size=AnalyzerAgent._PARALLEL_SECTION_CHUNK,
         max_sections=AnalyzerAgent._PARALLEL_SECTION_HARD_MAX_SECTIONS,
     )

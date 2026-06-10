@@ -114,24 +114,24 @@ class AnalyzerAgent(BaseAgent):
     }
     DEPTH_ANALYSIS_PROFILES = {
         SearchDepth.EASY: {
-            "max_sources": 12,
-            "max_sources_per_domain": 2,
-            "max_sources_per_task": 4,
-            "payload_char_budget": 12000,
-            "conflict_source_limit": 8,
-            "evidence_source_limit": 8,
+            "max_sources": 30,
+            "max_sources_per_domain": 3,
+            "max_sources_per_task": 12,
+            "payload_char_budget": 30000,
+            "conflict_source_limit": 12,
+            "evidence_source_limit": 12,
             "report_instruction": (
                 "Write a concise but complete report with a limited number of substantial sections. "
                 "Prioritize the clearest findings and avoid unnecessary expansion."
             ),
         },
         SearchDepth.MEDIUM: {
-            "max_sources": 24,
-            "max_sources_per_domain": 3,
-            "max_sources_per_task": 6,
-            "payload_char_budget": 28000,
-            "conflict_source_limit": 12,
-            "evidence_source_limit": 12,
+            "max_sources": 60,
+            "max_sources_per_domain": 4,
+            "max_sources_per_task": 16,
+            "payload_char_budget": 70000,
+            "conflict_source_limit": 18,
+            "evidence_source_limit": 18,
             "report_instruction": (
                 "Write a substantially more comprehensive report than a brief summary. "
                 "Prefer multiple substantial sections or subsections, include more concrete examples, "
@@ -139,16 +139,17 @@ class AnalyzerAgent(BaseAgent):
             ),
         },
         SearchDepth.HARD: {
-            # Deep tier: ~2× the source pool of a standard run. The payload budget is
-            # scaled with it so each source keeps the same content density (the budget
-            # is a *total* split across sources — see _apply_payload_budget — so raising
-            # max_sources without raising the budget would just starve the extra sources).
-            "max_sources": 72,
-            "max_sources_per_domain": 5,
-            "max_sources_per_task": 12,
-            "payload_char_budget": 84000,
-            "conflict_source_limit": 24,
-            "evidence_source_limit": 24,
+            # Deep tier — top of the 30/60/120 source ladder (EASY/MEDIUM/HARD). The
+            # payload budget scales with the pool so each source keeps the same content
+            # density (the budget is a *total* split across sources — see
+            # _apply_payload_budget — so raising max_sources without raising the budget
+            # would just starve the extra sources).
+            "max_sources": 120,
+            "max_sources_per_domain": 6,
+            "max_sources_per_task": 24,
+            "payload_char_budget": 140000,
+            "conflict_source_limit": 30,
+            "evidence_source_limit": 30,
             "report_instruction": (
                 "Write a very comprehensive deep-dive report. Expand the analysis substantially, "
                 "cover major subtopics in detail, use more year-by-year or category-by-category breakdowns when relevant, "
@@ -226,11 +227,11 @@ class AnalyzerAgent(BaseAgent):
     # (72 sources / chunk 12 = 6); a guard if max_sources is raised further later.
     _PARALLEL_SECTION_HARD_MAX_SECTIONS = 6
     # MEDIUM also uses the multi-stage writer (outline → sections → stitch) once it
-    # has enough evidence, but with tighter bounds than HARD to cap cost/latency:
-    # smaller chunks and at most two sections (→ 2 section calls + 1 synthesis).
+    # has enough evidence, but with tighter bounds than HARD to cap cost/latency.
+    # At 60 sources the 3-section cap yields ~20-source sections (3 calls + synthesis).
     _PARALLEL_SECTION_MIN_SOURCES_MEDIUM = 12
     _PARALLEL_SECTION_CHUNK_MEDIUM = 8
-    _PARALLEL_SECTION_MEDIUM_MAX_SECTIONS = 2
+    _PARALLEL_SECTION_MEDIUM_MAX_SECTIONS = 3
 
     def __init__(
         self,
