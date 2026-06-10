@@ -289,6 +289,9 @@ class SearchAgent:
 
         all_results = []
         raw_candidates: list[dict] = []
+        # url -> full content when the search backend already supplied it (Tavily
+        # raw_content), so the extraction step can skip fetching that URL.
+        prefetched_content: dict[str, str] = {}
         topics = self._detect_topics(task)
 
         try:
@@ -300,6 +303,9 @@ class SearchAgent:
                     url = res.get("url")
                     if not url:
                         continue
+                    content = res.get("content")
+                    if content and url not in prefetched_content:
+                        prefetched_content[url] = content
                     raw_candidates.append(
                         {
                             "url": url,
@@ -353,6 +359,25 @@ class SearchAgent:
                             break
                         candidate = remaining_candidates.pop(0)
                         url = candidate["url"]
+                        prefetched = prefetched_content.get(url)
+                        if prefetched:
+                            # The search backend already returned this page's content
+                            # (Tavily raw_content) — use it directly, no fetch needed.
+                            enriched_result = enrich_search_result_dict(
+                                {
+                                    "url": url,
+                                    "title": candidate.get("title"),
+                                    "content": prefetched[:10000],
+                                    "snippet": candidate.get("snippet"),
+                                }
+                            )
+                            all_results.append(enriched_result)
+                            successful_results.append(enriched_result)
+                            self.task_store.update_task(
+                                task_id,
+                                TaskUpdate(log=f"Used search-provided content for: {url}"),
+                            )
+                            continue
                         skip_reason = self.extractor.should_skip_url(url)
                         if skip_reason:
                             self.task_store.update_task(

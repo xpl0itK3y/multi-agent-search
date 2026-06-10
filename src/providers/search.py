@@ -33,11 +33,26 @@ class SuppressStderrFD:
         os.close(self.old_stderr)
         os.close(self.devnull)
 
-class SearchProvider:
-    def __init__(self, max_results: int = 5):
-        self.max_results = max_results
+class SearchBackend:
+    """A pluggable web-search source.
 
-    def search(self, query: str) -> List[Dict[str, str]]:
+    Returns result dicts with keys: url, title, snippet, and optionally `content`
+    (full page text when the backend can supply it directly — e.g. Tavily's
+    raw_content — letting the agent skip the separate fetch/extract step).
+    """
+
+    name = "base"
+
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
+        raise NotImplementedError
+
+
+class DuckDuckGoBackend(SearchBackend):
+    """Free DuckDuckGo backend — no content, results feed the fetch/extract step."""
+
+    name = "duckduckgo"
+
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
         """Run all DuckDuckGo backends concurrently; return the first successful result.
 
         Worst-case latency drops from ~60 s (three sequential 20 s timeouts) to ~20 s
@@ -51,7 +66,7 @@ class SearchProvider:
 
         def _try_backend(backend: str) -> List[Dict[str, str]]:
             with DDGS(timeout=20) as ddgs:
-                ddgs_gen = ddgs.text(query, max_results=self.max_results, backend=backend)
+                ddgs_gen = ddgs.text(query, max_results=max_results, backend=backend)
                 if ddgs_gen:
                     return [
                         {
@@ -81,6 +96,109 @@ class SearchProvider:
                     logger.warning("ddg_backend_failed backend=%s error=%s", backend, exc)
 
         logger.error("ddg_all_backends_failed query=%r", query[:80])
+        return []
+
+
+class TavilyBackend(SearchBackend):
+    """Tavily search API — relevant results plus raw page content in one call."""
+
+    name = "tavily"
+    ENDPOINT = "https://api.tavily.com/search"
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        search_depth: str = "advanced",
+        timeout: float = 20.0,
+        include_raw_content: bool = True,
+    ):
+        self.api_key = api_key
+        self.search_depth = search_depth
+        self.timeout = timeout
+        self.include_raw_content = include_raw_content
+
+    def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
+        import httpx
+
+        payload = {
+            "api_key": self.api_key,
+            "query": query,
+            "max_results": max_results,
+            "search_depth": self.search_depth,
+            "include_raw_content": self.include_raw_content,
+        }
+        response = httpx.post(self.ENDPOINT, json=payload, timeout=self.timeout)
+        response.raise_for_status()
+        data = response.json()
+
+        results: List[Dict[str, str]] = []
+        for item in data.get("results", []):
+            url = item.get("url") or ""
+            if not url:
+                continue
+            raw = item.get("raw_content") if self.include_raw_content else None
+            results.append(
+                {
+                    "title": item.get("title", ""),
+                    "url": url,
+                    "snippet": item.get("content", ""),
+                    "content": raw or None,  # full page text → lets the agent skip fetching
+                }
+            )
+        logger.info("tavily_search_success results=%d query_prefix=%r", len(results), query[:50])
+        return results
+
+
+def build_search_backends() -> tuple[SearchBackend, Optional[SearchBackend]]:
+    """Resolve (primary, fallback) backends from settings.
+
+    "auto" uses Tavily when ``TAVILY_API_KEY`` is set (with DuckDuckGo as fallback),
+    otherwise DuckDuckGo only. "tavily"/"duckduckgo" force a single backend.
+    """
+    choice = (settings.search_backend or "auto").lower()
+    ddg = DuckDuckGoBackend()
+    has_key = bool(settings.tavily_api_key)
+
+    def _tavily() -> "TavilyBackend":
+        return TavilyBackend(
+            settings.tavily_api_key,
+            search_depth=settings.tavily_search_depth,
+            timeout=settings.tavily_timeout_seconds,
+            include_raw_content=settings.tavily_include_raw_content,
+        )
+
+    if choice == "tavily":
+        if not has_key:
+            logger.warning("search_backend=tavily but no TAVILY_API_KEY set; using DuckDuckGo")
+            return ddg, None
+        return _tavily(), None
+    if choice == "duckduckgo" or not has_key:
+        return ddg, None
+    # auto (or anything else) with a key → Tavily primary, DuckDuckGo fallback
+    return _tavily(), ddg
+
+
+class SearchProvider:
+    def __init__(self, max_results: int = 5):
+        self.max_results = max_results
+        self.primary, self.fallback = build_search_backends()
+
+    def search(self, query: str) -> List[Dict[str, str]]:
+        """Search via the primary backend, falling back to DuckDuckGo on error/empty."""
+        try:
+            results = self.primary.search(query, self.max_results)
+            if results:
+                return results
+            logger.warning("search_primary_empty backend=%s query=%r", self.primary.name, query[:60])
+        except Exception as exc:
+            logger.warning("search_primary_failed backend=%s error=%s", self.primary.name, exc)
+
+        if self.fallback is not None:
+            try:
+                return self.fallback.search(query, self.max_results)
+            except Exception as exc:
+                logger.error("search_fallback_failed backend=%s error=%s", self.fallback.name, exc)
         return []
 
 

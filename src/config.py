@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     search_extraction_max_redirects: int = 1
     search_domain_fail_threshold: int = 2
     search_domain_cooldown_seconds: int = 600
+    # Search backend (P2): Tavily as the primary backend with DuckDuckGo as fallback.
+    # `search_backend`: "auto" (Tavily when a key is set, else DDG) | "tavily" | "duckduckgo".
+    # Tavily returns relevant results plus raw page content in one call, which removes the
+    # fragile per-URL fetch/extract step and the DuckDuckGo rate-limit ceiling.
+    tavily_api_key: Optional[str] = None
+    search_backend: str = "auto"
+    tavily_search_depth: str = "advanced"  # "basic" | "advanced"
+    tavily_timeout_seconds: float = 20.0
+    tavily_include_raw_content: bool = True
     analyzer_max_sources: int = 24
     analyzer_max_sources_per_domain: int = 3
     analyzer_max_sources_per_task: int = 6
