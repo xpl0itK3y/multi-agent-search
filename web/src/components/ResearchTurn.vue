@@ -82,6 +82,20 @@ onMounted(async () => {
     usage.value = s.llm_token_usage ?? null;
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
+    if (DONE.has(s.status)) {
+      done.value = true;
+      emit("done", s.status);
+      // Already-finished research: load its report so the panel renders immediately.
+      if (s.status === "completed") {
+        try {
+          const r = await api.getReport(props.id);
+          report.value = r.final_report ?? "";
+          isFinal.value = true;
+        } catch {
+          /* SSE may still deliver it */
+        }
+      }
+    }
   } catch {
     /* SSE still drives status/report */
   }

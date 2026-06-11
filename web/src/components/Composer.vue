@@ -17,9 +17,10 @@ function autosize() {
 watch(prompt, () => nextTick(autosize));
 onMounted(autosize);
 
-const props = defineProps<{ busy?: boolean }>();
+const props = defineProps<{ busy?: boolean; allowQuickQuestion?: boolean }>();
 const emit = defineEmits<{
   submit: [{ prompt: string; depth: Depth; model: string; planFirst: boolean }];
+  ask: [string];
 }>();
 
 const store = useResearchStore();
@@ -27,6 +28,11 @@ const store = useResearchStore();
 const depths: Depth[] = ["easy", "medium", "hard"];
 const depth = ref<Depth>("medium");
 const planFirst = ref(true);
+
+// Thread composer can switch between starting a deep research and a quick grounded
+// follow-up question on the latest report.
+const mode = ref<"research" | "quick">("research");
+const isQuick = computed(() => !!props.allowQuickQuestion && mode.value === "quick");
 
 const model = ref<string>("");
 watch(
@@ -37,10 +43,17 @@ watch(
   { immediate: true },
 );
 
-const canSubmit = computed(() => prompt.value.trim().length >= 5 && !props.busy);
+const canSubmit = computed(() => {
+  const len = prompt.value.trim().length;
+  return !props.busy && (isQuick.value ? len >= 1 : len >= 5);
+});
 
 function submit() {
   if (!canSubmit.value) return;
+  if (isQuick.value) {
+    emit("ask", prompt.value.trim());
+    return;
+  }
   emit("submit", {
     prompt: prompt.value.trim(),
     depth: depth.value,
@@ -63,7 +76,7 @@ function onKeydown(e: KeyboardEvent) {
       ref="textarea"
       v-model="prompt"
       rows="2"
-      :placeholder="$t('composer.placeholder')"
+      :placeholder="isQuick ? $t('composer.quickPlaceholder') : $t('composer.placeholder')"
       class="block w-full resize-y overflow-y-auto bg-transparent text-[15px] leading-relaxed text-ink placeholder:text-muted focus:outline-none max-h-[360px]"
       @input="autosize"
       @keydown="onKeydown"
@@ -71,10 +84,29 @@ function onKeydown(e: KeyboardEvent) {
 
     <div class="mt-2 flex items-center justify-between gap-2">
       <div class="flex items-center gap-2">
-        <button class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" :title="$t('composer.attach')">
+        <!-- Research / quick-question mode toggle -->
+        <div v-if="allowQuickQuestion" class="flex items-center rounded-full border border-bd p-0.5 text-xs">
+          <button
+            class="rounded-full px-2.5 py-1 transition"
+            :class="mode === 'research' ? 'bg-accent/15 text-accentSoft' : 'text-muted hover:text-ink'"
+            @click="mode = 'research'"
+          >
+            {{ $t("composer.modeResearch") }}
+          </button>
+          <button
+            class="rounded-full px-2.5 py-1 transition"
+            :class="mode === 'quick' ? 'bg-accent/15 text-accentSoft' : 'text-muted hover:text-ink'"
+            @click="mode = 'quick'"
+          >
+            {{ $t("composer.modeQuick") }}
+          </button>
+        </div>
+
+        <button v-if="!isQuick" class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" :title="$t('composer.attach')">
           +
         </button>
         <button
+          v-if="!isQuick"
           class="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition"
           :class="planFirst ? 'border-accent/40 bg-accent/15 text-accentSoft' : 'border-bd text-muted hover:text-ink'"
           :title="planFirst ? $t('composer.planOn') : $t('composer.planOff')"
@@ -87,6 +119,7 @@ function onKeydown(e: KeyboardEvent) {
       <div class="flex items-center gap-2">
         <!-- Model selector -->
         <select
+          v-if="!isQuick"
           v-model="model"
           class="cursor-pointer rounded-lg border border-bd bg-transparent px-2 py-1.5 text-sm text-muted hover:text-ink focus:outline-none"
           :title="$t('composer.model')"
@@ -97,6 +130,7 @@ function onKeydown(e: KeyboardEvent) {
 
         <!-- Depth selector -->
         <select
+          v-if="!isQuick"
           v-model="depth"
           class="cursor-pointer rounded-lg border border-bd bg-transparent px-2 py-1.5 text-sm text-muted hover:text-ink focus:outline-none"
           :title="$t('composer.depth')"

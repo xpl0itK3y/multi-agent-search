@@ -25,6 +25,9 @@ const ru = {
     model: "Модель",
     depth: "Глубина",
     runTitle: "Запустить (⌘/Ctrl + Enter)",
+    quickPlaceholder: "Быстрый вопрос по последнему отчёту…",
+    modeResearch: "Исследование",
+    modeQuick: "Быстрый вопрос",
   },
   depth: { easy: "Быстро", medium: "Сбалансировано", hard: "Глубоко" },
   chips: {
@@ -112,7 +115,7 @@ const ru = {
     stale_recovered: "Восстановление",
   },
   chat: { placeholder: "Спросить по исследованию…", searching: "Ищу источники…" },
-  thread: { empty: "В этом треде пока нет исследований." },
+  thread: { empty: "В этом треде пока нет исследований.", needResearch: "Сначала запустите исследование, затем задавайте вопросы по нему." },
   research: {
     costTitle: "Оценка расхода LLM",
     tokens: "токенов",
@@ -150,6 +153,9 @@ const en: typeof ru = {
     model: "Model",
     depth: "Depth",
     runTitle: "Run (⌘/Ctrl + Enter)",
+    quickPlaceholder: "Quick question about the latest report…",
+    modeResearch: "Research",
+    modeQuick: "Quick question",
   },
   depth: { easy: "Quick", medium: "Balanced", hard: "Deep Dive" },
   chips: {
@@ -237,7 +243,7 @@ const en: typeof ru = {
     stale_recovered: "Recovered",
   },
   chat: { placeholder: "Ask about this research…", searching: "Searching for sources…" },
-  thread: { empty: "No researches in this thread yet." },
+  thread: { empty: "No researches in this thread yet.", needResearch: "Run a research first, then ask questions about it." },
   research: {
     costTitle: "Estimated LLM usage",
     tokens: "tokens",
@@ -275,6 +281,9 @@ const es: typeof ru = {
     model: "Modelo",
     depth: "Profundidad",
     runTitle: "Ejecutar (⌘/Ctrl + Enter)",
+    quickPlaceholder: "Pregunta rápida sobre el último informe…",
+    modeResearch: "Investigación",
+    modeQuick: "Pregunta rápida",
   },
   depth: { easy: "Rápido", medium: "Equilibrado", hard: "Profundo" },
   chips: {
@@ -362,7 +371,7 @@ const es: typeof ru = {
     stale_recovered: "Recuperado",
   },
   chat: { placeholder: "Pregunta sobre esta investigación…", searching: "Buscando fuentes…" },
-  thread: { empty: "Aún no hay investigaciones en este hilo." },
+  thread: { empty: "Aún no hay investigaciones en este hilo.", needResearch: "Primero ejecuta una investigación y luego haz preguntas sobre ella." },
   research: {
     costTitle: "Uso estimado de LLM",
     tokens: "tokens",
