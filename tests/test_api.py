@@ -1181,10 +1181,15 @@ async def test_google_oauth_login_and_callback(client, mocker):
 
     assert (await client.get("/v1/auth/config")).json()["google_oauth"] is True
 
+    import urllib.parse as _up
+
+    def _state_from(resp):
+        return _up.parse_qs(_up.urlsplit(resp.headers["location"]).query)["state"][0]
+
     login = await client.get("/v1/auth/google/login", follow_redirects=False)
     assert login.status_code == 302
     assert "accounts.google.com" in login.headers["location"]
-    state = client.cookies.get("oauth_state")
+    state = _state_from(login)  # stateless signed token in the URL (no cookie)
     assert state
 
     mocker.patch(
@@ -1210,7 +1215,7 @@ async def test_google_oauth_login_and_callback(client, mocker):
 
     # A returning Google user goes straight in (no set-password redirect).
     login2 = await client.get("/v1/auth/google/login", follow_redirects=False)
-    state2 = client.cookies.get("oauth_state")
+    state2 = _state_from(login2)
     cb2 = await client.get(
         f"/v1/auth/google/callback?code=abc&state={state2}", follow_redirects=False
     )

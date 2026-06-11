@@ -1,4 +1,3 @@
-import hmac
 import json
 import secrets
 import uuid
@@ -15,7 +14,7 @@ from src.api.dependencies import (
     scope_user_id,
     verify_research_access,
 )
-from src.auth.security import create_token
+from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
@@ -151,27 +150,21 @@ def register_routes(app: FastAPI) -> None:
         """Which auth options the SPA should offer (e.g. show the Google button)."""
         return {"google_oauth": settings.oauth_enabled}
 
-    _OAUTH_STATE_COOKIE = "oauth_state"
-
     @app.get("/v1/auth/google/login")
     async def google_login():
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
-        state = secrets.token_urlsafe(24)
-        redirect = RedirectResponse(build_authorization_url(state), status_code=302)
-        # CSRF: bind the state to a short-lived cookie verified on callback.
-        redirect.set_cookie(
-            _OAUTH_STATE_COOKIE, state, httponly=True, secure=settings.auth_cookie_secure,
-            samesite="lax", max_age=600, path="/",
-        )
-        return redirect
+        # Stateless CSRF state: a short-lived signed token carried in the URL. Avoids a
+        # cookie round-trip, which is fragile across the cross-site Google redirect
+        # (SameSite / localhost-vs-127.0.0.1 issues).
+        state = create_token(secrets.token_urlsafe(8), ttl_seconds=600)
+        return RedirectResponse(build_authorization_url(state), status_code=302)
 
     @app.get("/v1/auth/google/callback")
     async def google_callback(request: Request, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
-        cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
-        if not code or not state or not cookie_state or not hmac.compare_digest(state, cookie_state):
+        if not code or decode_token(state) is None:
             raise HTTPException(status_code=400, detail="Invalid OAuth state")
         try:
             userinfo = fetch_userinfo(code)
@@ -186,7 +179,6 @@ def register_routes(app: FastAPI) -> None:
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
         _issue_session(redirect, user)  # sets the JWT session cookie
-        redirect.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
         return redirect
 
     @app.post("/v1/auth/set-password")
