@@ -17,6 +17,7 @@ from src.auth.security import create_token
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     AuthUser,
+    AuthSession,
     DecomposeRequest,
     DecomposeResponse,
     LoginRequest,
@@ -97,16 +98,19 @@ def create_app() -> FastAPI:
     return app
 
 
-def _set_auth_cookie(response: Response, user_id: str) -> None:
+def _issue_session(response: Response, user: AuthUser) -> str:
+    """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer)."""
+    token = create_token(user.id, email=user.email)
     response.set_cookie(
         key=settings.auth_cookie_name,
-        value=create_token(user_id),
+        value=token,
         httponly=True,
         secure=settings.auth_cookie_secure,
         samesite="lax",
         max_age=settings.auth_token_ttl_seconds,
         path="/",
     )
+    return token
 
 
 def register_routes(app: FastAPI) -> None:
@@ -117,17 +121,17 @@ def register_routes(app: FastAPI) -> None:
     async def health_check(request: Request):
         return get_research_service(request).get_health_status()
 
-    @app.post("/v1/auth/register", response_model=AuthUser)
+    @app.post("/v1/auth/register", response_model=AuthSession)
     async def register(payload: RegisterRequest, response: Response, request: Request):
         user = get_research_service(request).register_user(payload.email, payload.password)
-        _set_auth_cookie(response, user.id)
-        return user
+        token = _issue_session(response, user)
+        return AuthSession(access_token=token, user=user)
 
-    @app.post("/v1/auth/login", response_model=AuthUser)
+    @app.post("/v1/auth/login", response_model=AuthSession)
     async def login(payload: LoginRequest, response: Response, request: Request):
         user = get_research_service(request).authenticate_user(payload.email, payload.password)
-        _set_auth_cookie(response, user.id)
-        return user
+        token = _issue_session(response, user)
+        return AuthSession(access_token=token, user=user)
 
     @app.post("/v1/auth/logout")
     async def logout(response: Response):

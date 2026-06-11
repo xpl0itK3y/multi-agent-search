@@ -1135,10 +1135,13 @@ async def test_auth_register_login_me_flow(client, mocker):
     unauth = await client.get("/v1/auth/me")
     assert unauth.status_code == 401
 
-    # Register sets the session cookie.
+    # Register issues a JWT (Bearer + cookie) and returns the user.
     reg = await client.post("/v1/auth/register", json={"email": "x@y.com", "password": "secret12"})
     assert reg.status_code == 200
-    assert reg.json()["email"] == "x@y.com"
+    body = reg.json()
+    assert body["user"]["email"] == "x@y.com"
+    assert body["token_type"] == "bearer"
+    assert body["access_token"].count(".") == 2  # header.payload.signature
 
     # The httpx client persists the cookie, so /me now works.
     me = await client.get("/v1/auth/me")
@@ -1150,6 +1153,24 @@ async def test_auth_register_login_me_flow(client, mocker):
     assert out.status_code == 200
     after = await client.get("/v1/auth/me")
     assert after.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_bearer_jwt_authenticates_without_cookie(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    reg = await client.post("/v1/auth/register", json={"email": "bear@x.com", "password": "secret12"})
+    token = reg.json()["access_token"]
+
+    # Drop the cookie so only the Authorization: Bearer header can authenticate.
+    client.cookies.clear()
+    assert (await client.get("/v1/auth/me")).status_code == 401
+
+    me = await client.get("/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["email"] == "bear@x.com"
+
+    bad = await client.get("/v1/auth/me", headers={"Authorization": "Bearer not.a.jwt"})
+    assert bad.status_code == 401
 
 
 @pytest.mark.anyio

@@ -1,4 +1,5 @@
 import type {
+  AuthSession,
   AuthUser,
   ChatMessage,
   Clarification,
@@ -20,11 +21,26 @@ import type {
 // Set VITE_API_BASE (e.g. http://localhost:8000) for a non-proxied build.
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
+// JWT bearer token — persisted so the session survives reloads (the httpOnly
+// cookie is a parallel fallback, e.g. for SSE streams).
+const TOKEN_KEY = "access_token";
+let authToken: string | null = localStorage.getItem(TOKEN_KEY);
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     credentials: "include",
     ...init,
+    headers,
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => res.statusText);
@@ -37,13 +53,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   me: () => request<AuthUser>("/v1/auth/me"),
 
-  register: (email: string, password: string) =>
-    request<AuthUser>("/v1/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: async (email: string, password: string) => {
+    const res = await request<AuthSession>("/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    setAuthToken(res.access_token);
+    return res;
+  },
 
-  login: (email: string, password: string) =>
-    request<AuthUser>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  login: async (email: string, password: string) => {
+    const res = await request<AuthSession>("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    setAuthToken(res.access_token);
+    return res;
+  },
 
-  logout: () => request<{ status: string }>("/v1/auth/logout", { method: "POST" }),
+  logout: async () => {
+    try {
+      return await request<{ status: string }>("/v1/auth/logout", { method: "POST" });
+    } finally {
+      setAuthToken(null);
+    }
+  },
 
   listModels: () => request<ModelOption[]>("/v1/models"),
 

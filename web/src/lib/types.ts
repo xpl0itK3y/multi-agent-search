@@ -5,6 +5,12 @@ export interface AuthUser {
   email: string;
 }
 
+export interface AuthSession {
+  access_token: string;
+  token_type: string;
+  user: AuthUser;
+}
+
 export interface ModelOption {
   id: string;
   label: string;

@@ -211,6 +211,17 @@ class AuthUser(BaseModel):
     email: str
 
 
+class AuthSession(BaseModel):
+    """Login/register response: a Bearer JWT plus the authenticated user.
+
+    The token is also set as an httpOnly cookie; API clients can use ``access_token``
+    as ``Authorization: Bearer <token>``.
+    """
+    access_token: str
+    token_type: str = "bearer"
+    user: AuthUser
+
+
 class UserRecord(BaseModel):
     id: str
     email: str

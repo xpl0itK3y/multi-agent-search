@@ -13,11 +13,21 @@ def get_research_service(request: Request) -> ResearchService:
     return request.app.state.research_service
 
 
+def _extract_token(request: Request) -> str | None:
+    """JWT from the ``Authorization: Bearer`` header, falling back to the cookie."""
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth_header:
+        scheme, _, value = auth_header.partition(" ")
+        if scheme.lower() == "bearer" and value.strip():
+            return value.strip()
+    return request.cookies.get(settings.auth_cookie_name)
+
+
 def get_current_user(request: Request) -> AuthUser:
-    """Authenticated user from the session cookie. When auth is disabled, a local user."""
+    """Authenticated user from a Bearer JWT or session cookie. Local user when auth is off."""
     if settings.auth_disabled:
         return LOCAL_USER
-    token = request.cookies.get(settings.auth_cookie_name)
+    token = _extract_token(request)
     user_id = verify_token(token) if token else None
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")

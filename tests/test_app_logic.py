@@ -2508,13 +2508,23 @@ def test_auth_password_hash_and_verify():
 
 
 def test_auth_token_roundtrip_and_tamper():
-    from src.auth.security import create_token, verify_token
+    from src.auth.security import create_token, decode_token, verify_token
 
-    token = create_token("user-1")
+    token = create_token("user-1", email="u1@x.com")
     assert verify_token(token) == "user-1"
     assert verify_token(token + "x") is None
     assert verify_token("garbage") is None
     assert verify_token(create_token("user-2", ttl_seconds=-1)) is None  # expired
+
+    # It's a real JWT: header.payload.signature with HS256 + standard claims.
+    assert token.count(".") == 2
+    claims = decode_token(token)
+    assert claims["sub"] == "user-1"
+    assert claims["email"] == "u1@x.com"
+    assert claims["exp"] > claims["iat"]
+    # A token whose signature is replaced must not verify.
+    tampered = create_token("user-1").rsplit(".", 1)[0] + ".AAAA"
+    assert decode_token(tampered) is None
 
 
 def test_auth_register_and_authenticate():

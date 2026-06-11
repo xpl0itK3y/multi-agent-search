@@ -18,11 +18,11 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function login(email: string, password: string) {
-    user.value = await api.login(email, password);
+    user.value = (await api.login(email, password)).user;
   }
 
   async function register(email: string, password: string) {
-    user.value = await api.register(email, password);
+    user.value = (await api.register(email, password)).user;
   }
 
   async function logout() {
