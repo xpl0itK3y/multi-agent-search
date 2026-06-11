@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # TTL reuses stored results instead of re-hitting the (paid) search API.
     search_cache_enabled: bool = True
     search_cache_ttl_seconds: int = 86400
+    # Cap concurrently in-flight (processing/analyzing) researches per user to avoid
+    # overloading search/LLM. 0 disables the guard.
+    max_concurrent_researches: int = 1
     analyzer_max_sources: int = 24
     analyzer_max_sources_per_domain: int = 3
     analyzer_max_sources_per_task: int = 6

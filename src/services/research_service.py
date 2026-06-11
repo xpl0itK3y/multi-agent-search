@@ -190,10 +190,26 @@ class ResearchService:
 
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
+    # Researches actively consuming search/LLM resources (vs. terminal or waiting on user).
+    _BUSY_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
+
+    def _active_research_count(self, user_id: str | None) -> int:
+        return sum(
+            1
+            for item in self.task_store.list_researches(limit=100, user_id=user_id)
+            if item.status in self._BUSY_STATUSES
+        )
+
     def start_research(
         self, request: ResearchRequest, user_id: str | None = None
     ) -> tuple["ResearchResponse", str]:
         """Create research record immediately and return. Decompose runs in background."""
+        limit = settings.max_concurrent_researches
+        if limit > 0 and self._active_research_count(user_id) >= limit:
+            raise HTTPException(
+                status_code=409,
+                detail="A research is already in progress. Please wait for it to finish before starting another.",
+            )
         research = self.task_store.add_research(request, task_ids=[], user_id=user_id)
         logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).

@@ -28,6 +28,7 @@ const ru = {
     quickPlaceholder: "Быстрый вопрос по последнему отчёту…",
     modeResearch: "Исследование",
     modeQuick: "Быстрый вопрос",
+    researchBusyHint: "Дождитесь завершения текущего исследования, прежде чем запускать новое.",
   },
   depth: { easy: "Быстро", medium: "Сбалансировано", hard: "Глубоко" },
   chips: {
@@ -156,6 +157,7 @@ const en: typeof ru = {
     quickPlaceholder: "Quick question about the latest report…",
     modeResearch: "Research",
     modeQuick: "Quick question",
+    researchBusyHint: "Wait for the current research to finish before starting another.",
   },
   depth: { easy: "Quick", medium: "Balanced", hard: "Deep Dive" },
   chips: {
@@ -284,6 +286,7 @@ const es: typeof ru = {
     quickPlaceholder: "Pregunta rápida sobre el último informe…",
     modeResearch: "Investigación",
     modeQuick: "Pregunta rápida",
+    researchBusyHint: "Espera a que termine la investigación actual antes de iniciar otra.",
   },
   depth: { easy: "Rápido", medium: "Equilibrado", hard: "Profundo" },
   chips: {

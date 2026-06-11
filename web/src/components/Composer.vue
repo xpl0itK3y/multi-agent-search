@@ -17,7 +17,7 @@ function autosize() {
 watch(prompt, () => nextTick(autosize));
 onMounted(autosize);
 
-const props = defineProps<{ busy?: boolean; allowQuickQuestion?: boolean }>();
+const props = defineProps<{ busy?: boolean; allowQuickQuestion?: boolean; researchBusy?: boolean }>();
 const emit = defineEmits<{
   submit: [{ prompt: string; depth: Depth; model: string; planFirst: boolean }];
   ask: [string];
@@ -43,9 +43,13 @@ watch(
   { immediate: true },
 );
 
+// Block a new deep research while one is still running (system guard); quick
+// questions stay allowed since they're cheap.
+const researchBlocked = computed(() => !isQuick.value && !!props.researchBusy);
 const canSubmit = computed(() => {
   const len = prompt.value.trim().length;
-  return !props.busy && (isQuick.value ? len >= 1 : len >= 5);
+  if (props.busy || researchBlocked.value) return false;
+  return isQuick.value ? len >= 1 : len >= 5;
 });
 
 function submit() {
@@ -81,6 +85,8 @@ function onKeydown(e: KeyboardEvent) {
       @input="autosize"
       @keydown="onKeydown"
     />
+
+    <p v-if="researchBlocked" class="mt-1 text-xs text-muted">{{ $t("composer.researchBusyHint") }}</p>
 
     <div class="mt-2 flex items-center justify-between gap-2">
       <div class="flex items-center gap-2">

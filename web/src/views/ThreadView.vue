@@ -27,11 +27,17 @@ const busy = ref(false);
 const errorMsg = ref<string | null>(null);
 const scroller = ref<HTMLElement | null>(null);
 const completed = ref<Set<string>>(new Set());
+const finished = ref<Set<string>>(new Set());
 
 const threadTitle = computed(() => {
   const first = items.value.find((it) => it.kind === "research") as ResearchItem | undefined;
   return first?.prompt ?? "";
 });
+
+// A research is "running" until it reaches a terminal state — block new ones meanwhile.
+const anyResearchRunning = computed(() =>
+  items.value.some((it) => it.kind === "research" && !finished.value.has(it.id)),
+);
 
 // Quick questions are grounded on the most recent completed research in the thread.
 const latestCompletedResearchId = computed(() => {
@@ -57,6 +63,7 @@ async function loadThread() {
 }
 
 function onTurnDone(id: string, status: string) {
+  finished.value = new Set(finished.value).add(id);
   if (status === "completed") completed.value = new Set(completed.value).add(id);
 }
 
@@ -144,6 +151,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
         <Composer
           v-model:prompt="composerPrompt"
           :busy="busy"
+          :research-busy="anyResearchRunning"
           allow-quick-question
           @submit="onSubmit"
           @ask="onAsk"

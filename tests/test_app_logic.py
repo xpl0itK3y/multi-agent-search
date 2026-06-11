@@ -2594,12 +2594,14 @@ def test_start_research_groups_into_conversation_threads():
     service = ResearchService(task_store=InMemoryTaskStore())
     r1, id1 = service.start_research(ResearchRequest(prompt="quantum computing state", depth=SearchDepth.MEDIUM))
     assert r1.thread_id  # a fresh research opens a new thread
+    service.task_store.update_research_status(id1, ResearchStatus.COMPLETED, "report 1")  # finish before next
 
-    # A second research attached to the same thread.
+    # A second research attached to the same thread (started once the first finished).
     r2, id2 = service.start_research(
         ResearchRequest(prompt="redo with more depth", depth=SearchDepth.HARD, thread_id=r1.thread_id)
     )
     assert r2.thread_id == r1.thread_id
+    service.task_store.update_research_status(id2, ResearchStatus.COMPLETED, "report 2")
 
     # An unrelated research starts its own thread.
     r3, _ = service.start_research(ResearchRequest(prompt="totally different topic", depth=SearchDepth.EASY))
@@ -2608,3 +2610,19 @@ def test_start_research_groups_into_conversation_threads():
     thread = service.list_thread(r1.thread_id)
     assert [t.id for t in thread] == [id1, id2]  # chronological within the thread
     assert all(item.thread_id for item in service.list_researches(limit=10))
+
+
+def test_start_research_blocks_while_one_is_active():
+    from fastapi import HTTPException
+    service = ResearchService(task_store=InMemoryTaskStore())
+    _, id1 = service.start_research(ResearchRequest(prompt="first deep topic", depth=SearchDepth.MEDIUM))
+
+    # A second start while the first is still processing is rejected (system guard).
+    with pytest.raises(HTTPException) as exc:
+        service.start_research(ResearchRequest(prompt="second deep topic", depth=SearchDepth.EASY))
+    assert exc.value.status_code == 409
+
+    # Plan-review / clarifying (waiting on the user, no load) does not block.
+    service.task_store.update_research_status(id1, ResearchStatus.COMPLETED, "report")
+    r2, _ = service.start_research(ResearchRequest(prompt="third deep topic", depth=SearchDepth.EASY))
+    assert r2.research_id
