@@ -54,7 +54,7 @@ const ru = {
     delete: "Удалить",
     confirmDelete: "Удалить это исследование?",
   },
-  nav: { researches: "Исследования", collections: "Коллекции", templates: "Шаблоны", customize: "Настроить" },
+  nav: { researches: "Исследования" },
   status: {
     plan_review: "Ожидает подтверждения плана",
     clarifying: "Уточнения",
@@ -196,7 +196,7 @@ const en: typeof ru = {
     delete: "Delete",
     confirmDelete: "Delete this research?",
   },
-  nav: { researches: "Researches", collections: "Collections", templates: "Templates", customize: "Customize" },
+  nav: { researches: "Researches" },
   status: {
     plan_review: "Awaiting plan approval",
     clarifying: "Clarifying",
@@ -338,7 +338,7 @@ const es: typeof ru = {
     delete: "Eliminar",
     confirmDelete: "¿Eliminar esta investigación?",
   },
-  nav: { researches: "Investigaciones", collections: "Colecciones", templates: "Plantillas", customize: "Personalizar" },
+  nav: { researches: "Investigaciones" },
   status: {
     plan_review: "Esperando aprobación del plan",
     clarifying: "Aclaraciones",

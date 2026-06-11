@@ -86,9 +86,6 @@ async function onDelete(item: ResearchHistoryItem) {
 
 const nav = [
   { key: "researches", active: true },
-  { key: "collections", active: false },
-  { key: "templates", active: false },
-  { key: "customize", active: false },
 ];
 
 const LOCALE_LABEL: Record<string, string> = { ru: "RU", en: "EN", es: "ES" };
