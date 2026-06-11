@@ -9,6 +9,7 @@ from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
+from src.agents.red_team import RedTeamAgent
 from src.agents.replan import ReplanAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
@@ -51,6 +52,7 @@ def create_research_service() -> ResearchService:
     agent_analyzer = None
     chat_agent = None
     clarifier_agent = None
+    red_team_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -67,6 +69,7 @@ def create_research_service() -> ResearchService:
         replan_agent = ReplanAgent(llm=llm)            # Q-4: LLM-backed gap queries
         chat_agent = ChatAgent(llm)                    # grounded follow-up Q&A
         clarifier_agent = ClarifierAgent(llm)          # pre-plan clarifying questions
+        red_team_agent = RedTeamAgent(llm)             # adversarial counter-evidence pass
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -90,6 +93,7 @@ def create_research_service() -> ResearchService:
         replan_agent=replan_agent,
         chat_agent=chat_agent,
         clarifier=clarifier_agent,
+        red_team_agent=red_team_agent,
         broker=_create_broker(),
     )
 

@@ -152,6 +152,22 @@ class VerificationReport(BaseModel):
     claim_verification: ClaimVerificationSummary = Field(default_factory=ClaimVerificationSummary)
 
 
+class RedTeamFinding(BaseModel):
+    """One load-bearing claim that was stress-tested against counter-evidence."""
+    claim: str = ""
+    verdict: str = "holds"  # refuted | contested | qualified | holds
+    challenge: str = ""     # the counter-argument / what the report under-weights (or why it held)
+    source_urls: List[str] = Field(default_factory=list)
+
+
+class RedTeamReport(BaseModel):
+    """Adversarial pass: the report's key claims searched for refutation, then judged."""
+    research_id: str = ""
+    findings: List[RedTeamFinding] = Field(default_factory=list)
+    challenged: int = 0  # refuted + contested + qualified
+    held: int = 0        # claims that survived the attack
+
+
 class ReplanRecommendation(BaseModel):
     reason: str
     suggested_queries: List[str] = Field(default_factory=list)

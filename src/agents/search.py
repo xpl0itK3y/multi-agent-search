@@ -275,6 +275,14 @@ class SearchAgent:
         )
         return strong_preview_count >= self.max_sources
 
+    def search_query(self, query: str) -> list[dict]:
+        """Single-query search with no task lifecycle — used by the red-team counter-search."""
+        try:
+            return self._search_with_cache(query) or []
+        except Exception as exc:
+            logger.warning("search_query_failed query=%r error=%s", query, exc)
+            return []
+
     def _search_cache_key(self, query: str) -> str:
         backend = getattr(getattr(self.search_provider, "primary", None), "name", "?")
         raw = f"{backend}:{self.search_provider.max_results}:{query.strip().lower()}"

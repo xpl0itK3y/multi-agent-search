@@ -45,6 +45,7 @@ from src.api.schemas import (
     ChatMessage,
     Clarification,
     ClarifyAnswers,
+    RedTeamReport,
     ResearchConflict,
     VerificationReport,
     ResearchPlan,
@@ -420,6 +421,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/verification", response_model=VerificationReport, dependencies=research_guard)
     async def get_research_verification(research_id: str, request: Request):
         return get_research_service(request).get_research_verification(research_id)
+
+    @app.get("/v1/research/{research_id}/red-team", response_model=RedTeamReport, dependencies=research_guard)
+    async def get_research_red_team(research_id: str, request: Request):
+        return get_research_service(request).get_research_red_team(research_id)
 
     @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
     async def get_research_clarifications(research_id: str, request: Request):

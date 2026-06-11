@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     # Reasoning-capable model for planner/gap-analysis steps; must expose `reasoning_content`
     # so the "thinking" stream (frontend §4.1) can be shown. Falls back to deepseek_model if unset.
     deepseek_reasoner_model: Optional[str] = None
+    # Adversarial "red-team" pass: after the report, search for counter-evidence to its
+    # key claims and append a "weaknesses & counter-arguments" section (HARD only).
+    red_team_enabled: bool = True
+    red_team_model: str = "deepseek-chat"  # mechanical judging — use the fast/cheap model
+    red_team_max_claims: int = 5
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

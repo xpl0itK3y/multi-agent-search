@@ -41,6 +41,7 @@ from src.api.schemas import (
     Clarification,
     ResearchConflict,
     ResearchPlan,
+    RedTeamReport,
     ResearchPlanItem,
     ResearchPlanUpdate,
     ResearchSummary,
@@ -111,6 +112,7 @@ class ResearchService:
         replan_agent: ReplanAgent | None = None,
         chat_agent=None,
         clarifier=None,
+        red_team_agent=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -124,6 +126,7 @@ class ResearchService:
         self.replan_agent = replan_agent or ReplanAgent()
         self.chat_agent = chat_agent
         self.clarifier = clarifier
+        self.red_team_agent = red_team_agent
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
@@ -1183,6 +1186,94 @@ class ResearchService:
         if event is not None:
             self.task_store.append_research_graph_event(research_id, event)
 
+    # ── adversarial red-team pass ───────────────────────────────────────────────
+
+    _RED_TEAM_VERDICT_LABELS = {
+        "ru": {
+            "refuted": "Опровергнуто",
+            "contested": "Оспаривается",
+            "qualified": "С оговоркой",
+            "holds": "Устояло",
+        },
+        "en": {
+            "refuted": "Refuted",
+            "contested": "Contested",
+            "qualified": "Qualified",
+            "holds": "Holds",
+        },
+    }
+
+    def _maybe_red_team(self, report: str, research, tasks: list) -> str:
+        """HARD-only adversarial pass: stress-test the report's claims, append findings.
+
+        Searches for counter-evidence to the load-bearing claims, judges each, stores the
+        structured result in graph_state, and appends a 'weaknesses' section to the report.
+        Never raises — a red-team failure must not break finalization.
+        """
+        if not settings.red_team_enabled or not (report or "").strip():
+            return report
+        if getattr(research.depth, "value", research.depth) != SearchDepth.HARD.value:
+            return report  # deep pass only — too slow/expensive for EASY/MEDIUM
+        agent = self.red_team_agent
+        if agent is None:
+            return report
+        try:
+            language = self._detect_report_language(research.prompt, report)
+            search_agent = SearchAgent(
+                task_store=self.task_store,
+                max_sources=4,
+                search_results_per_query=5,
+                max_candidate_urls=8,
+                extraction_concurrency=settings.search_extraction_concurrency,
+                extraction_timeout_seconds=settings.search_extraction_timeout_seconds,
+            )
+            red_team = agent.challenge(
+                research.prompt,
+                report,
+                search_agent.search_query,
+                language=language,
+                model=settings.red_team_model,
+                max_claims=settings.red_team_max_claims,
+            )
+            if not red_team.findings:
+                return report
+            red_team.research_id = research.id
+            self._store_red_team(research.id, red_team)
+            return report.rstrip() + "\n\n" + self._render_red_team_section(red_team, language)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("red_team_pass_failed research_id=%s error=%s", research.id, exc)
+            return report
+
+    def _store_red_team(self, research_id: str, red_team: RedTeamReport) -> None:
+        research = self.task_store.get_research(research_id)
+        state = dict((research.graph_state if research else None) or {})
+        state["red_team"] = red_team.model_dump()
+        self.task_store.update_research_graph_state(research_id, state)
+
+    def get_research_red_team(self, research_id: str) -> RedTeamReport:
+        """Stored adversarial findings for the artifact panel (empty if the pass didn't run)."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("red_team")
+        if not data:
+            return RedTeamReport(research_id=research_id)
+        return RedTeamReport.model_validate(data)
+
+    def _render_red_team_section(self, red_team: RedTeamReport, language: str) -> str:
+        labels = self._RED_TEAM_VERDICT_LABELS.get(language, self._RED_TEAM_VERDICT_LABELS["en"])
+        heading = "## Слабые места и контраргументы" if language == "ru" else "## Weaknesses & counter-arguments"
+        intro = (
+            "Ключевые утверждения отчёта проверены на опровержение."
+            if language == "ru"
+            else "The report's key claims were stress-tested against counter-evidence."
+        )
+        lines = [heading, "", intro, ""]
+        for finding in red_team.findings:
+            verdict = labels.get(finding.verdict, finding.verdict)
+            lines.append(f"- **{verdict}** — {finding.claim}")
+            if finding.challenge:
+                lines.append(f"  {finding.challenge}")
+        return "\n".join(lines)
+
     def _inject_graph_execution_trail(self, report: str, research_id: str) -> str:
         research = self.task_store.get_research(research_id)
         if not research or not research.graph_trail:
@@ -1283,6 +1374,7 @@ class ResearchService:
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
+            report = self._maybe_red_team(report, research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,
