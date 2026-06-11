@@ -194,11 +194,19 @@ class ResearchService:
     _BUSY_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
 
     def _active_research_count(self, user_id: str | None) -> int:
-        return sum(
-            1
-            for item in self.task_store.list_researches(limit=100, user_id=user_id)
-            if item.status in self._BUSY_STATUSES
-        )
+        # Only count researches still making progress; a stalled one (dead worker /
+        # hung provider) must not lock the user out forever.
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.research_stale_active_seconds)
+        count = 0
+        for item in self.task_store.list_researches(limit=100, user_id=user_id):
+            if item.status not in self._BUSY_STATUSES:
+                continue
+            updated = item.updated_at
+            if updated is not None and updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            if updated is None or updated >= cutoff:
+                count += 1
+        return count
 
     def start_research(
         self, request: ResearchRequest, user_id: str | None = None

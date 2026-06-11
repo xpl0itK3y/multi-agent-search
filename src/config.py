@@ -58,8 +58,11 @@ class Settings(BaseSettings):
     search_cache_enabled: bool = True
     search_cache_ttl_seconds: int = 86400
     # Cap concurrently in-flight (processing/analyzing) researches per user to avoid
-    # overloading search/LLM. 0 disables the guard.
+    # overloading search/LLM. 0 disables the guard. A busy research only counts while
+    # it's making progress (updated within research_stale_active_seconds) — a stalled
+    # one (dead worker, hung provider) stops blocking instead of locking the user out.
     max_concurrent_researches: int = 1
+    research_stale_active_seconds: int = 300
     analyzer_max_sources: int = 24
     analyzer_max_sources_per_domain: int = 3
     analyzer_max_sources_per_task: int = 6

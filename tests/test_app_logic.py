@@ -2613,16 +2613,18 @@ def test_start_research_groups_into_conversation_threads():
 
 
 def test_start_research_blocks_while_one_is_active():
+    from datetime import datetime, timedelta, timezone
     from fastapi import HTTPException
     service = ResearchService(task_store=InMemoryTaskStore())
     _, id1 = service.start_research(ResearchRequest(prompt="first deep topic", depth=SearchDepth.MEDIUM))
 
-    # A second start while the first is still processing is rejected (system guard).
+    # A fresh in-flight research rejects a second start (system guard).
     with pytest.raises(HTTPException) as exc:
         service.start_research(ResearchRequest(prompt="second deep topic", depth=SearchDepth.EASY))
     assert exc.value.status_code == 409
 
-    # Plan-review / clarifying (waiting on the user, no load) does not block.
-    service.task_store.update_research_status(id1, ResearchStatus.COMPLETED, "report")
+    # A stalled research (no progress past the staleness window) stops blocking —
+    # a dead worker / hung provider must not lock the user out forever.
+    service.task_store.researches[id1].updated_at = datetime.now(timezone.utc) - timedelta(seconds=10_000)
     r2, _ = service.start_research(ResearchRequest(prompt="third deep topic", depth=SearchDepth.EASY))
     assert r2.research_id
