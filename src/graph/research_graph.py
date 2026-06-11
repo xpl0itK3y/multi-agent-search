@@ -6,7 +6,7 @@ import time
 from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import ReplanRecommendation, SearchTask
+from src.api.schemas import ReplanRecommendation, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
     record_graph_analyze,
@@ -131,6 +131,15 @@ class FinalizeGraphRunner:
         deadline = state.get("finalize_deadline")
         return deadline is None or time.time() < deadline
 
+    def _is_deep_loop(self, state: FinalizeGraphState) -> bool:
+        """Only HARD runs the extra deep-research branches (replan / tie-break / retry).
+
+        EASY/MEDIUM finalize in a single analyze pass — the deep loop adds several more
+        multi-minute LLM calls + extra searches, which is far too slow for light depths.
+        """
+        depth = state.get("depth")
+        return getattr(depth, "value", depth) == SearchDepth.HARD.value
+
     def _pool_size(self, tasks) -> int:
         """Count of unique (deduped-by-URL) sources across tasks — for no-progress detection."""
         return len(self.service._build_research_source_pool(tasks))
@@ -161,6 +170,7 @@ class FinalizeGraphRunner:
             ) if self._supports_graph_branching(analyzer) else []
             should_replan = (
                 bool(recommendations)
+                and self._is_deep_loop(state)
                 and state["replan_attempts"] < settings.langgraph_replan_max_loops
                 and self._budget_ok(state)
                 and not state.get("branch_stalled")
@@ -352,6 +362,7 @@ class FinalizeGraphRunner:
             should_tie_break = False
             if (
                 self._supports_graph_branching(self.service.analyzer)
+                and self._is_deep_loop(state)
                 and state["tie_break_attempts"] < settings.langgraph_tie_break_max_loops
                 and (weak_support or has_conflicts)
                 and self._budget_ok(state)
@@ -364,7 +375,8 @@ class FinalizeGraphRunner:
                 weak_support=weak_support,
             ) if should_tie_break else []
             if (
-                state["analyze_attempts"] <= settings.langgraph_verification_max_retries
+                self._is_deep_loop(state)
+                and state["analyze_attempts"] <= settings.langgraph_verification_max_retries
                 and state["analyze_attempts"] < settings.finalize_budget_max_analyze_passes
                 and self._budget_ok(state)
             ):

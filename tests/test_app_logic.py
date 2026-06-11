@@ -1093,7 +1093,8 @@ def test_finalize_graph_runner_retries_after_report_notes(mocker):
     mocker.patch("src.config.settings.langgraph_verification_max_retries", 1)
     task_store = InMemoryTaskStore()
     research = task_store.add_research(
-        ResearchRequest(prompt="topic", depth=SearchDepth.MEDIUM),
+        # The retry/tie-break deep loop runs only for HARD depth.
+        ResearchRequest(prompt="topic", depth=SearchDepth.HARD),
         task_ids=["task-1"],
     )
     task_store.add_task(
