@@ -280,13 +280,30 @@ class ResearchService:
                     registered_tasks.append(task)
                     task_ids.append(task.id)
                 self.task_store.set_research_task_ids(research_id, task_ids)
+                enqueued_jobs = 0
                 for task in registered_tasks:
                     if task.status == TaskStatus.PENDING and task.queries:
                         job = self.task_store.add_search_task_job(task.id, request.depth.value, settings.job_max_attempts)
                         if self.broker:
                             self.broker.push_search_job(job.id)
-                # Clear crash-recovery marker now that decompose succeeded.
+                        enqueued_jobs += 1
+                # Clear crash-recovery marker now that decompose ran.
                 self._clear_decompose_pending(research_id)
+                if enqueued_jobs == 0:
+                    # Decompose produced no searchable queries (e.g. the model was
+                    # unavailable / a degenerate fallback came back). Fail cleanly instead
+                    # of leaving the research stuck in 'processing' forever.
+                    logger.warning(
+                        "research_decompose_no_queries research_id=%s task_count=%s",
+                        research_id, len(registered_tasks),
+                    )
+                    self.task_store.update_research_status(
+                        research_id,
+                        ResearchStatus.FAILED,
+                        "Could not generate a search plan (no searchable queries). "
+                        "Check the model/API key and try again.",
+                    )
+                    return
                 logger.info(
                     "research_decomposed research_id=%s task_count=%s depth=%s",
                     research_id,
