@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.schemas import (
@@ -176,7 +176,9 @@ class SQLAlchemyTaskStore:
         with self.session_scope() as session:
             stmt = (
                 select(ResearchORM)
-                .where(ResearchORM.graph_state["thread_id"].astext == thread_id)
+                # Match by thread_id, or by research id (a single-research thread whose
+                # thread_id was never set / got lost still resolves via /thread/<id>).
+                .where(or_(ResearchORM.graph_state["thread_id"].astext == thread_id, ResearchORM.id == thread_id))
                 .order_by(ResearchORM.created_at.asc())
             )
             if user_id is not None:

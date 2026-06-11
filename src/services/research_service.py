@@ -1141,6 +1141,11 @@ class ResearchService:
         }
 
     def checkpoint_graph_state(self, research_id: str, graph_state: dict, event: dict | None = None) -> None:
+        # The finalize graph's state doesn't carry user-facing metadata (thread_id, title,
+        # model, …). Merge over the existing graph_state so a checkpoint can't wipe it.
+        research = self.task_store.get_research(research_id)
+        if research and research.graph_state:
+            graph_state = {**research.graph_state, **graph_state}
         self.task_store.update_research_graph_state(research_id, graph_state)
         if event is not None:
             self.task_store.append_research_graph_event(research_id, event)

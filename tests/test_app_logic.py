@@ -2678,3 +2678,15 @@ def test_search_completion_auto_enqueues_finalization():
     service._maybe_enqueue_finalization(research.id)
     assert store.get_research(research.id).status == ResearchStatus.ANALYZING
     assert store.get_latest_research_finalize_job(research.id) is not None
+
+
+def test_list_thread_resolves_by_research_id_when_thread_id_lost():
+    from src.services.research_service import ResearchService
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    research = store.add_research(ResearchRequest(prompt="lost thread topic", depth=SearchDepth.EASY), task_ids=[])
+    # Simulate a research whose thread_id got wiped from graph_state.
+    store.update_research_graph_state(research.id, {"some": "state"})
+    # /thread/<research_id> still resolves it (fallback to id match).
+    thread = service.list_thread(research.id)
+    assert [t.id for t in thread] == [research.id]

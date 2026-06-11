@@ -127,7 +127,7 @@ class InMemoryTaskStore:
     ) -> list[ResearchHistoryItem]:
         records = [
             r for r in self.researches.values()
-            if (r.graph_state or {}).get("thread_id") == thread_id
+            if (r.graph_state or {}).get("thread_id") == thread_id or r.id == thread_id
         ]
         if user_id is not None:
             records = [r for r in records if r.user_id == user_id]
