@@ -136,7 +136,7 @@ onBeforeUnmount(() => close?.());
   <div class="space-y-3">
     <!-- user prompt bubble -->
     <div class="flex justify-end">
-      <div class="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-surface px-4 py-2.5 text-[15px] text-ink">
+      <div class="animate-rise max-w-[80%] whitespace-pre-wrap rounded-2xl bg-surface px-4 py-2.5 text-[15px] text-ink">
         {{ prompt }}
       </div>
     </div>
@@ -186,7 +186,7 @@ onBeforeUnmount(() => close?.());
       <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within) -->
       <div
         v-if="report || done"
-        class="h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
+        class="animate-fade-in h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
       >
         <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" />
       </div>

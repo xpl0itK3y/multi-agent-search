@@ -18,7 +18,7 @@ function quality(q?: string | null) {
     :href="source.url"
     target="_blank"
     rel="noopener noreferrer"
-    class="block rounded-lg border border-bd bg-surface/50 p-3 hover:bg-surface"
+    class="block rounded-lg border border-bd bg-surface/50 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-accentSoft/40 hover:bg-surface"
   >
     <div class="flex items-center gap-2">
       <span class="shrink-0 text-xs text-muted">[S{{ index }}]</span>

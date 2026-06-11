@@ -206,7 +206,7 @@ async function exportReport(fmt: "pdf" | "docx") {
             <ul v-if="verification.uncovered_questions.length" class="mt-3 space-y-1">
               <li class="text-xs font-medium text-muted">{{ $t("artifact.uncovered") }}</li>
               <li v-for="(q, i) in verification.uncovered_questions" :key="i" class="flex gap-2 text-sm text-muted">
-                <span class="text-red-400">○</span><span>{{ q }}</span>
+                <span class="mt-0.5 shrink-0 text-red-400">○</span><span class="line-clamp-2">{{ q }}</span>
               </li>
             </ul>
           </div>

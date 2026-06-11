@@ -49,27 +49,27 @@ function approve() {
 </script>
 
 <template>
-  <div class="mx-auto w-full max-w-2xl px-6 py-10">
+  <div class="animate-rise mx-auto w-full max-w-2xl px-6 py-6">
     <div class="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
       <span class="text-accent">✶</span> {{ $t("plan.tag") }}
     </div>
-    <h1 v-if="prompt" class="mb-2 font-serif text-2xl leading-snug text-ink">{{ prompt }}</h1>
-    <p class="mb-6 text-sm text-muted">
+    <h1 v-if="prompt" class="mb-1.5 line-clamp-2 font-serif text-xl leading-snug text-ink">{{ prompt }}</h1>
+    <p class="mb-4 text-sm text-muted">
       {{ $t("plan.subtitle") }}
     </p>
 
-    <div class="space-y-3">
+    <div class="space-y-2">
       <div
         v-for="(row, i) in rows"
         :key="row.id"
-        class="rounded-card border border-bd bg-surface/50 p-4"
+        class="rounded-card border border-bd bg-surface/50 p-3 transition-colors hover:border-accentSoft/50"
       >
-        <div class="mb-2 flex items-center gap-2">
+        <div class="mb-1.5 flex items-center gap-2">
           <span class="text-xs text-muted">{{ i + 1 }}</span>
           <input
             v-model="row.description"
             :placeholder="$t('plan.subquestion')"
-            class="flex-1 bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
+            class="flex-1 truncate bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none"
           />
           <button class="text-muted hover:text-red-400" :title="$t('plan.delete')" @click="removeRow(i)">✕</button>
         </div>

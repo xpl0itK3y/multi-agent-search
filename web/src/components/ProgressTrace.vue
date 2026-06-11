@@ -53,19 +53,22 @@ function label(step: string): string {
         >{{ reasoning }}</div>
       </div>
 
-      <ol class="space-y-3">
+      <transition-group name="trace" tag="ol" class="relative space-y-3">
         <li
           v-for="(entry, i) in entries"
           :key="i"
           class="flex gap-3 text-sm"
         >
-          <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accentSoft" />
+          <span
+            class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+            :class="live && i === entries.length - 1 ? 'animate-pulse bg-accent' : 'bg-accentSoft'"
+          />
           <div class="min-w-0">
             <div class="text-ink">{{ label(entry.step) }}</div>
-            <div v-if="entry.detail" class="text-muted">{{ entry.detail }}</div>
+            <div v-if="entry.detail" class="line-clamp-2 break-words text-muted">{{ entry.detail }}</div>
           </div>
         </li>
-      </ol>
+      </transition-group>
     </div>
   </div>
 </template>

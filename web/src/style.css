@@ -66,3 +66,71 @@ body {
   background: rgb(var(--c-muted) / 0.35);
   border-radius: 9999px;
 }
+
+/* ---- Motion: entrances + Vue transition classes ---- */
+@keyframes fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.35s ease both;
+}
+.animate-rise {
+  animation: fade-slide-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* <transition-group name="trace"> — new steps slide in, removals fade, rest glide */
+.trace-enter-active {
+  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.trace-leave-active {
+  transition: opacity 0.2s ease;
+  position: absolute;
+}
+.trace-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.trace-leave-to {
+  opacity: 0;
+}
+.trace-move {
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* <transition name="fade"> generic crossfade */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-rise,
+  .trace-enter-active,
+  .trace-leave-active,
+  .trace-move,
+  .fade-enter-active,
+  .fade-leave-active {
+    animation: none !important;
+    transition: none !important;
+  }
+}
