@@ -297,6 +297,15 @@ class SearchAgent:
                 logger.warning("search_cache_put_failed error=%s", exc)
         return results
 
+    def _emit_progress(self, research_id: str | None, detail: str) -> None:
+        """Append a live search-progress step to the research trail (streamed via SSE)."""
+        if not research_id or not hasattr(self.task_store, "append_research_graph_event"):
+            return
+        try:
+            self.task_store.append_research_graph_event(research_id, {"step": "search", "detail": detail})
+        except Exception:  # progress events must never break a search
+            pass
+
     def run_task(self, task_id: str):
         """
         Execute a search task: search for queries, extract content, and update the configured task store.
@@ -318,10 +327,13 @@ class SearchAgent:
         prefetched_content: dict[str, str] = {}
         topics = self._detect_topics(task)
 
+        research_id = getattr(task, "research_id", None)
+        self._emit_progress(research_id, f"🔎 {task.description}")
         try:
             for query in task.queries:
                 self.task_store.update_task(task_id, TaskUpdate(log=f"Searching for: {query}"))
                 search_results = self._search_with_cache(query)
+                self._emit_progress(research_id, f"🔍 {query} — {len(search_results)}")
 
                 for res in search_results:
                     url = res.get("url")
@@ -468,6 +480,7 @@ class SearchAgent:
                     submit_candidates()
 
             selected_results = self._select_best_results(all_results)
+            self._emit_progress(research_id, f"✓ {task.description} — {len(selected_results)} источников")
             success_count = sum(1 for item in all_results if item.get("extraction_status") == "success")
             failure_count = sum(1 for item in all_results if item.get("extraction_status") != "success")
             avg_content_chars = (

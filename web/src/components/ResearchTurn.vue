@@ -106,6 +106,10 @@ onMounted(async () => {
       if (s !== "clarifying") clarification.value = null;
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
+      if (DONE.has(s) && !done.value) {
+        done.value = true;
+        emit("done", s); // ensure the thread learns of completion even without onDone
+      }
     },
     onTrace: (step, detail) => trace.value.push({ step, detail }),
     onReasoning: (r) => (reasoning.value = r),

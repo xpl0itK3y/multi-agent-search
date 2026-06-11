@@ -1168,7 +1168,9 @@ class ResearchService:
         step_label = "Шаг" if language == "ru" else "Step"
         detail_label = "Детали" if language == "ru" else "Details"
         lines = [heading]
-        for entry in research.graph_trail[-8:]:
+        # Exclude live search-progress steps — the trail in the report is the finalize graph.
+        finalize_entries = [e for e in research.graph_trail if e.get("step") != "search"]
+        for entry in finalize_entries[-8:]:
             step = entry.get("step") or "unknown"
             detail = entry.get("detail") or ""
             lines.append(f"- {step_label}: {step}. {detail_label}: {detail}")

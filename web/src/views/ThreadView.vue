@@ -39,13 +39,18 @@ const anyResearchRunning = computed(() =>
   items.value.some((it) => it.kind === "research" && !finished.value.has(it.id)),
 );
 
-// Quick questions are grounded on the most recent completed research in the thread.
+// Quick questions are grounded on the most recent completed research; fall back to the
+// last research turn so a visible report can always be questioned (the done-event may
+// not have registered after a reload).
 const latestCompletedResearchId = computed(() => {
+  let lastResearch: string | null = null;
   for (let i = items.value.length - 1; i >= 0; i--) {
     const it = items.value[i];
-    if (it.kind === "research" && completed.value.has(it.id)) return it.id;
+    if (it.kind !== "research") continue;
+    if (lastResearch === null) lastResearch = it.id;
+    if (completed.value.has(it.id)) return it.id;
   }
-  return null;
+  return lastResearch;
 });
 
 async function scrollToBottom() {
