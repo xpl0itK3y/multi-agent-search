@@ -37,6 +37,13 @@ MODEL_CATALOG: tuple[ModelOption, ...] = (
         tier="flash",
         reasoning=False,
     ),
+    ModelOption(
+        id="deepseek-chat",
+        label="Chat",
+        description="Самый быстрый и дешёвый — обычный чат-режим. Для быстрых ответов и черновиков.",
+        tier="flash",
+        reasoning=False,
+    ),
 )
 
 _BY_ID: dict[str, ModelOption] = {option.id: option for option in MODEL_CATALOG}

@@ -25,6 +25,8 @@ def test_catalog_exposes_default_and_is_serializable():
     assert any(m["default"] for m in models)
     assert model_catalog.DEFAULT_MODEL_ID in ids
     assert "deepseek-v4-flash" in ids
+    assert "deepseek-chat" in ids  # fast chat model is selectable
+    assert model_catalog.resolve_model_id("deepseek-chat", "deepseek-v4-pro") == "deepseek-chat"
 
 
 def test_analyzer_threads_selected_model_to_llm():
