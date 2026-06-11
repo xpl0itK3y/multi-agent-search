@@ -8,7 +8,7 @@ import { useResearchStore } from "@/stores/research";
 import ResearchTurn from "@/components/ResearchTurn.vue";
 import Composer from "@/components/Composer.vue";
 import MarkdownView from "@/components/MarkdownView.vue";
-import type { Depth } from "@/lib/types";
+import type { ChatMessage, Depth } from "@/lib/types";
 
 // A conversation thread: a sequence of deep researches and quick grounded
 // follow-up questions, with one composer (mode toggle) at the bottom.
@@ -58,10 +58,38 @@ async function scrollToBottom() {
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: "smooth" });
 }
 
+// Pair a flat [user, assistant, user, assistant, …] message log into Q&A turns,
+// tolerating an unanswered trailing question or a missing question.
+function pairMessages(msgs: ChatMessage[]): { question: string; answer: string }[] {
+  const pairs: { question: string; answer: string }[] = [];
+  let pendingQ: string | null = null;
+  for (const m of msgs) {
+    if (m.role === "user") {
+      if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "" });
+      pendingQ = m.content;
+    } else {
+      pairs.push({ question: pendingQ ?? "", answer: m.content });
+      pendingQ = null;
+    }
+  }
+  if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "" });
+  return pairs;
+}
+
 async function loadThread() {
   try {
     const list = await api.getThread(props.threadId);
-    items.value = list.map((r) => ({ kind: "research", id: r.id, prompt: r.prompt }));
+    // Load each research's saved Q&A in parallel, then interleave so follow-up
+    // questions reappear under their research after a refresh / re-login.
+    const messages = await Promise.all(list.map((r) => api.getMessages(r.id).catch(() => [])));
+    const built: ThreadItem[] = [];
+    list.forEach((r, idx) => {
+      built.push({ kind: "research", id: r.id, prompt: r.prompt });
+      for (const p of pairMessages(messages[idx])) {
+        built.push({ kind: "chat", question: p.question, answer: p.answer, researchId: r.id, busy: false, searching: false });
+      }
+    });
+    items.value = built;
   } catch (e) {
     errorMsg.value = (e as Error).message;
   }
