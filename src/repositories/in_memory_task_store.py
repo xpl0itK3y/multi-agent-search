@@ -70,6 +70,11 @@ class InMemoryTaskStore:
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         return self.users.get(user_id)
 
+    def update_user_password(self, user_id: str, password_hash: str) -> None:
+        user = self.users.get(user_id)
+        if user:
+            self.users[user_id] = UserRecord(id=user.id, email=user.email, password_hash=password_hash)
+
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)
 

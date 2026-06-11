@@ -147,8 +147,12 @@ class ResearchService:
             raise HTTPException(status_code=401, detail="Invalid email or password")
         return AuthUser(id=user.id, email=user.email)
 
-    def get_or_create_oauth_user(self, email: str) -> AuthUser:
-        """Resolve (or create) a passwordless account for a verified OAuth identity."""
+    def get_or_create_oauth_user(self, email: str) -> tuple[AuthUser, bool]:
+        """Resolve (or create) an account for a verified OAuth identity.
+
+        Returns (user, created): ``created`` is True for a brand-new account, so the
+        caller can offer to set a password for future email/password login.
+        """
         from src.auth.security import hash_password
 
         normalized = (email or "").strip().lower()
@@ -156,12 +160,20 @@ class ResearchService:
             raise HTTPException(status_code=400, detail="OAuth provider returned no email")
         existing = self.task_store.get_user_by_email(normalized)
         if existing is not None:
-            return AuthUser(id=existing.id, email=existing.email)
-        # No usable password — OAuth users authenticate only through their provider.
+            return AuthUser(id=existing.id, email=existing.email), False
+        # New account: start passwordless (a random unusable hash) until the user sets one.
         user = self.task_store.create_user(
             str(uuid.uuid4()), normalized, hash_password(secrets.token_urlsafe(32))
         )
-        return AuthUser(id=user.id, email=user.email)
+        return AuthUser(id=user.id, email=user.email), True
+
+    def set_user_password(self, user_id: str, password: str) -> None:
+        """Set/replace a user's password (e.g. after first Google sign-in)."""
+        from src.auth.security import hash_password
+
+        if len(password or "") < 6:
+            raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+        self.task_store.update_user_password(user_id, hash_password(password))
 
     def get_auth_user(self, user_id: str) -> AuthUser | None:
         user = self.task_store.get_user_by_id(user_id)

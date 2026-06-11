@@ -1195,11 +1195,26 @@ async def test_google_oauth_login_and_callback(client, mocker):
         f"/v1/auth/google/callback?code=abc&state={state}", follow_redirects=False
     )
     assert cb.status_code == 302
-    assert cb.headers["location"] == "/"
+    assert cb.headers["location"] == "/set-password"  # new user → offered to set a password
 
     me = await client.get("/v1/auth/me")  # session cookie now established
     assert me.status_code == 200
     assert me.json()["email"] == "g@user.com"
+
+    # Set a password, then email/password login works for this Google-created account.
+    sp = await client.post("/v1/auth/set-password", json={"password": "mypass123"})
+    assert sp.status_code == 200
+    await client.post("/v1/auth/logout")
+    relogin = await client.post("/v1/auth/login", json={"email": "g@user.com", "password": "mypass123"})
+    assert relogin.status_code == 200
+
+    # A returning Google user goes straight in (no set-password redirect).
+    login2 = await client.get("/v1/auth/google/login", follow_redirects=False)
+    state2 = client.cookies.get("oauth_state")
+    cb2 = await client.get(
+        f"/v1/auth/google/callback?code=abc&state={state2}", follow_redirects=False
+    )
+    assert cb2.headers["location"] == "/"
 
 
 @pytest.mark.anyio

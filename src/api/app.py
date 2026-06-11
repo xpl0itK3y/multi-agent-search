@@ -21,6 +21,7 @@ from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     AuthUser,
     AuthSession,
+    SetPasswordRequest,
     DecomposeRequest,
     DecomposeResponse,
     LoginRequest,
@@ -180,11 +181,20 @@ def register_routes(app: FastAPI) -> None:
         verified = userinfo.get("email_verified")
         if not email or verified not in (True, "true"):
             raise HTTPException(status_code=400, detail="Google account email is not verified")
-        user = get_research_service(request).get_or_create_oauth_user(email)
-        redirect = RedirectResponse(settings.oauth_post_login_redirect, status_code=302)
+        user, created = get_research_service(request).get_or_create_oauth_user(email)
+        # New users are offered a password to set; returning users go straight in.
+        target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
+        redirect = RedirectResponse(target, status_code=302)
         _issue_session(redirect, user)  # sets the JWT session cookie
         redirect.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
         return redirect
+
+    @app.post("/v1/auth/set-password")
+    async def set_password(
+        payload: SetPasswordRequest, request: Request, user: AuthUser = Depends(get_current_user)
+    ):
+        get_research_service(request).set_user_password(user.id, payload.password)
+        return {"status": "ok"}
 
     @app.get("/metrics")
     async def metrics_endpoint():

@@ -201,6 +201,10 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=200)
 
 
+class SetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=6, max_length=200)
+
+
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=200)
     password: str = Field(..., min_length=1, max_length=200)

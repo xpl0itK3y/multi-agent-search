@@ -2642,7 +2642,12 @@ def test_start_research_blocks_while_one_is_active():
 
 def test_get_or_create_oauth_user_is_idempotent():
     service = ResearchService(task_store=InMemoryTaskStore())
-    u1 = service.get_or_create_oauth_user("Person@Gmail.com")
+    u1, created1 = service.get_or_create_oauth_user("Person@Gmail.com")
     assert u1.email == "person@gmail.com"
-    u2 = service.get_or_create_oauth_user("person@gmail.com")
-    assert u2.id == u1.id  # same account, not a duplicate
+    assert created1 is True  # brand-new account
+    u2, created2 = service.get_or_create_oauth_user("person@gmail.com")
+    assert u2.id == u1.id and created2 is False  # same account, not a duplicate
+
+    # After setting a password the user can also log in with email + password.
+    service.set_user_password(u1.id, "newpass1")
+    assert service.authenticate_user("person@gmail.com", "newpass1").id == u1.id

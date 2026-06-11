@@ -99,6 +99,12 @@ class SQLAlchemyTaskStore:
                 return None
             return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
 
+    def update_user_password(self, user_id: str, password_hash: str) -> None:
+        with self.session_scope() as session:
+            user = session.get(UserORM, user_id)
+            if user is not None:
+                user.password_hash = password_hash
+
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         with self.session_scope() as session:
             row = session.get(SearchCacheORM, cache_key)

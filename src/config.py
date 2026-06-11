@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8501/v1/auth/google/callback"
     oauth_post_login_redirect: str = "/"
+    # New OAuth users land here to optionally set a password for email/password login.
+    oauth_new_user_redirect: str = "/set-password"
 
     @property
     def oauth_enabled(self) -> bool:

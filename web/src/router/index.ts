@@ -5,6 +5,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
+    { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
     {
       path: "/research/:id",

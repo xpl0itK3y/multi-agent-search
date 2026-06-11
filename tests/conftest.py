@@ -20,6 +20,18 @@ def mock_llm():
     return MockLLMProvider()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_auth_settings(monkeypatch):
+    """Pin auth settings to test defaults so a developer's local .env (which may set
+    AUTH_DISABLED=false or Google OAuth creds) cannot change test behavior. Tests that
+    need auth enabled / OAuth configured override these via mocker.patch."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "google_client_id", "", raising=False)
+    monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
+
+
 @pytest.fixture
 async def client():
     app = create_app()
