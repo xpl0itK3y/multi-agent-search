@@ -3,6 +3,8 @@ export type Depth = "easy" | "medium" | "hard";
 export interface AuthUser {
   id: string;
   email: string;
+  name?: string | null;
+  avatar_url?: string | null;
 }
 
 export interface AuthSession {

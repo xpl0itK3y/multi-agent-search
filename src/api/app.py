@@ -174,7 +174,9 @@ def register_routes(app: FastAPI) -> None:
         verified = userinfo.get("email_verified")
         if not email or verified not in (True, "true"):
             raise HTTPException(status_code=400, detail="Google account email is not verified")
-        user, created = get_research_service(request).get_or_create_oauth_user(email)
+        user, created = get_research_service(request).get_or_create_oauth_user(
+            email, name=userinfo.get("name"), avatar_url=userinfo.get("picture")
+        )
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)

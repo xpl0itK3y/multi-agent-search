@@ -81,7 +81,7 @@ class SQLAlchemyTaskStore:
         with self.session_scope() as session:
             session.add(user)
             session.flush()
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -90,20 +90,29 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is None:
                 return None
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash)
+            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
 
     def update_user_password(self, user_id: str, password_hash: str) -> None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is not None:
                 user.password_hash = password_hash
+
+    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
+        with self.session_scope() as session:
+            user = session.get(UserORM, user_id)
+            if user is not None:
+                if name:
+                    user.name = name
+                if avatar_url:
+                    user.avatar_url = avatar_url
 
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         with self.session_scope() as session:

@@ -10,7 +10,8 @@ import { useAuthStore } from "@/stores/auth";
 const ui = useUiStore();
 const auth = useAuthStore();
 
-const displayName = computed(() => auth.user?.email ?? ui.userName);
+const displayName = computed(() => auth.user?.name || auth.user?.email || ui.userName);
+const avatarUrl = computed(() => auth.user?.avatar_url || null);
 
 async function logout() {
   await auth.logout();
@@ -124,8 +125,15 @@ const vFocus = {
   >
     <button class="rail-btn" :title="$t('sidebar.expand')" @click="ui.toggleSidebar()">⌗</button>
     <button class="rail-btn" :title="$t('sidebar.newResearch')" @click="router.push('/')">+</button>
-    <div class="mt-auto grid h-9 w-9 place-items-center rounded-full bg-surface text-sm">
-      {{ ui.userName.charAt(0).toUpperCase() }}
+    <img
+      v-if="avatarUrl"
+      :src="avatarUrl"
+      alt=""
+      referrerpolicy="no-referrer"
+      class="mt-auto h-9 w-9 rounded-full object-cover"
+    />
+    <div v-else class="mt-auto grid h-9 w-9 place-items-center rounded-full bg-surface text-sm">
+      {{ displayName.charAt(0).toUpperCase() }}
     </div>
   </aside>
 
@@ -241,7 +249,14 @@ const vFocus = {
 
     <!-- User card -->
     <div class="mt-auto flex items-center gap-3 border-t border-bd px-4 py-3">
-      <div class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm">
+      <img
+        v-if="avatarUrl"
+        :src="avatarUrl"
+        alt=""
+        referrerpolicy="no-referrer"
+        class="h-9 w-9 shrink-0 rounded-full object-cover"
+      />
+      <div v-else class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm">
         {{ displayName.charAt(0).toUpperCase() }}
       </div>
       <div class="min-w-0 flex-1">

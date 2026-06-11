@@ -73,7 +73,18 @@ class InMemoryTaskStore:
     def update_user_password(self, user_id: str, password_hash: str) -> None:
         user = self.users.get(user_id)
         if user:
-            self.users[user_id] = UserRecord(id=user.id, email=user.email, password_hash=password_hash)
+            self.users[user_id] = user.model_copy(update={"password_hash": password_hash})
+
+    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
+        user = self.users.get(user_id)
+        if user:
+            patch = {}
+            if name:
+                patch["name"] = name
+            if avatar_url:
+                patch["avatar_url"] = avatar_url
+            if patch:
+                self.users[user_id] = user.model_copy(update=patch)
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)

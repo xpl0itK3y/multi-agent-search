@@ -213,6 +213,8 @@ class LoginRequest(BaseModel):
 class AuthUser(BaseModel):
     id: str
     email: str
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class AuthSession(BaseModel):
@@ -230,6 +232,8 @@ class UserRecord(BaseModel):
     id: str
     email: str
     password_hash: str
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class ResearchRecord(BaseModel):
