@@ -2651,3 +2651,29 @@ def test_get_or_create_oauth_user_is_idempotent():
     # After setting a password the user can also log in with email + password.
     service.set_user_password(u1.id, "newpass1")
     assert service.authenticate_user("person@gmail.com", "newpass1").id == u1.id
+
+
+def test_search_completion_auto_enqueues_finalization():
+    from src.api.schemas import TaskUpdate
+    store = InMemoryTaskStore()
+
+    class _StubAnalyzer:
+        def run_analysis(self, *a, **k):
+            return "report"
+
+    service = ResearchService(task_store=store, analyzer=_StubAnalyzer())
+    research = store.add_research(ResearchRequest(prompt="quantum topic here", depth=SearchDepth.EASY), task_ids=[])
+    store.add_task({"id": "t1", "research_id": research.id, "description": "d", "queries": ["q"], "status": TaskStatus.COMPLETED})
+    store.add_task({"id": "t2", "research_id": research.id, "description": "d", "queries": ["q"], "status": TaskStatus.RUNNING})
+    store.set_research_task_ids(research.id, ["t1", "t2"])
+
+    # Not all tasks done yet → no finalize.
+    service._maybe_enqueue_finalization(research.id)
+    assert store.get_research(research.id).status == ResearchStatus.PROCESSING
+    assert store.get_latest_research_finalize_job(research.id) is None
+
+    # Last task completes → finalize is enqueued (status → ANALYZING).
+    store.update_task("t2", TaskUpdate(status=TaskStatus.COMPLETED))
+    service._maybe_enqueue_finalization(research.id)
+    assert store.get_research(research.id).status == ResearchStatus.ANALYZING
+    assert store.get_latest_research_finalize_job(research.id) is not None

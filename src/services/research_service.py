@@ -2435,6 +2435,24 @@ class ResearchService:
                 extraction_timeout_seconds=settings.search_extraction_timeout_seconds,
             )
             agent.run_task(task_id)
+            # Auto-finalize once every search task for this research is done — nothing
+            # else triggers it, so without this the research stalls in 'processing'.
+            task = self.task_store.get_task(task_id)
+            if task and task.research_id:
+                self._maybe_enqueue_finalization(task.research_id)
+
+    def _maybe_enqueue_finalization(self, research_id: str) -> None:
+        research = self.task_store.get_research(research_id)
+        if research is None or research.status in (
+            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED
+        ):
+            return
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        if not tasks:
+            return
+        if all(t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED) for t in tasks):
+            logger.info("research_search_complete_auto_finalize research_id=%s task_count=%s", research_id, len(tasks))
+            self.enqueue_research_finalization(research_id)  # idempotent via status guard
 
     def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.task_store.get_search_task_job(job_id)
