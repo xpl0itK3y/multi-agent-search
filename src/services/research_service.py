@@ -772,6 +772,38 @@ class ResearchService:
         covered = sum(1 for token in set(tokens) if token in haystack)
         return covered / len(set(tokens)) < 0.34
 
+    def _chat_tokens(self, text: str) -> list[str]:
+        import re
+
+        return [
+            token
+            for token in re.findall(r"[^\W\d_]{4,}", (text or "").lower(), flags=re.UNICODE)
+            if token not in self._CHAT_STOPWORDS
+        ]
+
+    def _rank_sources_for_question(self, question: str, pool: list[dict], k: int) -> list[dict]:
+        """Retrieve the k sources most relevant to the question instead of the first k.
+
+        Lightweight lexical retrieval (frequency-weighted term overlap over title+content);
+        a drop-in step that a pgvector embedding search can later replace.
+        """
+        from collections import Counter
+
+        q_tokens = set(self._chat_tokens(question))
+        if not q_tokens or len(pool) <= k:
+            return pool[:k]
+        scored: list[tuple[float, int, dict]] = []
+        for index, item in enumerate(pool):
+            counts = Counter(self._chat_tokens((item.get("title") or "") + " " + (item.get("content") or "")))
+            score = float(sum(counts.get(token, 0) for token in q_tokens))
+            scored.append((score, index, item))  # index keeps the sort stable
+        scored.sort(key=lambda s: (s[0], -s[1]), reverse=True)
+        ranked = [item for score, _, item in scored if score > 0][:k]
+        if len(ranked) < k:  # pad with the rest to keep some breadth
+            chosen = {id(it) for it in ranked}
+            ranked += [item for _, _, item in scored if id(item) not in chosen][: k - len(ranked)]
+        return ranked
+
     def _mini_search_for_chat(self, research_id: str, question: str, depth: SearchDepth) -> list[dict]:
         """Run a small follow-up web search for a chat question; persists results as a task."""
         task = self.task_store.add_task(
@@ -824,7 +856,8 @@ class ResearchService:
             self._mini_search_for_chat(research_id, question, research.depth)
             tasks = self.task_store.get_tasks_by_research(research_id)
             pool = self._build_research_source_pool(tasks)
-        pool = pool[:12]
+        # Retrieve the most relevant sources for this question (not just the first 12).
+        pool = self._rank_sources_for_question(question, pool, 12)
         sources = [
             {
                 "source_id": f"S{index}",

@@ -2690,3 +2690,16 @@ def test_list_thread_resolves_by_research_id_when_thread_id_lost():
     # /thread/<research_id> still resolves it (fallback to id match).
     thread = service.list_thread(research.id)
     assert [t.id for t in thread] == [research.id]
+
+
+def test_rank_sources_for_question_prefers_relevant():
+    from src.services.research_service import ResearchService
+    service = ResearchService(task_store=InMemoryTaskStore())
+    pool = [
+        {"title": "Cats", "content": "feline behavior grooming whiskers " * 5},
+        {"title": "Quantum", "content": "qubit superposition entanglement decoherence " * 5},
+        {"title": "Cooking", "content": "recipes pasta sauce kitchen " * 5},
+    ] + [{"title": f"Filler {i}", "content": "unrelated filler text here"} for i in range(15)]
+    ranked = service._rank_sources_for_question("explain qubit superposition decoherence", pool, 3)
+    assert ranked[0]["title"] == "Quantum"  # most relevant first, not just the first item
+    assert len(ranked) == 3
