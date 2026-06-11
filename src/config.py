@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     auth_token_ttl_seconds: int = 604800  # 7 days
     auth_cookie_name: str = "access_token"
     auth_cookie_secure: bool = False  # set True when served over HTTPS
+    # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
+    # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8501/v1/auth/google/callback"
+    oauth_post_login_redirect: str = "/"
+
+    @property
+    def oauth_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
     # Comma-separated list of allowed CORS origins for the Vue SPA (dev: Vite 5173 / preview 4173).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
     # SSRF guard: when False, user webhooks must resolve to public IPs only.

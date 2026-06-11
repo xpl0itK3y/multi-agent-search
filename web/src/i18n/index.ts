@@ -133,6 +133,8 @@ const ru = {
     toRegister: "Нет аккаунта? Зарегистрироваться",
     toLogin: "Уже есть аккаунт? Войти",
     logout: "Выйти",
+    google: "Войти через Google",
+    or: "или",
   },
 };
 
@@ -262,6 +264,8 @@ const en: typeof ru = {
     toRegister: "No account? Sign up",
     toLogin: "Have an account? Sign in",
     logout: "Log out",
+    google: "Sign in with Google",
+    or: "or",
   },
 };
 
@@ -391,6 +395,8 @@ const es: typeof ru = {
     toRegister: "¿Sin cuenta? Regístrate",
     toLogin: "¿Ya tienes cuenta? Inicia sesión",
     logout: "Salir",
+    google: "Iniciar sesión con Google",
+    or: "o",
   },
 };
 

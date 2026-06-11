@@ -1,5 +1,6 @@
 import logging
 import time
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -144,6 +145,22 @@ class ResearchService:
         user = self.task_store.get_user_by_email(email.strip().lower())
         if user is None or not verify_password(password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
+        return AuthUser(id=user.id, email=user.email)
+
+    def get_or_create_oauth_user(self, email: str) -> AuthUser:
+        """Resolve (or create) a passwordless account for a verified OAuth identity."""
+        from src.auth.security import hash_password
+
+        normalized = (email or "").strip().lower()
+        if "@" not in normalized:
+            raise HTTPException(status_code=400, detail="OAuth provider returned no email")
+        existing = self.task_store.get_user_by_email(normalized)
+        if existing is not None:
+            return AuthUser(id=existing.id, email=existing.email)
+        # No usable password — OAuth users authenticate only through their provider.
+        user = self.task_store.create_user(
+            str(uuid.uuid4()), normalized, hash_password(secrets.token_urlsafe(32))
+        )
         return AuthUser(id=user.id, email=user.email)
 
     def get_auth_user(self, user_id: str) -> AuthUser | None:

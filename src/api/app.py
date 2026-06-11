@@ -1,4 +1,6 @@
+import hmac
 import json
+import secrets
 import uuid
 import time
 from typing import List
@@ -6,7 +8,7 @@ from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
@@ -14,6 +16,7 @@ from src.api.dependencies import (
     verify_research_access,
 )
 from src.auth.security import create_token
+from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     AuthUser,
@@ -141,6 +144,47 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/me", response_model=AuthUser)
     async def me(user: AuthUser = Depends(get_current_user)):
         return user
+
+    @app.get("/v1/auth/config")
+    async def auth_config():
+        """Which auth options the SPA should offer (e.g. show the Google button)."""
+        return {"google_oauth": settings.oauth_enabled}
+
+    _OAUTH_STATE_COOKIE = "oauth_state"
+
+    @app.get("/v1/auth/google/login")
+    async def google_login():
+        if not settings.oauth_enabled:
+            raise HTTPException(status_code=404, detail="Google OAuth is not configured")
+        state = secrets.token_urlsafe(24)
+        redirect = RedirectResponse(build_authorization_url(state), status_code=302)
+        # CSRF: bind the state to a short-lived cookie verified on callback.
+        redirect.set_cookie(
+            _OAUTH_STATE_COOKIE, state, httponly=True, secure=settings.auth_cookie_secure,
+            samesite="lax", max_age=600, path="/",
+        )
+        return redirect
+
+    @app.get("/v1/auth/google/callback")
+    async def google_callback(request: Request, code: str = "", state: str = ""):
+        if not settings.oauth_enabled:
+            raise HTTPException(status_code=404, detail="Google OAuth is not configured")
+        cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
+        if not code or not state or not cookie_state or not hmac.compare_digest(state, cookie_state):
+            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+        try:
+            userinfo = fetch_userinfo(code)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Google sign-in failed: {exc}")
+        email = userinfo.get("email")
+        verified = userinfo.get("email_verified")
+        if not email or verified not in (True, "true"):
+            raise HTTPException(status_code=400, detail="Google account email is not verified")
+        user = get_research_service(request).get_or_create_oauth_user(email)
+        redirect = RedirectResponse(settings.oauth_post_login_redirect, status_code=302)
+        _issue_session(redirect, user)  # sets the JWT session cookie
+        redirect.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
+        return redirect
 
     @app.get("/metrics")
     async def metrics_endpoint():

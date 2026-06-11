@@ -79,6 +79,11 @@ export const api = {
     }
   },
 
+  authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
+
+  // Full-page navigation to start the Google OAuth redirect flow.
+  googleLoginUrl: () => `${BASE}/v1/auth/google/login`,
+
   listModels: () => request<ModelOption[]>("/v1/models"),
 
   listResearch: (limit = 30) =>

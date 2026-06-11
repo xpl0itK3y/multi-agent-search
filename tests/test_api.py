@@ -1174,6 +1174,49 @@ async def test_bearer_jwt_authenticates_without_cookie(client, mocker):
 
 
 @pytest.mark.anyio
+async def test_google_oauth_login_and_callback(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    mocker.patch("src.config.settings.google_client_id", "cid")
+    mocker.patch("src.config.settings.google_client_secret", "sec")
+
+    assert (await client.get("/v1/auth/config")).json()["google_oauth"] is True
+
+    login = await client.get("/v1/auth/google/login", follow_redirects=False)
+    assert login.status_code == 302
+    assert "accounts.google.com" in login.headers["location"]
+    state = client.cookies.get("oauth_state")
+    assert state
+
+    mocker.patch(
+        "src.api.app.fetch_userinfo",
+        return_value={"email": "g@user.com", "email_verified": True, "sub": "123"},
+    )
+    cb = await client.get(
+        f"/v1/auth/google/callback?code=abc&state={state}", follow_redirects=False
+    )
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/"
+
+    me = await client.get("/v1/auth/me")  # session cookie now established
+    assert me.status_code == 200
+    assert me.json()["email"] == "g@user.com"
+
+
+@pytest.mark.anyio
+async def test_google_login_404_when_not_configured(client):
+    assert (await client.get("/v1/auth/config")).json()["google_oauth"] is False
+    assert (await client.get("/v1/auth/google/login")).status_code == 404
+
+
+@pytest.mark.anyio
+async def test_google_callback_rejects_bad_state(client, mocker):
+    mocker.patch("src.config.settings.google_client_id", "cid")
+    mocker.patch("src.config.settings.google_client_secret", "sec")
+    cb = await client.get("/v1/auth/google/callback?code=abc&state=wrong", follow_redirects=False)
+    assert cb.status_code == 400
+
+
+@pytest.mark.anyio
 async def test_research_access_scoped_to_owner(client, mocker):
     mocker.patch("src.api.dependencies.settings.auth_disabled", False)
 

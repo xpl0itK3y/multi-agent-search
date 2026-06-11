@@ -2638,3 +2638,11 @@ def test_start_research_blocks_while_one_is_active():
     service.task_store.researches[id1].updated_at = datetime.now(timezone.utc) - timedelta(seconds=10_000)
     r2, _ = service.start_research(ResearchRequest(prompt="third deep topic", depth=SearchDepth.EASY))
     assert r2.research_id
+
+
+def test_get_or_create_oauth_user_is_idempotent():
+    service = ResearchService(task_store=InMemoryTaskStore())
+    u1 = service.get_or_create_oauth_user("Person@Gmail.com")
+    assert u1.email == "person@gmail.com"
+    u2 = service.get_or_create_oauth_user("person@gmail.com")
+    assert u2.id == u1.id  # same account, not a duplicate
