@@ -2,18 +2,19 @@
 import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { Conflict, GraphTrailEntry, SourcePreview, VerificationReport } from "@/lib/types";
+import type { Conflict, GraphTrailEntry, RedTeamReport, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
-type Tab = "report" | "sources" | "confidence" | "conflicts" | "trail";
+type Tab = "report" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
 const conflicts = ref<Conflict[] | null>(null);
 const verification = ref<VerificationReport | null>(null);
+const redTeam = ref<RedTeamReport | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -70,14 +71,43 @@ async function ensureVerification() {
   }
 }
 
+async function ensureRedTeam() {
+  if (redTeam.value || loading.value) return;
+  loading.value = true;
+  error.value = null;
+  try {
+    redTeam.value = await api.getRedTeam(props.id);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    loading.value = false;
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") ensureSources();
   if (t === "confidence") ensureVerification();
   if (t === "conflicts") ensureConflicts();
+  if (t === "redteam") ensureRedTeam();
   if (t === "trail") ensureTrail();
 });
 
-const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "trail"];
+const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
+
+function shortUrl(u: string): string {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return u;
+  }
+}
+
+const verdictClass: Record<string, string> = {
+  refuted: "text-red-400 border-red-400/40",
+  contested: "text-amber-500 border-amber-500/40",
+  qualified: "text-sky-500 border-sky-500/40",
+  holds: "text-emerald-500 border-emerald-500/40",
+};
 
 const levelClass: Record<string, string> = {
   strong: "text-emerald-500 border-emerald-500/40",
@@ -237,6 +267,44 @@ async function exportReport(fmt: "pdf" | "docx") {
             {{ $t("artifact.confidenceEmpty") }}
           </p>
         </div>
+      </template>
+
+      <template v-else-if="tab === 'redteam'">
+        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
+        <p v-else-if="error" class="text-red-400">{{ error }}</p>
+        <template v-else-if="redTeam && redTeam.findings.length">
+          <div class="mb-4 flex gap-4 text-xs text-muted">
+            <span><span class="font-semibold text-amber-500">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
+            <span><span class="font-semibold text-emerald-500">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
+          </div>
+          <div class="space-y-3">
+            <div
+              v-for="(f, i) in redTeam.findings"
+              :key="i"
+              class="rounded-lg border border-bd bg-surface/50 p-3"
+            >
+              <span
+                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                :class="verdictClass[f.verdict] || 'text-muted border-bd'"
+              >
+                {{ $t("redteam." + f.verdict) }}
+              </span>
+              <div class="mt-2 text-sm text-ink">{{ f.claim }}</div>
+              <div v-if="f.challenge" class="mt-1 text-sm text-muted">{{ f.challenge }}</div>
+              <div v-if="f.source_urls.length" class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                <a
+                  v-for="(u, j) in f.source_urls"
+                  :key="j"
+                  :href="u"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs text-accent hover:underline"
+                >{{ shortUrl(u) }}</a>
+              </div>
+            </div>
+          </div>
+        </template>
+        <p v-else class="text-muted">{{ $t("redteam.empty") }}</p>
       </template>
 
       <template v-else>

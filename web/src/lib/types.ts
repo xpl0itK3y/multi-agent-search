@@ -128,6 +128,20 @@ export interface VerificationReport {
   };
 }
 
+export interface RedTeamFinding {
+  claim: string;
+  verdict: "refuted" | "contested" | "qualified" | "holds";
+  challenge: string;
+  source_urls: string[];
+}
+
+export interface RedTeamReport {
+  research_id: string;
+  findings: RedTeamFinding[];
+  challenged: number;
+  held: number;
+}
+
 export interface GraphTrailEntry {
   step?: string;
   detail?: string;

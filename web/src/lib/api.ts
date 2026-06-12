@@ -8,6 +8,7 @@ import type {
   Depth,
   ModelOption,
   PlanItem,
+  RedTeamReport,
   ResearchGraph,
   ResearchHistoryItem,
   ResearchPlan,
@@ -146,6 +147,9 @@ export const api = {
 
   getVerification: (id: string) =>
     request<VerificationReport>(`/v1/research/${id}/verification`),
+
+  getRedTeam: (id: string) =>
+    request<RedTeamReport>(`/v1/research/${id}/red-team`),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),
