@@ -159,6 +159,23 @@ export interface CitationAudit {
   grounding: CitationGround[];
 }
 
+export interface DiffClaim {
+  statement: string;
+  old_level: string;
+  new_level: string;
+}
+
+export interface ResearchDiff {
+  research_id: string;
+  compared_to: string;
+  compared_at: string;
+  new_claims: string[];
+  dropped_claims: string[];
+  shifted_claims: DiffClaim[];
+  new_sources: number;
+  new_domains: string[];
+}
+
 export interface GraphTrailEntry {
   step?: string;
   detail?: string;

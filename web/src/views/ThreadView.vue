@@ -100,6 +100,12 @@ function onTurnDone(id: string, status: string) {
   if (status === "completed") completed.value = new Set(completed.value).add(id);
 }
 
+// "Refresh" cloned the research into a new run — add it as a new turn in the thread.
+function onRefreshed(payload: { id: string; prompt: string }) {
+  items.value.push({ kind: "research", id: payload.id, prompt: payload.prompt });
+  scrollToBottom();
+}
+
 async function onSubmit(payload: { prompt: string; depth: Depth; model: string; planFirst: boolean }) {
   busy.value = true;
   errorMsg.value = null;
@@ -159,6 +165,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
             :id="it.id"
             :initial-prompt="it.prompt"
             @done="onTurnDone(it.id, $event)"
+            @refreshed="onRefreshed"
           />
           <div v-else class="space-y-3">
             <div class="flex justify-end">

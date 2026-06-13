@@ -2,11 +2,12 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, Conflict, GraphTrailEntry, RedTeamReport, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
+const emit = defineEmits<{ refreshed: [string] }>();
 
 type Tab = "report" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
@@ -17,6 +18,9 @@ const verification = ref<VerificationReport | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const showWeak = ref(false);
+const diff = ref<ResearchDiff | null>(null);
+const showDiff = ref(false);
+const refreshing = ref(false);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -103,11 +107,23 @@ watch(tab, (t) => {
   if (t === "trail") ensureTrail();
 });
 
-// Citation grounding/integrity loads once the report is final (powers inline hover + scorecard).
+async function ensureDiff() {
+  if (diff.value) return;
+  try {
+    diff.value = await api.getDiff(props.id);
+  } catch {
+    /* no diff (first run) — banner stays hidden */
+  }
+}
+
+// Citation grounding + living-research diff load once the report is final.
 watch(
   () => props.isFinal,
   (final) => {
-    if (final) ensureCitations();
+    if (final) {
+      ensureCitations();
+      ensureDiff();
+    }
   },
   { immediate: true },
 );
@@ -118,6 +134,24 @@ const integrityClass = computed(() => {
   if (r >= 0.5) return "text-amber-500";
   return "text-red-400";
 });
+
+const diffHasChanges = computed(() => {
+  const d = diff.value;
+  return !!d && (d.new_claims.length > 0 || d.dropped_claims.length > 0 || d.shifted_claims.length > 0 || d.new_sources > 0);
+});
+
+async function onRefresh() {
+  refreshing.value = true;
+  error.value = null;
+  try {
+    const res = await api.refreshResearch(props.id);
+    emit("refreshed", res.research_id);
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    refreshing.value = false;
+  }
+}
 
 const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
 
@@ -187,7 +221,15 @@ async function exportReport(fmt: "pdf" | "docx") {
         {{ $t("artifact." + tb) }}
       </button>
 
-      <div v-if="report" class="ml-auto flex items-center gap-1">
+      <div v-if="report && isFinal" class="ml-auto flex items-center gap-1">
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="refreshing"
+          :title="$t('diff.refreshHint')"
+          @click="onRefresh"
+        >
+          {{ refreshing ? $t("diff.refreshing") : "↻ " + $t("diff.refresh") }}
+        </button>
         <button
           class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
           :disabled="!!exporting"
@@ -225,6 +267,34 @@ async function exportReport(fmt: "pdf" | "docx") {
           <ul v-if="showWeak && citations.unsupported_claims.length" class="mt-2 space-y-1 border-t border-bd pt-2">
             <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
           </ul>
+        </div>
+        <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
+          <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
+            <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
+            <span class="text-muted">
+              +{{ diff.new_claims.length }} {{ $t("diff.new") }} · {{ diff.shifted_claims.length }} {{ $t("diff.shifted") }} · {{ diff.new_sources }} {{ $t("diff.sources") }}
+            </span>
+            <span class="ml-auto text-muted">{{ showDiff ? "▾" : "▸" }}</span>
+          </button>
+          <div v-if="showDiff" class="mt-2 space-y-3 border-t border-bd pt-2">
+            <div v-if="diff.shifted_claims.length">
+              <div class="mb-1 font-medium text-muted">{{ $t("diff.shiftedH") }}</div>
+              <div v-for="(s, i) in diff.shifted_claims" :key="i" class="line-clamp-2 text-ink">
+                <span :class="levelClass[s.old_level]">{{ $t("confidence." + s.old_level) }}</span>
+                →
+                <span :class="levelClass[s.new_level]">{{ $t("confidence." + s.new_level) }}</span>
+                {{ s.statement }}
+              </div>
+            </div>
+            <div v-if="diff.new_claims.length">
+              <div class="mb-1 font-medium text-muted">{{ $t("diff.newH") }}</div>
+              <div v-for="(c, i) in diff.new_claims" :key="i" class="line-clamp-2 text-emerald-600 dark:text-emerald-400">+ {{ c }}</div>
+            </div>
+            <div v-if="diff.dropped_claims.length">
+              <div class="mb-1 font-medium text-muted">{{ $t("diff.droppedH") }}</div>
+              <div v-for="(c, i) in diff.dropped_claims" :key="i" class="line-clamp-2 text-muted">− {{ c }}</div>
+            </div>
+          </div>
         </div>
         <MarkdownView v-if="report" :source="report" :grounding="citations?.grounding" :class="{ 'opacity-80': !isFinal }" />
         <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>

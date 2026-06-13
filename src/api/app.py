@@ -48,6 +48,7 @@ from src.api.schemas import (
     ClarifyAnswers,
     RedTeamReport,
     ResearchConflict,
+    ResearchDiff,
     VerificationReport,
     ResearchPlan,
     ResearchPlanUpdate,
@@ -430,6 +431,22 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/citations", response_model=CitationAudit, dependencies=research_guard)
     async def get_research_citations(research_id: str, request: Request):
         return get_research_service(request).get_research_citation_audit(research_id)
+
+    @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
+    async def get_research_diff(research_id: str, request: Request):
+        return get_research_service(request).get_research_diff(research_id)
+
+    @app.post("/v1/research/{research_id}/refresh", response_model=ResearchResponse, dependencies=research_guard)
+    async def refresh_research(
+        research_id: str,
+        request: Request,
+        background_tasks: BackgroundTasks,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        service = get_research_service(request)
+        response, new_id, payload = service.refresh_research(research_id, user_id=owner)
+        background_tasks.add_task(service.decompose_and_enqueue, new_id, payload)
+        return response
 
     @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
     async def get_research_clarifications(research_id: str, request: Request):

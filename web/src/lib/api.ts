@@ -10,6 +10,7 @@ import type {
   CitationAudit,
   PlanItem,
   RedTeamReport,
+  ResearchDiff,
   ResearchGraph,
   ResearchHistoryItem,
   ResearchPlan,
@@ -154,6 +155,12 @@ export const api = {
 
   getCitations: (id: string) =>
     request<CitationAudit>(`/v1/research/${id}/citations`),
+
+  getDiff: (id: string) =>
+    request<ResearchDiff>(`/v1/research/${id}/diff`),
+
+  refreshResearch: (id: string) =>
+    request<CreateResearchResponse>(`/v1/research/${id}/refresh`, { method: "POST" }),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),

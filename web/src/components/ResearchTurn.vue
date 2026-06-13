@@ -12,7 +12,7 @@ import ClarifyCard from "./ClarifyCard.vue";
 // One deep-research run rendered as a conversation turn: the prompt, its live
 // progress, and the final report (with sources/confidence/conflicts tabs).
 const props = defineProps<{ id: string; initialPrompt?: string }>();
-const emit = defineEmits<{ done: [status: string] }>();
+const emit = defineEmits<{ done: [status: string]; refreshed: [{ id: string; prompt: string }] }>();
 const { t, te } = useI18n();
 
 const prompt = ref(props.initialPrompt ?? "");
@@ -188,7 +188,7 @@ onBeforeUnmount(() => close?.());
         v-if="report || done"
         class="animate-fade-in h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
       >
-        <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" />
+        <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" @refreshed="(id) => emit('refreshed', { id, prompt })" />
       </div>
     </template>
   </div>

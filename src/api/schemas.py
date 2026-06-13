@@ -191,6 +191,29 @@ class CitationAudit(BaseModel):
     grounding: List[CitationGround] = Field(default_factory=list)
 
 
+class DiffClaim(BaseModel):
+    """A claim whose confidence shifted between two runs of the same research."""
+    statement: str = ""
+    old_level: str = ""
+    new_level: str = ""
+
+
+class ResearchDiff(BaseModel):
+    """What changed vs the previous run of this research (living-research diff)."""
+    research_id: str = ""
+    compared_to: str = ""   # parent research id
+    compared_at: str = ""   # parent run timestamp (ISO)
+    new_claims: List[str] = Field(default_factory=list)
+    dropped_claims: List[str] = Field(default_factory=list)
+    shifted_claims: List[DiffClaim] = Field(default_factory=list)
+    new_sources: int = 0
+    new_domains: List[str] = Field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.new_claims or self.dropped_claims or self.shifted_claims or self.new_sources)
+
+
 class ReplanRecommendation(BaseModel):
     reason: str
     suggested_queries: List[str] = Field(default_factory=list)

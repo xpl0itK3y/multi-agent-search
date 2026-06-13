@@ -15,6 +15,7 @@ from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
+from src.agents.research_diff import ResearchDiffAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.brokers.redis_broker import RedisBroker
@@ -44,6 +45,7 @@ from src.api.schemas import (
     ResearchPlan,
     CitationAudit,
     RedTeamReport,
+    ResearchDiff,
     ResearchPlanItem,
     ResearchPlanUpdate,
     ResearchSummary,
@@ -130,6 +132,7 @@ class ResearchService:
         self.clarifier = clarifier
         self.red_team_agent = red_team_agent
         self.citation_auditor = CitationAuditAgent()
+        self.research_differ = ResearchDiffAgent()
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
@@ -1301,6 +1304,69 @@ class ResearchService:
             return CitationAudit(research_id=research_id)
         return CitationAudit.model_validate(data)
 
+    # ── living research: refresh + diff vs the previous run ──────────────────────
+
+    def refresh_research(
+        self, parent_id: str, user_id: str | None = None
+    ) -> tuple["ResearchResponse", str, ResearchRequest]:
+        """Re-run a research with the same prompt/depth/model in its thread, linked to the
+        parent so finalize can diff what changed. Auto-runs (no plan step) — one click.
+
+        Returns (response, new_id, request) so the caller can enqueue decompose in the
+        background, mirroring the create-research endpoint.
+        """
+        parent = self.task_store.get_research(parent_id)
+        if not parent:
+            raise HTTPException(status_code=404, detail="Research not found")
+        graph_state = parent.graph_state or {}
+        request = ResearchRequest(
+            prompt=parent.prompt,
+            depth=parent.depth,
+            model=graph_state.get("model"),
+            thread_id=graph_state.get("thread_id") or parent_id,
+            plan_first=False,
+        )
+        response, new_id = self.start_research(request, user_id)
+        new = self.task_store.get_research(new_id)
+        state = dict((new.graph_state if new else None) or {})
+        state["refreshed_from"] = parent_id
+        self.task_store.update_research_graph_state(new_id, state)
+        logger.info("research_refreshed new_id=%s parent_id=%s", new_id, parent_id)
+        return response, new_id, request
+
+    def _maybe_compute_diff(self, research_id: str) -> None:
+        """If this run is a refresh of an earlier one, diff findings + sources and store it."""
+        research = self.task_store.get_research(research_id)
+        parent_id = ((research.graph_state if research else None) or {}).get("refreshed_from")
+        if not parent_id:
+            return
+        parent = self.task_store.get_research(parent_id)
+        if not parent:
+            return
+        try:
+            new_v = self.get_research_verification(research_id)
+            old_v = self.get_research_verification(parent_id)
+            new_domains = [s.domain for s in self.get_research_sources(research_id) if s.domain]
+            old_domains = [s.domain for s in self.get_research_sources(parent_id) if s.domain]
+            diff = self.research_differ.diff(new_v.findings, old_v.findings, new_domains, old_domains)
+            diff.research_id = research_id
+            diff.compared_to = parent_id
+            stamp = getattr(parent, "completed_at", None) or getattr(parent, "updated_at", None) or getattr(parent, "created_at", None)
+            diff.compared_at = stamp.isoformat() if hasattr(stamp, "isoformat") else ""
+            state = dict((self.task_store.get_research(research_id).graph_state) or {})
+            state["diff"] = diff.model_dump()
+            self.task_store.update_research_graph_state(research_id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("research_diff_failed research_id=%s error=%s", research_id, exc)
+
+    def get_research_diff(self, research_id: str) -> ResearchDiff:
+        """Stored 'what changed vs the previous run' for a refreshed research."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("diff")
+        if not data:
+            return ResearchDiff(research_id=research_id)
+        return ResearchDiff.model_validate(data)
+
     def _render_red_team_section(self, red_team: RedTeamReport, language: str) -> str:
         labels = self._RED_TEAM_VERDICT_LABELS.get(language, self._RED_TEAM_VERDICT_LABELS["en"])
         heading = "## Слабые места и контраргументы" if language == "ru" else "## Weaknesses & counter-arguments"
@@ -1425,6 +1491,7 @@ class ResearchService:
                 ResearchStatus.COMPLETED,
                 report,
             )
+            self._maybe_compute_diff(research_id)
 
             # persist token usage into graph_state (U-3)
             if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
