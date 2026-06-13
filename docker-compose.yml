@@ -12,7 +12,7 @@ x-worker-base: &worker-base
   env_file:
     - .env
   environment:
-    POSTGRES_HOST: db
+    POSTGRES_HOST: pgbouncer
     POSTGRES_PORT: 5432
     REDIS_URL: redis://redis:6379/0
     USE_REDIS_BROKER: "true"
@@ -36,7 +36,7 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       REDIS_URL: redis://redis:6379/0
       USE_REDIS_BROKER: "true"
@@ -66,7 +66,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker
 
@@ -74,7 +74,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-2
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker-2
 
@@ -82,7 +82,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-3
     environment:
-      POSTGRES_HOST: db
+      POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker-3
 
@@ -116,6 +116,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  # Connection pooler: multiplexes many app connections onto few Postgres backends
+  # (transaction mode), so the API + workers can scale without exhausting Postgres.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: multi-agent-search-pgbouncer
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-app}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      DB_NAME: ${POSTGRES_DB:-multi_agent_search}
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "25"
+      MIN_POOL_SIZE: "5"
+    ports:
+      - "6432:5432"  # edoburu/pgbouncer listens on 5432 inside the container
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-app} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   migrate:

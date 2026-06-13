@@ -22,6 +22,9 @@ def _engine_kwargs(url: str) -> dict:
             max_overflow=settings.db_max_overflow,
             pool_timeout=settings.db_pool_timeout,
             pool_recycle=settings.db_pool_recycle,
+            # Disable psycopg server-side prepared statements so the app works through a
+            # PgBouncer transaction pool (and it's harmless connecting straight to Postgres).
+            connect_args={"prepare_threshold": None},
         )
     return kwargs
 
