@@ -116,18 +116,23 @@ def create_research_service() -> ResearchService:
 async def lifespan(app: FastAPI):
     service = create_research_service()
     app.state.research_service = service
-    # Recover any decompositions that were lost when the previous process terminated (R-1).
-    try:
-        recovered = service.recover_pending_decompositions()
-        if recovered:
-            print(f"Startup: recovered {recovered} pending decomposition(s)")
-    except Exception as exc:
-        print(f"Warning: startup decomposition recovery failed: {exc}")
-    # Promote any queued researches that have free slots (drains a backlog after a restart).
-    try:
-        promoted = service.promote_queued_researches()
-        if promoted:
-            print(f"Startup: promoted {promoted} queued research(es)")
-    except Exception as exc:
-        print(f"Warning: startup queue promotion failed: {exc}")
+    # With multiple uvicorn workers, only one process should run startup recovery/promotion
+    # (a Redis single-flight lock; without a broker it's a single process anyway).
+    broker = getattr(service, "broker", None)
+    run_startup = broker.try_acquire_lock("startup_recovery", 60) if broker is not None else True
+    if run_startup:
+        # Recover any decompositions that were lost when the previous process terminated (R-1).
+        try:
+            recovered = service.recover_pending_decompositions()
+            if recovered:
+                print(f"Startup: recovered {recovered} pending decomposition(s)")
+        except Exception as exc:
+            print(f"Warning: startup decomposition recovery failed: {exc}")
+        # Promote queued researches that have free slots (drains a backlog after a restart).
+        try:
+            promoted = service.promote_queued_researches()
+            if promoted:
+                print(f"Startup: promoted {promoted} queued research(es)")
+        except Exception as exc:
+            print(f"Warning: startup queue promotion failed: {exc}")
     yield

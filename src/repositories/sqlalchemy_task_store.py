@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.api.schemas import (
@@ -231,6 +231,20 @@ class SQLAlchemyTaskStore:
             result = research_orm_to_record(research)
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
         return result
+
+    def try_claim_queued_research(self, research_id: str) -> bool:
+        """Atomically flip QUEUED -> PROCESSING (only if still queued). True if this caller
+        won the slot — prevents two processes from promoting the same research."""
+        with self.session_scope() as session:
+            outcome = session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id, ResearchORM.status == ResearchStatus.QUEUED.value)
+                .values(status=ResearchStatus.PROCESSING.value, updated_at=datetime.now(timezone.utc))
+            )
+            claimed = outcome.rowcount == 1
+        if claimed:
+            self._emit_change(research_id)
+        return claimed
 
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTaskORM(

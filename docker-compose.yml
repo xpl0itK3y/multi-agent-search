@@ -41,6 +41,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       USE_REDIS_BROKER: "true"
       LOG_FORMAT: json
+      API_WORKERS: "2"
+    # Multiple uvicorn worker processes for request/SSE concurrency. Safe across workers:
+    # startup recovery is single-flighted (Redis lock), queue promotion claims atomically,
+    # and SSE wakes via Redis pub/sub shared by all workers.
+    command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2}"
     ports:
       - "8000:8000"
     restart: unless-stopped

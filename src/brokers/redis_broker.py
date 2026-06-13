@@ -102,6 +102,15 @@ class RedisBroker:
         pubsub.subscribe(self._research_channel(research_id))
         return pubsub
 
+    def try_acquire_lock(self, name: str, ttl_seconds: int = 30) -> bool:
+        """Best-effort single-flight lock (SET NX EX). True if acquired. On Redis error,
+        returns True so a single-process deployment still runs the guarded work."""
+        try:
+            return bool(self._client.set(f"mas:lock:{name}", "1", nx=True, ex=ttl_seconds))
+        except Exception as exc:
+            logger.warning("redis_lock_failed name=%s error=%s", name, exc)
+            return True
+
     def close(self) -> None:
         try:
             self._client.close()

@@ -174,6 +174,16 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
+    def try_claim_queued_research(self, research_id: str) -> bool:
+        """Atomically flip QUEUED -> PROCESSING (only if still queued)."""
+        research = self.researches.get(research_id)
+        if research is None or research.status != ResearchStatus.QUEUED:
+            return False
+        research.status = ResearchStatus.PROCESSING
+        research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
+        return True
+
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTask(**task_data)
         self.tasks[task.id] = task

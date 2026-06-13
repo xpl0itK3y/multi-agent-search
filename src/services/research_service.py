@@ -302,19 +302,21 @@ class ResearchService:
         for item in self._queued_ordered():
             if self._global_running_count() >= cap:
                 break
-            research = self.task_store.get_research(item.id)
-            if not research or research.status != ResearchStatus.QUEUED:
+            # Atomic claim: only the process that flips QUEUED->PROCESSING runs decompose,
+            # so concurrent workers/API processes never double-promote the same research.
+            if not self.task_store.try_claim_queued_research(item.id):
                 continue
-            payload = (research.graph_state or {}).get("decompose_payload")
+            research = self.task_store.get_research(item.id)
+            payload = (research.graph_state or {}).get("decompose_payload") if research else None
             if not payload:
+                self.task_store.update_research_status(item.id, ResearchStatus.FAILED, "Queued research had no plan to run.")
                 continue
             try:
                 request = ResearchRequest.model_validate(payload)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("promote_payload_invalid research_id=%s error=%s", item.id, exc)
+                self.task_store.update_research_status(item.id, ResearchStatus.FAILED, "Queued research plan was invalid.")
                 continue
-            # Flip to running first so it counts toward the cap and won't be double-promoted.
-            self.task_store.update_research_status(item.id, ResearchStatus.PROCESSING)
             _threading.Thread(
                 target=self.decompose_and_enqueue, args=(item.id, request),
                 daemon=True, name=f"promote-{item.id[:8]}",

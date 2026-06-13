@@ -71,3 +71,12 @@ def test_promote_starts_queued_when_slot_frees(monkeypatch):
         store.update_research_status(item.id, ResearchStatus.COMPLETED)
     assert svc.promote_queued_researches() == 1
     assert store.get_research(rid).status != ResearchStatus.QUEUED
+
+
+def test_try_claim_queued_is_atomic_once():
+    store = InMemoryTaskStore()
+    rec = store.add_research(ResearchRequest(prompt="claim topic here", depth=SearchDepth.EASY), task_ids=[])
+    store.update_research_status(rec.id, ResearchStatus.QUEUED)
+    assert store.try_claim_queued_research(rec.id) is True
+    assert store.get_research(rec.id).status == ResearchStatus.PROCESSING
+    assert store.try_claim_queued_research(rec.id) is False  # already claimed — no double promote

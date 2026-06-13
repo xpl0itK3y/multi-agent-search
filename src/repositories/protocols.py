@@ -49,6 +49,8 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
+    def try_claim_queued_research(self, research_id: str) -> bool: ...
+
     def set_research_task_ids(
         self,
         research_id: str,
