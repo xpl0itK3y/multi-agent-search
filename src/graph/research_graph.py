@@ -272,7 +272,9 @@ class FinalizeGraphRunner:
             _last_rlen = [0]
 
             def _streaming_callback(partial: str) -> None:
-                if len(partial) - _last_len[0] >= 500:
+                # Save every +500 chars; also save on a "restart" (partial shorter than
+                # last) so the streamed synthesis replaces the section drafts live.
+                if len(partial) < _last_len[0] or len(partial) - _last_len[0] >= 500:
                     _last_len[0] = len(partial)
                     self.service.task_store.save_partial_report(state["research_id"], partial)
 

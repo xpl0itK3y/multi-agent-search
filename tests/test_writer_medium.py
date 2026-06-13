@@ -131,6 +131,26 @@ def test_source_ladder_is_consistent(depth, expected_pool):
     assert profile["payload_char_budget"] / expected_pool >= 900
 
 
+def test_synthesis_streams_to_callback_when_provided():
+    """Perceived-speed: the merged synthesis streams live instead of appearing all-at-once."""
+
+    class StreamingLLM(RecordingLLM):
+        def generate(self, system_prompt="", user_prompt="", model=None, **kwargs):
+            if system_prompt == AnalyzerAgent.SYNTHESIS_SYSTEM_PROMPT:
+                cb = kwargs.get("streaming_callback")
+                if cb:
+                    cb("## Report\npartial")  # simulate a streamed chunk
+            return super().generate(system_prompt=system_prompt, user_prompt=user_prompt, model=model, **kwargs)
+
+    streamed: list[str] = []
+    AnalyzerAgent(StreamingLLM())._run_parallel_section_analysis(
+        _sources(16), "q", "en", SearchDepth.MEDIUM,
+        chunk_size=8, max_sections=2,
+        synthesis_streaming_callback=lambda s: streamed.append(s),
+    )
+    assert streamed and "Report" in streamed[-1]
+
+
 def test_deep_hard_pool_is_bounded_to_six_sections():
     # 120 deep-tier sources are bounded to six section calls (chunk grows to ~20),
     # so cost stays at ~6 sections + synthesis no matter how deep the pool.

@@ -1210,6 +1210,7 @@ class AnalyzerAgent(BaseAgent):
         model: str | None = None,
         chunk_size: int | None = None,
         max_sections: int | None = None,
+        synthesis_streaming_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         chunk_size = chunk_size or self._PARALLEL_SECTION_CHUNK
         # When a section cap is given, grow the chunk so we never exceed it
@@ -1239,7 +1240,7 @@ class AnalyzerAgent(BaseAgent):
             if section_done_callback:
                 section_done_callback(idx, draft)
 
-        with ThreadPoolExecutor(max_workers=min(n, 4)) as executor:
+        with ThreadPoolExecutor(max_workers=min(n, max(1, settings.analyzer_section_concurrency))) as executor:
             futures = [executor.submit(_run_section, i, chunk) for i, chunk in enumerate(chunks)]
             for future in as_completed(futures):
                 future.result()  # surface any exceptions
@@ -1252,11 +1253,14 @@ class AnalyzerAgent(BaseAgent):
             source_summary=source_summary,
         )
         logger.info("analyzer_synthesis_start section_count=%d", len(completed_drafts))
+        # Stream the synthesis token-by-token so the merged report appears live instead
+        # of all-at-once after a multi-minute call (perceived-speed win, model-agnostic).
         return self.llm.generate(
             system_prompt=self.SYNTHESIS_SYSTEM_PROMPT,
             user_prompt=synthesis_prompt,
             model=model,
             temperature=0.3,
+            streaming_callback=synthesis_streaming_callback,
         )
 
     @maybe_traceable(name="analyzer_run_analysis", run_type="llm")
@@ -1323,8 +1327,10 @@ class AnalyzerAgent(BaseAgent):
                 model=model,
                 chunk_size=section_chunk,
                 max_sections=section_cap,
+                synthesis_streaming_callback=streaming_callback,
             )
-            # Stream the synthesis result too once it's done
+            # Final flush — ensure the complete synthesized report is persisted even if
+            # the provider didn't stream (streaming above already showed it building).
             if streaming_callback:
                 streaming_callback(result)
         else:

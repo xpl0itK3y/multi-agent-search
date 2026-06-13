@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     red_team_enabled: bool = True
     red_team_model: str = "deepseek-chat"  # mechanical judging — use the fast/cheap model
     red_team_max_claims: int = 5
+    # Max concurrent section-writer LLM calls in the multi-stage analyzer (model-agnostic
+    # speed knob — higher writes more report sections at once; watch provider rate limits).
+    analyzer_section_concurrency: int = 6
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
