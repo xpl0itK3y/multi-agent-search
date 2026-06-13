@@ -117,4 +117,11 @@ async def lifespan(app: FastAPI):
             print(f"Startup: recovered {recovered} pending decomposition(s)")
     except Exception as exc:
         print(f"Warning: startup decomposition recovery failed: {exc}")
+    # Promote any queued researches that have free slots (drains a backlog after a restart).
+    try:
+        promoted = service.promote_queued_researches()
+        if promoted:
+            print(f"Startup: promoted {promoted} queued research(es)")
+    except Exception as exc:
+        print(f"Warning: startup queue promotion failed: {exc}")
     yield

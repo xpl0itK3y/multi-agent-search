@@ -58,6 +58,7 @@ export interface ResearchStatusSummary {
   finalize_ready: boolean;
   has_final_report: boolean;
   llm_token_usage?: Record<string, number>;
+  queue_position?: number | null;
 }
 
 export interface SourcePreview {

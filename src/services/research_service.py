@@ -247,15 +247,21 @@ class ResearchService:
         return DecomposeResponse(tasks=registered_tasks, depth=depth)
 
     # Researches actively consuming search/LLM resources (vs. terminal or waiting on user).
-    _BUSY_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
+    _RUNNING_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
+    # A user's "in flight" research includes a queued one, so the per-user guard counts it.
+    _IN_FLIGHT_STATUSES = _RUNNING_STATUSES | {ResearchStatus.QUEUED}
 
-    def _active_research_count(self, user_id: str | None) -> int:
+    def _count_active(self, user_id: str | None, statuses: set) -> int:
         # Only count researches still making progress; a stalled one (dead worker /
-        # hung provider) must not lock the user out forever.
+        # hung provider) must not lock the user (or the global slot) out forever.
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.research_stale_active_seconds)
         count = 0
-        for item in self.task_store.list_researches(limit=100, user_id=user_id):
-            if item.status not in self._BUSY_STATUSES:
+        for item in self.task_store.list_researches(limit=200, user_id=user_id):
+            if item.status not in statuses:
+                continue
+            # Queued items never go stale — they're waiting, not running.
+            if item.status == ResearchStatus.QUEUED:
+                count += 1
                 continue
             updated = item.updated_at
             if updated is not None and updated.tzinfo is None:
@@ -263,6 +269,59 @@ class ResearchService:
             if updated is None or updated >= cutoff:
                 count += 1
         return count
+
+    def _active_research_count(self, user_id: str | None) -> int:
+        return self._count_active(user_id, self._IN_FLIGHT_STATUSES)
+
+    def _global_running_count(self) -> int:
+        """Researches actively RUNNING across all users (excludes queued) — for admission."""
+        return self._count_active(None, self._RUNNING_STATUSES)
+
+    def _queued_ordered(self) -> list:
+        """All QUEUED researches across users, oldest-first (FIFO order)."""
+        queued = [
+            item for item in self.task_store.list_researches(limit=200, user_id=None)
+            if item.status == ResearchStatus.QUEUED
+        ]
+        return sorted(queued, key=lambda r: r.created_at)
+
+    def _queue_position(self, research_id: str) -> int | None:
+        for index, item in enumerate(self._queued_ordered(), start=1):
+            if item.id == research_id:
+                return index
+        return None
+
+    def promote_queued_researches(self) -> int:
+        """Start queued researches (oldest first) while running slots are free under the cap."""
+        cap = settings.max_global_active_researches
+        if cap <= 0:
+            return 0
+        import threading as _threading
+
+        promoted = 0
+        for item in self._queued_ordered():
+            if self._global_running_count() >= cap:
+                break
+            research = self.task_store.get_research(item.id)
+            if not research or research.status != ResearchStatus.QUEUED:
+                continue
+            payload = (research.graph_state or {}).get("decompose_payload")
+            if not payload:
+                continue
+            try:
+                request = ResearchRequest.model_validate(payload)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("promote_payload_invalid research_id=%s error=%s", item.id, exc)
+                continue
+            # Flip to running first so it counts toward the cap and won't be double-promoted.
+            self.task_store.update_research_status(item.id, ResearchStatus.PROCESSING)
+            _threading.Thread(
+                target=self.decompose_and_enqueue, args=(item.id, request),
+                daemon=True, name=f"promote-{item.id[:8]}",
+            ).start()
+            promoted += 1
+            logger.info("research_promoted_from_queue research_id=%s", item.id)
+        return promoted
 
     def start_research(
         self, request: ResearchRequest, user_id: str | None = None
@@ -274,8 +333,12 @@ class ResearchService:
                 status_code=409,
                 detail="A research is already in progress. Please wait for it to finish before starting another.",
             )
+        # Global admission control: queue the research when the system is at capacity.
+        global_cap = settings.max_global_active_researches
+        queued = global_cap > 0 and self._global_running_count() >= global_cap
+
         research = self.task_store.add_research(request, task_ids=[], user_id=user_id)
-        logger.info("research_created research_id=%s depth=%s", research.id, request.depth.value)
+        logger.info("research_created research_id=%s depth=%s queued=%s", research.id, request.depth.value, queued)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
         # update_research_graph_state replaces the entire dict, so merge everything in one call.
         # Group researches into a conversation thread; a new id starts a new thread.
@@ -290,10 +353,15 @@ class ResearchService:
         if request.webhook_url:
             graph_state["webhook_url"] = str(request.webhook_url)
         self.task_store.update_research_graph_state(research.id, graph_state)
+        if queued:
+            # Park it; decompose_and_enqueue will defer, and promote_queued_researches
+            # will start it when a slot frees up.
+            self.task_store.update_research_status(research.id, ResearchStatus.QUEUED)
         return ResearchResponse(
             research_id=research.id,
-            status="success",
-            message="Research created. Task decomposition in progress…",
+            status="queued" if queued else "success",
+            message="Queued — the system is at capacity; it will start automatically." if queued
+            else "Research created. Task decomposition in progress…",
             thread_id=thread_id,
         ), research.id
 
@@ -303,6 +371,10 @@ class ResearchService:
         with bind_observability_context(research_id=research_id):
             try:
                 research = self.task_store.get_research(research_id)
+                # Admission control: a queued research waits for promote_queued_researches.
+                if research is not None and research.status == ResearchStatus.QUEUED:
+                    logger.info("decompose_deferred_queued research_id=%s", research_id)
+                    return
                 graph_state = (research.graph_state if research else None) or {}
                 # Clarify step (plan-first only, once): ask up to 3 questions before planning.
                 if (
@@ -597,6 +669,7 @@ class ResearchService:
             finalize_ready=finalize_ready,
             latest_finalize_job=self.task_store.get_latest_research_finalize_job(research_id),
             llm_token_usage=graph_state.get("llm_token_usage", {}),
+            queue_position=self._queue_position(research_id) if research.status == ResearchStatus.QUEUED else None,
         )
 
     def _store_clarifications_for_review(self, research_id: str, questions: list[str]) -> None:
@@ -1748,6 +1821,12 @@ class ResearchService:
                     )
                     logger.error("finalize_job_dead_letter")
                 return failed_job
+            finally:
+                # A running slot likely just freed — admit the next queued research.
+                try:
+                    self.promote_queued_researches()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning("promote_after_finalize_failed error=%s", exc)
 
     def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         return self.task_store.get_research_finalize_job(job_id)

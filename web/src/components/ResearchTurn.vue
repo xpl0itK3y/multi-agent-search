@@ -31,10 +31,34 @@ const clarification = ref<Clarification | null>(null);
 const clarifyBusy = ref(false);
 
 const DONE = new Set(["completed", "failed", "timeout"]);
+const queuePos = ref<number | null>(null);
 let close: (() => void) | undefined;
+let queuePoll: number | undefined;
 
 function statusLabel(s: string): string {
   return te(`status.${s}`) ? t(`status.${s}`) : s;
+}
+
+// While queued, poll for the (shrinking) queue position; SSE flips status on promotion.
+function startQueuePoll() {
+  if (queuePoll) return;
+  queuePoll = window.setInterval(async () => {
+    if (status.value !== "queued") return stopQueuePoll();
+    try {
+      const s = await api.getStatus(props.id);
+      status.value = s.status;
+      queuePos.value = s.queue_position ?? null;
+      if (s.status !== "queued") stopQueuePoll();
+    } catch {
+      /* transient — keep polling */
+    }
+  }, 4000);
+}
+function stopQueuePoll() {
+  if (queuePoll) {
+    clearInterval(queuePoll);
+    queuePoll = undefined;
+  }
 }
 
 const costLabel = computed(() => {
@@ -80,6 +104,8 @@ onMounted(async () => {
     if (!prompt.value) prompt.value = s.prompt;
     status.value = s.status;
     usage.value = s.llm_token_usage ?? null;
+    queuePos.value = s.queue_position ?? null;
+    if (s.status === "queued") startQueuePoll();
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
     if (DONE.has(s.status)) {
@@ -102,6 +128,8 @@ onMounted(async () => {
   close = openResearchStream(props.id, {
     onStatus: (s) => {
       status.value = s;
+      if (s === "queued") startQueuePoll();
+      else if (queuePos.value !== null) queuePos.value = null;
       if (s === "clarifying" && !clarification.value) loadClarifications();
       if (s !== "clarifying") clarification.value = null;
       if (s === "plan_review" && !plan.value) loadPlan();
@@ -129,7 +157,10 @@ onMounted(async () => {
   });
 });
 
-onBeforeUnmount(() => close?.());
+onBeforeUnmount(() => {
+  close?.();
+  stopQueuePoll();
+});
 </script>
 
 <template>
@@ -170,7 +201,7 @@ onBeforeUnmount(() => close?.());
             'bg-accent animate-pulse': !DONE.has(status),
           }"
         />
-        <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
+        <span class="text-sm text-muted">{{ statusLabel(status) }}<template v-if="status === 'queued' && queuePos"> · #{{ queuePos }}</template></span>
         <span v-if="costLabel" class="ml-auto text-xs text-muted" :title="$t('research.costTitle')">{{ costLabel }}</span>
       </div>
 

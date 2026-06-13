@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_timeout: int = 30
     db_pool_recycle: int = 1800
+    # Global admission control: max researches RUNNING at once across all users. Excess are
+    # QUEUED (with a position) and promoted as slots free — graceful backpressure under load.
+    max_global_active_researches: int = 20
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

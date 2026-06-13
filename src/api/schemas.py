@@ -15,6 +15,7 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 class ResearchStatus(str, Enum):
+    QUEUED = "queued"
     CLARIFYING = "clarifying"
     PLAN_REVIEW = "plan_review"
     PROCESSING = "processing"
@@ -397,6 +398,7 @@ class ResearchStatusSummary(BaseModel):
     finalize_ready: bool = False
     latest_finalize_job: Optional["ResearchFinalizeJob"] = None
     llm_token_usage: Dict[str, Any] = Field(default_factory=dict)
+    queue_position: Optional[int] = None  # 1-based position when status == queued
 
 
 class ResearchConflict(BaseModel):

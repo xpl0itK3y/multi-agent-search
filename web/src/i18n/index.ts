@@ -56,6 +56,7 @@ const ru = {
   },
   nav: { researches: "Исследования" },
   status: {
+    queued: "В очереди",
     plan_review: "Ожидает подтверждения плана",
     clarifying: "Уточнения",
     processing: "Декомпозиция и поиск…",
@@ -267,6 +268,7 @@ const en: typeof ru = {
   },
   nav: { researches: "Researches" },
   status: {
+    queued: "Queued",
     plan_review: "Awaiting plan approval",
     clarifying: "Clarifying",
     processing: "Decomposing and searching…",
@@ -478,6 +480,7 @@ const es: typeof ru = {
   },
   nav: { researches: "Investigaciones" },
   status: {
+    queued: "En cola",
     plan_review: "Esperando aprobación del plan",
     clarifying: "Aclaraciones",
     processing: "Descomponiendo y buscando…",
