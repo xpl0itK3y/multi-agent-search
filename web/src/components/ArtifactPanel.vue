@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { Conflict, GraphTrailEntry, RedTeamReport, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, Conflict, GraphTrailEntry, RedTeamReport, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
@@ -15,6 +15,8 @@ const sources = ref<SourcePreview[] | null>(null);
 const conflicts = ref<Conflict[] | null>(null);
 const verification = ref<VerificationReport | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
+const citations = ref<CitationAudit | null>(null);
+const showWeak = ref(false);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -84,12 +86,37 @@ async function ensureRedTeam() {
   }
 }
 
+async function ensureCitations() {
+  if (citations.value) return;
+  try {
+    citations.value = await api.getCitations(props.id);
+  } catch {
+    /* grounding is optional — the report still renders without it */
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") ensureSources();
   if (t === "confidence") ensureVerification();
   if (t === "conflicts") ensureConflicts();
   if (t === "redteam") ensureRedTeam();
   if (t === "trail") ensureTrail();
+});
+
+// Citation grounding/integrity loads once the report is final (powers inline hover + scorecard).
+watch(
+  () => props.isFinal,
+  (final) => {
+    if (final) ensureCitations();
+  },
+  { immediate: true },
+);
+
+const integrityClass = computed(() => {
+  const r = citations.value?.integrity ?? 0;
+  if (r >= 0.8) return "text-emerald-500";
+  if (r >= 0.5) return "text-amber-500";
+  return "text-red-400";
 });
 
 const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
@@ -182,7 +209,24 @@ async function exportReport(fmt: "pdf" | "docx") {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
       <template v-if="tab === 'report'">
-        <MarkdownView v-if="report" :source="report" :class="{ 'opacity-80': !isFinal }" />
+        <div v-if="citations && citations.total" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-medium text-ink">{{ $t("citations.integrity") }}</span>
+            <span class="font-semibold" :class="integrityClass">{{ Math.round(citations.integrity * 100) }}%</span>
+            <span class="text-muted">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
+            <button
+              v-if="citations.unsupported_claims.length"
+              class="ml-auto text-red-400 hover:underline"
+              @click="showWeak = !showWeak"
+            >
+              ⚠ {{ citations.unsupported_claims.length }} {{ $t("citations.weak") }}
+            </button>
+          </div>
+          <ul v-if="showWeak && citations.unsupported_claims.length" class="mt-2 space-y-1 border-t border-bd pt-2">
+            <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
+          </ul>
+        </div>
+        <MarkdownView v-if="report" :source="report" :grounding="citations?.grounding" :class="{ 'opacity-80': !isFinal }" />
         <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>
       </template>
 

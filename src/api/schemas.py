@@ -168,6 +168,29 @@ class RedTeamReport(BaseModel):
     held: int = 0        # claims that survived the attack
 
 
+class CitationGround(BaseModel):
+    """Per-source grounding for inline hover: the best passage in the cited source."""
+    source_id: str = ""
+    url: str = ""
+    title: str = ""
+    quote: str = ""
+    supported: bool = True
+
+
+class CitationAudit(BaseModel):
+    """Deterministic citation check: does each [Sn] source's text actually match the claim?
+
+    Lexical overlap between the cited sentence and the source content — flags citations
+    whose source doesn't even mention the claim's terms (the big Gemini/Perplexity failure).
+    """
+    research_id: str = ""
+    total: int = 0          # inline citations checked
+    supported: int = 0      # citations whose source text matches the claim
+    integrity: float = 0.0  # supported / total
+    unsupported_claims: List[str] = Field(default_factory=list)
+    grounding: List[CitationGround] = Field(default_factory=list)
+
+
 class ReplanRecommendation(BaseModel):
     reason: str
     suggested_queries: List[str] = Field(default_factory=list)

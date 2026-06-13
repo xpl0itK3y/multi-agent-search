@@ -14,6 +14,7 @@ from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
+from src.agents.citation_audit import CitationAuditAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.brokers.redis_broker import RedisBroker
@@ -41,6 +42,7 @@ from src.api.schemas import (
     Clarification,
     ResearchConflict,
     ResearchPlan,
+    CitationAudit,
     RedTeamReport,
     ResearchPlanItem,
     ResearchPlanUpdate,
@@ -127,6 +129,7 @@ class ResearchService:
         self.chat_agent = chat_agent
         self.clarifier = clarifier
         self.red_team_agent = red_team_agent
+        self.citation_auditor = CitationAuditAgent()
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
@@ -1258,6 +1261,46 @@ class ResearchService:
             return RedTeamReport(research_id=research_id)
         return RedTeamReport.model_validate(data)
 
+    # ── citation audit (deterministic claim↔source grounding) ───────────────────
+
+    def _audit_citations(self, report: str, research, tasks: list) -> None:
+        """Check each [Sn] citation against its source text; store grounding + integrity.
+
+        Reconstructs the analyzer's exact source numbering so [Sn] line up, then matches
+        lexically. Never raises — an audit failure must not break finalization.
+        """
+        if not (report or "").strip():
+            return
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return  # minimal analyzer — no [Sn] numbering to reconstruct
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                source["source_id"]: {
+                    "content": source.get("content"),
+                    "url": source.get("url"),
+                    "title": source.get("title"),
+                }
+                for source in aggregated
+                if source.get("source_id")
+            }
+            audit = self.citation_auditor.audit(report, sources_by_id)
+            audit.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["citation_audit"] = audit.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("citation_audit_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_citation_audit(self, research_id: str) -> CitationAudit:
+        """Stored citation grounding/integrity for inline hover + the trust scorecard."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("citation_audit")
+        if not data:
+            return CitationAudit(research_id=research_id)
+        return CitationAudit.model_validate(data)
+
     def _render_red_team_section(self, red_team: RedTeamReport, language: str) -> str:
         labels = self._RED_TEAM_VERDICT_LABELS.get(language, self._RED_TEAM_VERDICT_LABELS["en"])
         heading = "## Слабые места и контраргументы" if language == "ru" else "## Weaknesses & counter-arguments"
@@ -1375,6 +1418,7 @@ class ResearchService:
                     model=(research.graph_state or {}).get("model"),
                 )
             report = self._maybe_red_team(report, research, tasks)
+            self._audit_citations(report, research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,

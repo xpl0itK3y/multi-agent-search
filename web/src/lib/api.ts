@@ -7,6 +7,7 @@ import type {
   CreateResearchResponse,
   Depth,
   ModelOption,
+  CitationAudit,
   PlanItem,
   RedTeamReport,
   ResearchGraph,
@@ -150,6 +151,9 @@ export const api = {
 
   getRedTeam: (id: string) =>
     request<RedTeamReport>(`/v1/research/${id}/red-team`),
+
+  getCitations: (id: string) =>
+    request<CitationAudit>(`/v1/research/${id}/citations`),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),

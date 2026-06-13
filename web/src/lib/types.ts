@@ -142,6 +142,23 @@ export interface RedTeamReport {
   held: number;
 }
 
+export interface CitationGround {
+  source_id: string;
+  url: string;
+  title: string;
+  quote: string;
+  supported: boolean;
+}
+
+export interface CitationAudit {
+  research_id: string;
+  total: number;
+  supported: number;
+  integrity: number;
+  unsupported_claims: string[];
+  grounding: CitationGround[];
+}
+
 export interface GraphTrailEntry {
   step?: string;
   detail?: string;

@@ -114,6 +114,11 @@ const ru = {
     held: "устояло",
     empty: "Адверсариальная проверка не запускалась — она только для глубокого режима (HARD).",
   },
+  citations: {
+    integrity: "Цитаты",
+    matched: "сопоставлено с источником",
+    weak: "не подтверждены источником",
+  },
   trace: {
     title: "Ход работы",
     reasoning: "Размышления",
@@ -266,6 +271,11 @@ const en: typeof ru = {
     held: "held",
     empty: "No adversarial pass ran — it's deep mode (HARD) only.",
   },
+  citations: {
+    integrity: "Citations",
+    matched: "matched to source",
+    weak: "not backed by source",
+  },
   trace: {
     title: "Progress",
     reasoning: "Reasoning",
@@ -417,6 +427,11 @@ const es: typeof ru = {
     challenged: "discutidas",
     held: "resistieron",
     empty: "No se ejecutó la prueba adversarial — solo en modo profundo (HARD).",
+  },
+  citations: {
+    integrity: "Citas",
+    matched: "coinciden con la fuente",
+    weak: "sin respaldo en la fuente",
   },
   trace: {
     title: "Progreso",
