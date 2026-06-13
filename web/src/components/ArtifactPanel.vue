@@ -208,6 +208,24 @@ const siteMenuOpen = ref(false);
 const customAccent = ref("#c15f3c");
 const customBase = ref<"light" | "dark">("light");
 const siteThemes = ["auto", "light", "dark", "editorial", "slate"] as const;
+const appOpen = ref(false);
+const appPrompt = ref("");
+
+function filenameFrom(res: Response, fallback: string): string {
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
+  return m ? decodeURIComponent(m[1]) : fallback;
+}
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
@@ -220,21 +238,37 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?:
       credentials: "include",
     });
     if (!res.ok) return;
-    const blob = await res.blob();
-    const cd = res.headers.get("Content-Disposition") || "";
-    const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
-    const name = m ? decodeURIComponent(m[1]) : `research.${fmt}`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob(await res.blob(), filenameFrom(res, `research.${fmt}`));
   } finally {
     exporting.value = null;
     siteMenuOpen.value = false;
+  }
+}
+
+// AI-generated custom export: send the user's brief, download the generated HTML.
+async function exportApp() {
+  if (!appPrompt.value.trim() || exporting.value) return;
+  exporting.value = "app";
+  error.value = null;
+  try {
+    const token = localStorage.getItem("access_token");
+    const res = await fetch(`${BASE}/v1/research/${props.id}/export/app`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ prompt: appPrompt.value }),
+    });
+    if (!res.ok) {
+      error.value = res.status === 502 ? t("site.appFailed") : `HTTP ${res.status}`;
+      return;
+    }
+    saveBlob(await res.blob(), filenameFrom(res, "research-app.html"));
+    siteMenuOpen.value = false;
+    appOpen.value = false;
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    exporting.value = null;
   }
 }
 </script>
@@ -326,6 +360,28 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?:
                 >
                   {{ $t("site.download") }}
                 </button>
+              </div>
+            </div>
+            <div class="mt-2 border-t border-bd pt-2">
+              <button class="flex w-full items-center justify-between px-1 text-[11px] text-muted hover:text-ink" @click="appOpen = !appOpen">
+                <span>✨ {{ $t("site.app") }}</span>
+                <span>{{ appOpen ? "▾" : "▸" }}</span>
+              </button>
+              <div v-if="appOpen" class="mt-1 px-1">
+                <textarea
+                  v-model="appPrompt"
+                  :placeholder="$t('site.appPlaceholder')"
+                  rows="3"
+                  class="w-full resize-none rounded border border-bd bg-bg px-2 py-1 text-xs text-ink placeholder:text-muted focus:outline-none"
+                />
+                <button
+                  class="mt-1 w-full rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
+                  :disabled="exporting === 'app' || !appPrompt.trim()"
+                  @click="exportApp"
+                >
+                  {{ exporting === "app" ? $t("site.appBusy") : $t("site.appGo") }}
+                </button>
+                <p class="mt-1 text-[10px] leading-snug text-muted">{{ $t("site.appHint") }}</p>
               </div>
             </div>
           </div>

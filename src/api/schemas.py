@@ -191,6 +191,11 @@ class CitationAudit(BaseModel):
     grounding: List[CitationGround] = Field(default_factory=list)
 
 
+class AppExportRequest(BaseModel):
+    """Free-text design brief for the AI-generated custom HTML export."""
+    prompt: str = Field(default="", max_length=4000)
+
+
 class ComparisonCell(BaseModel):
     """One (option × criterion) value with the source ids that back it."""
     option: str = ""

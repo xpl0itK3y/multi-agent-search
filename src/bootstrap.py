@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.chat import ChatAgent
+from src.agents.app_export import AppExportAgent
 from src.agents.clarifier import ClarifierAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.comparison import ComparisonAgent
@@ -55,6 +56,7 @@ def create_research_service() -> ResearchService:
     clarifier_agent = None
     red_team_agent = None
     comparison_agent = None
+    app_export_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -73,6 +75,7 @@ def create_research_service() -> ResearchService:
         clarifier_agent = ClarifierAgent(llm)          # pre-plan clarifying questions
         red_team_agent = RedTeamAgent(llm)             # adversarial counter-evidence pass
         comparison_agent = ComparisonAgent(llm)        # structured comparison table
+        app_export_agent = AppExportAgent(llm)         # AI-generated custom HTML export
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -98,6 +101,7 @@ def create_research_service() -> ResearchService:
         clarifier=clarifier_agent,
         red_team_agent=red_team_agent,
         comparison_agent=comparison_agent,
+        app_export_agent=app_export_agent,
         broker=_create_broker(),
     )
 
