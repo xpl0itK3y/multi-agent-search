@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     # Max concurrent section-writer LLM calls in the multi-stage analyzer (model-agnostic
     # speed knob — higher writes more report sections at once; watch provider rate limits).
     analyzer_section_concurrency: int = 6
+    # DB connection pool (per process). The SQLAlchemy default (5 + 10 overflow = 15) is
+    # far too small once many SSE/status pollers hit the API — tune these under load and
+    # keep (api_procs + workers) * (pool+overflow) under Postgres max_connections / PgBouncer.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"
