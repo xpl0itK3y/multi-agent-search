@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Global admission control: max researches RUNNING at once across all users. Excess are
     # QUEUED (with a position) and promoted as slots free — graceful backpressure under load.
     max_global_active_researches: int = 20
+    # LLM call rate-limiting: cap concurrent in-flight LLM calls across ALL processes
+    # (global Redis semaphore; in-process fallback). 0 disables. Prevents 429 storms.
+    llm_max_concurrent: int = 16
+    llm_acquire_timeout_seconds: int = 120  # max wait for a slot before proceeding anyway
+    llm_retry_max_attempts: int = 3
+    llm_retry_base_delay: float = 1.0
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

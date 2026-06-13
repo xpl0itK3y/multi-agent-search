@@ -1,4 +1,5 @@
 import logging
+import random
 import threading
 import time
 
@@ -7,11 +8,11 @@ from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from src.config import settings
 from src.core.llm import LLMProvider
 from src.observability import maybe_wrap_openai_client
+from src.providers.rate_limit import get_llm_limiter
 
 logger = logging.getLogger(__name__)
 
 _RETRYABLE = (RateLimitError, APIConnectionError, APITimeoutError)
-_MAX_ATTEMPTS = 3
 
 # DeepSeek Chat pricing (USD per 1M tokens, cache-miss blended estimate)
 _PRICE_INPUT_PER_M  = 0.14
@@ -83,60 +84,68 @@ class DeepSeekProvider(LLMProvider):
             kwargs.setdefault("stream_options", {"include_usage": True})
 
         last_exc: Exception | None = None
+        max_attempts = max(1, settings.llm_retry_max_attempts)
+        base_delay = settings.llm_retry_base_delay
 
-        for attempt in range(_MAX_ATTEMPTS):
+        for attempt in range(max_attempts):
             try:
-                response = self.client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": user_prompt},
-                    ],
-                    stream=use_stream,
-                    **kwargs,
-                )
+                # Hold a global concurrency slot for the whole call (incl. streaming) so a
+                # burst of researches can't overrun the provider into 429s.
+                with get_llm_limiter().slot():
+                    response = self.client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": user_prompt},
+                        ],
+                        stream=use_stream,
+                        **kwargs,
+                    )
 
-                if not use_stream:
-                    if response.usage:
-                        self._record_usage(
-                            response.usage.prompt_tokens,
-                            response.usage.completion_tokens,
-                        )
-                    return response.choices[0].message.content
+                    if not use_stream:
+                        if response.usage:
+                            self._record_usage(
+                                response.usage.prompt_tokens,
+                                response.usage.completion_tokens,
+                            )
+                        return response.choices[0].message.content
 
-                accumulated = ""
-                reasoning_accumulated = ""
-                for chunk in response:
-                    # final usage chunk (stream_options include_usage)
-                    if chunk.usage:
-                        self._record_usage(
-                            chunk.usage.prompt_tokens,
-                            chunk.usage.completion_tokens,
-                        )
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    # Reasoning models expose a separate reasoning_content field on the delta.
-                    reasoning_piece = getattr(delta, "reasoning_content", None) or ""
-                    if reasoning_piece:
-                        reasoning_accumulated += reasoning_piece
-                        if reasoning_callback:
-                            reasoning_callback(reasoning_accumulated)
-                    content_piece = delta.content or ""
-                    if content_piece:
-                        accumulated += content_piece
-                        if streaming_callback:
-                            streaming_callback(accumulated)
-                return accumulated
+                    accumulated = ""
+                    reasoning_accumulated = ""
+                    for chunk in response:
+                        # final usage chunk (stream_options include_usage)
+                        if chunk.usage:
+                            self._record_usage(
+                                chunk.usage.prompt_tokens,
+                                chunk.usage.completion_tokens,
+                            )
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
+                        # Reasoning models expose a separate reasoning_content field on the delta.
+                        reasoning_piece = getattr(delta, "reasoning_content", None) or ""
+                        if reasoning_piece:
+                            reasoning_accumulated += reasoning_piece
+                            if reasoning_callback:
+                                reasoning_callback(reasoning_accumulated)
+                        content_piece = delta.content or ""
+                        if content_piece:
+                            accumulated += content_piece
+                            if streaming_callback:
+                                streaming_callback(accumulated)
+                    return accumulated
 
             except _RETRYABLE as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                # Exponential backoff with jitter; longer for 429 so the provider recovers.
+                wait = base_delay * (2 ** attempt) + random.uniform(0, base_delay)
+                if isinstance(exc, RateLimitError):
+                    wait *= 2
                 logger.warning(
-                    "deepseek_retryable_error attempt=%d/%d wait=%ds error=%s",
-                    attempt + 1, _MAX_ATTEMPTS, wait, exc,
+                    "deepseek_retryable_error attempt=%d/%d wait=%.1fs error=%s",
+                    attempt + 1, max_attempts, wait, exc,
                 )
-                if attempt < _MAX_ATTEMPTS - 1:
+                if attempt < max_attempts - 1:
                     time.sleep(wait)
 
         raise last_exc  # type: ignore[misc]
