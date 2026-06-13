@@ -204,10 +204,19 @@ function stepLabel(step: string): string {
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
-async function exportReport(fmt: "pdf" | "docx" | "html") {
+const siteMenuOpen = ref(false);
+const customAccent = ref("#c15f3c");
+const customBase = ref<"light" | "dark">("light");
+const siteThemes = ["auto", "light", "dark", "editorial", "slate"] as const;
+
+async function exportReport(fmt: "pdf" | "docx" | "html", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
   try {
-    const res = await fetch(`${BASE}/v1/research/${props.id}/export?format=${fmt}`, {
+    const params = new URLSearchParams({ format: fmt });
+    if (opts?.theme) params.set("theme", opts.theme);
+    if (opts?.accent) params.set("accent", opts.accent);
+    if (opts?.base) params.set("base", opts.base);
+    const res = await fetch(`${BASE}/v1/research/${props.id}/export?${params.toString()}`, {
       credentials: "include",
     });
     if (!res.ok) return;
@@ -225,6 +234,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html") {
     URL.revokeObjectURL(url);
   } finally {
     exporting.value = null;
+    siteMenuOpen.value = false;
   }
 }
 </script>
@@ -267,14 +277,43 @@ async function exportReport(fmt: "pdf" | "docx" | "html") {
         >
           DOCX
         </button>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('artifact.exportHtml')"
-          @click="exportReport('html')"
-        >
-          {{ $t("artifact.site") }}
-        </button>
+        <div class="relative">
+          <button
+            class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+            :disabled="!!exporting"
+            :title="$t('artifact.exportHtml')"
+            @click="siteMenuOpen = !siteMenuOpen"
+          >
+            {{ $t("artifact.site") }} ▾
+          </button>
+          <div v-if="siteMenuOpen" class="absolute right-0 z-20 mt-1 w-52 rounded-lg border border-bd bg-surface p-2 shadow-lg">
+            <div class="mb-1 px-1 text-[11px] uppercase tracking-wide text-muted">{{ $t("site.title") }}</div>
+            <button
+              v-for="th in siteThemes"
+              :key="th"
+              class="block w-full rounded px-2 py-1 text-left text-sm text-ink transition-colors hover:bg-surfaceHover"
+              @click="exportReport('html', { theme: th })"
+            >
+              {{ $t("site." + th) }}
+            </button>
+            <div class="mt-2 border-t border-bd pt-2">
+              <div class="mb-1 px-1 text-[11px] text-muted">{{ $t("site.custom") }}</div>
+              <div class="flex items-center gap-1.5 px-1">
+                <input v-model="customAccent" type="color" class="h-7 w-8 shrink-0 cursor-pointer rounded border border-bd bg-transparent" />
+                <select v-model="customBase" class="min-w-0 flex-1 rounded border border-bd bg-bg px-1 py-1 text-xs text-ink">
+                  <option value="light">{{ $t("site.light") }}</option>
+                  <option value="dark">{{ $t("site.dark") }}</option>
+                </select>
+                <button
+                  class="shrink-0 rounded bg-accent px-2 py-1 text-xs font-medium text-bg"
+                  @click="exportReport('html', { theme: 'custom', accent: customAccent, base: customBase })"
+                >
+                  {{ $t("site.download") }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

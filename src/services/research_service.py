@@ -982,8 +982,11 @@ class ResearchService:
         base = "-".join(filter(None, base.split("-")))[:60] or "research"
         return f"{base}.{ext}"
 
-    def export_research_report(self, research_id: str, fmt: str) -> tuple[bytes, str, str]:
-        """Render the final report to PDF/DOCX bytes. Returns (data, media_type, filename)."""
+    def export_research_report(
+        self, research_id: str, fmt: str,
+        theme: str | None = None, accent: str | None = None, base: str | None = None,
+    ) -> tuple[bytes, str, str]:
+        """Render the final report to PDF/DOCX/HTML bytes. Returns (data, media_type, filename)."""
         research = self.task_store.get_research(research_id)
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
@@ -1014,6 +1017,7 @@ class ResearchService:
             data = generate_html(
                 research.final_report, research.prompt, depth, created_at,
                 scorecard=self._export_scorecard(research_id), labels=labels,
+                theme=theme, accent=accent, base=base,
             )
             return data, "text/html; charset=utf-8", self._export_filename(title, "html")
         raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx or html)")

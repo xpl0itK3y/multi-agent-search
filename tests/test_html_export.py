@@ -43,6 +43,30 @@ def test_generate_html_without_scorecard_has_no_cards():
     assert "Body." in out
 
 
+def test_html_theme_dark_uses_dark_vars():
+    out = generate_html("Body.", "Q", theme="dark").decode("utf-8")
+    assert "#262624" in out  # dark background
+    assert "prefers-color-scheme" not in out  # explicit theme → no auto-switch
+
+
+def test_html_auto_theme_has_dark_media():
+    out = generate_html("Body.", "Q").decode("utf-8")  # default = auto
+    assert "prefers-color-scheme:dark" in out
+
+
+def test_html_custom_accent_applied_and_sanitized():
+    ok = generate_html("Body.", "Q", theme="custom", accent="#ff0066", base="light").decode("utf-8")
+    assert "--accent:#ff0066" in ok
+    # a CSS-injection attempt via the accent param is rejected (not a hex color)
+    bad = generate_html("Body.", "Q", theme="custom", accent="red;}body{display:none").decode("utf-8")
+    assert "display:none" not in bad
+
+
+def test_html_editorial_theme_is_serif_body():
+    out = generate_html("Body.", "Q", theme="editorial").decode("utf-8")
+    assert "Iowan Old Style" in out  # editorial uses a serif body stack
+
+
 def test_export_html_via_service():
     store = InMemoryTaskStore()
     svc = ResearchService(task_store=store)

@@ -749,14 +749,25 @@ def _markdown_to_html(md: str) -> str:
     return "\n".join(out)
 
 
-_HTML_CSS = """
-:root{--bg:#faf9f5;--card:#fff;--bd:#e6e3da;--ink:#2b2a27;--muted:#6f6c66;--accent:#c15f3c;--green:#10b981;--amber:#f59e0b;--red:#ef4444}
-@media (prefers-color-scheme:dark){:root{--bg:#262624;--card:#302f2e;--bd:#403f3c;--ink:#ece9e3;--muted:#9a9890;--accent:#d97757}}
+_SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif"
+_SERIF = "Georgia,'Times New Roman',serif"
+_STATUS_VARS = "--green:#10b981;--amber:#f59e0b;--red:#ef4444"
+
+# Each theme is a block of CSS custom properties; the base rules below reference them,
+# so a new look is just a new var set. The user picks one (or a custom accent).
+_THEME_VARS = {
+    "light": f"--bg:#faf9f5;--card:#fff;--bd:#e6e3da;--ink:#2b2a27;--muted:#6f6c66;--accent:#c15f3c;--font-body:{_SANS};--font-head:{_SERIF}",
+    "dark": f"--bg:#262624;--card:#302f2e;--bd:#403f3c;--ink:#ece9e3;--muted:#9a9890;--accent:#d97757;--font-body:{_SANS};--font-head:{_SERIF}",
+    "editorial": f"--bg:#f7f3ea;--card:#fffdf8;--bd:#e3dcc9;--ink:#1f1b16;--muted:#6b6457;--accent:#7c4a2d;--font-body:Georgia,'Iowan Old Style',serif;--font-head:Georgia,serif",
+    "slate": f"--bg:#0f172a;--card:#1e293b;--bd:#334155;--ink:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--font-body:{_SANS};--font-head:{_SANS}",
+}
+
+_HTML_BASE_CSS = """
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 var(--font-body);-webkit-font-smoothing:antialiased}
 main{max-width:760px;margin:0 auto;padding:48px 24px 80px}
 .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
-h1.title{font-family:Georgia,"Times New Roman",serif;font-size:30px;line-height:1.25;margin:.3em 0 .2em}
+h1.title{font-family:var(--font-head);font-size:30px;line-height:1.25;margin:.3em 0 .2em}
 .meta{color:var(--muted);font-size:13px;margin-bottom:28px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:0 0 32px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px}
@@ -765,7 +776,7 @@ h1.title{font-family:Georgia,"Times New Roman",serif;font-size:30px;line-height:
 .card .sub{font-size:12px;color:var(--muted)}
 .g{color:var(--green)}.a{color:var(--amber)}.r{color:var(--red)}
 article{font-size:16px}
-article h1,article h2,article h3,article h4{font-family:Georgia,serif;line-height:1.3;margin:1.6em 0 .5em;color:var(--ink)}
+article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.3;margin:1.6em 0 .5em;color:var(--ink)}
 article h1{font-size:24px}article h2{font-size:21px}article h3{font-size:18px}article h4{font-size:16px}
 article p{margin:.7em 0}article ul,article ol{margin:.6em 0;padding-left:1.4em}article li{margin:.3em 0}
 article a{color:var(--accent);text-decoration:none;word-break:break-word}article a:hover{text-decoration:underline}
@@ -773,6 +784,34 @@ sup.cite{color:var(--accent);font-weight:600;font-size:.7em}
 hr{border:0;border-top:1px solid var(--bd);margin:2em 0}
 footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--bd);color:var(--muted);font-size:12px}
 """
+
+_HEX_RE = re.compile(r"^#?[0-9a-fA-F]{3,8}$")
+
+
+def _safe_color(value: Optional[str]) -> Optional[str]:
+    """Accept only a hex color so a query param can't inject CSS."""
+    if value and _HEX_RE.match(value.strip()):
+        v = value.strip()
+        return v if v.startswith("#") else f"#{v}"
+    return None
+
+
+def _build_css(theme: Optional[str], accent: Optional[str], base: Optional[str]) -> str:
+    theme = (theme or "auto").lower()
+    if theme == "custom":
+        base_vars = _THEME_VARS["dark" if (base or "").lower() == "dark" else "light"]
+        color = _safe_color(accent)
+        if color:
+            base_vars = re.sub(r"--accent:[^;]+", f"--accent:{color}", base_vars)
+        root = f":root{{{base_vars};{_STATUS_VARS}}}"
+    elif theme == "auto":
+        root = (
+            f":root{{{_THEME_VARS['light']};{_STATUS_VARS}}}"
+            f"@media (prefers-color-scheme:dark){{:root{{{_THEME_VARS['dark']}}}}}"
+        )
+    else:
+        root = f":root{{{_THEME_VARS.get(theme, _THEME_VARS['light'])};{_STATUS_VARS}}}"
+    return root + _HTML_BASE_CSS
 
 
 def _card(label: str, value: str, sub: str = "", value_cls: str = "") -> str:
@@ -791,8 +830,15 @@ def generate_html(
     created_at: Optional[str] = None,
     scorecard: Optional[dict] = None,
     labels: Optional[dict] = None,
+    theme: Optional[str] = None,
+    accent: Optional[str] = None,
+    base: Optional[str] = None,
 ) -> bytes:
-    """Render the report as a self-contained, shareable HTML page (report + trust scorecard)."""
+    """Render the report as a self-contained, shareable HTML page (report + trust scorecard).
+
+    ``theme`` picks a look (auto/light/dark/editorial/slate/custom); ``custom`` uses ``accent``
+    (hex) over a light or dark ``base``.
+    """
     labels = labels or {}
     when = created_at or ""
     try:
@@ -831,7 +877,7 @@ def generate_html(
         "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_html_mod.escape(prompt[:120])}</title>"
-        f"<style>{_HTML_CSS}</style></head><body><main>"
+        f"<style>{_build_css(theme, accent, base)}</style></head><body><main>"
         f'<div class="eyebrow">{_html_mod.escape(labels.get("eyebrow", "Research report"))}</div>'
         f'<h1 class="title">{_html_mod.escape(prompt)}</h1>'
         f'<div class="meta">{meta}</div>'

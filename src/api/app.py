@@ -410,9 +410,14 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).get_research_sources(research_id)
 
     @app.get("/v1/research/{research_id}/export", dependencies=research_guard)
-    def export_research(research_id: str, request: Request, format: str = "pdf"):
+    def export_research(
+        research_id: str, request: Request, format: str = "pdf",
+        theme: str | None = None, accent: str | None = None, base: str | None = None,
+    ):
         # sync def -> threadpool (PDF/DOCX generation is blocking)
-        data, media_type, filename = get_research_service(request).export_research_report(research_id, format)
+        data, media_type, filename = get_research_service(request).export_research_report(
+            research_id, format, theme=theme, accent=accent, base=base,
+        )
         ascii_name = filename.encode("ascii", "ignore").decode() or "research"
         disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
         return Response(content=data, media_type=media_type, headers={"Content-Disposition": disposition})
