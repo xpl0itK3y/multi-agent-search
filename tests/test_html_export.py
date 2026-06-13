@@ -76,3 +76,26 @@ def test_export_html_via_service():
     assert media.startswith("text/html")
     assert name.endswith(".html")
     assert b"<!DOCTYPE html>" in data and b"Compare X and Y" in data
+
+
+def test_export_md_via_service():
+    store = InMemoryTaskStore()
+    svc = ResearchService(task_store=store)
+    rec = store.add_research(ResearchRequest(prompt="Topic here", depth=SearchDepth.EASY), task_ids=[])
+    store.update_research_status(rec.id, ResearchStatus.COMPLETED, "## Report\nBody.")
+    data, media, name = svc.export_research_report(rec.id, "md")
+    assert media.startswith("text/markdown") and name.endswith(".md")
+    assert data == b"## Report\nBody."
+
+
+def test_export_json_via_service():
+    import json as _json
+    store = InMemoryTaskStore()
+    svc = ResearchService(task_store=store)
+    rec = store.add_research(ResearchRequest(prompt="Topic here", depth=SearchDepth.EASY), task_ids=[])
+    store.update_research_status(rec.id, ResearchStatus.COMPLETED, "## Report\nBody.")
+    data, media, name = svc.export_research_report(rec.id, "json")
+    assert media.startswith("application/json") and name.endswith(".json")
+    obj = _json.loads(data)
+    assert obj["prompt"] == "Topic here" and obj["report"] == "## Report\nBody."
+    assert "verification" in obj and "sources" in obj

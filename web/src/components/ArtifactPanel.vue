@@ -209,7 +209,7 @@ const customAccent = ref("#c15f3c");
 const customBase = ref<"light" | "dark">("light");
 const siteThemes = ["auto", "light", "dark", "editorial", "slate"] as const;
 
-async function exportReport(fmt: "pdf" | "docx" | "html", opts?: { theme?: string; accent?: string; base?: string }) {
+async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
   try {
     const params = new URLSearchParams({ format: fmt });
@@ -276,6 +276,22 @@ async function exportReport(fmt: "pdf" | "docx" | "html", opts?: { theme?: strin
           @click="exportReport('docx')"
         >
           DOCX
+        </button>
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('artifact.export')"
+          @click="exportReport('md')"
+        >
+          MD
+        </button>
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('artifact.exportJson')"
+          @click="exportReport('json')"
+        >
+          JSON
         </button>
         <div class="relative">
           <button

@@ -103,6 +103,7 @@ const ru = {
     dashboard: "Дашборд",
     site: "Сайт",
     exportHtml: "Скачать как сайт (HTML)",
+    exportJson: "Структурный экспорт (JSON)",
   },
   confidence: {
     strong: "высокая",
@@ -307,6 +308,7 @@ const en: typeof ru = {
     dashboard: "Dashboard",
     site: "Site",
     exportHtml: "Download as a site (HTML)",
+    exportJson: "Structured export (JSON)",
   },
   confidence: {
     strong: "high",
@@ -511,6 +513,7 @@ const es: typeof ru = {
     dashboard: "Panel",
     site: "Sitio",
     exportHtml: "Descargar como sitio (HTML)",
+    exportJson: "Exportación estructurada (JSON)",
   },
   confidence: {
     strong: "alta",

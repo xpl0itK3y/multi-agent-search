@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 import secrets
@@ -1020,7 +1021,38 @@ class ResearchService:
                 theme=theme, accent=accent, base=base,
             )
             return data, "text/html; charset=utf-8", self._export_filename(title, "html")
-        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx or html)")
+        if normalized in ("md", "markdown"):
+            return research.final_report.encode("utf-8"), "text/markdown; charset=utf-8", self._export_filename(title, "md")
+        if normalized == "json":
+            payload = self._export_json_payload(research, depth, created_at)
+            data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            return data, "application/json; charset=utf-8", self._export_filename(title, "json")
+        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx, html, md or json)")
+
+    def _export_json_payload(self, research, depth: str, created_at: str | None) -> dict:
+        """Full structured export — the report plus all trust artifacts as machine-readable data."""
+
+        def safe(fn):
+            try:
+                value = fn()
+                return value.model_dump() if hasattr(value, "model_dump") else value
+            except Exception:  # pragma: no cover - defensive
+                return None
+
+        rid = research.id
+        return {
+            "research_id": rid,
+            "prompt": research.prompt,
+            "depth": depth,
+            "created_at": created_at,
+            "report": research.final_report,
+            "verification": safe(lambda: self.get_research_verification(rid)),
+            "citations": safe(lambda: self.get_research_citation_audit(rid)),
+            "red_team": safe(lambda: self.get_research_red_team(rid)),
+            "comparison": safe(lambda: self.get_research_comparison(rid)),
+            "diff": safe(lambda: self.get_research_diff(rid)),
+            "sources": safe(lambda: [s.model_dump() for s in self.get_research_sources(rid)]),
+        }
 
     _HTML_EXPORT_LABELS = {
         "ru": {
