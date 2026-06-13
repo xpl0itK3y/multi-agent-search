@@ -4,12 +4,13 @@ import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import type { CitationAudit, ComparisonRow, ComparisonTable, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
+import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 const emit = defineEmits<{ refreshed: [string] }>();
 
-type Tab = "report" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
+type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
@@ -169,9 +170,9 @@ async function onRefresh() {
 }
 
 const tabKeys = computed<Tab[]>(() => {
-  const base: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
+  const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
   // The comparison tab only appears when the query actually produced a table.
-  if (comparison.value && comparison.value.options.length >= 2) base.splice(1, 0, "comparison");
+  if (comparison.value && comparison.value.options.length >= 2) base.splice(2, 0, "comparison");
   return base;
 });
 
@@ -318,6 +319,10 @@ async function exportReport(fmt: "pdf" | "docx") {
         </div>
         <MarkdownView v-if="report" :source="report" :grounding="citations?.grounding" :class="{ 'opacity-80': !isFinal }" />
         <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>
+      </template>
+
+      <template v-else-if="tab === 'dashboard'">
+        <ResearchDashboard :id="id" @navigate="(t) => (tab = t as Tab)" />
       </template>
 
       <template v-else-if="tab === 'comparison'">
