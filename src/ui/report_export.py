@@ -679,3 +679,165 @@ def generate_docx(
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ── HTML export (self-contained, shareable "mini-site") ──────────────────────────
+
+import html as _html_mod
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_MD_CITE = re.compile(r"\[S(\d+)\]")
+_MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)")
+_MD_BULLET = re.compile(r"^[-*]\s+(.*)")
+_MD_NUMBERED = re.compile(r"^\d+\.\s+(.*)")
+
+
+def _md_inline(text: str) -> str:
+    """Inline markdown on already HTML-escaped text: links, bold, [Sn] citations."""
+    text = _MD_LINK.sub(r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>', text)
+    text = _MD_BOLD.sub(r"<strong>\1</strong>", text)
+    text = _MD_CITE.sub(r'<sup class="cite">[S\1]</sup>', text)
+    return text
+
+
+def _markdown_to_html(md: str) -> str:
+    out: list[str] = []
+    para: list[str] = []
+    list_type: Optional[str] = None
+
+    def flush_para() -> None:
+        if para:
+            out.append("<p>" + _md_inline(_html_mod.escape(" ".join(para))) + "</p>")
+            para.clear()
+
+    def close_list() -> None:
+        nonlocal list_type
+        if list_type:
+            out.append(f"</{list_type}>")
+            list_type = None
+
+    for raw in (md or "").split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            flush_para()
+            close_list()
+            continue
+        heading = _MD_HEADING.match(stripped)
+        if heading:
+            flush_para()
+            close_list()
+            level = len(heading.group(1))
+            out.append(f"<h{level}>" + _md_inline(_html_mod.escape(heading.group(2))) + f"</h{level}>")
+            continue
+        bullet = _MD_BULLET.match(stripped)
+        numbered = _MD_NUMBERED.match(stripped)
+        if bullet or numbered:
+            flush_para()
+            want = "ul" if bullet else "ol"
+            if list_type != want:
+                close_list()
+                out.append(f"<{want}>")
+                list_type = want
+            out.append("<li>" + _md_inline(_html_mod.escape((bullet or numbered).group(1))) + "</li>")
+            continue
+        close_list()
+        para.append(stripped)
+
+    flush_para()
+    close_list()
+    return "\n".join(out)
+
+
+_HTML_CSS = """
+:root{--bg:#faf9f5;--card:#fff;--bd:#e6e3da;--ink:#2b2a27;--muted:#6f6c66;--accent:#c15f3c;--green:#10b981;--amber:#f59e0b;--red:#ef4444}
+@media (prefers-color-scheme:dark){:root{--bg:#262624;--card:#302f2e;--bd:#403f3c;--ink:#ece9e3;--muted:#9a9890;--accent:#d97757}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:48px 24px 80px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
+h1.title{font-family:Georgia,"Times New Roman",serif;font-size:30px;line-height:1.25;margin:.3em 0 .2em}
+.meta{color:var(--muted);font-size:13px;margin-bottom:28px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:0 0 32px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px}
+.card .lbl{font-size:12px;color:var(--muted)}
+.card .val{font-size:26px;font-weight:700;margin-top:4px}
+.card .sub{font-size:12px;color:var(--muted)}
+.g{color:var(--green)}.a{color:var(--amber)}.r{color:var(--red)}
+article{font-size:16px}
+article h1,article h2,article h3,article h4{font-family:Georgia,serif;line-height:1.3;margin:1.6em 0 .5em;color:var(--ink)}
+article h1{font-size:24px}article h2{font-size:21px}article h3{font-size:18px}article h4{font-size:16px}
+article p{margin:.7em 0}article ul,article ol{margin:.6em 0;padding-left:1.4em}article li{margin:.3em 0}
+article a{color:var(--accent);text-decoration:none;word-break:break-word}article a:hover{text-decoration:underline}
+sup.cite{color:var(--accent);font-weight:600;font-size:.7em}
+hr{border:0;border-top:1px solid var(--bd);margin:2em 0}
+footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--bd);color:var(--muted);font-size:12px}
+"""
+
+
+def _card(label: str, value: str, sub: str = "", value_cls: str = "") -> str:
+    cls = f" {value_cls}" if value_cls else ""
+    sub_html = f'<div class="sub">{_html_mod.escape(sub)}</div>' if sub else ""
+    return (
+        f'<div class="card"><div class="lbl">{_html_mod.escape(label)}</div>'
+        f'<div class="val{cls}">{_html_mod.escape(value)}</div>{sub_html}</div>'
+    )
+
+
+def generate_html(
+    report: str,
+    prompt: str,
+    depth: str = "",
+    created_at: Optional[str] = None,
+    scorecard: Optional[dict] = None,
+    labels: Optional[dict] = None,
+) -> bytes:
+    """Render the report as a self-contained, shareable HTML page (report + trust scorecard)."""
+    labels = labels or {}
+    when = created_at or ""
+    try:
+        when = datetime.fromisoformat(created_at).strftime("%Y-%m-%d") if created_at else ""
+    except (ValueError, TypeError):
+        pass
+
+    cards = ""
+    sc = scorecard or {}
+    if sc.get("coverage_pct") is not None:
+        cards += _card(labels.get("coverage", "Plan coverage"), f"{sc['coverage_pct']}%")
+    if sc.get("integrity_pct") is not None:
+        cls = "g" if sc["integrity_pct"] >= 80 else "a" if sc["integrity_pct"] >= 50 else "r"
+        cards += _card(
+            labels.get("citations", "Citations"), f"{sc['integrity_pct']}%",
+            f"{sc.get('supported', 0)}/{sc.get('total', 0)}", cls,
+        )
+    if sc.get("sources"):
+        high = sc.get("high_sources") or 0
+        cards += _card(labels.get("sources", "Sources"), str(sc["sources"]),
+                       f"{high} {labels.get('highQuality', 'high quality')}" if high else "")
+    if sc.get("has_redteam"):
+        cards += _card(
+            labels.get("redteam", "Red-team"),
+            f"{sc.get('challenged', 0)} / {sc.get('held', 0)}",
+            labels.get("challengedHeld", "challenged / held"),
+        )
+    cards_html = f'<div class="cards">{cards}</div>' if cards else ""
+
+    meta_bits = [b for b in [depth, when] if b]
+    meta = " · ".join(_html_mod.escape(b) for b in meta_bits)
+    body = _markdown_to_html(report)
+    footer = labels.get("footer", "Generated with verifiable research — every claim traceable to its source.")
+
+    page = (
+        "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{_html_mod.escape(prompt[:120])}</title>"
+        f"<style>{_HTML_CSS}</style></head><body><main>"
+        f'<div class="eyebrow">{_html_mod.escape(labels.get("eyebrow", "Research report"))}</div>'
+        f'<h1 class="title">{_html_mod.escape(prompt)}</h1>'
+        f'<div class="meta">{meta}</div>'
+        f"{cards_html}"
+        f"<article>{body}</article>"
+        f"<footer>{_html_mod.escape(footer)}</footer>"
+        "</main></body></html>"
+    )
+    return page.encode("utf-8")

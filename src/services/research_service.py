@@ -1006,7 +1006,59 @@ class ResearchService:
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 self._export_filename(title, "docx"),
             )
-        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf or docx)")
+        if normalized == "html":
+            from src.ui.report_export import generate_html
+
+            language = self._detect_report_language(research.prompt, research.final_report)
+            labels = self._HTML_EXPORT_LABELS.get(language, self._HTML_EXPORT_LABELS["en"])
+            data = generate_html(
+                research.final_report, research.prompt, depth, created_at,
+                scorecard=self._export_scorecard(research_id), labels=labels,
+            )
+            return data, "text/html; charset=utf-8", self._export_filename(title, "html")
+        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx or html)")
+
+    _HTML_EXPORT_LABELS = {
+        "ru": {
+            "coverage": "Покрытие плана", "citations": "Цитаты", "sources": "Источников",
+            "highQuality": "высокого качества", "redteam": "Red-team", "challengedHeld": "оспорено / устояло",
+            "eyebrow": "Исследование",
+            "footer": "Сделано в verifiable research — каждое утверждение прослеживается до источника.",
+        },
+        "en": {
+            "coverage": "Plan coverage", "citations": "Citations", "sources": "Sources",
+            "highQuality": "high quality", "redteam": "Red-team", "challengedHeld": "challenged / held",
+            "eyebrow": "Research report",
+            "footer": "Generated with verifiable research — every claim traceable to its source.",
+        },
+    }
+
+    def _export_scorecard(self, research_id: str) -> dict:
+        """Trust metrics for the HTML export header (best-effort — each metric is optional)."""
+        sc: dict = {}
+        try:
+            sc["coverage_pct"] = round(self.get_research_verification(research_id).coverage_ratio * 100)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        try:
+            citations = self.get_research_citation_audit(research_id)
+            if citations.total:
+                sc.update(integrity_pct=round(citations.integrity * 100), supported=citations.supported, total=citations.total)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        try:
+            sources = self.get_research_sources(research_id)
+            sc["sources"] = len(sources)
+            sc["high_sources"] = sum(1 for s in sources if (s.source_quality or "") == "high")
+        except Exception:  # pragma: no cover - defensive
+            pass
+        try:
+            red_team = self.get_research_red_team(research_id)
+            if red_team.findings:
+                sc.update(has_redteam=True, challenged=red_team.challenged, held=red_team.held)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return sc
 
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)

@@ -101,6 +101,8 @@ const ru = {
     redteam: "Контраргументы",
     comparison: "Сравнение",
     dashboard: "Дашборд",
+    site: "Сайт",
+    exportHtml: "Скачать как сайт (HTML)",
   },
   confidence: {
     strong: "высокая",
@@ -293,6 +295,8 @@ const en: typeof ru = {
     redteam: "Counter-arguments",
     comparison: "Comparison",
     dashboard: "Dashboard",
+    site: "Site",
+    exportHtml: "Download as a site (HTML)",
   },
   confidence: {
     strong: "high",
@@ -485,6 +489,8 @@ const es: typeof ru = {
     redteam: "Contraargumentos",
     comparison: "Comparación",
     dashboard: "Panel",
+    site: "Sitio",
+    exportHtml: "Descargar como sitio (HTML)",
   },
   confidence: {
     strong: "alta",

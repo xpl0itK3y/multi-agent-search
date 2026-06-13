@@ -204,7 +204,7 @@ function stepLabel(step: string): string {
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
-async function exportReport(fmt: "pdf" | "docx") {
+async function exportReport(fmt: "pdf" | "docx" | "html") {
   exporting.value = fmt;
   try {
     const res = await fetch(`${BASE}/v1/research/${props.id}/export?format=${fmt}`, {
@@ -266,6 +266,14 @@ async function exportReport(fmt: "pdf" | "docx") {
           @click="exportReport('docx')"
         >
           DOCX
+        </button>
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('artifact.exportHtml')"
+          @click="exportReport('html')"
+        >
+          {{ $t("artifact.site") }}
         </button>
       </div>
     </div>
