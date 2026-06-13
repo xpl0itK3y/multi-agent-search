@@ -2,14 +2,14 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 const emit = defineEmits<{ refreshed: [string] }>();
 
-type Tab = "report" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
+type Tab = "report" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
@@ -21,6 +21,7 @@ const showWeak = ref(false);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
 const refreshing = ref(false);
+const comparison = ref<ComparisonTable | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -116,17 +117,31 @@ async function ensureDiff() {
   }
 }
 
-// Citation grounding + living-research diff load once the report is final.
+async function ensureComparison() {
+  if (comparison.value) return;
+  try {
+    comparison.value = await api.getComparison(props.id);
+  } catch {
+    /* not a comparison — tab stays hidden */
+  }
+}
+
+// Citation grounding, living-research diff and the comparison table load once final.
 watch(
   () => props.isFinal,
   (final) => {
     if (final) {
       ensureCitations();
       ensureDiff();
+      ensureComparison();
     }
   },
   { immediate: true },
 );
+
+function cellFor(row: ComparisonRow, option: string) {
+  return row.cells.find((c) => c.option === option) || null;
+}
 
 const integrityClass = computed(() => {
   const r = citations.value?.integrity ?? 0;
@@ -153,7 +168,12 @@ async function onRefresh() {
   }
 }
 
-const tabKeys: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
+const tabKeys = computed<Tab[]>(() => {
+  const base: Tab[] = ["report", "sources", "confidence", "conflicts", "redteam", "trail"];
+  // The comparison tab only appears when the query actually produced a table.
+  if (comparison.value && comparison.value.options.length >= 2) base.splice(1, 0, "comparison");
+  return base;
+});
 
 function shortUrl(u: string): string {
   try {
@@ -298,6 +318,40 @@ async function exportReport(fmt: "pdf" | "docx") {
         </div>
         <MarkdownView v-if="report" :source="report" :grounding="citations?.grounding" :class="{ 'opacity-80': !isFinal }" />
         <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>
+      </template>
+
+      <template v-else-if="tab === 'comparison'">
+        <div v-if="comparison && comparison.options.length >= 2" class="space-y-4">
+          <div class="overflow-x-auto">
+            <table class="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th class="border-b border-bd px-2 py-2 text-left"></th>
+                  <th v-for="o in comparison.options" :key="o" class="border-b border-bd px-2 py-2 text-left font-medium text-ink">{{ o }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, i) in comparison.rows" :key="i" class="align-top">
+                  <td class="border-b border-bd px-2 py-2 font-medium text-muted">{{ row.criterion }}</td>
+                  <td v-for="o in comparison.options" :key="o" class="border-b border-bd px-2 py-2 text-ink">
+                    <template v-if="cellFor(row, o)">
+                      {{ cellFor(row, o)!.value }}
+                      <span
+                        v-if="cellFor(row, o)!.source_ids.length"
+                        class="ml-1 text-[10px] font-semibold text-accent"
+                      >{{ cellFor(row, o)!.source_ids.map((s) => "[" + s + "]").join("") }}</span>
+                    </template>
+                    <span v-else class="text-muted">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="comparison.recommendation" class="rounded-lg border border-bd bg-surface/40 p-3 text-sm text-ink">
+            <span class="font-medium">{{ $t("comparison.recommendation") }}:</span> {{ comparison.recommendation }}
+          </p>
+        </div>
+        <p v-else class="text-muted">{{ $t("comparison.empty") }}</p>
       </template>
 
       <template v-else-if="tab === 'sources'">

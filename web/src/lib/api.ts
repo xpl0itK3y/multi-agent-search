@@ -3,6 +3,7 @@ import type {
   AuthUser,
   ChatMessage,
   Clarification,
+  ComparisonTable,
   Conflict,
   CreateResearchResponse,
   Depth,
@@ -158,6 +159,9 @@ export const api = {
 
   getDiff: (id: string) =>
     request<ResearchDiff>(`/v1/research/${id}/diff`),
+
+  getComparison: (id: string) =>
+    request<ComparisonTable>(`/v1/research/${id}/comparison`),
 
   refreshResearch: (id: string) =>
     request<CreateResearchResponse>(`/v1/research/${id}/refresh`, { method: "POST" }),

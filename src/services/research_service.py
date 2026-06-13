@@ -44,6 +44,7 @@ from src.api.schemas import (
     ResearchConflict,
     ResearchPlan,
     CitationAudit,
+    ComparisonTable,
     RedTeamReport,
     ResearchDiff,
     ResearchPlanItem,
@@ -117,6 +118,7 @@ class ResearchService:
         chat_agent=None,
         clarifier=None,
         red_team_agent=None,
+        comparison_agent=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -131,6 +133,7 @@ class ResearchService:
         self.chat_agent = chat_agent
         self.clarifier = clarifier
         self.red_team_agent = red_team_agent
+        self.comparison_agent = comparison_agent
         self.citation_auditor = CitationAuditAgent()
         self.research_differ = ResearchDiffAgent()
         self.broker = broker
@@ -1304,6 +1307,48 @@ class ResearchService:
             return CitationAudit(research_id=research_id)
         return CitationAudit.model_validate(data)
 
+    # ── structured comparison table ─────────────────────────────────────────────
+
+    _COMPARISON_SIGNALS = (
+        "сравни", "сравнение", "что лучше", "лучше ли", " против ", " или ", "разница между",
+        "vs", "versus", "compare", "comparison", "difference between", " or ", "better",
+    )
+
+    def _looks_like_comparison(self, prompt: str) -> bool:
+        lowered = f" {(prompt or '').lower()} "
+        return any(signal in lowered for signal in self._COMPARISON_SIGNALS)
+
+    def _maybe_build_comparison(self, report: str, research) -> None:
+        """If the query compares named options, extract a scored table and store it.
+
+        Heuristic-gated (only comparison-shaped prompts run the LLM). Never raises.
+        """
+        if self.comparison_agent is None or not (report or "").strip():
+            return
+        if not self._looks_like_comparison(research.prompt):
+            return
+        try:
+            language = self._detect_report_language(research.prompt, report)
+            table = self.comparison_agent.build(
+                research.prompt, report, language=language, model=settings.red_team_model
+            )
+            if not table.has_table:
+                return
+            table.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["comparison"] = table.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("comparison_build_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_comparison(self, research_id: str) -> ComparisonTable:
+        """Stored comparison table for the artifact panel (empty when not a comparison)."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("comparison")
+        if not data:
+            return ComparisonTable(research_id=research_id)
+        return ComparisonTable.model_validate(data)
+
     # ── living research: refresh + diff vs the previous run ──────────────────────
 
     def refresh_research(
@@ -1485,6 +1530,7 @@ class ResearchService:
                 )
             report = self._maybe_red_team(report, research, tasks)
             self._audit_citations(report, research, tasks)
+            self._maybe_build_comparison(report, research)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,

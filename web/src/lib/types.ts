@@ -159,6 +159,24 @@ export interface CitationAudit {
   grounding: CitationGround[];
 }
 
+export interface ComparisonCell {
+  option: string;
+  value: string;
+  source_ids: string[];
+}
+
+export interface ComparisonRow {
+  criterion: string;
+  cells: ComparisonCell[];
+}
+
+export interface ComparisonTable {
+  research_id: string;
+  options: string[];
+  rows: ComparisonRow[];
+  recommendation: string;
+}
+
 export interface DiffClaim {
   statement: string;
   old_level: string;

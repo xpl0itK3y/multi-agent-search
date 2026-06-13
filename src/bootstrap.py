@@ -6,6 +6,7 @@ from src.agents.analyzer import AnalyzerAgent
 from src.agents.chat import ChatAgent
 from src.agents.clarifier import ClarifierAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.comparison import ComparisonAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
@@ -53,6 +54,7 @@ def create_research_service() -> ResearchService:
     chat_agent = None
     clarifier_agent = None
     red_team_agent = None
+    comparison_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -70,6 +72,7 @@ def create_research_service() -> ResearchService:
         chat_agent = ChatAgent(llm)                    # grounded follow-up Q&A
         clarifier_agent = ClarifierAgent(llm)          # pre-plan clarifying questions
         red_team_agent = RedTeamAgent(llm)             # adversarial counter-evidence pass
+        comparison_agent = ComparisonAgent(llm)        # structured comparison table
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -94,6 +97,7 @@ def create_research_service() -> ResearchService:
         chat_agent=chat_agent,
         clarifier=clarifier_agent,
         red_team_agent=red_team_agent,
+        comparison_agent=comparison_agent,
         broker=_create_broker(),
     )
 

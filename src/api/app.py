@@ -46,6 +46,7 @@ from src.api.schemas import (
     CitationAudit,
     Clarification,
     ClarifyAnswers,
+    ComparisonTable,
     RedTeamReport,
     ResearchConflict,
     ResearchDiff,
@@ -435,6 +436,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
     async def get_research_diff(research_id: str, request: Request):
         return get_research_service(request).get_research_diff(research_id)
+
+    @app.get("/v1/research/{research_id}/comparison", response_model=ComparisonTable, dependencies=research_guard)
+    async def get_research_comparison(research_id: str, request: Request):
+        return get_research_service(request).get_research_comparison(research_id)
 
     @app.post("/v1/research/{research_id}/refresh", response_model=ResearchResponse, dependencies=research_guard)
     async def refresh_research(

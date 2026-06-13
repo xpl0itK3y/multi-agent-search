@@ -99,6 +99,7 @@ const ru = {
     confidenceEmpty: "Данных для оценки уверенности пока нет.",
     export: "Экспорт",
     redteam: "Контраргументы",
+    comparison: "Сравнение",
   },
   confidence: {
     strong: "высокая",
@@ -130,6 +131,10 @@ const ru = {
     refresh: "Обновить",
     refreshing: "Запуск…",
     refreshHint: "Перезапустить и сравнить с этим прогоном",
+  },
+  comparison: {
+    recommendation: "Вывод",
+    empty: "Это не сравнение — таблица не сформирована.",
   },
   trace: {
     title: "Ход работы",
@@ -268,6 +273,7 @@ const en: typeof ru = {
     confidenceEmpty: "No confidence data yet.",
     export: "Export",
     redteam: "Counter-arguments",
+    comparison: "Comparison",
   },
   confidence: {
     strong: "high",
@@ -299,6 +305,10 @@ const en: typeof ru = {
     refresh: "Refresh",
     refreshing: "Starting…",
     refreshHint: "Re-run and compare against this run",
+  },
+  comparison: {
+    recommendation: "Bottom line",
+    empty: "Not a comparison — no table.",
   },
   trace: {
     title: "Progress",
@@ -437,6 +447,7 @@ const es: typeof ru = {
     confidenceEmpty: "Aún no hay datos de confianza.",
     export: "Exportar",
     redteam: "Contraargumentos",
+    comparison: "Comparación",
   },
   confidence: {
     strong: "alta",
@@ -468,6 +479,10 @@ const es: typeof ru = {
     refresh: "Actualizar",
     refreshing: "Iniciando…",
     refreshHint: "Volver a ejecutar y comparar con esta versión",
+  },
+  comparison: {
+    recommendation: "Conclusión",
+    empty: "No es una comparación — sin tabla.",
   },
   trace: {
     title: "Progreso",

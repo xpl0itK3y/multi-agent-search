@@ -191,6 +191,30 @@ class CitationAudit(BaseModel):
     grounding: List[CitationGround] = Field(default_factory=list)
 
 
+class ComparisonCell(BaseModel):
+    """One (option × criterion) value with the source ids that back it."""
+    option: str = ""
+    value: str = ""
+    source_ids: List[str] = Field(default_factory=list)
+
+
+class ComparisonRow(BaseModel):
+    criterion: str = ""
+    cells: List[ComparisonCell] = Field(default_factory=list)
+
+
+class ComparisonTable(BaseModel):
+    """Structured side-by-side comparison extracted from the report (for 'compare X vs Y')."""
+    research_id: str = ""
+    options: List[str] = Field(default_factory=list)   # column headers — the things compared
+    rows: List[ComparisonRow] = Field(default_factory=list)  # criteria
+    recommendation: str = ""
+
+    @property
+    def has_table(self) -> bool:
+        return len(self.options) >= 2 and len(self.rows) >= 1
+
+
 class DiffClaim(BaseModel):
     """A claim whose confidence shifted between two runs of the same research."""
     statement: str = ""
