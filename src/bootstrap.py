@@ -87,8 +87,14 @@ def create_research_service() -> ResearchService:
     except Exception as exc:
         print(f"Warning: Failed to initialize agents: {exc}")
 
+    task_store = create_task_store()
+    broker = _create_broker()
+    # Wire pub/sub so state changes (any process) wake SSE streams instead of DB polling.
+    if broker is not None and hasattr(task_store, "set_event_notifier"):
+        task_store.set_event_notifier(broker.publish_research_event)
+
     return ResearchService(
-        task_store=create_task_store(),
+        task_store=task_store,
         optimizer=agent_optimizer,
         orchestrator=agent_orchestrator,
         analyzer=agent_analyzer,
@@ -102,7 +108,7 @@ def create_research_service() -> ResearchService:
         red_team_agent=red_team_agent,
         comparison_agent=comparison_agent,
         app_export_agent=app_export_agent,
-        broker=_create_broker(),
+        broker=broker,
     )
 
 

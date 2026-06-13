@@ -147,6 +147,18 @@ class InMemoryTaskStore:
             for r in records
         ]
 
+    def set_event_notifier(self, notifier) -> None:
+        """Optional callback(research_id) fired on live state changes (SSE pub/sub)."""
+        self._event_notifier = notifier
+
+    def _emit_change(self, research_id: str) -> None:
+        notifier = getattr(self, "_event_notifier", None)
+        if notifier:
+            try:
+                notifier(research_id)
+            except Exception:  # best-effort — never break a write on a notify failure
+                pass
+
     def update_research_status(
         self,
         research_id: str,
@@ -159,6 +171,7 @@ class InMemoryTaskStore:
             if report:
                 research.final_report = report
             research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
         return research
 
     def add_task(self, task_data: dict) -> SearchTask:
@@ -198,6 +211,7 @@ class InMemoryTaskStore:
         state = dict(research.graph_state or {})
         state["partial_report"] = partial
         research.graph_state = state
+        self._emit_change(research_id)
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
@@ -206,6 +220,7 @@ class InMemoryTaskStore:
         state = dict(research.graph_state or {})
         state["partial_reasoning"] = partial
         research.graph_state = state
+        self._emit_change(research_id)
 
     def append_research_graph_event(
         self,
@@ -221,6 +236,7 @@ class InMemoryTaskStore:
         }
         research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
         research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
         return research
 
     def compact_research_graph_trails(self) -> list[str]:

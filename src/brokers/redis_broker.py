@@ -81,6 +81,27 @@ class RedisBroker:
         except Exception:
             return False
 
+    # ------------------------------------------------------------------
+    # Live research events (pub/sub) — lets SSE wake on change instead of
+    # polling Postgres every second (cuts DB load under many open streams).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _research_channel(research_id: str) -> str:
+        return f"mas:rt:{research_id}"
+
+    def publish_research_event(self, research_id: str) -> None:
+        try:
+            self._client.publish(self._research_channel(research_id), "1")
+        except Exception as exc:  # pub/sub is best-effort — SSE has a heartbeat fallback
+            logger.warning("redis_publish_research_event_failed research_id=%s error=%s", research_id, exc)
+
+    def research_listener(self, research_id: str):
+        """A pubsub subscribed to one research's channel; caller polls get_message + closes it."""
+        pubsub = self._client.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(self._research_channel(research_id))
+        return pubsub
+
     def close(self) -> None:
         try:
             self._client.close()

@@ -572,53 +572,68 @@ def register_routes(app: FastAPI) -> None:
             last_report: str | None = None
             last_reasoning: str | None = None
             last_trail_len = 0
-            idle_ticks = 0
             deadline = time.monotonic() + 900  # 10-minute safety cap
+            # Wake on a Redis pub/sub change ping instead of polling Postgres every second;
+            # a heartbeat timeout still re-reads + keeps the connection alive (and is the
+            # fallback when no broker is configured).
+            broker = getattr(service, "broker", None)
+            try:
+                listener = broker.research_listener(research_id) if broker is not None else None
+            except Exception:
+                listener = None
             yield ": connected\n\n"
-            while time.monotonic() < deadline:
-                research = service.task_store.get_research(research_id)
-                if research is None:
-                    yield sse("stream_error", {"detail": "Research not found"})
-                    yield sse("done", {"status": "failed"})
-                    return
+            try:
+                while time.monotonic() < deadline:
+                    research = service.task_store.get_research(research_id)
+                    if research is None:
+                        yield sse("stream_error", {"detail": "Research not found"})
+                        yield sse("done", {"status": "failed"})
+                        return
 
-                graph_state = research.graph_state or {}
-                status = getattr(research.status, "value", str(research.status))
-                if status != last_status:
-                    last_status = status
-                    idle_ticks = 0
-                    yield sse("status_change", {"status": status})
+                    graph_state = research.graph_state or {}
+                    status = getattr(research.status, "value", str(research.status))
+                    if status != last_status:
+                        last_status = status
+                        yield sse("status_change", {"status": status})
 
-                trail = research.graph_trail or []
-                if len(trail) > last_trail_len:
-                    for entry in trail[last_trail_len:]:
-                        yield sse("trace_step", {"step": entry.get("step"), "detail": entry.get("detail")})
-                    last_trail_len = len(trail)
-                    idle_ticks = 0
+                    trail = research.graph_trail or []
+                    if len(trail) > last_trail_len:
+                        for entry in trail[last_trail_len:]:
+                            yield sse("trace_step", {"step": entry.get("step"), "detail": entry.get("detail")})
+                        last_trail_len = len(trail)
 
-                reasoning = graph_state.get("partial_reasoning")
-                if reasoning and reasoning != last_reasoning:
-                    last_reasoning = reasoning
-                    idle_ticks = 0
-                    yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
+                    reasoning = graph_state.get("partial_reasoning")
+                    if reasoning and reasoning != last_reasoning:
+                        last_reasoning = reasoning
+                        yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
 
-                report = research.final_report or graph_state.get("partial_report")
-                if report and report != last_report:
-                    last_report = report
-                    idle_ticks = 0
-                    yield sse("report", {"report": report, "final": bool(research.final_report)})
+                    report = research.final_report or graph_state.get("partial_report")
+                    if report and report != last_report:
+                        last_report = report
+                        yield sse("report", {"report": report, "final": bool(research.final_report)})
 
-                if status in ("completed", "failed"):
-                    yield sse("done", {"status": status})
-                    return
+                    if status in ("completed", "failed"):
+                        yield sse("done", {"status": status})
+                        return
 
-                idle_ticks += 1
-                if idle_ticks >= 15:  # keep-alive comment so proxies don't drop the stream
-                    idle_ticks = 0
-                    yield ": ping\n\n"
-                time.sleep(1.0)
+                    if listener is not None:
+                        try:
+                            woke = listener.get_message(timeout=15.0)
+                        except Exception:
+                            woke = None
+                            time.sleep(1.0)
+                        if woke is None:  # heartbeat — no change this interval
+                            yield ": ping\n\n"
+                    else:
+                        time.sleep(1.0)
 
-            yield sse("done", {"status": "timeout"})
+                yield sse("done", {"status": "timeout"})
+            finally:
+                if listener is not None:
+                    try:
+                        listener.close()
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             event_stream(),

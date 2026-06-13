@@ -199,6 +199,18 @@ class SQLAlchemyTaskStore:
                 for r in rows
             ]
 
+    def set_event_notifier(self, notifier) -> None:
+        """Optional callback(research_id) fired after a committed state change (SSE pub/sub)."""
+        self._event_notifier = notifier
+
+    def _emit_change(self, research_id: str) -> None:
+        notifier = getattr(self, "_event_notifier", None)
+        if notifier:
+            try:
+                notifier(research_id)
+            except Exception:  # best-effort — never break a write on a notify failure
+                pass
+
     def update_research_status(
         self,
         research_id: str,
@@ -216,7 +228,9 @@ class SQLAlchemyTaskStore:
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
-            return research_orm_to_record(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)  # after commit so SSE re-reads the new state
+        return result
 
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTaskORM(
@@ -280,6 +294,7 @@ class SQLAlchemyTaskStore:
             state["partial_report"] = partial
             research.graph_state = state
             session.flush()
+        self._emit_change(research_id)
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None:
         with self.session_scope() as session:
@@ -290,6 +305,7 @@ class SQLAlchemyTaskStore:
             state["partial_reasoning"] = partial
             research.graph_state = state
             session.flush()
+        self._emit_change(research_id)
 
     def append_research_graph_event(
         self,
@@ -309,7 +325,9 @@ class SQLAlchemyTaskStore:
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
-            return research_orm_to_record(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)
+        return result
 
     def compact_research_graph_trails(self) -> list[str]:
         with self.session_scope() as session:
