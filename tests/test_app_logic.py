@@ -18,6 +18,22 @@ from src.observability.context import bind_observability_context
 from src.repositories import InMemoryTaskStore
 from src.services.research_service import ResearchService
 from src.search_depth_profiles import get_depth_profile
+from src.config import settings
+
+
+@pytest.fixture(autouse=True)
+def _disable_report_editor():
+    # These analyzer unit tests assert on the single report-generation call and on the
+    # source payload; the editorial pass (an extra LLM call) is covered by its own tests.
+    original = settings.report_editor_enabled
+    settings.report_editor_enabled = False
+    yield
+    settings.report_editor_enabled = original
+
+
+def _json_payload_str(user_prompt: str) -> str:
+    """Extract the trailing JSON payload from an analyzer user prompt (prose precedes it)."""
+    return user_prompt[user_prompt.index("{"):]
 
 
 class RecordingLLM(LLMProvider):
@@ -88,7 +104,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["system_prompt"] == agent.SYSTEM_PROMPT
     assert "original prompt" in llm.calls[0]["user_prompt"]
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["gathered_data"][0]["source_id"] == "S1"
     assert parsed["gathered_data"][0]["domain"] == "example.com"
@@ -97,8 +113,8 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert parsed["gathered_data"][0]["confidence"]
     assert parsed["source_summary"]["total_sources"] == 1
     assert "evidence_summary" in parsed
-    assert "Use inline source references like [S1], [S2]" in agent.SYSTEM_PROMPT
-    assert "When sources conflict, prefer primary and high-confidence sources" in agent.SYSTEM_PROMPT
+    assert "Cite every factual claim inline with [S1], [S2]" in agent.SYSTEM_PROMPT
+    assert "When sources conflict, prefer primary/high-confidence ones" in agent.SYSTEM_PROMPT
     assert "substantially more comprehensive report" in llm.calls[0]["user_prompt"]
     assert "cautious wording" in llm.calls[0]["user_prompt"]
 
@@ -230,7 +246,7 @@ def test_analyzer_agent_limits_duplicate_domains_during_source_selection():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     example_sources = [item for item in gathered if item["domain"] == "example.com"]
@@ -262,7 +278,7 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
     assert "### Additional Relevant Sources" in result
     assert "## Report Notes" in result
     assert len(llm.calls) == 1
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered) == 1
@@ -330,7 +346,7 @@ def test_analyzer_agent_compacts_source_content_before_prompt_payload():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered[0]["content"]) <= 1605
@@ -361,7 +377,7 @@ def test_analyzer_agent_applies_global_payload_budget():
 
     agent.run_analysis("original prompt", tasks)
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     total_chars = sum(len(item["content"]) for item in gathered)
@@ -462,7 +478,7 @@ def test_analyzer_agent_prefers_trusted_domains_for_similar_sources():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered) == 1
@@ -509,7 +525,7 @@ def test_analyzer_agent_prefers_programming_docs_over_generic_tutorial_sites():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     urls = [item["url"] for item in parsed["gathered_data"]]
     assert "https://fastapi.tiangolo.com/" in urls
@@ -556,7 +572,7 @@ def test_analyzer_agent_penalizes_agency_comparison_blogs_for_programming_querie
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     urls = [item["url"] for item in parsed["gathered_data"]]
     assert "https://fastapi.tiangolo.com/async/" in urls
@@ -596,7 +612,7 @@ def test_analyzer_agent_prefers_high_quality_reference_sources_over_social_resul
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert gathered[0]["url"] == "https://docs.python.org/3/library/asyncio.html"
@@ -627,7 +643,7 @@ def test_analyzer_agent_preserves_source_quality_metadata_in_payload():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert gathered[0]["domain"] == "docs.python.org"
@@ -662,7 +678,7 @@ def test_analyzer_agent_excludes_low_quality_speculative_sources_from_payload():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["gathered_data"] == []
 
@@ -702,7 +718,7 @@ def test_analyzer_agent_keeps_stronger_sources_while_dropping_speculative_noise(
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     assert len(gathered) == 1
@@ -748,7 +764,7 @@ def test_analyzer_agent_prefers_reported_news_and_official_announcements_over_tr
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     urls = [item["url"] for item in parsed["gathered_data"]]
     assert "https://www.reuters.com/technology/example-story/" in urls
@@ -802,7 +818,7 @@ def test_analyzer_agent_prefers_premium_consumer_tech_sources_over_weak_mobile_l
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     gathered = parsed["gathered_data"]
     urls = [item["url"] for item in gathered]
@@ -1007,7 +1023,7 @@ def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["detected_conflicts"]
     assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
@@ -1041,7 +1057,7 @@ def test_analyzer_agent_passes_evidence_groups_into_prompt_payload():
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["evidence_groups"]
     assert parsed["evidence_groups"][0]["source_ids"] == ["S1", "S2"]
@@ -1331,7 +1347,7 @@ def test_analyzer_agent_requires_more_than_generic_overlap_for_numeric_conflict(
         ],
     )
 
-    payload = llm.calls[0]["user_prompt"].split("\n\n", maxsplit=1)[1]
+    payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["detected_conflicts"] == []
 

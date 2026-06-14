@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     watch_min_interval_seconds: int = 3600          # floor on user-chosen cadence (1h)
     watch_default_interval_seconds: int = 86400     # daily if no interval given
     watch_sweep_lock_ttl_seconds: int = 20          # only one worker sweeps per window
+    # Report quality: a final editorial LLM pass (answer-first structure, tighter prose, dedupe)
+    # on MEDIUM/HARD reports. One extra call — disable to trade quality for latency/cost.
+    report_editor_enabled: bool = True
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

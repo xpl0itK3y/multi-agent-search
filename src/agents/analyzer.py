@@ -176,48 +176,79 @@ class AnalyzerAgent(BaseAgent):
     - Claims supported by multiple sources in the same evidence group have strong multi-source backing — prioritize these in key findings
     - Single-source groups labeled "weak" should be presented with appropriate hedging
 
-    YOUR TASK:
-    1. Read all the provided content.
-    2. Ignore generic website navigation text, cookie warnings, or irrelevant ads.
-    3. Synthesize the core information, weighting sources by their reliability hierarchy above.
-    4. Write a detailed, structured final report in Markdown.
-    5. The report MUST be written in the SAME LANGUAGE as the user's original prompt (if the prompt is in Spanish, write in Spanish; if Russian, in Russian, etc.).
-    6. Include an "Introduction", "Key Findings / Main Sections", and a "Conclusion".
-    7. Use inline source references like [S1], [S2] when you make factual claims.
-    8. Include a "Sources" list at the end with the source IDs and URLs you actually used.
-    9. When sources conflict, prefer primary and high-confidence sources; explicitly note the conflict if both sides have credible evidence.
-    10. Produce a genuinely comprehensive report, not a short summary: expand major sections, include concrete examples, and cover meaningful subcategories or year-by-year breakdowns when the topic supports it.
+    YOUR TASK — write a publication-quality analytical report, not a summary of pages:
+    1. Read all content; ignore navigation text, cookie warnings, and ads.
+    2. Synthesize, don't list. Build an argument that answers the question — compare and reconcile what sources say, explain the *why* / mechanism, and draw out implications and trade-offs. Never write "Source 1 says X, Source 2 says Y."
+    3. Weight claims by the reliability hierarchy above; anchor key findings in primary/high-confidence sources.
+    4. Write in the SAME LANGUAGE as the user's original prompt (Spanish→Spanish, Russian→Russian, etc.).
+
+    REQUIRED STRUCTURE (Markdown):
+    - Open with an answer-first **Executive summary**: the direct answer to the question in 1–2 sentences, then 3–6 key takeaways as bullets, each carrying its [Sn] citation(s).
+    - Then the analytical body, organized into sections with **descriptive, informative headings** (never "Section 1" / "Main findings") — each section should answer a real facet of the question.
+    - Near the end, a section that explicitly separates **what is well-established** vs **what is contested or uncertain** vs **open questions** the evidence does not resolve.
+    - End with a short **Conclusion / bottom line**.
+    - A "Sources" list is appended automatically — do not write one.
+
+    WRITING QUALITY:
+    - Be specific: prefer concrete numbers, dates, named entities, and examples over vague generalities. Cut filler and hedge-padding.
+    - Use a Markdown **table** whenever you compare options or present quantitative data across categories — it reads far better than prose.
+    - Cite every factual claim inline with [S1], [S2] using the exact source_id values.
+    - When sources conflict, prefer primary/high-confidence ones and state the disagreement explicitly.
+    - Produce a genuinely comprehensive report: expand major sections, cover meaningful subcategories or year-by-year breakdowns when the topic supports it.
 
     DO NOT:
     - Hallucinate or make up facts not present in the provided text.
     - Present speculative predictions or rumors (source_type="speculative") as established facts.
     - Give equal weight to low-confidence sources when stronger primary or expert sources exist.
     - State contested or weakly supported claims with absolute certainty when the sources only support softer wording.
-    - Output any internal reasoning, just the final markdown report.
+    - Output any internal reasoning — just the final Markdown report.
     """
 
     SECTION_SYSTEM_PROMPT = """
-    You are a Research Analyst. Analyze the provided subset of research sources and write detailed analytical findings.
+    You are a Research Analyst writing one part of a larger report. Analyze the provided subset of sources and write deep analytical findings.
 
     Rules:
-    - Write ONLY analytical content sections (## heading, paragraphs, bullets).
-    - Do NOT write: Introduction, Conclusion, Summary, or Sources sections.
-    - Cite every factual claim with inline source IDs exactly as they appear in gathered_data, e.g. [S13].
-    - Be thorough and specific. Cover all meaningful findings from the provided sources.
+    - Write ONLY analytical body sections (## descriptive heading, paragraphs, bullets) — no Introduction, Conclusion, Summary, or Sources.
+    - Synthesize, don't list: reconcile what the sources say, explain the *why* / mechanism, and note implications. Never write "Source 1 says…, Source 2 says…".
+    - Be specific: prefer concrete numbers, dates, named entities, and examples over vague generalities.
+    - Use a Markdown table when comparing options or presenting quantitative data across categories.
+    - Cite every factual claim with inline [Sn] using the exact source_id values from gathered_data, e.g. [S13].
     - Do not invent information. If the sources are limited, say so briefly.
     """
 
     SYNTHESIS_SYSTEM_PROMPT = """
-    You are a Research Analyst. You have received several partial research analyses, each covering different source groups.
-    Synthesize them into ONE coherent, comprehensive research report.
+    You are a senior Research Analyst assembling several partial analyses (each covering different sources) into ONE publication-quality report.
 
-    Rules:
-    - Write a complete report: Introduction, main sections, Conclusion.
-    - Do NOT include a Sources section (it will be appended automatically).
-    - Preserve all inline citations [Sn] EXACTLY as they appear in the partial analyses — do not renumber or remove them.
-    - Merge and deduplicate information across sections into a unified narrative.
-    - Remove meta-commentary like "Section 1 analyzed..." — just write the findings.
-    - Output only the final markdown report, no internal reasoning.
+    REQUIRED STRUCTURE:
+    - Open with an answer-first **Executive summary**: the direct answer to the research question in 1–2 sentences, then 3–6 key takeaways as bullets, each carrying its [Sn] citation(s).
+    - Then the analytical body, organized into sections with **descriptive, informative headings** that map to the facets of the question (not "Section 1").
+    - Near the end, a section separating **what is well-established** vs **what is contested/uncertain** vs **open questions**.
+    - End with a short **Conclusion / bottom line**. Do NOT include a Sources section (appended automatically).
+
+    RULES:
+    - Merge and DEDUPLICATE across the partial analyses into a single unified argument — do not repeat the same point in multiple sections, and remove meta-commentary like "Section 1 analyzed…".
+    - Preserve all inline citations [Sn] EXACTLY as they appear in the partials — never renumber, drop, or invent them.
+    - Keep concrete specifics (numbers, dates, names); convert comparative/quantitative prose into Markdown tables where it improves clarity.
+    - Output only the final Markdown report, no internal reasoning.
+    """
+
+    EDITOR_SYSTEM_PROMPT = """
+    You are a senior editor at a research publication. You receive a complete DRAFT research report and return a publication-quality FINAL version. You sharpen and tighten — you do NOT summarize substance away; the final report should be as comprehensive as the draft, just better.
+
+    Make it better by:
+    - Ensuring it OPENS with a tight answer-first **Executive summary**: the direct answer in 1–2 sentences, then 3–6 key takeaways as bullets (each keeping its [Sn] citations). Add it if missing; tighten it if present.
+    - Giving every section a **descriptive, informative heading** (never "Section 1", "Main findings").
+    - Making claims **specific** — keep the concrete numbers, dates, names, and examples; cut vague filler, throat-clearing, and hedge-padding.
+    - Converting comparative or quantitative prose into a clean **Markdown table** where it improves clarity.
+    - Ensuring there is a section separating **well-established** vs **contested/uncertain** vs **open questions**.
+    - Removing repetition and redundancy so each point is made once, in the right place.
+
+    HARD CONSTRAINTS — violating these breaks the system:
+    - Do NOT invent facts or add claims not supported by the draft.
+    - Do NOT add, drop, or renumber [Sn] citations — preserve each one on the sentence it supports.
+    - Do NOT change the report's language.
+    - Do NOT add a Sources section (it is appended separately).
+    - Output ONLY the final Markdown report — no preamble, no notes about what you changed.
     """
 
     # Minimum number of sources to activate parallel section mode on HARD depth.
@@ -614,7 +645,28 @@ class AnalyzerAgent(BaseAgent):
             "empty_sources": "The sources section is present but no cited sources were included under it.",
         }
 
-    def _build_user_prompt(self, input_data: dict, language: str, retry: bool = False, depth: SearchDepth | None = None) -> str:
+    def _plan_outline_block(self, plan_questions: list[str] | None) -> str:
+        """Render the plan's sub-questions as an outline directive so the report answers
+        exactly what was asked, with sections mapped to the facets of the question."""
+        questions = [q.strip() for q in (plan_questions or []) if q and q.strip()]
+        if not questions:
+            return ""
+        numbered = "\n".join(f"{i}. {q}" for i, q in enumerate(dict.fromkeys(questions), start=1))
+        return (
+            "Organize the report so it directly answers these planned sub-questions, "
+            "with a descriptive section (or clearly labelled part) for each facet — merge "
+            "overlapping ones, and don't leave any unanswered if the evidence covers it:\n"
+            f"{numbered}\n\n"
+        )
+
+    def _build_user_prompt(
+        self,
+        input_data: dict,
+        language: str,
+        retry: bool = False,
+        depth: SearchDepth | None = None,
+        plan_questions: list[str] | None = None,
+    ) -> str:
         instruction = self._language_instruction(language)
         if retry:
             instruction = (
@@ -635,11 +687,15 @@ class AnalyzerAgent(BaseAgent):
             "Please analyze this data and generate the final report. "
             f"{instruction} "
             f"{expanded_report_instruction} "
+            "Lead with an answer-first Executive summary (direct answer + 3–6 key takeaways with [Sn]), "
+            "use descriptive section headings, prefer concrete specifics over vague wording, and use Markdown "
+            "tables for comparative or quantitative data. "
             f"{confidence_instruction} "
             "Prefer concrete reported developments over speculative future-looking claims. "
             "Use evidence_groups to identify where multiple sources reinforce the same point. "
             "If a source is mostly predictive, label it as a forecast rather than a confirmed development. "
-            "If sources disagree, add a section titled 'Conflicts And Uncertainties' and cite the competing evidence.\n\n"
+            "Separate what is well-established from what is contested or unresolved.\n\n"
+            f"{self._plan_outline_block(plan_questions)}"
             f"{json.dumps(input_data, ensure_ascii=False)}"
         )
 
@@ -1127,8 +1183,9 @@ class AnalyzerAgent(BaseAgent):
         model: str | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
+        plan_questions: list[str] | None = None,
     ) -> str:
-        user_prompt = self._build_user_prompt(input_data, language, retry=retry, depth=depth)
+        user_prompt = self._build_user_prompt(input_data, language, retry=retry, depth=depth, plan_questions=plan_questions)
         return self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
@@ -1163,6 +1220,7 @@ class AnalyzerAgent(BaseAgent):
         conflicts: list[dict] | None = None,
         evidence_groups: list[dict] | None = None,
         source_summary=None,
+        plan_questions: list[str] | None = None,
     ) -> str:
         instruction = self._language_instruction(language)
         profile = self._resolve_depth_profile(depth)
@@ -1188,14 +1246,76 @@ class AnalyzerAgent(BaseAgent):
             f"{instruction} "
             f"{profile['report_instruction']} "
             "Below are partial research analyses from different source groups. "
-            "Merge them into one coherent report with Introduction, main sections, and Conclusion. "
+            "Merge them into ONE coherent report that opens with an answer-first Executive summary "
+            "(direct answer + 3–6 key takeaways with [Sn]), uses descriptive section headings, and ends "
+            "with a section separating well-established from contested/open points plus a short bottom line. "
+            "Deduplicate across the partials — make each point once. "
             "Preserve all inline citations [Sn] exactly. Do NOT include a Sources section. "
-            "Use detected_conflicts to add a conflicts section if there are material disagreements. "
-            "Use evidence_groups to emphasise findings supported by multiple sources."
+            "Use detected_conflicts to surface material disagreements. "
+            "Use evidence_groups to emphasise findings supported by multiple sources.\n\n"
+            f"{self._plan_outline_block(plan_questions)}"
+            f"Research question: {prompt}"
             f"{meta_block}\n\n"
-            f"Research question: {prompt}\n\n"
             f"{drafts_text}"
         )
+
+    def _build_editor_prompt(self, report: str, prompt: str, language: str, plan_questions: list[str] | None) -> str:
+        return (
+            f"{self._language_instruction(language)} "
+            "Edit the draft below into a publication-quality final report following your editing rules. "
+            "Preserve every [Sn] citation exactly and keep the report comprehensive.\n\n"
+            f"{self._plan_outline_block(plan_questions)}"
+            f"Research question: {prompt}\n\n"
+            f"Draft report:\n{report}"
+        )
+
+    def _editor_preserved_citations(self, before: str, after: str) -> bool:
+        """Guard against an editor that drops/renumbers citations or truncates the report."""
+        if not (after or "").strip():
+            return False
+        before_ids = set(self._extract_used_source_ids(before))
+        after_ids = set(self._extract_used_source_ids(after))
+        if before_ids and len(after_ids & before_ids) < 0.5 * len(before_ids):
+            return False  # lost more than half the citations — editor went rogue
+        if len(after.strip()) < 0.4 * len(before.strip()):
+            return False  # summarized away substance
+        return True
+
+    def _maybe_edit_report(
+        self,
+        report: str,
+        prompt: str,
+        language: str,
+        depth: SearchDepth | None,
+        model: str | None,
+        plan_questions: list[str] | None,
+    ) -> str:
+        """Final editorial pass: tighten prose, enforce answer-first structure, dedupe.
+
+        One extra LLM call — gated to substantial reports (MEDIUM/HARD) and behind a flag.
+        Defensive: falls back to the unedited report if the editor drops citations or fails.
+        """
+        if not settings.report_editor_enabled:
+            return report
+        if depth not in (SearchDepth.MEDIUM, SearchDepth.HARD):
+            return report  # not worth the extra call on EASY
+        if not (report or "").strip():
+            return report
+        try:
+            edited = self.llm.generate(
+                system_prompt=self.EDITOR_SYSTEM_PROMPT,
+                user_prompt=self._build_editor_prompt(report, prompt, language, plan_questions),
+                model=model,
+                temperature=0.3,
+            )
+            edited = (edited or "").strip()
+            if self._editor_preserved_citations(report, edited):
+                logger.info("report_editor_applied before=%d after=%d", len(report), len(edited))
+                return edited
+            logger.warning("report_editor_discarded reason=citation_or_length_guard")
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("report_editor_failed", exc_info=True)
+        return report
 
     def _run_parallel_section_analysis(
         self,
@@ -1211,6 +1331,7 @@ class AnalyzerAgent(BaseAgent):
         chunk_size: int | None = None,
         max_sections: int | None = None,
         synthesis_streaming_callback: Optional[Callable[[str], None]] = None,
+        plan_questions: list[str] | None = None,
     ) -> str:
         chunk_size = chunk_size or self._PARALLEL_SECTION_CHUNK
         # When a section cap is given, grow the chunk so we never exceed it
@@ -1251,6 +1372,7 @@ class AnalyzerAgent(BaseAgent):
             conflicts=conflicts,
             evidence_groups=evidence_groups,
             source_summary=source_summary,
+            plan_questions=plan_questions,
         )
         logger.info("analyzer_synthesis_start section_count=%d", len(completed_drafts))
         # Stream the synthesis token-by-token so the merged report appears live instead
@@ -1290,6 +1412,10 @@ class AnalyzerAgent(BaseAgent):
         evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool, depth=depth)
         evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = self._detect_language(prompt)
+        # Plan sub-questions drive the report outline so it answers exactly what was asked.
+        plan_questions = list(dict.fromkeys(
+            (t.description or "").strip() for t in tasks if getattr(t, "description", "").strip()
+        ))[:12]
 
         is_hard = depth == SearchDepth.HARD
         is_medium = depth == SearchDepth.MEDIUM
@@ -1328,11 +1454,8 @@ class AnalyzerAgent(BaseAgent):
                 chunk_size=section_chunk,
                 max_sections=section_cap,
                 synthesis_streaming_callback=streaming_callback,
+                plan_questions=plan_questions,
             )
-            # Final flush — ensure the complete synthesized report is persisted even if
-            # the provider didn't stream (streaming above already showed it building).
-            if streaming_callback:
-                streaming_callback(result)
         else:
             input_data = {
                 "original_prompt": prompt,
@@ -1347,6 +1470,7 @@ class AnalyzerAgent(BaseAgent):
                 input_data, prompt_language, depth=depth, model=model,
                 streaming_callback=streaming_callback,
                 reasoning_callback=reasoning_callback,
+                plan_questions=plan_questions,
             )
             # Skip language retry for HARD (avoids an extra multi-minute LLM call).
             if not is_hard and prompt_language != "unknown":
@@ -1357,7 +1481,15 @@ class AnalyzerAgent(BaseAgent):
                         prompt_language,
                         report_language,
                     )
-                    result = self._generate_report(input_data, prompt_language, retry=True, depth=depth, model=model)
+                    result = self._generate_report(
+                        input_data, prompt_language, retry=True, depth=depth, model=model,
+                        plan_questions=plan_questions,
+                    )
+        # Final editorial pass (MEDIUM/HARD): tighten prose, enforce answer-first structure, dedupe.
+        result = self._maybe_edit_report(result, prompt, prompt_language, depth, model, plan_questions)
+        # Stream the final (possibly edited) report once so the UI lands on the polished version.
+        if streaming_callback:
+            streaming_callback(result)
         llm_ms = (time.perf_counter() - llm_started_at) * 1000
 
         normalized = self._post_process_report(result, prompt_language)
