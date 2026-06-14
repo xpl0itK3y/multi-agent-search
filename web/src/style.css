@@ -20,7 +20,9 @@
   color-scheme: light;
 }
 
-.dark {
+/* Dark themes set the .dark class too (for Tailwind dark: variants); the palette comes
+   from data-theme. Each theme also carries its own brand gradient (logo adapts). */
+html[data-theme="dark"] {
   --c-bg: 14 15 23;
   --c-rail: 18 20 30;
   --c-surface: 25 27 40;
@@ -33,6 +35,66 @@
   --c-grad-a: 139 124 255;
   --c-grad-b: 56 220 245;
   color-scheme: dark;
+}
+
+html[data-theme="midnight"] {
+  --c-bg: 9 14 28;
+  --c-rail: 13 19 36;
+  --c-surface: 20 28 48;
+  --c-surface-hover: 28 38 62;
+  --c-bd: 38 50 78;
+  --c-ink: 224 232 247;
+  --c-muted: 138 152 182;
+  --c-accent: 56 160 255;
+  --c-accent-soft: 120 190 255;
+  --c-grad-a: 56 160 255;
+  --c-grad-b: 90 230 220;
+  color-scheme: dark;
+}
+
+html[data-theme="emerald"] {
+  --c-bg: 9 18 16;
+  --c-rail: 12 23 20;
+  --c-surface: 18 32 28;
+  --c-surface-hover: 26 44 38;
+  --c-bd: 36 58 50;
+  --c-ink: 228 240 234;
+  --c-muted: 138 168 158;
+  --c-accent: 16 200 140;
+  --c-accent-soft: 90 222 170;
+  --c-grad-a: 16 200 140;
+  --c-grad-b: 120 230 200;
+  color-scheme: dark;
+}
+
+html[data-theme="rose"] {
+  --c-bg: 22 12 18;
+  --c-rail: 28 16 24;
+  --c-surface: 37 22 31;
+  --c-surface-hover: 50 30 42;
+  --c-bd: 64 40 54;
+  --c-ink: 246 232 240;
+  --c-muted: 184 152 170;
+  --c-accent: 244 96 150;
+  --c-accent-soft: 250 150 185;
+  --c-grad-a: 244 96 150;
+  --c-grad-b: 255 165 120;
+  color-scheme: dark;
+}
+
+html[data-theme="sand"] {
+  --c-bg: 250 248 243;
+  --c-rail: 244 240 232;
+  --c-surface: 255 255 255;
+  --c-surface-hover: 243 238 229;
+  --c-bd: 228 222 210;
+  --c-ink: 41 37 32;
+  --c-muted: 120 112 100;
+  --c-accent: 200 130 40;
+  --c-accent-soft: 222 168 96;
+  --c-grad-a: 217 146 53;
+  --c-grad-b: 230 196 110;
+  color-scheme: light;
 }
 
 /* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */

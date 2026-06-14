@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { ResearchHistoryItem } from "@/lib/types";
 import { useResearchStore } from "@/stores/research";
-import { useUiStore } from "@/stores/ui";
+import { useUiStore, THEMES } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import SparkLogo from "@/components/SparkLogo.vue";
 
@@ -26,6 +26,7 @@ const { t } = useI18n();
 const collapsed = computed(() => ui.sidebarCollapsed);
 
 const searchOpen = ref(false);
+const themeMenuOpen = ref(false);
 const searchQuery = ref("");
 const searchInput = ref<HTMLInputElement | null>(null);
 const editingId = ref<string | null>(null);
@@ -151,13 +152,23 @@ const vFocus = {
         <button class="icon-btn text-[11px] font-medium" :title="LOCALE_LABEL[ui.locale]" @click="cycleLocale()">
           {{ LOCALE_LABEL[ui.locale] }}
         </button>
-        <button
-          class="icon-btn"
-          :title="ui.theme === 'dark' ? $t('sidebar.themeLight') : $t('sidebar.themeDark')"
-          @click="ui.toggleTheme()"
-        >
-          {{ ui.theme === "dark" ? "☀" : "☾" }}
-        </button>
+        <div class="relative">
+          <button class="icon-btn" :title="$t('sidebar.theme')" @click="themeMenuOpen = !themeMenuOpen">◐</button>
+          <div
+            v-if="themeMenuOpen"
+            class="absolute right-0 z-30 mt-1 flex gap-1.5 rounded-xl border border-bd bg-surface p-2 shadow-lg"
+          >
+            <button
+              v-for="t in THEMES"
+              :key="t.id"
+              class="h-6 w-6 rounded-full border-2 transition-transform hover:scale-110"
+              :class="ui.theme === t.id ? 'border-ink' : 'border-transparent'"
+              :style="{ background: t.swatch }"
+              :title="$t('themes.' + t.id)"
+              @click="ui.setTheme(t.id); themeMenuOpen = false"
+            />
+          </div>
+        </div>
         <button class="icon-btn" :title="$t('sidebar.collapse')" @click="ui.toggleSidebar()">⌗</button>
       </div>
     </div>

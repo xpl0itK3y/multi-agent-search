@@ -1,10 +1,21 @@
 <!doctype html>
-<html lang="ru" class="dark">
+<html lang="ru" class="dark" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Veris — verifiable research</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      // Apply the saved theme before render to avoid a flash of the wrong palette.
+      (function () {
+        try {
+          var t = localStorage.getItem("theme") || "dark";
+          var dark = ["dark", "midnight", "emerald", "rose"].indexOf(t) >= 0;
+          document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
