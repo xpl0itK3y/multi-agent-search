@@ -178,6 +178,21 @@ export interface SourceIndependence {
   echo_warnings: string[];
 }
 
+export interface ReputationFlag {
+  source_id: string;
+  domain: string;
+  category: "satire" | "fabricated" | "conspiracy" | "state_media";
+  reason: string;
+}
+
+export interface SourceReputation {
+  research_id: string;
+  total_sources: number;
+  flagged_count: number;
+  categories: string[];
+  flagged: ReputationFlag[];
+}
+
 export interface ConfidenceComponent {
   key: string;
   score: number;

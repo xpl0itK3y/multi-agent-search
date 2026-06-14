@@ -155,6 +155,12 @@ const ru = {
     trail: "Аудит-трейл",
     hint: "Скачать полную трассу получения отчёта: под-вопросы, поисковые запросы, источники, шаги графа — для воспроизводимости",
   },
+  reputation: {
+    title: "Репутация источников",
+    flagged: "помечено",
+    hint: "Источники с доменов, помеченных как сатира / фейк / конспирология / госмедиа по прозрачному списку. Это повод проверить, а не приговор отдельной статье.",
+    category: { satire: "сатира", fabricated: "фейк-ньюс", conspiracy: "конспирология", state_media: "госмедиа" },
+  },
   numbers: {
     title: "Проверка чисел",
     matched: "сверены с источником",
@@ -415,6 +421,12 @@ const en: typeof ru = {
     trail: "Audit trail",
     hint: "Download the full provenance: sub-questions, search queries, sources and graph steps — for reproducibility",
   },
+  reputation: {
+    title: "Source credibility",
+    flagged: "flagged",
+    hint: "Sources from domains listed as satire / fabricated / conspiracy / state-controlled on a transparent list. A prompt to verify, not a verdict on any single article.",
+    category: { satire: "satire", fabricated: "fake-news", conspiracy: "conspiracy", state_media: "state media" },
+  },
   numbers: {
     title: "Figure check",
     matched: "traced to source",
@@ -674,6 +686,12 @@ const es: typeof ru = {
   audit: {
     trail: "Traza de auditoría",
     hint: "Descargar la procedencia completa: subpreguntas, consultas, fuentes y pasos del grafo — para reproducibilidad",
+  },
+  reputation: {
+    title: "Credibilidad de fuentes",
+    flagged: "marcadas",
+    hint: "Fuentes de dominios listados como sátira / falsos / conspiración / medios estatales en una lista transparente. Una señal para verificar, no un veredicto sobre un artículo concreto.",
+    category: { satire: "sátira", fabricated: "noticias falsas", conspiracy: "conspiración", state_media: "medios estatales" },
   },
   numbers: {
     title: "Verificación de cifras",

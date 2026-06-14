@@ -17,6 +17,7 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
+from src.agents.source_reputation import SourceReputationAgent
 from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.research_diff import ResearchDiffAgent
@@ -49,6 +50,7 @@ from src.api.schemas import (
     ResearchPlan,
     CitationAudit,
     SourceIndependence,
+    SourceReputation,
     NumericCheck,
     ConfidenceReport,
     AuditTrail,
@@ -150,6 +152,7 @@ class ResearchService:
         self.app_export_agent = app_export_agent
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
+        self.reputation_auditor = SourceReputationAgent()
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.research_differ = ResearchDiffAgent()
@@ -1143,6 +1146,7 @@ class ResearchService:
             "verification": safe(lambda: self.get_research_verification(rid)),
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
+            "source_reputation": safe(lambda: self.get_research_source_reputation(rid)),
             "numeric_check": safe(lambda: self.get_research_numeric_check(rid)),
             "confidence": safe(lambda: self.get_research_confidence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
@@ -1558,6 +1562,40 @@ class ResearchService:
             return SourceIndependence(research_id=research_id)
         return SourceIndependence.model_validate(data)
 
+    # ── source reputation (low-credibility / state-media domain flags) ───────────
+
+    def _assess_source_reputation(self, research, tasks: list) -> None:
+        """Flag cited sources from satire/fabricated/conspiracy/state-controlled domains.
+
+        Reuses the analyzer's [Sn] numbering so flags line up with the report. Deterministic
+        and defensive — never breaks finalization.
+        """
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                s["source_id"]: {"url": s.get("url"), "domain": s.get("domain")}
+                for s in aggregated
+                if s.get("source_id")
+            }
+            reputation = self.reputation_auditor.assess(sources_by_id)
+            reputation.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["source_reputation"] = reputation.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("source_reputation_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_source_reputation(self, research_id: str) -> SourceReputation:
+        """Stored domain-credibility flags (satire / fabricated / conspiracy / state media)."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("source_reputation")
+        if not data:
+            return SourceReputation(research_id=research_id)
+        return SourceReputation.model_validate(data)
+
     # ── numeric & contradiction check (every figure traced to its source) ────────
 
     def _check_numbers(self, report: str, research, tasks: list) -> None:
@@ -1691,6 +1729,9 @@ class ResearchService:
         ind = state.get("source_independence") or {}
         if ind.get("total_sources"):
             out.append(f"source independence: {ind.get('independent_origins', 0)}/{ind.get('total_sources', 0)} origins")
+        rep = state.get("source_reputation") or {}
+        if rep.get("flagged_count"):
+            out.append(f"reputation flags: {rep.get('flagged_count')} source(s) ({', '.join(rep.get('categories', []))})")
         return out
 
     def _render_audit_trail_md(self, trail: AuditTrail) -> str:
@@ -2131,6 +2172,7 @@ class ResearchService:
             report = self._maybe_red_team(report, research, tasks)
             self._audit_citations(report, research, tasks)
             self._analyze_source_independence(research, tasks)
+            self._assess_source_reputation(research, tasks)
             self._check_numbers(report, research, tasks)
             self._maybe_build_comparison(report, research)
             report = self._inject_graph_execution_trail(report, research_id)

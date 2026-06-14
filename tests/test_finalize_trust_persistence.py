@@ -44,4 +44,5 @@ def test_finalize_keeps_trust_artifacts_and_token_usage(mocker):
     # … AND the trust artifacts the finalize steps stored survived the token write
     assert "citation_audit" in gs
     assert "source_independence" in gs
+    assert "source_reputation" in gs
     assert "numeric_check" in gs

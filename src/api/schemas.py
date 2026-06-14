@@ -282,6 +282,26 @@ class NumericCheck(BaseModel):
     contradictions: List[NumericContradiction] = Field(default_factory=list)
 
 
+class ReputationFlag(BaseModel):
+    """A cited source whose domain is on the transparent low-credibility / bias list."""
+    source_id: str = ""
+    domain: str = ""
+    category: str = ""   # satire | fabricated | conspiracy | state_media
+    reason: str = ""
+
+
+class SourceReputation(BaseModel):
+    """Domain-credibility check: flags cited sources from satire, fabricated/fake-news,
+    conspiracy or state-controlled domains against a transparent bundled list — the kind of
+    'your source is a known hoax site' signal Perplexity/Gemini never surface inline.
+    """
+    research_id: str = ""
+    total_sources: int = 0
+    flagged_count: int = 0
+    categories: List[str] = Field(default_factory=list)   # distinct categories present
+    flagged: List[ReputationFlag] = Field(default_factory=list)
+
+
 class AuditQuery(BaseModel):
     """One planned sub-question and the search queries actually issued for it."""
     task: str = ""

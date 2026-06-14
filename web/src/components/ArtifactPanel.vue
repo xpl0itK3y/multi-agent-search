@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -19,6 +19,7 @@ const verification = ref<VerificationReport | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
+const reputation = ref<SourceReputation | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
 const showNumbers = ref(false);
@@ -121,6 +122,15 @@ async function ensureIndependence() {
   }
 }
 
+async function ensureReputation() {
+  if (reputation.value) return;
+  try {
+    reputation.value = await api.getSourceReputation(props.id);
+  } catch {
+    /* reputation flags are optional */
+  }
+}
+
 async function ensureConfidence() {
   if (confidence.value) return;
   try {
@@ -143,6 +153,7 @@ watch(tab, (t) => {
   if (t === "sources") {
     ensureSources();
     ensureIndependence();
+    ensureReputation();
   }
   if (t === "confidence") {
     ensureVerification();
@@ -178,6 +189,7 @@ watch(
     if (final) {
       ensureCitations();
       ensureIndependence();
+      ensureReputation();
       ensureConfidence();
       ensureNumbers();
       ensureWatch();
@@ -226,6 +238,12 @@ const independenceBar = computed(() => {
 const clusterKindClass: Record<string, string> = {
   syndicated: "border-red-400/40 text-red-400",
   "single-domain": "border-amber-500/40 text-amber-500",
+};
+const reputationClass: Record<string, string> = {
+  satire: "border-amber-500/40 text-amber-500",
+  fabricated: "border-red-400/40 text-red-400",
+  conspiracy: "border-red-400/40 text-red-400",
+  state_media: "border-amber-500/40 text-amber-500",
 };
 
 // ── confidence / honesty meter ────────────────────────────────────────────────
@@ -664,6 +682,16 @@ async function exportApp() {
             </div>
           </div>
         </div>
+        <button
+          v-if="reputation && reputation.flagged_count"
+          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-400/40 bg-red-400/5 px-3 py-2 text-left text-xs"
+          @click="tab = 'sources'"
+        >
+          <span class="text-red-400">⚑</span>
+          <span class="font-medium text-ink">{{ $t("reputation.title") }}</span>
+          <span class="text-red-400">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
+          <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
+        </button>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
@@ -784,6 +812,32 @@ async function exportApp() {
             <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-emerald-500">
               ✓ {{ $t("independence.allIndependent") }}
             </p>
+          </div>
+          <!-- Domain-credibility flags: satire / fabricated / conspiracy / state-controlled -->
+          <div
+            v-if="reputation && reputation.flagged_count"
+            class="mb-3 rounded-xl border border-red-400/40 bg-red-400/5 p-4 animate-rise"
+          >
+            <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
+              <span class="text-red-400">⚑</span>{{ $t("reputation.title") }}
+              <span class="text-red-400">· {{ reputation.flagged_count }}/{{ reputation.total_sources }}</span>
+            </div>
+            <p class="mb-3 text-xs text-muted">{{ $t("reputation.hint") }}</p>
+            <ul class="space-y-2">
+              <li v-for="(f, i) in reputation.flagged" :key="i" class="flex items-start gap-2 text-xs">
+                <span
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  :class="reputationClass[f.category] || 'border-bd text-muted'"
+                >
+                  {{ $t("reputation.category." + f.category) }}
+                </span>
+                <div class="min-w-0">
+                  <span class="text-accent">[{{ f.source_id }}]</span>
+                  <span class="text-ink"> {{ f.domain }}</span>
+                  <span class="text-muted"> — {{ f.reason }}</span>
+                </div>
+              </li>
+            </ul>
           </div>
           <SourceCard v-for="(s, i) in sources" :key="s.url" :source="s" :index="i + 1" />
         </div>
