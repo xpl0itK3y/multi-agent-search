@@ -176,6 +176,13 @@ const ru = {
     oneSided: "однобоко",
     hint: "Как доказательная база делится по отношению к центральному тезису вопроса. Дополняет независимость источников — разнообразие точек зрения, а не первоисточников.",
   },
+  integrity: {
+    title: "Проверка ретракций",
+    retracted: "отозвано",
+    hint: "Процитированные DOI сверены с Crossref / Retraction Watch. Источник на отозванной статье — самая серьёзная проблема доверия.",
+    hintShort: "источник на отозванной статье",
+    kind: { retraction: "отозвано", concern: "оговорка" },
+  },
   reputation: {
     title: "Репутация источников",
     flagged: "помечено",
@@ -463,6 +470,13 @@ const en: typeof ru = {
     oneSided: "one-sided",
     hint: "How the evidence splits on the question's central claim. Complements source independence — diversity of viewpoints, not just origins.",
   },
+  integrity: {
+    title: "Retraction check",
+    retracted: "retracted",
+    hint: "Cited DOIs checked against Crossref / Retraction Watch. A source backed by a retracted paper is the most serious trust problem.",
+    hintShort: "a source rests on a retracted paper",
+    kind: { retraction: "retracted", concern: "concern" },
+  },
   reputation: {
     title: "Source credibility",
     flagged: "flagged",
@@ -749,6 +763,13 @@ const es: typeof ru = {
     neutral: "neutral",
     oneSided: "sesgado",
     hint: "Cómo se divide la evidencia respecto a la afirmación central. Complementa la independencia de fuentes — diversidad de puntos de vista, no solo de orígenes.",
+  },
+  integrity: {
+    title: "Verificación de retractaciones",
+    retracted: "retractadas",
+    hint: "Los DOI citados se cotejan con Crossref / Retraction Watch. Una fuente basada en un artículo retractado es el problema de confianza más grave.",
+    hintShort: "una fuente se basa en un artículo retractado",
+    kind: { retraction: "retractado", concern: "preocupación" },
   },
   reputation: {
     title: "Credibilidad de fuentes",

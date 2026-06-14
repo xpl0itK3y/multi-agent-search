@@ -82,6 +82,9 @@ const stanceText = computed(() => {
         <span v-if="report.source_reputation.flagged_count" class="rounded-lg border border-red-400/40 px-2.5 py-1 text-red-400">
           ⚑ {{ report.source_reputation.flagged_count }} {{ $t("reputation.flagged") }}
         </span>
+        <span v-if="report.source_integrity.flagged.length" class="rounded-lg border border-red-500/50 px-2.5 py-1 text-red-500">
+          ⛔ {{ report.source_integrity.retracted_count }} {{ $t("integrity.retracted") }}
+        </span>
       </div>
 
       <MarkdownView :source="report.final_report" :grounding="report.citations.grounding" />

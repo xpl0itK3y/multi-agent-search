@@ -197,6 +197,7 @@ export interface PublicReport {
   numeric_check: NumericCheck;
   stance: StanceBalance;
   red_team: RedTeamReport;
+  source_integrity: SourceIntegrity;
 }
 
 export interface StanceSource {
@@ -214,6 +215,20 @@ export interface StanceBalance {
   dominant_side: string;
   skew: number;
   sources: StanceSource[];
+}
+
+export interface IntegrityFlag {
+  source_id: string;
+  doi: string;
+  kind: "retraction" | "concern";
+  detail: string;
+}
+
+export interface SourceIntegrity {
+  research_id: string;
+  checked_dois: number;
+  retracted_count: number;
+  flagged: IntegrityFlag[];
 }
 
 export interface ReputationFlag {

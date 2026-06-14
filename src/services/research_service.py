@@ -18,6 +18,7 @@ from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
 from src.agents.source_reputation import SourceReputationAgent
+from src.agents.retraction import RetractionAgent
 from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.research_diff import ResearchDiffAgent
@@ -51,6 +52,7 @@ from src.api.schemas import (
     CitationAudit,
     SourceIndependence,
     SourceReputation,
+    SourceIntegrity,
     StanceBalance,
     NumericCheck,
     ConfidenceReport,
@@ -158,6 +160,8 @@ class ResearchService:
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
         self.reputation_auditor = SourceReputationAgent()
+        self.retraction_agent = RetractionAgent()
+        self._crossref_cache: dict[str, dict | None] = {}
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.research_differ = ResearchDiffAgent()
@@ -1152,6 +1156,7 @@ class ResearchService:
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
             "source_reputation": safe(lambda: self.get_research_source_reputation(rid)),
+            "source_integrity": safe(lambda: self.get_research_source_integrity(rid)),
             "stance_balance": safe(lambda: self.get_research_stance(rid)),
             "numeric_check": safe(lambda: self.get_research_numeric_check(rid)),
             "confidence": safe(lambda: self.get_research_confidence(rid)),
@@ -1602,6 +1607,65 @@ class ResearchService:
             return SourceReputation(research_id=research_id)
         return SourceReputation.model_validate(data)
 
+    # ── retraction check (cited DOIs vs Crossref / Retraction Watch) ─────────────
+
+    def _crossref_fetch(self, doi: str) -> dict | None:
+        """Fetch a Crossref work message for a DOI (cached, short timeout, never raises)."""
+        if doi in self._crossref_cache:
+            return self._crossref_cache[doi]
+        message: dict | None = None
+        try:
+            import urllib.parse
+            import urllib.request
+
+            url = "https://api.crossref.org/works/" + urllib.parse.quote(doi, safe="")
+            req = urllib.request.Request(url, headers={"User-Agent": "Veris/1.0 (research integrity check)"})
+            with urllib.request.urlopen(req, timeout=settings.retraction_check_timeout) as resp:
+                message = json.loads(resp.read().decode("utf-8")).get("message")
+        except Exception as exc:  # pragma: no cover - network/parse failures degrade to "no info"
+            logger.info("crossref_fetch_failed doi=%s error=%s", doi, exc)
+            message = None
+        if len(self._crossref_cache) > 5000:
+            self._crossref_cache.clear()
+        self._crossref_cache[doi] = message
+        return message
+
+    def _check_retractions(self, research, tasks: list) -> None:
+        """Flag cited sources backed by a retracted paper (Crossref/Retraction Watch).
+
+        Network step — gated by a flag, capped, and fully defensive: any failure degrades to
+        no flags and never breaks finalization. Stored only when DOIs were actually checked.
+        """
+        if not settings.retraction_check_enabled:
+            return
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                s["source_id"]: {"url": s.get("url"), "content": s.get("content")}
+                for s in aggregated
+                if s.get("source_id")
+            }
+            integrity = self.retraction_agent.check(sources_by_id, self._crossref_fetch)
+            if integrity.checked_dois == 0:
+                return  # no academic DOIs to verify — nothing to record
+            integrity.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["source_integrity"] = integrity.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("retraction_check_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_source_integrity(self, research_id: str) -> SourceIntegrity:
+        """Stored retraction check: cited DOIs flagged as retracted / under concern."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("source_integrity")
+        if not data:
+            return SourceIntegrity(research_id=research_id)
+        return SourceIntegrity.model_validate(data)
+
     # ── stance / viewpoint balance (one LLM call, contestable questions only) ─────
 
     _STANCE_SIGNALS = (
@@ -1796,6 +1860,9 @@ class ResearchService:
         st = state.get("stance_balance") or {}
         if st.get("applicable"):
             out.append(f"viewpoint balance: {st.get('supports', 0)} for / {st.get('opposes', 0)} against / {st.get('neutral', 0)} neutral")
+        integ = state.get("source_integrity") or {}
+        if integ.get("checked_dois"):
+            out.append(f"retraction check: {integ.get('checked_dois')} DOI(s) checked, {integ.get('retracted_count', 0)} retracted")
         return out
 
     def _render_audit_trail_md(self, trail: AuditTrail) -> str:
@@ -1909,6 +1976,7 @@ class ResearchService:
             numeric_check=safe(lambda: self.get_research_numeric_check(rid), NumericCheck()),
             stance=safe(lambda: self.get_research_stance(rid), StanceBalance()),
             red_team=safe(lambda: self.get_research_red_team(rid), RedTeamReport()),
+            source_integrity=safe(lambda: self.get_research_source_integrity(rid), SourceIntegrity()),
         )
 
     # ── confidence / honesty meter (fuses all trust signals into one number) ─────
@@ -2309,6 +2377,7 @@ class ResearchService:
             self._analyze_source_independence(research, tasks)
             self._assess_source_reputation(research, tasks)
             self._check_numbers(report, research, tasks)
+            self._check_retractions(research, tasks)
             self._maybe_build_comparison(report, research)
             self._maybe_assess_stance(research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)

@@ -304,6 +304,25 @@ class StanceBalance(BaseModel):
     sources: List[StanceSource] = Field(default_factory=list)
 
 
+class IntegrityFlag(BaseModel):
+    """A cited source backed by a paper Crossref/Retraction Watch records as retracted."""
+    source_id: str = ""
+    doi: str = ""
+    kind: str = ""     # retraction | concern
+    detail: str = ""
+
+
+class SourceIntegrity(BaseModel):
+    """Retraction check: cited DOIs looked up against Crossref/Retraction Watch — flags a claim
+    resting on a retracted paper (or one under an expression of concern). The single most
+    damning source problem, and one no competitor surfaces inline.
+    """
+    research_id: str = ""
+    checked_dois: int = 0
+    retracted_count: int = 0
+    flagged: List[IntegrityFlag] = Field(default_factory=list)
+
+
 class ReputationFlag(BaseModel):
     """A cited source whose domain is on the transparent low-credibility / bias list."""
     source_id: str = ""
@@ -394,6 +413,7 @@ class PublicReport(BaseModel):
     numeric_check: NumericCheck = Field(default_factory=NumericCheck)
     stance: StanceBalance = Field(default_factory=StanceBalance)
     red_team: RedTeamReport = Field(default_factory=RedTeamReport)
+    source_integrity: SourceIntegrity = Field(default_factory=SourceIntegrity)
 
 
 class ResearchWatch(BaseModel):

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Report quality: a final editorial LLM pass (answer-first structure, tighter prose, dedupe)
     # on MEDIUM/HARD reports. One extra call — disable to trade quality for latency/cost.
     report_editor_enabled: bool = True
+    # Retraction check: look up cited DOIs against Crossref/Retraction Watch at finalize and flag
+    # sources backed by a retracted paper. Network — degrades gracefully, never breaks finalize.
+    retraction_check_enabled: bool = True
+    retraction_check_timeout: float = 5.0
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

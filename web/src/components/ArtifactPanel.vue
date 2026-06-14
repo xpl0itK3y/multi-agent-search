@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -20,6 +20,7 @@ const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
 const reputation = ref<SourceReputation | null>(null);
+const integrity = ref<SourceIntegrity | null>(null);
 const stance = ref<StanceBalance | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
@@ -141,6 +142,15 @@ async function ensureStance() {
   }
 }
 
+async function ensureIntegrity() {
+  if (integrity.value) return;
+  try {
+    integrity.value = await api.getSourceIntegrity(props.id);
+  } catch {
+    /* retraction check is optional — only academic sources have DOIs */
+  }
+}
+
 async function ensureConfidence() {
   if (confidence.value) return;
   try {
@@ -165,6 +175,7 @@ watch(tab, (t) => {
     ensureIndependence();
     ensureReputation();
     ensureStance();
+    ensureIntegrity();
   }
   if (t === "confidence") {
     ensureVerification();
@@ -202,6 +213,7 @@ watch(
       ensureIndependence();
       ensureReputation();
       ensureStance();
+      ensureIntegrity();
       ensureConfidence();
       ensureNumbers();
       ensureWatch();
@@ -787,6 +799,18 @@ async function exportApp() {
           <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
         </button>
         <button
+          v-if="integrity && integrity.flagged.length"
+          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 text-left text-xs"
+          @click="tab = 'sources'"
+        >
+          <span class="text-red-500">⛔</span>
+          <span class="font-medium text-ink">{{ $t("integrity.title") }}</span>
+          <span class="font-semibold text-red-500">
+            {{ integrity.retracted_count }} {{ $t("integrity.retracted") }}
+          </span>
+          <span class="text-muted">{{ $t("integrity.hintShort") }}</span>
+        </button>
+        <button
           v-if="stance && stance.applicable"
           class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
           :class="stanceOneSided ? 'border-amber-500/40 bg-amber-500/5' : 'border-bd bg-surface/40'"
@@ -941,6 +965,32 @@ async function exportApp() {
                   <span class="text-accent">[{{ f.source_id }}]</span>
                   <span class="text-ink"> {{ f.domain }}</span>
                   <span class="text-muted"> — {{ f.reason }}</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+          <!-- Retraction check: cited DOIs flagged as retracted / under concern -->
+          <div
+            v-if="integrity && integrity.flagged.length"
+            class="mb-3 rounded-xl border border-red-500/50 bg-red-500/10 p-4 animate-rise"
+          >
+            <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
+              <span class="text-red-500">⛔</span>{{ $t("integrity.title") }}
+              <span class="text-red-500">· {{ integrity.retracted_count }}/{{ integrity.checked_dois }}</span>
+            </div>
+            <p class="mb-3 text-xs text-muted">{{ $t("integrity.hint") }}</p>
+            <ul class="space-y-2">
+              <li v-for="(f, i) in integrity.flagged" :key="i" class="flex items-start gap-2 text-xs">
+                <span
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  :class="f.kind === 'retraction' ? 'border-red-500/50 text-red-500' : 'border-amber-500/40 text-amber-500'"
+                >
+                  {{ $t("integrity.kind." + f.kind) }}
+                </span>
+                <div class="min-w-0">
+                  <span class="text-accent">[{{ f.source_id }}]</span>
+                  <a :href="`https://doi.org/${f.doi}`" target="_blank" rel="noopener noreferrer" class="text-ink hover:underline"> {{ f.doi }}</a>
+                  <span v-if="f.detail" class="text-muted"> — {{ f.detail }}</span>
                 </div>
               </li>
             </ul>
