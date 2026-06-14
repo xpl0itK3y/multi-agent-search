@@ -16,6 +16,7 @@ from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
+from src.agents.source_independence import SourceIndependenceAgent
 from src.agents.research_diff import ResearchDiffAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
@@ -45,6 +46,7 @@ from src.api.schemas import (
     ResearchConflict,
     ResearchPlan,
     CitationAudit,
+    SourceIndependence,
     ComparisonTable,
     RedTeamReport,
     ResearchDiff,
@@ -138,6 +140,7 @@ class ResearchService:
         self.comparison_agent = comparison_agent
         self.app_export_agent = app_export_agent
         self.citation_auditor = CitationAuditAgent()
+        self.independence_auditor = SourceIndependenceAgent()
         self.research_differ = ResearchDiffAgent()
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
@@ -1125,6 +1128,7 @@ class ResearchService:
             "report": research.final_report,
             "verification": safe(lambda: self.get_research_verification(rid)),
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
+            "source_independence": safe(lambda: self.get_research_source_independence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
             "comparison": safe(lambda: self.get_research_comparison(rid)),
             "diff": safe(lambda: self.get_research_diff(rid)),
@@ -1500,6 +1504,44 @@ class ResearchService:
             return CitationAudit(research_id=research_id)
         return CitationAudit.model_validate(data)
 
+    # ── source independence (echo-chamber / circular-sourcing detector) ─────────
+
+    def _analyze_source_independence(self, research, tasks: list) -> None:
+        """Cluster the cited sources into independent origins; store the result.
+
+        Reuses the analyzer's exact source numbering so cluster source_ids line up with
+        the report's [Sn]. Deterministic and defensive — never breaks finalization.
+        """
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                source["source_id"]: {
+                    "content": source.get("content"),
+                    "url": source.get("url"),
+                    "title": source.get("title"),
+                }
+                for source in aggregated
+                if source.get("source_id")
+            }
+            independence = self.independence_auditor.analyze(sources_by_id)
+            independence.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["source_independence"] = independence.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("source_independence_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_source_independence(self, research_id: str) -> SourceIndependence:
+        """Stored echo-chamber analysis: how many independent origins the sources really are."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("source_independence")
+        if not data:
+            return SourceIndependence(research_id=research_id)
+        return SourceIndependence.model_validate(data)
+
     # ── structured comparison table ─────────────────────────────────────────────
 
     _COMPARISON_SIGNALS = (
@@ -1723,6 +1765,7 @@ class ResearchService:
                 )
             report = self._maybe_red_team(report, research, tasks)
             self._audit_citations(report, research, tasks)
+            self._analyze_source_independence(research, tasks)
             self._maybe_build_comparison(report, research)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(

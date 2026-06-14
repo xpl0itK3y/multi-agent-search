@@ -160,6 +160,24 @@ export interface CitationAudit {
   grounding: CitationGround[];
 }
 
+export interface OriginCluster {
+  label: string;
+  kind: "unique" | "single-domain" | "syndicated";
+  size: number;
+  domains: string[];
+  source_ids: string[];
+}
+
+export interface SourceIndependence {
+  research_id: string;
+  total_sources: number;
+  independent_origins: number;
+  independence_score: number;
+  dominant_origin_share: number;
+  clusters: OriginCluster[];
+  echo_warnings: string[];
+}
+
 export interface ComparisonCell {
   option: string;
   value: string;

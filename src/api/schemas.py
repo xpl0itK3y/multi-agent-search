@@ -192,6 +192,35 @@ class CitationAudit(BaseModel):
     grounding: List[CitationGround] = Field(default_factory=list)
 
 
+class OriginCluster(BaseModel):
+    """A set of sources that are NOT independent of each other.
+
+    Either the same outlet (multiple articles from one domain) or the same reprinted
+    text spread across several domains (a wire story / syndication).
+    """
+    label: str = ""               # representative domain or title
+    kind: str = "unique"          # unique | single-domain | syndicated
+    size: int = 0
+    domains: List[str] = Field(default_factory=list)
+    source_ids: List[str] = Field(default_factory=list)
+
+
+class SourceIndependence(BaseModel):
+    """How many INDEPENDENT origins the cited sources really represent (echo-chamber detector).
+
+    Clusters sources that are the same outlet or the same reprinted text, so a report with
+    "12 sources" that are really 3 origins is exposed — the circular-sourcing failure that
+    Perplexity/Gemini hide by presenting every citation as if it were independent corroboration.
+    """
+    research_id: str = ""
+    total_sources: int = 0
+    independent_origins: int = 0
+    independence_score: float = 0.0     # origins / total (1.0 = every source independent)
+    dominant_origin_share: float = 0.0  # largest cluster / total (1.0 = one origin behind everything)
+    clusters: List[OriginCluster] = Field(default_factory=list)  # only the non-trivial (size>1) echo groups
+    echo_warnings: List[str] = Field(default_factory=list)
+
+
 class AppExportRequest(BaseModel):
     """Free-text design brief for the AI-generated custom HTML export."""
     prompt: str = Field(default="", max_length=4000)

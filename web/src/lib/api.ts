@@ -9,6 +9,7 @@ import type {
   Depth,
   ModelOption,
   CitationAudit,
+  SourceIndependence,
   PlanItem,
   RedTeamReport,
   ResearchDiff,
@@ -156,6 +157,9 @@ export const api = {
 
   getCitations: (id: string) =>
     request<CitationAudit>(`/v1/research/${id}/citations`),
+
+  getSourceIndependence: (id: string) =>
+    request<SourceIndependence>(`/v1/research/${id}/source-independence`),
 
   getDiff: (id: string) =>
     request<ResearchDiff>(`/v1/research/${id}/diff`),

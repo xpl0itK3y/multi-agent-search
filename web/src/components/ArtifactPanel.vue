@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -18,6 +18,7 @@ const conflicts = ref<Conflict[] | null>(null);
 const verification = ref<VerificationReport | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
+const independence = ref<SourceIndependence | null>(null);
 const showWeak = ref(false);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
@@ -101,8 +102,20 @@ async function ensureCitations() {
   }
 }
 
+async function ensureIndependence() {
+  if (independence.value) return;
+  try {
+    independence.value = await api.getSourceIndependence(props.id);
+  } catch {
+    /* independence analysis is optional — sources still render without it */
+  }
+}
+
 watch(tab, (t) => {
-  if (t === "sources") ensureSources();
+  if (t === "sources") {
+    ensureSources();
+    ensureIndependence();
+  }
   if (t === "confidence") ensureVerification();
   if (t === "conflicts") ensureConflicts();
   if (t === "redteam") ensureRedTeam();
@@ -133,6 +146,7 @@ watch(
   (final) => {
     if (final) {
       ensureCitations();
+      ensureIndependence();
       ensureDiff();
       ensureComparison();
     }
@@ -150,6 +164,24 @@ const integrityClass = computed(() => {
   if (r >= 0.5) return "text-amber-500";
   return "text-red-400";
 });
+
+const independenceScore = computed(() => independence.value?.independence_score ?? null);
+const independenceClass = computed(() => {
+  const r = independenceScore.value ?? 1;
+  if (r >= 0.8) return "text-emerald-500";
+  if (r >= 0.5) return "text-amber-500";
+  return "text-red-400";
+});
+const independenceBar = computed(() => {
+  const r = independenceScore.value ?? 1;
+  if (r >= 0.8) return "bg-emerald-500";
+  if (r >= 0.5) return "bg-amber-500";
+  return "bg-red-400";
+});
+const clusterKindClass: Record<string, string> = {
+  syndicated: "border-red-400/40 text-red-400",
+  "single-domain": "border-amber-500/40 text-amber-500",
+};
 
 const diffHasChanges = computed(() => {
   const d = diff.value;
@@ -408,6 +440,23 @@ async function exportApp() {
             <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
           </ul>
         </div>
+        <div
+          v-if="independence && independence.total_sources > 1"
+          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
+        >
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-medium text-ink">{{ $t("independence.title") }}</span>
+            <span class="font-semibold" :class="independenceClass">{{ Math.round(independence.independence_score * 100) }}%</span>
+            <span class="text-muted">{{ independence.independent_origins }}/{{ independence.total_sources }} {{ $t("independence.origins") }}</span>
+            <button
+              v-if="independence.clusters.length"
+              class="ml-auto text-amber-500 hover:underline"
+              @click="tab = 'sources'"
+            >
+              ⚠ {{ independence.clusters.length }} {{ $t("independence.echoClusters") }}
+            </button>
+          </div>
+        </div>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
@@ -483,6 +532,52 @@ async function exportApp() {
         <p v-else-if="error" class="text-red-400">{{ error }}</p>
         <p v-else-if="sources && !sources.length" class="text-muted">{{ $t("artifact.sourcesEmpty") }}</p>
         <div v-else class="space-y-2">
+          <!-- Source-independence / echo-chamber summary: how many independent origins these sources really are -->
+          <div
+            v-if="independence && independence.total_sources > 1"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+          >
+            <div class="flex items-center gap-3">
+              <div class="text-2xl font-semibold leading-none" :class="independenceClass">
+                {{ Math.round(independence.independence_score * 100) }}%
+              </div>
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-ink">{{ $t("independence.title") }}</div>
+                <div class="text-xs text-muted">
+                  {{ independence.independent_origins }} {{ $t("independence.of") }}
+                  {{ independence.total_sources }} {{ $t("independence.origins") }}
+                </div>
+              </div>
+            </div>
+            <div class="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface">
+              <div
+                class="h-full rounded-full transition-all"
+                :class="independenceBar"
+                :style="{ width: independence.independence_score * 100 + '%' }"
+              />
+            </div>
+            <p class="mt-2 text-xs text-muted">{{ $t("independence.hint") }}</p>
+            <ul v-if="independence.clusters.length" class="mt-3 space-y-2 border-t border-bd pt-3">
+              <li v-for="(c, i) in independence.clusters" :key="i" class="flex items-start gap-2">
+                <span
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  :class="clusterKindClass[c.kind] || 'border-bd text-muted'"
+                >
+                  {{ $t("independence.kind." + c.kind) }}
+                </span>
+                <div class="min-w-0 text-xs">
+                  <div class="text-ink">{{ c.label }} · {{ c.size }} {{ $t("independence.sources") }}</div>
+                  <div class="truncate text-muted">
+                    <span class="text-accent">{{ c.source_ids.map((s) => "[" + s + "]").join(" ") }}</span>
+                    <span v-if="c.domains.length"> · {{ c.domains.join(", ") }}</span>
+                  </div>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-emerald-500">
+              ✓ {{ $t("independence.allIndependent") }}
+            </p>
+          </div>
           <SourceCard v-for="(s, i) in sources" :key="s.url" :source="s" :index="i + 1" />
         </div>
       </template>

@@ -127,6 +127,20 @@ const ru = {
     matched: "сопоставлено с источником",
     weak: "не подтверждены источником",
   },
+  independence: {
+    title: "Независимость источников",
+    origins: "независимых",
+    of: "из",
+    sources: "источн.",
+    echoClusters: "эхо-кластер(ов)",
+    hint: "Сколько по-настоящему независимых первоисточников стоит за отчётом. Перепечатки и статьи одного издания не считаются отдельными — так видно скрытую эхо-камеру.",
+    allIndependent: "Все источники независимы друг от друга",
+    kind: {
+      syndicated: "перепечатка",
+      "single-domain": "одно издание",
+      unique: "уникальный",
+    },
+  },
   diff: {
     title: "Что изменилось",
     new: "новых",
@@ -341,6 +355,20 @@ const en: typeof ru = {
     matched: "matched to source",
     weak: "not backed by source",
   },
+  independence: {
+    title: "Source independence",
+    origins: "independent",
+    of: "of",
+    sources: "sources",
+    echoClusters: "echo cluster(s)",
+    hint: "How many genuinely independent origins back this report. Reprints and same-outlet articles don't count separately — this exposes a hidden echo chamber.",
+    allIndependent: "Every source is independent of the others",
+    kind: {
+      syndicated: "reprint",
+      "single-domain": "same outlet",
+      unique: "unique",
+    },
+  },
   diff: {
     title: "What changed",
     new: "new",
@@ -554,6 +582,20 @@ const es: typeof ru = {
     integrity: "Citas",
     matched: "coinciden con la fuente",
     weak: "sin respaldo en la fuente",
+  },
+  independence: {
+    title: "Independencia de fuentes",
+    origins: "independientes",
+    of: "de",
+    sources: "fuentes",
+    echoClusters: "clúster(es) de eco",
+    hint: "Cuántos orígenes realmente independientes respaldan este informe. Las reediciones y los artículos del mismo medio no cuentan por separado — así se revela la cámara de eco oculta.",
+    allIndependent: "Cada fuente es independiente de las demás",
+    kind: {
+      syndicated: "reedición",
+      "single-domain": "mismo medio",
+      unique: "único",
+    },
   },
   diff: {
     title: "Qué cambió",

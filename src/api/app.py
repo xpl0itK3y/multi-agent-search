@@ -45,6 +45,7 @@ from src.api.schemas import (
     ChatMessage,
     AppExportRequest,
     CitationAudit,
+    SourceIndependence,
     Clarification,
     ClarifyAnswers,
     ComparisonTable,
@@ -446,6 +447,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/citations", response_model=CitationAudit, dependencies=research_guard)
     async def get_research_citations(research_id: str, request: Request):
         return get_research_service(request).get_research_citation_audit(research_id)
+
+    @app.get("/v1/research/{research_id}/source-independence", response_model=SourceIndependence, dependencies=research_guard)
+    async def get_research_source_independence(research_id: str, request: Request):
+        return get_research_service(request).get_research_source_independence(research_id)
 
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
     async def get_research_diff(research_id: str, request: Request):
