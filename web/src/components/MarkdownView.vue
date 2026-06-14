@@ -14,6 +14,13 @@ function escAttr(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// A source URL safe to place inside an href: http(s) only, attribute-escaped so a URL
+// containing a quote can't break out of href="…" and inject an event handler (XSS).
+function safeHref(u: string | undefined): string {
+  if (!u || !/^https?:\/\//i.test(u)) return "";
+  return escAttr(u);
+}
+
 // html:false — report text comes from LLM/web content, never render raw HTML (XSS-safe).
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
 
@@ -49,7 +56,7 @@ const html = computed(() => {
   // a weak-citation flag when the source text doesn't actually back the claim.
   return rendered.replace(/\[S(\d+)\]/g, (_full, n: string) => {
     const g = ground.get(`S${n}`);
-    const url = g?.url || urls.get(n);
+    const url = safeHref(g?.url || urls.get(n));
     const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
     const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
     return url
