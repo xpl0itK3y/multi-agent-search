@@ -49,3 +49,26 @@ def test_surface_extracts_findings():
 def test_surface_safe_on_garbage():
     assert CrossLanguageAgent(_StubLLM("not json")).surface("q", "en", {"zh": ["x"]}) == []
     assert CrossLanguageAgent(_StubLLM("{}")).surface("q", "en", {}) == []  # no foreign sources
+
+
+def test_injected_task_is_a_valid_search_task():
+    # The decompose loop calls SearchTask(**task_dict) / accesses task_dict['id'] — the injected
+    # cross-language task must carry id + status + queries, or decompose fails (regression).
+    from src.api.schemas import ResearchRequest, SearchDepth, SearchTask
+    from src.repositories.in_memory_task_store import InMemoryTaskStore
+    from src.services.research_service import ResearchService
+
+    class _XL:
+        def plan(self, prompt, lang, max_targets):
+            return ["de"], ["Deutsche Anfrage zur Regulierung"]
+
+    store = InMemoryTaskStore()
+    svc = ResearchService(task_store=store, cross_language_agent=_XL())
+    rec = store.add_research(ResearchRequest(prompt="How does Germany regulate Sunday shopping?", depth=SearchDepth.EASY), task_ids=[])
+    tasks_raw: list = []
+    svc._maybe_add_cross_language_task(rec.id, "How does Germany regulate Sunday shopping?", tasks_raw)
+
+    assert len(tasks_raw) == 1
+    task = SearchTask(**{**tasks_raw[0], "research_id": rec.id})  # must not raise / KeyError 'id'
+    assert task.id and task.queries == ["Deutsche Anfrage zur Regulierung"]
+    assert store.get_research(rec.id).graph_state.get("cross_language_targets") == ["de"]

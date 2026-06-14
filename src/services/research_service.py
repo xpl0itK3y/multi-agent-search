@@ -1685,7 +1685,12 @@ class ResearchService:
             langs, queries = self.cross_language_agent.plan(prompt, query_lang, settings.cross_language_max_targets)
             if not queries:
                 return
-            tasks_raw.append({"description": "Coverage in other languages", "queries": queries})
+            tasks_raw.append({
+                "id": str(uuid.uuid4()),
+                "description": "Coverage in other languages",
+                "queries": queries,
+                "status": TaskStatus.PENDING,
+            })
             state = dict((self.task_store.get_research(research_id).graph_state) or {})
             state["cross_language_targets"] = langs
             state.setdefault("query_language", query_lang)
