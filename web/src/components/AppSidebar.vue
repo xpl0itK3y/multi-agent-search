@@ -6,6 +6,7 @@ import type { ResearchHistoryItem } from "@/lib/types";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
+import SparkLogo from "@/components/SparkLogo.vue";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -141,7 +142,10 @@ const vFocus = {
   >
     <!-- Brand -->
     <div class="flex items-center justify-between px-4 pt-4 pb-3">
-      <span class="font-serif text-xl tracking-tight text-ink">{{ $t("sidebar.brand") }}</span>
+      <div class="flex items-center gap-2">
+        <SparkLogo :size="26" />
+        <span class="veris-wordmark text-xl font-semibold tracking-tight">{{ $t("sidebar.brand") }}</span>
+      </div>
       <div class="flex items-center gap-1 text-muted">
         <button class="icon-btn" :title="$t('sidebar.search')" @click="toggleSearch()">⌕</button>
         <button class="icon-btn text-[11px] font-medium" :title="LOCALE_LABEL[ui.locale]" @click="cycleLocale()">
@@ -205,7 +209,7 @@ const vFocus = {
         <div
           v-for="item in filteredHistory"
           :key="item.id"
-          class="group flex items-center gap-1 rounded-lg pr-1 text-sm hover:bg-surface"
+          class="group flex items-center gap-1 rounded-lg pr-1 text-sm transition-all duration-150 hover:translate-x-0.5 hover:bg-surface"
           :class="currentThreadId === threadKey(item) ? 'bg-surface text-ink' : 'text-muted'"
         >
           <input

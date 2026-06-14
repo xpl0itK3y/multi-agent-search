@@ -5,28 +5,33 @@
 /* Theme palettes as space-separated RGB channels so Tailwind alpha modifiers
    (e.g. bg-surface/50) work. Light = default; .dark on <html> switches. */
 :root {
-  --c-bg: 250 249 245;
-  --c-rail: 240 238 230;
+  --c-bg: 247 248 252;
+  --c-rail: 240 242 248;
   --c-surface: 255 255 255;
-  --c-surface-hover: 240 238 230;
-  --c-bd: 226 223 214;
-  --c-ink: 43 42 39;
-  --c-muted: 117 114 107;
-  --c-accent: 193 95 60;
-  --c-accent-soft: 201 138 110;
+  --c-surface-hover: 238 240 248;
+  --c-bd: 224 227 238;
+  --c-ink: 23 25 38;
+  --c-muted: 104 108 128;
+  --c-accent: 91 84 232;
+  --c-accent-soft: 139 132 244;
+  /* Brand gradient (logo, highlights) — violet → cyan */
+  --c-grad-a: 109 94 240;
+  --c-grad-b: 34 211 238;
   color-scheme: light;
 }
 
 .dark {
-  --c-bg: 38 38 36;
-  --c-rail: 31 30 29;
-  --c-surface: 48 48 46;
-  --c-surface-hover: 58 58 55;
-  --c-bd: 64 63 60;
-  --c-ink: 236 234 227;
-  --c-muted: 154 152 144;
-  --c-accent: 217 119 87;
-  --c-accent-soft: 224 162 136;
+  --c-bg: 14 15 23;
+  --c-rail: 18 20 30;
+  --c-surface: 25 27 40;
+  --c-surface-hover: 34 36 53;
+  --c-bd: 44 47 68;
+  --c-ink: 233 234 246;
+  --c-muted: 147 151 176;
+  --c-accent: 139 124 255;
+  --c-accent-soft: 167 156 255;
+  --c-grad-a: 139 124 255;
+  --c-grad-b: 56 220 245;
   color-scheme: dark;
 }
 
@@ -128,6 +133,75 @@ body {
   opacity: 0;
 }
 
+/* slide-up entrance (route views) */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.view-enter-active {
+  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.view-leave-active {
+  transition: opacity 0.15s ease;
+}
+.view-leave-to {
+  opacity: 0;
+}
+
+/* ---- Brand ---- */
+.veris-wordmark {
+  background: linear-gradient(120deg, rgb(var(--c-grad-a)), rgb(var(--c-grad-b)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.veris-logo {
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), filter 0.45s ease;
+  filter: drop-shadow(0 2px 7px rgb(var(--c-accent) / 0.4));
+}
+.veris-logo:hover {
+  transform: rotate(-6deg) scale(1.08);
+}
+
+/* ---- Interaction polish ---- */
+button,
+a,
+[role="button"],
+input,
+textarea,
+select {
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease;
+}
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: rgb(var(--c-accent) / 0.55);
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+}
+.lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.lift:hover {
+  transform: translateY(-2px);
+}
+/* gentle attention pulse for the live status dot */
+@keyframes soft-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
   .animate-rise,
@@ -135,7 +209,10 @@ body {
   .trace-leave-active,
   .trace-move,
   .fade-enter-active,
-  .fade-leave-active {
+  .fade-leave-active,
+  .view-enter-active,
+  .veris-logo,
+  .lift {
     animation: none !important;
     transition: none !important;
   }

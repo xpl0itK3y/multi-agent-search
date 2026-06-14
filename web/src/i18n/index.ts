@@ -38,7 +38,7 @@ const ru = {
     url: { label: "Из ссылки", template: "Исследуй на основе источника: " },
   },
   sidebar: {
-    brand: "Research",
+    brand: "Veris",
     search: "Поиск",
     newResearch: "Новое исследование",
     recents: "Недавние",
@@ -250,7 +250,7 @@ const en: typeof ru = {
     url: { label: "From URL", template: "Research based on this source: " },
   },
   sidebar: {
-    brand: "Research",
+    brand: "Veris",
     search: "Search",
     newResearch: "New research",
     recents: "Recents",
@@ -462,7 +462,7 @@ const es: typeof ru = {
     url: { label: "Desde URL", template: "Investiga a partir de esta fuente: " },
   },
   sidebar: {
-    brand: "Research",
+    brand: "Veris",
     search: "Buscar",
     newResearch: "Nueva investigación",
     recents: "Recientes",

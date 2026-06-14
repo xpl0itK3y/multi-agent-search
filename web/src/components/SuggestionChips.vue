@@ -17,7 +17,7 @@ const chips: { icon: string; key: string }[] = [
     <button
       v-for="chip in chips"
       :key="chip.key"
-      class="flex items-center gap-2 rounded-full border border-bd bg-surface/60 px-3.5 py-2 text-sm text-muted hover:bg-surface hover:text-ink"
+      class="flex items-center gap-2 rounded-full border border-bd bg-surface/60 px-3.5 py-2 text-sm text-muted transition-all duration-200 hover:-translate-y-0.5 hover:border-accentSoft/50 hover:bg-surface hover:text-ink hover:shadow-sm"
       @click="emit('pick', t(`chips.${chip.key}.template`))"
     >
       <span class="text-accentSoft">{{ chip.icon }}</span>
