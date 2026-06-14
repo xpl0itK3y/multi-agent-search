@@ -221,6 +221,39 @@ class SourceIndependence(BaseModel):
     echo_warnings: List[str] = Field(default_factory=list)
 
 
+class ConfidenceComponent(BaseModel):
+    """One transparent input to the overall confidence score (so the number isn't a black box)."""
+    key: str = ""        # citations | corroboration | resilience | independence
+    score: float = 0.0   # 0..1
+    weight: float = 0.0  # 0..1 (weights of present components sum to 1)
+    detail: str = ""     # short human note, e.g. "8/10 citations matched source"
+
+
+class ConfidenceClaim(BaseModel):
+    """A load-bearing finding with its fused confidence band."""
+    statement: str = ""
+    band: str = "solid"           # solid | contested | speculative
+    support_level: str = "weak"   # original verification level (strong|medium|weak)
+    source_ids: List[str] = Field(default_factory=list)
+    note: str = ""                # why it was downgraded (red-team / weak grounding / single origin)
+
+
+class ConfidenceReport(BaseModel):
+    """Honesty meter: fuses citation grounding, claim verification, red-team and source
+    independence into one calibrated confidence — the single trust number Perplexity/Gemini
+    never show. Transparent: every component that feeds the score is listed.
+    """
+    research_id: str = ""
+    overall: float = 0.0          # 0..1 weighted blend of the components
+    grade: str = "low"            # high | medium | low
+    total_claims: int = 0
+    solid: int = 0                # claim counts by band (the "71/20/9" headline)
+    contested: int = 0
+    speculative: int = 0
+    components: List[ConfidenceComponent] = Field(default_factory=list)
+    claims: List[ConfidenceClaim] = Field(default_factory=list)
+
+
 class AppExportRequest(BaseModel):
     """Free-text design brief for the AI-generated custom HTML export."""
     prompt: str = Field(default="", max_length=4000)

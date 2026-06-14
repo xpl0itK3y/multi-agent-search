@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -19,6 +19,7 @@ const verification = ref<VerificationReport | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
+const confidence = ref<ConfidenceReport | null>(null);
 const showWeak = ref(false);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
@@ -111,12 +112,24 @@ async function ensureIndependence() {
   }
 }
 
+async function ensureConfidence() {
+  if (confidence.value) return;
+  try {
+    confidence.value = await api.getConfidence(props.id);
+  } catch {
+    /* honesty meter is optional — the report still renders without it */
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") {
     ensureSources();
     ensureIndependence();
   }
-  if (t === "confidence") ensureVerification();
+  if (t === "confidence") {
+    ensureVerification();
+    ensureConfidence();
+  }
   if (t === "conflicts") ensureConflicts();
   if (t === "redteam") ensureRedTeam();
   if (t === "trail") ensureTrail();
@@ -147,6 +160,7 @@ watch(
     if (final) {
       ensureCitations();
       ensureIndependence();
+      ensureConfidence();
       ensureDiff();
       ensureComparison();
     }
@@ -181,6 +195,23 @@ const independenceBar = computed(() => {
 const clusterKindClass: Record<string, string> = {
   syndicated: "border-red-400/40 text-red-400",
   "single-domain": "border-amber-500/40 text-amber-500",
+};
+
+// ── confidence / honesty meter ────────────────────────────────────────────────
+const gradeClass = computed(() => {
+  const g = confidence.value?.grade;
+  if (g === "high") return "text-emerald-500";
+  if (g === "medium") return "text-amber-500";
+  return "text-red-400";
+});
+function bandPct(n: number): number {
+  const total = confidence.value?.total_claims || 0;
+  return total ? Math.round((n / total) * 100) : 0;
+}
+const bandClass: Record<string, string> = {
+  solid: "bg-emerald-500",
+  contested: "bg-amber-500",
+  speculative: "bg-red-400",
 };
 
 const diffHasChanges = computed(() => {
@@ -457,6 +488,20 @@ async function exportApp() {
             </button>
           </div>
         </div>
+        <button
+          v-if="confidence && confidence.components.length"
+          class="mb-4 flex w-full items-center gap-3 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-left text-xs"
+          @click="tab = 'confidence'"
+        >
+          <span class="font-medium text-ink">{{ $t("confidence.meter") }}</span>
+          <span class="text-lg font-semibold leading-none" :class="gradeClass">{{ Math.round(confidence.overall * 100) }}%</span>
+          <span class="text-muted">{{ $t("confidence.grade." + confidence.grade) }}</span>
+          <span v-if="confidence.total_claims" class="ml-auto text-muted">
+            {{ bandPct(confidence.solid) }}% {{ $t("confidence.band.solid") }} ·
+            {{ bandPct(confidence.contested) }}% {{ $t("confidence.band.contested") }} ·
+            {{ bandPct(confidence.speculative) }}% {{ $t("confidence.band.speculative") }}
+          </span>
+        </button>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
@@ -612,6 +657,44 @@ async function exportApp() {
         <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
         <p v-else-if="error" class="text-red-400">{{ error }}</p>
         <div v-else-if="verification" class="space-y-6">
+          <!-- Honesty meter: one calibrated confidence fused from all trust signals, with its inputs shown -->
+          <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4 animate-rise">
+            <div class="flex items-center gap-4">
+              <div class="text-3xl font-semibold leading-none" :class="gradeClass">
+                {{ Math.round(confidence.overall * 100) }}%
+              </div>
+              <div>
+                <div class="text-sm font-medium text-ink">{{ $t("confidence.meter") }}</div>
+                <div class="text-xs font-medium" :class="gradeClass">{{ $t("confidence.grade." + confidence.grade) }}</div>
+              </div>
+            </div>
+
+            <template v-if="confidence.total_claims">
+              <div class="mt-3 flex h-2 w-full overflow-hidden rounded-full bg-surface">
+                <div :class="bandClass.solid" :style="{ width: bandPct(confidence.solid) + '%' }" />
+                <div :class="bandClass.contested" :style="{ width: bandPct(confidence.contested) + '%' }" />
+                <div :class="bandClass.speculative" :style="{ width: bandPct(confidence.speculative) + '%' }" />
+              </div>
+              <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+                <span><span class="font-semibold text-emerald-500">{{ bandPct(confidence.solid) }}%</span> {{ $t("confidence.band.solid") }}</span>
+                <span><span class="font-semibold text-amber-500">{{ bandPct(confidence.contested) }}%</span> {{ $t("confidence.band.contested") }}</span>
+                <span><span class="font-semibold text-red-400">{{ bandPct(confidence.speculative) }}%</span> {{ $t("confidence.band.speculative") }}</span>
+              </div>
+            </template>
+
+            <div class="mt-3 space-y-1.5 border-t border-bd pt-3">
+              <div class="text-xs font-medium text-muted">{{ $t("confidence.fromSignals") }}</div>
+              <div v-for="c in confidence.components" :key="c.key" class="flex items-center gap-2 text-xs">
+                <span class="w-32 shrink-0 text-ink">{{ $t("confidence.component." + c.key) }}</span>
+                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
+                  <div class="h-full rounded-full bg-accent transition-all" :style="{ width: c.score * 100 + '%' }" />
+                </div>
+                <span class="w-9 shrink-0 text-right font-medium text-ink">{{ Math.round(c.score * 100) }}%</span>
+                <span class="hidden shrink-0 text-muted md:inline">{{ c.detail }}</span>
+              </div>
+            </div>
+          </div>
+
           <div>
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="font-medium text-ink">{{ $t("artifact.planCoverage") }}</span>

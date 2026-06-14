@@ -17,6 +17,7 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
+from src.agents.confidence import ConfidenceAgent
 from src.agents.research_diff import ResearchDiffAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
@@ -47,6 +48,7 @@ from src.api.schemas import (
     ResearchPlan,
     CitationAudit,
     SourceIndependence,
+    ConfidenceReport,
     ComparisonTable,
     RedTeamReport,
     ResearchDiff,
@@ -141,6 +143,7 @@ class ResearchService:
         self.app_export_agent = app_export_agent
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
+        self.confidence_agent = ConfidenceAgent()
         self.research_differ = ResearchDiffAgent()
         self.broker = broker
         self.finalize_graph_runner = FinalizeGraphRunner(self)
@@ -1129,6 +1132,7 @@ class ResearchService:
             "verification": safe(lambda: self.get_research_verification(rid)),
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
+            "confidence": safe(lambda: self.get_research_confidence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
             "comparison": safe(lambda: self.get_research_comparison(rid)),
             "diff": safe(lambda: self.get_research_diff(rid)),
@@ -1541,6 +1545,24 @@ class ResearchService:
         if not data:
             return SourceIndependence(research_id=research_id)
         return SourceIndependence.model_validate(data)
+
+    # ── confidence / honesty meter (fuses all trust signals into one number) ─────
+
+    def get_research_confidence(self, research_id: str) -> ConfidenceReport:
+        """Honesty meter (no LLM): fuse citation grounding, claim verification, red-team and
+        source independence into one calibrated confidence. Recomputed on demand, same cheap
+        pattern as verification/conflicts — so it always reflects the latest stored signals.
+        """
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        verification = self.get_research_verification(research_id)
+        citations = self.get_research_citation_audit(research_id)
+        red_team = self.get_research_red_team(research_id)
+        independence = self.get_research_source_independence(research_id)
+        confidence = self.confidence_agent.compose(verification, citations, red_team, independence)
+        confidence.research_id = research_id
+        return confidence
 
     # ── structured comparison table ─────────────────────────────────────────────
 

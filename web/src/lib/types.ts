@@ -178,6 +178,33 @@ export interface SourceIndependence {
   echo_warnings: string[];
 }
 
+export interface ConfidenceComponent {
+  key: string;
+  score: number;
+  weight: number;
+  detail: string;
+}
+
+export interface ConfidenceClaim {
+  statement: string;
+  band: "solid" | "contested" | "speculative";
+  support_level: string;
+  source_ids: string[];
+  note: string;
+}
+
+export interface ConfidenceReport {
+  research_id: string;
+  overall: number;
+  grade: "high" | "medium" | "low";
+  total_claims: number;
+  solid: number;
+  contested: number;
+  speculative: number;
+  components: ConfidenceComponent[];
+  claims: ConfidenceClaim[];
+}
+
 export interface ComparisonCell {
   option: string;
   value: string;

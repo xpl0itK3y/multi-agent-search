@@ -10,6 +10,7 @@ import type {
   ModelOption,
   CitationAudit,
   SourceIndependence,
+  ConfidenceReport,
   PlanItem,
   RedTeamReport,
   ResearchDiff,
@@ -160,6 +161,9 @@ export const api = {
 
   getSourceIndependence: (id: string) =>
     request<SourceIndependence>(`/v1/research/${id}/source-independence`),
+
+  getConfidence: (id: string) =>
+    request<ConfidenceReport>(`/v1/research/${id}/confidence`),
 
   getDiff: (id: string) =>
     request<ResearchDiff>(`/v1/research/${id}/diff`),

@@ -46,6 +46,7 @@ from src.api.schemas import (
     AppExportRequest,
     CitationAudit,
     SourceIndependence,
+    ConfidenceReport,
     Clarification,
     ClarifyAnswers,
     ComparisonTable,
@@ -451,6 +452,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/source-independence", response_model=SourceIndependence, dependencies=research_guard)
     async def get_research_source_independence(research_id: str, request: Request):
         return get_research_service(request).get_research_source_independence(research_id)
+
+    @app.get("/v1/research/{research_id}/confidence", response_model=ConfidenceReport, dependencies=research_guard)
+    async def get_research_confidence(research_id: str, request: Request):
+        return get_research_service(request).get_research_confidence(research_id)
 
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
     async def get_research_diff(research_id: str, request: Request):
