@@ -279,7 +279,13 @@ const stanceTotal = computed(() => {
 function stancePct(n: number): number {
   return stanceTotal.value ? Math.round((n / stanceTotal.value) * 100) : 0;
 }
-const stanceOneSided = computed(() => (stance.value?.applicable ?? false) && (stance.value?.skew ?? 0) >= 0.7);
+const stanceOneSided = computed(() => {
+  const s = stance.value;
+  if (!s?.applicable) return false;
+  // Only "one-sided" when the sources that take a side skew hard AND actually outnumber the
+  // neutral ones — otherwise 7-for / 0-against / 7-neutral wrongly reads as one-sided.
+  return s.skew >= 0.7 && s.supports + s.opposes > s.neutral;
+});
 
 // ── confidence / honesty meter ────────────────────────────────────────────────
 const gradeClass = computed(() => {

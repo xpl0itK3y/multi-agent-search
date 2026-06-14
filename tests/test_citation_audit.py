@@ -39,3 +39,23 @@ def test_citation_audit_unknown_source_id_ignored():
         {"S1": {"content": "unrelated content about something"}},
     )
     assert audit.total == 0  # S9 not in pool -> nothing to check
+
+
+def test_citation_audit_credits_pooled_synthesis():
+    # No single source covers the whole synthesis bullet, but together they do.
+    report = "Fasting improves insulin sensitivity, reduces arterial pressure, and preserves muscle mass [S1][S2][S3]."
+    sources = {
+        "S1": {"content": "Studies reported better insulin outcomes overall."},
+        "S2": {"content": "Pressure readings fell during the period."},
+        "S3": {"content": "Muscle was largely retained throughout."},
+    }
+    audit = CitationAuditAgent().audit(report, sources)
+    assert audit.total == 1 and audit.supported == 1  # one claim, grounded by the pooled sources
+
+
+def test_citation_audit_still_flags_fabrication_across_all_sources():
+    # None of the cited sources mention the claim's terms -> still unsupported.
+    report = "The Roman Empire collapsed because of dietary fasting trends [S1][S2]."
+    sources = {"S1": {"content": "A guide to baking sourdough bread."}, "S2": {"content": "Tips for indoor gardening."}}
+    audit = CitationAuditAgent().audit(report, sources)
+    assert audit.total == 1 and audit.supported == 0

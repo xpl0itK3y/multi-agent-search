@@ -64,6 +64,36 @@ def test_internal_contradiction_detected():
     assert "$2.3billion" in vals and "$3.2billion" in vals
 
 
+def test_range_is_not_flagged_as_contradiction():
+    report = "The 5:2 diet restricts intake to 500-600 kcal on fasting days each week [S1]."
+    r = _agent().check(report, {"S1": {"content": "5:2 uses 500 to 600 kcal"}})
+    assert r.contradictions == []  # "500-600" is a range, not a disagreement
+
+
+def test_different_study_years_are_not_a_contradiction():
+    report = "A 2024 systematic review and a 2025 follow-up trial examined the same protocol here [S1]."
+    r = _agent().check(report, {"S1": {"content": "reviews published 2024 and 2025"}})
+    assert r.contradictions == []  # different studies legitimately have different years
+
+
+def test_effect_size_vs_confidence_interval_not_flagged():
+    report = "Mean HbA1c reduction reached 0.32% with a 95% confidence interval in the trial [S1]."
+    r = _agent().check(report, {"S1": {"content": "hba1c fell 0.32 percent, 95% CI"}})
+    assert r.contradictions == []  # 0.32% effect vs 95% CI are different quantities (orders apart)
+
+
+def test_real_contradiction_still_flagged():
+    report = "Total revenue was $2.3 billion overall [S1]. Total revenue was $3.2 billion overall [S2]."
+    r = _agent().check(report, {"S1": {"content": "revenue 2.3 billion"}, "S2": {"content": "revenue 3.2 billion"}})
+    assert r.contradictions  # same quantity, same magnitude, not a range → genuine disagreement
+
+
+def test_numbers_inside_urls_are_ignored():
+    report = "See the trial at https://pmc.ncbi.nlm.nih.gov/articles/PMC9889728 for the full protocol here [S1]."
+    r = _agent().check(report, {"S1": {"content": "protocol"}})
+    assert r.total == 0 and r.contradictions == []  # PMC9889728 is an identifier, not a statistic
+
+
 def test_uncited_figure_not_counted():
     r = _agent().check("Growth was 40% this year.", {})
     assert r.total == 0 and r.unsupported == []

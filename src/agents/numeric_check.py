@@ -23,6 +23,7 @@ from src.api.schemas import NumericCheck, NumericClaim, NumericContradiction
 _CITATION = re.compile(r"\[S(\d+)\]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 _WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+_URL = re.compile(r"https?://\S+")
 
 # A figure: optional currency, a numeric core (with thousands/decimal separators), optional
 # scale word or percent sign. Case-insensitive; covers EN + RU scale words.
@@ -114,29 +115,53 @@ class NumericCheckAgent:
         for tokens, entries in by_subject.items():
             if len(entries) < 2 or len(tokens) < 2:
                 continue
-            # group only same-kind figures; flag if any two disagree beyond tolerance
             by_kind: dict[str, list] = {}
             for raw, canon, kind, sentence in entries:
+                if kind == "year":
+                    continue  # different studies legitimately carry different years — not a contradiction
                 by_kind.setdefault(kind, []).append((raw, canon, sentence))
             for kind, group in by_kind.items():
                 distinct: list[tuple[str, float, str]] = []
                 for raw, canon, sentence in group:
-                    if not any(self._close(canon, c, kind) for _, c, _ in distinct):
-                        distinct.append((raw, canon, sentence))
-                if len(distinct) >= 2:
-                    out.append(
-                        NumericContradiction(
-                            subject=" ".join(sorted(tokens))[:80],
-                            values=[d[0] for d in distinct][:4],
-                            sentences=[d[2][:200] for d in distinct][:4],
-                        )
+                    if any(self._close(canon, c, kind) for _, c, _ in distinct):
+                        continue
+                    # two values stated as a range ("500–600 kcal") are not a contradiction
+                    if any(self._is_range(raw, r2, sentence) for r2, _c, _s in distinct):
+                        continue
+                    distinct.append((raw, canon, sentence))
+                if len(distinct) < 2:
+                    continue
+                # Only flag when the values are the same order of magnitude. A huge spread
+                # usually means different quantities (e.g. an effect size 0.32% vs a 95% CI).
+                canons = [abs(c) for _, c, _ in distinct if c]
+                if canons and max(canons) / max(min(canons), 1e-9) > 10:
+                    continue
+                out.append(
+                    NumericContradiction(
+                        subject=" ".join(sorted(tokens))[:80],
+                        values=[d[0] for d in distinct][:4],
+                        sentences=[d[2][:200] for d in distinct][:4],
                     )
+                )
         return out[:10]
+
+    @staticmethod
+    def _is_range(a_raw: str, b_raw: str, sentence: str) -> bool:
+        """True if a and b appear in the sentence joined as a range (500–600, 2 to 4)."""
+        a = re.sub(r"[^\d.]", "", a_raw or "")
+        b = re.sub(r"[^\d.]", "", b_raw or "")
+        if not a or not b:
+            return False
+        sep = r"\s*(?:[-–—]|to|and|или|–)\s*"
+        pattern = f"({re.escape(a)}{sep}{re.escape(b)}|{re.escape(b)}{sep}{re.escape(a)})"
+        return re.search(pattern, sentence or "", re.IGNORECASE) is not None
 
     # ── figure extraction / matching ────────────────────────────────────────────
 
     def _figures(self, text: str) -> list[tuple[str, float, str, tuple[str, ...]]]:
         """Significant figures in a sentence: (raw, canonical value, kind, context tokens)."""
+        # Drop URLs first — article/DOI ids (e.g. .../PMC9889728) are identifiers, not statistics.
+        text = _URL.sub(" ", text or "")
         figures: list[tuple[str, float, str, tuple[str, ...]]] = []
         for m in _NUM.finditer(text):
             canon = self._canon(m.group("num"))

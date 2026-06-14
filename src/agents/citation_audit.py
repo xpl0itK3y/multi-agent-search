@@ -35,7 +35,11 @@ class CitationAuditAgent:
         if not report or not sources_by_id:
             return CitationAudit()
 
-        checks: list[tuple[str, str, bool]] = []  # (claim, source_id, supported)
+        # One check per CLAIM (not per citation): a claim is grounded if any single cited
+        # source backs it OR the cited sources *together* cover it — so a synthesis bullet that
+        # paraphrases several sources isn't wrongly flagged, while a claim none of its sources
+        # mention still fails (the real fabrication case).
+        checks: list[tuple[str, bool]] = []  # (claim, supported)
         best: dict[str, tuple[float, str, bool]] = {}  # source_id -> (score, quote, supported)
 
         for sentence in _SENTENCE_SPLIT.split(report):
@@ -46,20 +50,30 @@ class CitationAuditAgent:
             claim_tokens = self._tokens(claim)
             if len(claim_tokens) < 4:
                 continue  # too short to judge meaningfully
+            pooled: set[str] = set()
+            any_single = False
+            saw_source = False
             for n in dict.fromkeys(ids):  # dedupe, preserve order
                 source_id = f"S{n}"
                 source = sources_by_id.get(source_id)
                 if not source:
                     continue
+                saw_source = True
                 quote, score = self._best_passage(claim_tokens, source.get("content") or "")
-                supported = score >= _SUPPORT_THRESHOLD
-                checks.append((claim, source_id, supported))
+                pooled |= self._tokens(quote)
+                single_ok = score >= _SUPPORT_THRESHOLD
+                any_single = any_single or single_ok
                 if source_id not in best or score > best[source_id][0]:
-                    best[source_id] = (score, quote, supported)
+                    best[source_id] = (score, quote, single_ok)
+            if not saw_source:
+                continue
+            pooled_cov = len(claim_tokens & pooled) / len(claim_tokens) if claim_tokens else 0.0
+            supported = any_single or pooled_cov >= _SUPPORT_THRESHOLD
+            checks.append((claim, supported))
 
         total = len(checks)
-        supported = sum(1 for _, _, ok in checks if ok)
-        unsupported_claims = [claim for claim, _, ok in checks if not ok][:20]
+        supported = sum(1 for _, ok in checks if ok)
+        unsupported_claims = [claim for claim, ok in checks if not ok][:20]
         grounding = [
             CitationGround(
                 source_id=source_id,
