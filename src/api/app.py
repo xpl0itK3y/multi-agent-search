@@ -46,6 +46,7 @@ from src.api.schemas import (
     AppExportRequest,
     CitationAudit,
     SourceIndependence,
+    NumericCheck,
     ConfidenceReport,
     ResearchWatch,
     WatchRequest,
@@ -458,6 +459,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/confidence", response_model=ConfidenceReport, dependencies=research_guard)
     async def get_research_confidence(research_id: str, request: Request):
         return get_research_service(request).get_research_confidence(research_id)
+
+    @app.get("/v1/research/{research_id}/numeric-check", response_model=NumericCheck, dependencies=research_guard)
+    async def get_research_numeric_check(research_id: str, request: Request):
+        return get_research_service(request).get_research_numeric_check(research_id)
 
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
     async def get_research_diff(research_id: str, request: Request):

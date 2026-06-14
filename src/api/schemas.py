@@ -254,6 +254,34 @@ class ConfidenceReport(BaseModel):
     claims: List[ConfidenceClaim] = Field(default_factory=list)
 
 
+class NumericClaim(BaseModel):
+    """One quantitative claim and whether its cited source actually contains the figure."""
+    value: str = ""        # the figure as written, e.g. "40%" / "$2.3B" / "2019"
+    subject: str = ""      # short context — what the number measures
+    source_id: str = ""    # the [Sn] it was cited against
+    sentence: str = ""     # the claim sentence (trimmed)
+
+
+class NumericContradiction(BaseModel):
+    """Two figures in the report that describe the same quantity but disagree."""
+    subject: str = ""
+    values: List[str] = Field(default_factory=list)
+    sentences: List[str] = Field(default_factory=list)
+
+
+class NumericCheck(BaseModel):
+    """Deterministic figure check: is every number traceable to its cited source, and is the
+    report internally consistent? Catches the classic LLM failure of mangling/​inventing a
+    statistic — which neither Perplexity nor Gemini verifies against the source.
+    """
+    research_id: str = ""
+    total: int = 0          # figures checked against a cited source
+    supported: int = 0      # figures found in the cited source
+    integrity: float = 0.0  # supported / total
+    unsupported: List[NumericClaim] = Field(default_factory=list)         # figure not in source
+    contradictions: List[NumericContradiction] = Field(default_factory=list)
+
+
 class ResearchWatch(BaseModel):
     """A standing 'watch this question': periodic auto re-runs + an alert when the answer
     materially changes. The watch follows the thread head — each scheduled re-run creates a

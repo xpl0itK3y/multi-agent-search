@@ -205,6 +205,28 @@ export interface ConfidenceReport {
   claims: ConfidenceClaim[];
 }
 
+export interface NumericClaim {
+  value: string;
+  subject: string;
+  source_id: string;
+  sentence: string;
+}
+
+export interface NumericContradiction {
+  subject: string;
+  values: string[];
+  sentences: string[];
+}
+
+export interface NumericCheck {
+  research_id: string;
+  total: number;
+  supported: number;
+  integrity: number;
+  unsupported: NumericClaim[];
+  contradictions: NumericContradiction[];
+}
+
 export interface ResearchWatch {
   research_id: string;
   enabled: boolean;

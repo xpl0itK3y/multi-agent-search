@@ -10,6 +10,7 @@ import type {
   ModelOption,
   CitationAudit,
   SourceIndependence,
+  NumericCheck,
   ConfidenceReport,
   ResearchWatch,
   PlanItem,
@@ -165,6 +166,9 @@ export const api = {
 
   getConfidence: (id: string) =>
     request<ConfidenceReport>(`/v1/research/${id}/confidence`),
+
+  getNumericCheck: (id: string) =>
+    request<NumericCheck>(`/v1/research/${id}/numeric-check`),
 
   getWatch: (id: string) =>
     request<ResearchWatch>(`/v1/research/${id}/watch`),

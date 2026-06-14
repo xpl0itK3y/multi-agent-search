@@ -17,6 +17,7 @@ from src.agents.orchestrator import OrchestratorAgent
 from src.agents.replan import ReplanAgent
 from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
+from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.research_diff import ResearchDiffAgent
 from src.agents.search import SearchAgent
@@ -48,6 +49,7 @@ from src.api.schemas import (
     ResearchPlan,
     CitationAudit,
     SourceIndependence,
+    NumericCheck,
     ConfidenceReport,
     ResearchWatch,
     ComparisonTable,
@@ -144,6 +146,7 @@ class ResearchService:
         self.app_export_agent = app_export_agent
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
+        self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.research_differ = ResearchDiffAgent()
         self.broker = broker
@@ -1133,6 +1136,7 @@ class ResearchService:
             "verification": safe(lambda: self.get_research_verification(rid)),
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
+            "numeric_check": safe(lambda: self.get_research_numeric_check(rid)),
             "confidence": safe(lambda: self.get_research_confidence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
             "comparison": safe(lambda: self.get_research_comparison(rid)),
@@ -1547,6 +1551,42 @@ class ResearchService:
             return SourceIndependence(research_id=research_id)
         return SourceIndependence.model_validate(data)
 
+    # ── numeric & contradiction check (every figure traced to its source) ────────
+
+    def _check_numbers(self, report: str, research, tasks: list) -> None:
+        """Verify each cited figure against its source text and flag internal contradictions.
+
+        Reconstructs the analyzer's [Sn] numbering so figures line up with their sources.
+        Deterministic; never breaks finalization.
+        """
+        if not (report or "").strip():
+            return
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                source["source_id"]: {"content": source.get("content")}
+                for source in aggregated
+                if source.get("source_id")
+            }
+            check = self.numeric_checker.check(report, sources_by_id)
+            check.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["numeric_check"] = check.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("numeric_check_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_numeric_check(self, research_id: str) -> NumericCheck:
+        """Stored figure check: figures traced to source + internal contradictions."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("numeric_check")
+        if not data:
+            return NumericCheck(research_id=research_id)
+        return NumericCheck.model_validate(data)
+
     # ── confidence / honesty meter (fuses all trust signals into one number) ─────
 
     def get_research_confidence(self, research_id: str) -> ConfidenceReport:
@@ -1943,6 +1983,7 @@ class ResearchService:
             report = self._maybe_red_team(report, research, tasks)
             self._audit_citations(report, research, tasks)
             self._analyze_source_independence(research, tasks)
+            self._check_numbers(report, research, tasks)
             self._maybe_build_comparison(report, research)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(

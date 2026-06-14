@@ -151,6 +151,14 @@ const ru = {
       unique: "уникальный",
     },
   },
+  numbers: {
+    title: "Проверка чисел",
+    matched: "сверены с источником",
+    none: "значимых чисел с источником не найдено",
+    issues: "проблем",
+    unsupported: "Нет в источнике",
+    contradictions: "Противоречия в отчёте",
+  },
   watch: {
     watch: "Следить",
     hint: "Перезапускать этот вопрос по расписанию и сообщать, когда ответ изменится",
@@ -399,6 +407,14 @@ const en: typeof ru = {
       unique: "unique",
     },
   },
+  numbers: {
+    title: "Figure check",
+    matched: "traced to source",
+    none: "no significant figures cited",
+    issues: "issues",
+    unsupported: "Not found in source",
+    contradictions: "Internal contradictions",
+  },
   watch: {
     watch: "Watch",
     hint: "Re-run this question on a schedule and alert when the answer changes",
@@ -646,6 +662,14 @@ const es: typeof ru = {
       "single-domain": "mismo medio",
       unique: "único",
     },
+  },
+  numbers: {
+    title: "Verificación de cifras",
+    matched: "rastreadas a la fuente",
+    none: "sin cifras significativas citadas",
+    issues: "problemas",
+    unsupported: "No están en la fuente",
+    contradictions: "Contradicciones internas",
   },
   watch: {
     watch: "Vigilar",

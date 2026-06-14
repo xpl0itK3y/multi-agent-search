@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -20,6 +20,8 @@ const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
+const numbers = ref<NumericCheck | null>(null);
+const showNumbers = ref(false);
 const showWeak = ref(false);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
@@ -128,6 +130,15 @@ async function ensureConfidence() {
   }
 }
 
+async function ensureNumbers() {
+  if (numbers.value) return;
+  try {
+    numbers.value = await api.getNumericCheck(props.id);
+  } catch {
+    /* numeric check is optional — the report still renders without it */
+  }
+}
+
 watch(tab, (t) => {
   if (t === "sources") {
     ensureSources();
@@ -168,6 +179,7 @@ watch(
       ensureCitations();
       ensureIndependence();
       ensureConfidence();
+      ensureNumbers();
       ensureWatch();
       ensureDiff();
       ensureComparison();
@@ -185,6 +197,17 @@ const integrityClass = computed(() => {
   if (r >= 0.8) return "text-emerald-500";
   if (r >= 0.5) return "text-amber-500";
   return "text-red-400";
+});
+
+const numericClass = computed(() => {
+  const r = numbers.value?.integrity ?? 1;
+  if (r >= 0.9) return "text-emerald-500";
+  if (r >= 0.6) return "text-amber-500";
+  return "text-red-400";
+});
+const numericHasIssues = computed(() => {
+  const n = numbers.value;
+  return !!n && (n.total > 0 || n.contradictions.length > 0);
 });
 
 const independenceScore = computed(() => independence.value?.independence_score ?? null);
@@ -593,6 +616,46 @@ async function exportApp() {
             {{ bandPct(confidence.speculative) }}% {{ $t("confidence.band.speculative") }}
           </span>
         </button>
+        <div
+          v-if="numericHasIssues"
+          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
+        >
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-medium text-ink">{{ $t("numbers.title") }}</span>
+            <template v-if="numbers!.total">
+              <span class="font-semibold" :class="numericClass">{{ Math.round(numbers!.integrity * 100) }}%</span>
+              <span class="text-muted">{{ numbers!.supported }}/{{ numbers!.total }} {{ $t("numbers.matched") }}</span>
+            </template>
+            <span v-else class="text-muted">{{ $t("numbers.none") }}</span>
+            <button
+              v-if="numbers!.unsupported.length || numbers!.contradictions.length"
+              class="ml-auto text-red-400 hover:underline"
+              @click="showNumbers = !showNumbers"
+            >
+              ⚠ {{ numbers!.unsupported.length + numbers!.contradictions.length }} {{ $t("numbers.issues") }}
+            </button>
+          </div>
+          <div v-if="showNumbers" class="mt-2 space-y-2 border-t border-bd pt-2">
+            <div v-if="numbers!.unsupported.length">
+              <div class="mb-1 font-medium text-muted">{{ $t("numbers.unsupported") }}</div>
+              <ul class="space-y-1">
+                <li v-for="(c, i) in numbers!.unsupported" :key="'u' + i" class="flex gap-2 text-muted">
+                  <span class="shrink-0 font-semibold text-red-400">{{ c.value }}</span>
+                  <span class="line-clamp-2">{{ c.sentence }} <span class="text-accent">[{{ c.source_id }}]</span></span>
+                </li>
+              </ul>
+            </div>
+            <div v-if="numbers!.contradictions.length">
+              <div class="mb-1 font-medium text-muted">{{ $t("numbers.contradictions") }}</div>
+              <ul class="space-y-1">
+                <li v-for="(c, i) in numbers!.contradictions" :key="'c' + i" class="text-muted">
+                  <span class="font-semibold text-amber-500">{{ c.values.join(" ≠ ") }}</span>
+                  <span v-for="(s, j) in c.sentences" :key="j" class="ml-2 block line-clamp-1 pl-2 text-[11px]">○ {{ s }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
