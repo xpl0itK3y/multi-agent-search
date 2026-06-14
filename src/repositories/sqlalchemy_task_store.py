@@ -170,6 +170,14 @@ class SQLAlchemyTaskStore:
                 for r in rows
             ]
 
+    def list_active_watch_research_ids(self) -> list[str]:
+        """Ids of researches with an enabled watch (server-side JSONB filter)."""
+        with self.session_scope() as session:
+            stmt = select(ResearchORM.id).where(
+                ResearchORM.graph_state["watch"]["enabled"].astext == "true"
+            )
+            return [row[0] for row in session.execute(stmt).all()]
+
     def list_thread_researches(
         self, thread_id: str, user_id: str | None = None
     ) -> list[ResearchHistoryItem]:

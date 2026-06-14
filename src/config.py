@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     llm_acquire_timeout_seconds: int = 120  # max wait for a slot before proceeding anyway
     llm_retry_max_attempts: int = 3
     llm_retry_base_delay: float = 1.0
+    # Watch / monitoring: periodically re-run a watched question and alert when the answer
+    # materially changes. The worker sweep is single-flight (Redis lock) across processes.
+    watch_enabled: bool = True
+    watch_min_interval_seconds: int = 3600          # floor on user-chosen cadence (1h)
+    watch_default_interval_seconds: int = 86400     # daily if no interval given
+    watch_sweep_lock_ttl_seconds: int = 20          # only one worker sweeps per window
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

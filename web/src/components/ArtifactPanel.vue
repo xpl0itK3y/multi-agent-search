@@ -24,6 +24,13 @@ const showWeak = ref(false);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
 const refreshing = ref(false);
+const watch_ = ref<import("@/lib/types").ResearchWatch | null>(null);
+const watchMenuOpen = ref(false);
+const WATCH_INTERVALS = [
+  { key: "hourly", seconds: 3600 },
+  { key: "daily", seconds: 86400 },
+  { key: "weekly", seconds: 604800 },
+];
 const comparison = ref<ComparisonTable | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
@@ -161,6 +168,7 @@ watch(
       ensureCitations();
       ensureIndependence();
       ensureConfidence();
+      ensureWatch();
       ensureDiff();
       ensureComparison();
     }
@@ -231,6 +239,42 @@ async function onRefresh() {
     refreshing.value = false;
   }
 }
+
+async function ensureWatch() {
+  if (watch_.value) return;
+  try {
+    watch_.value = await api.getWatch(props.id);
+  } catch {
+    /* watch is optional */
+  }
+}
+async function startWatch(seconds: number) {
+  watchMenuOpen.value = false;
+  try {
+    watch_.value = await api.setWatch(props.id, true, seconds);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+async function stopWatch() {
+  watchMenuOpen.value = false;
+  try {
+    watch_.value = await api.setWatch(props.id, false);
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+async function ackWatch() {
+  try {
+    watch_.value = await api.ackWatch(props.id);
+  } catch {
+    /* ignore */
+  }
+}
+const watchIntervalKey = computed(() => {
+  const s = watch_.value?.interval_seconds ?? 0;
+  return WATCH_INTERVALS.find((i) => i.seconds === s)?.key ?? "custom";
+});
 
 const tabKeys = computed<Tab[]>(() => {
   const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
@@ -350,6 +394,44 @@ async function exportApp() {
       </button>
 
       <div v-if="report && isFinal" class="ml-auto flex items-center gap-1">
+        <div class="relative">
+          <button
+            class="flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition"
+            :class="watch_ && watch_.enabled ? 'border-accent/50 text-accent' : 'border-bd text-muted hover:text-ink'"
+            :title="$t('watch.hint')"
+            @click="watchMenuOpen = !watchMenuOpen"
+          >
+            <span>👁</span>
+            <span>{{ watch_ && watch_.enabled ? $t("watch.intervals." + watchIntervalKey) : $t("watch.watch") }}</span>
+            <span
+              v-if="watch_ && watch_.has_unseen_change"
+              class="ml-0.5 h-1.5 w-1.5 rounded-full bg-amber-500"
+              :style="{ animation: 'soft-pulse 1.6s ease-in-out infinite' }"
+            />
+          </button>
+          <div
+            v-if="watchMenuOpen"
+            class="absolute right-0 z-30 mt-1 w-44 rounded-xl border border-bd bg-surface p-1 text-xs shadow-lg"
+          >
+            <div class="px-2 py-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("watch.every") }}</div>
+            <button
+              v-for="iv in WATCH_INTERVALS"
+              :key="iv.key"
+              class="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-ink hover:bg-surface-hover"
+              @click="startWatch(iv.seconds)"
+            >
+              {{ $t("watch.intervals." + iv.key) }}
+              <span v-if="watch_ && watch_.enabled && watchIntervalKey === iv.key" class="text-accent">✓</span>
+            </button>
+            <button
+              v-if="watch_ && watch_.enabled"
+              class="mt-1 w-full rounded-lg border-t border-bd px-2 py-1.5 text-left text-red-400 hover:bg-surface-hover"
+              @click="stopWatch"
+            >
+              {{ $t("watch.stop") }}
+            </button>
+          </div>
+        </div>
         <button
           class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
           :disabled="refreshing"
@@ -454,6 +536,15 @@ async function exportApp() {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
       <template v-if="tab === 'report'">
+        <div
+          v-if="watch_ && watch_.has_unseen_change"
+          class="mb-4 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs animate-rise"
+        >
+          <span class="text-amber-500">🔔</span>
+          <span class="font-medium text-ink">{{ $t("watch.changed") }}</span>
+          <span class="text-muted">{{ $t("watch.changedHint") }}</span>
+          <button class="ml-auto text-accent hover:underline" @click="ackWatch">{{ $t("watch.markSeen") }}</button>
+        </div>
         <div v-if="citations && citations.total" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span class="font-medium text-ink">{{ $t("citations.integrity") }}</span>

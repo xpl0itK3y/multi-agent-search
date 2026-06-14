@@ -254,6 +254,28 @@ class ConfidenceReport(BaseModel):
     claims: List[ConfidenceClaim] = Field(default_factory=list)
 
 
+class ResearchWatch(BaseModel):
+    """A standing 'watch this question': periodic auto re-runs + an alert when the answer
+    materially changes. The watch follows the thread head — each scheduled re-run creates a
+    new run and the watch moves to it. Turns one-shot research into a monitor.
+    """
+    research_id: str = ""        # current head of the watched thread
+    enabled: bool = False
+    interval_seconds: int = 0
+    next_run_at: str = ""        # ISO; when the next re-run is due
+    last_run_at: str = ""        # ISO; when a scheduled re-run last fired
+    last_change_at: str = ""     # ISO; when a re-run last produced a material change
+    acknowledged_at: str = ""    # ISO; user dismissed the change badge
+    runs: int = 0                # scheduled re-runs fired so far
+    has_unseen_change: bool = False  # derived: last_change_at later than acknowledged_at
+
+
+class WatchRequest(BaseModel):
+    """Enable/disable a watch and (optionally) set its cadence."""
+    enabled: bool = True
+    interval_seconds: Optional[int] = None
+
+
 class AppExportRequest(BaseModel):
     """Free-text design brief for the AI-generated custom HTML export."""
     prompt: str = Field(default="", max_length=4000)

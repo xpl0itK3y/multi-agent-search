@@ -205,6 +205,18 @@ export interface ConfidenceReport {
   claims: ConfidenceClaim[];
 }
 
+export interface ResearchWatch {
+  research_id: string;
+  enabled: boolean;
+  interval_seconds: number;
+  next_run_at: string;
+  last_run_at: string;
+  last_change_at: string;
+  acknowledged_at: string;
+  runs: number;
+  has_unseen_change: boolean;
+}
+
 export interface ComparisonCell {
   option: string;
   value: string;
