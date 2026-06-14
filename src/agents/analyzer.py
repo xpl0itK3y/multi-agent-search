@@ -32,8 +32,15 @@ class AnalyzerAgent(BaseAgent):
     SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники)\s*$.*\Z")
     CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conflicts And Uncertainties|Противоречия и неопределенности|Противоречия и неопределённости)\s*$")
     REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту)\s*$")
-    INTRODUCTION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Introduction|Введение)\s*$")
-    CONCLUSION_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conclusion|Заключение)\s*$")
+    # An opening summary or a closing bottom-line counts — the report now leads with an
+    # "Executive summary" and may close with "Conclusion / Bottom line", so accept those
+    # (and the ru/es equivalents) and don't require an exact, suffix-free heading.
+    INTRODUCTION_HEADING_PATTERN = re.compile(
+        r"(?im)^##\s+(Introduction|Введение|Executive\s+Summary|Кратк\w+\s+резюме|Резюме|Resumen(\s+ejecutivo)?|Introducci[oó]n)\b"
+    )
+    CONCLUSION_HEADING_PATTERN = re.compile(
+        r"(?im)^##\s+(Conclusion|Заключение|Итог\w*|Вывод\w*|Bottom\s+Line|Conclusi[oó]n)\b"
+    )
     # Single source of truth lives in src/agents/language_utils.py (A-6).
     LANGUAGE_HINTS = LANGUAGE_HINTS
     STOPWORDS = {
@@ -557,12 +564,27 @@ class AnalyzerAgent(BaseAgent):
         r"i\s+have\s+(combined|merged|synthesized)|here\s+is\s+(the|a)\s+(synthesized|final))[^\n]*\n+"
     )
 
+    # A short prose fragment the writer sometimes leaks onto the front of a table row,
+    # breaking the Markdown table (e.g. "Based on the available sources, | cell | cell |").
+    _POLLUTED_TABLE_ROW = re.compile(r"(?m)^[ \t]*([^|\n]{1,80}?[,:])\s*(\|.*\|)[ \t]*$")
+
+    def _clean_table_rows(self, text: str) -> str:
+        """Strip a leaked sentence fragment that prefixes a table row, so the table renders.
+
+        Only fires when the fragment ends in a comma/colon (a dangling clause) and the rest
+        of the line is a real table row (>=2 pipes) — legitimate prose with a pipe is untouched.
+        """
+        def _fix(m: "re.Match") -> str:
+            return m.group(2) if m.group(2).count("|") >= 2 else m.group(0)
+        return self._POLLUTED_TABLE_ROW.sub(_fix, text)
+
     def _post_process_report(self, report: str, language: str) -> str:
         normalized = report.replace("\r\n", "\n").strip()
         normalized = re.sub(r"\n{3,}", "\n\n", normalized)
         normalized = re.sub(r"(?m)^[ \t]+$", "", normalized)
         # Strip LLM meta-commentary preamble that sometimes appears before the first heading.
         normalized = self._LLM_PREAMBLE.sub("", normalized).strip()
+        normalized = self._clean_table_rows(normalized)
 
         localized_sources_heading = self._sources_heading(language)
         if re.search(r"(?im)^sources:\s*$", normalized):
