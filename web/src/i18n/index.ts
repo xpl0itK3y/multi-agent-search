@@ -151,6 +151,10 @@ const ru = {
       unique: "уникальный",
     },
   },
+  audit: {
+    trail: "Аудит-трейл",
+    hint: "Скачать полную трассу получения отчёта: под-вопросы, поисковые запросы, источники, шаги графа — для воспроизводимости",
+  },
   numbers: {
     title: "Проверка чисел",
     matched: "сверены с источником",
@@ -407,6 +411,10 @@ const en: typeof ru = {
       unique: "unique",
     },
   },
+  audit: {
+    trail: "Audit trail",
+    hint: "Download the full provenance: sub-questions, search queries, sources and graph steps — for reproducibility",
+  },
   numbers: {
     title: "Figure check",
     matched: "traced to source",
@@ -662,6 +670,10 @@ const es: typeof ru = {
       "single-domain": "mismo medio",
       unique: "único",
     },
+  },
+  audit: {
+    trail: "Traza de auditoría",
+    hint: "Descargar la procedencia completa: subpreguntas, consultas, fuentes y pasos del grafo — para reproducibilidad",
   },
   numbers: {
     title: "Verificación de cifras",

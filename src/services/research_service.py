@@ -51,6 +51,10 @@ from src.api.schemas import (
     SourceIndependence,
     NumericCheck,
     ConfidenceReport,
+    AuditTrail,
+    AuditQuery,
+    AuditSource,
+    AuditStep,
     ResearchWatch,
     ComparisonTable,
     RedTeamReport,
@@ -1114,7 +1118,10 @@ class ResearchService:
             payload = self._export_json_payload(research, depth, created_at)
             data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             return data, "application/json; charset=utf-8", self._export_filename(title, "json")
-        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx, html, md or json)")
+        if normalized in ("trail", "audit"):
+            md = self._render_audit_trail_md(self.get_research_audit_trail(research_id))
+            return md.encode("utf-8"), "text/markdown; charset=utf-8", self._export_filename(f"{title}-audit-trail", "md")
+        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx, html, md, json or trail)")
 
     def _export_json_payload(self, research, depth: str, created_at: str | None) -> dict:
         """Full structured export — the report plus all trust artifacts as machine-readable data."""
@@ -1587,6 +1594,147 @@ class ResearchService:
             return NumericCheck(research_id=research_id)
         return NumericCheck.model_validate(data)
 
+    # ── audit trail (reproducible 'show your work' provenance) ───────────────────
+
+    def get_research_audit_trail(self, research_id: str) -> AuditTrail:
+        """Assemble the full provenance behind a report — sub-questions, queries, sources,
+        graph steps and decisions — deterministically from what the pipeline already records."""
+        research = self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        state = research.graph_state or {}
+
+        plan = [t.description for t in tasks if (t.description or "").strip()]
+        queries = [
+            AuditQuery(
+                task=t.description or "",
+                queries=list(t.queries or []),
+                status=getattr(t.status, "value", str(t.status)),
+                result_count=len(t.result or []),
+            )
+            for t in tasks
+        ]
+
+        sources = self._audit_sources(research, tasks)
+
+        steps = [
+            AuditStep(
+                step=str(e.get("step") or "unknown"),
+                detail=str(e.get("detail") or ""),
+                timestamp=str(e.get("timestamp") or ""),
+            )
+            for e in (research.graph_trail or [])
+        ][:120]
+
+        terminal = research.status in (ResearchStatus.COMPLETED, ResearchStatus.FAILED)
+        return AuditTrail(
+            research_id=research.id,
+            prompt=research.prompt,
+            model=state.get("model", ""),
+            depth=getattr(research.depth, "value", str(research.depth)),
+            status=getattr(research.status, "value", str(research.status)),
+            created_at=research.created_at.isoformat() if research.created_at else "",
+            completed_at=research.updated_at.isoformat() if (terminal and research.updated_at) else "",
+            plan=plan,
+            queries=queries,
+            sources=sources,
+            steps=steps,
+            decisions=self._audit_decisions(state),
+            token_usage=state.get("llm_token_usage", {}) or {},
+            source_count=len(sources),
+            query_count=sum(len(q.queries) for q in queries),
+        )
+
+    def _audit_sources(self, research, tasks: list) -> list[AuditSource]:
+        """Sources numbered by the same [Sn] scheme the report used, when reconstructable."""
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if callable(prepare):
+            try:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                return [
+                    AuditSource(
+                        source_id=s.get("source_id", ""),
+                        url=s.get("url", "") or "",
+                        domain=s.get("domain", "") or "",
+                        title=s.get("title", "") or "",
+                        source_quality=s.get("source_quality", "") or "",
+                        extraction_status=s.get("extraction_status", "") or "",
+                    )
+                    for s in aggregated
+                    if s.get("source_id")
+                ]
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("audit_trail_sources_failed research_id=%s error=%s", research.id, exc)
+        # Fallback: the deduped preview list (no [Sn] numbering).
+        return [
+            AuditSource(url=s.url or "", domain=s.domain or "", title=s.title or "", source_quality=s.source_quality or "")
+            for s in self.get_research_sources(research.id)
+        ]
+
+    @staticmethod
+    def _audit_decisions(state: dict) -> list[str]:
+        """Human-readable summary of the finalize graph's decisions from its counters."""
+        out: list[str] = []
+        replan = int(state.get("replan_attempts", 0) or 0)
+        tie = int(state.get("tie_break_attempts", 0) or 0)
+        analyze = int(state.get("analyze_attempts", 0) or 0)
+        if analyze:
+            out.append(f"analyze passes: {analyze}")
+        if replan:
+            out.append(f"replan triggered: {replan}x (coverage looked weak)")
+        if tie:
+            out.append(f"tie-break passes: {tie}")
+        rt = state.get("red_team") or {}
+        if rt.get("challenged") or rt.get("held"):
+            out.append(f"red-team: {rt.get('challenged', 0)} challenged, {rt.get('held', 0)} held")
+        ind = state.get("source_independence") or {}
+        if ind.get("total_sources"):
+            out.append(f"source independence: {ind.get('independent_origins', 0)}/{ind.get('total_sources', 0)} origins")
+        return out
+
+    def _render_audit_trail_md(self, trail: AuditTrail) -> str:
+        """Human-readable Markdown rendering of the audit trail for export."""
+        L: list[str] = [f"# Audit trail — {trail.prompt}", ""]
+        meta = [
+            f"- **Research ID:** {trail.research_id}",
+            f"- **Model:** {trail.model or '—'}   **Depth:** {trail.depth}   **Status:** {trail.status}",
+            f"- **Started:** {trail.created_at or '—'}   **Completed:** {trail.completed_at or '—'}",
+            f"- **Sources:** {trail.source_count}   **Search queries:** {trail.query_count}",
+        ]
+        if trail.token_usage:
+            u = trail.token_usage
+            meta.append(
+                f"- **Tokens:** {u.get('prompt_tokens', 0)} in / {u.get('completion_tokens', 0)} out"
+                + (f"   **Est. cost:** ${u.get('estimated_cost_usd', 0):.4f}" if u.get("estimated_cost_usd") else "")
+            )
+        L += meta + [""]
+
+        if trail.plan:
+            L += ["## Plan (sub-questions)", ""] + [f"{i}. {q}" for i, q in enumerate(trail.plan, 1)] + [""]
+        if trail.decisions:
+            L += ["## Graph decisions", ""] + [f"- {d}" for d in trail.decisions] + [""]
+        if trail.queries:
+            L += ["## Search queries", ""]
+            for q in trail.queries:
+                L.append(f"- **{q.task}** _({q.status}, {q.result_count} results)_")
+                L += [f"    - `{query}`" for query in q.queries]
+            L.append("")
+        if trail.steps:
+            L += ["## Execution trail", ""]
+            for s in trail.steps:
+                ts = f" _{s.timestamp}_" if s.timestamp else ""
+                L.append(f"- **{s.step}**{ts}: {s.detail}".rstrip(": "))
+            L.append("")
+        if trail.sources:
+            L += ["## Sources fetched", ""]
+            for s in trail.sources:
+                sid = f"[{s.source_id}] " if s.source_id else ""
+                qual = f" _(quality: {s.source_quality})_" if s.source_quality else ""
+                L.append(f"- {sid}[{s.title or s.domain or s.url}]({s.url}){qual}")
+            L.append("")
+        return "\n".join(L).strip() + "\n"
+
     # ── confidence / honesty meter (fuses all trust signals into one number) ─────
 
     def get_research_confidence(self, research_id: str) -> ConfidenceReport:
@@ -2003,7 +2151,10 @@ class ResearchService:
                     usage.get("completion_tokens", 0),
                     usage.get("estimated_cost_usd", 0),
                 )
-                gs = (research.graph_state or {}).copy()
+                # Re-fetch the LATEST graph_state — the finalize trust steps (citation audit,
+                # source independence, numeric check, diff) wrote to it after `research` was
+                # captured, so copying the stale snapshot here would wipe them.
+                gs = dict((self.task_store.get_research(research_id).graph_state) or {})
                 gs["llm_token_usage"] = usage
                 self.task_store.update_research_graph_state(research_id, gs)
 

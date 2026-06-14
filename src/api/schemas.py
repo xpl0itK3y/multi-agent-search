@@ -282,6 +282,53 @@ class NumericCheck(BaseModel):
     contradictions: List[NumericContradiction] = Field(default_factory=list)
 
 
+class AuditQuery(BaseModel):
+    """One planned sub-question and the search queries actually issued for it."""
+    task: str = ""
+    queries: List[str] = Field(default_factory=list)
+    status: str = ""
+    result_count: int = 0
+
+
+class AuditSource(BaseModel):
+    """A source the report could cite, with the [Sn] id the report numbered it by."""
+    source_id: str = ""
+    url: str = ""
+    domain: str = ""
+    title: str = ""
+    source_quality: str = ""
+    extraction_status: str = ""
+
+
+class AuditStep(BaseModel):
+    """One finalize-graph execution step (collect_context / replan / analyze / verify / …)."""
+    step: str = ""
+    detail: str = ""
+    timestamp: str = ""
+
+
+class AuditTrail(BaseModel):
+    """Reproducible provenance — every sub-question, search query, fetched source and graph
+    decision behind the report. A 'show your work' artifact a fact-checker can audit or
+    reproduce; assembled deterministically from what the pipeline already records.
+    """
+    research_id: str = ""
+    prompt: str = ""
+    model: str = ""
+    depth: str = ""
+    status: str = ""
+    created_at: str = ""
+    completed_at: str = ""
+    plan: List[str] = Field(default_factory=list)                # the sub-questions
+    queries: List[AuditQuery] = Field(default_factory=list)      # queries issued per task
+    sources: List[AuditSource] = Field(default_factory=list)
+    steps: List[AuditStep] = Field(default_factory=list)         # finalize-graph execution trail
+    decisions: List[str] = Field(default_factory=list)           # replan/tie-break/analyze/red-team etc.
+    token_usage: Dict[str, Any] = Field(default_factory=dict)
+    source_count: int = 0
+    query_count: int = 0
+
+
 class ResearchWatch(BaseModel):
     """A standing 'watch this question': periodic auto re-runs + an alert when the answer
     materially changes. The watch follows the thread head — each scheduled re-run creates a

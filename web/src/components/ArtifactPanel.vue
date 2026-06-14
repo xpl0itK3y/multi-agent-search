@@ -357,7 +357,7 @@ function saveBlob(blob: Blob, name: string) {
   URL.revokeObjectURL(url);
 }
 
-async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?: { theme?: string; accent?: string; base?: string }) {
+async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trail", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
   try {
     const params = new URLSearchParams({ format: fmt });
@@ -368,7 +368,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json", opts?:
       credentials: "include",
     });
     if (!res.ok) return;
-    saveBlob(await res.blob(), filenameFrom(res, `research.${fmt}`));
+    saveBlob(await res.blob(), filenameFrom(res, fmt === "trail" ? "audit-trail.md" : `research.${fmt}`));
   } finally {
     exporting.value = null;
     siteMenuOpen.value = false;
@@ -494,6 +494,14 @@ async function exportApp() {
           @click="exportReport('json')"
         >
           JSON
+        </button>
+        <button
+          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+          :disabled="!!exporting"
+          :title="$t('audit.hint')"
+          @click="exportReport('trail')"
+        >
+          {{ $t("audit.trail") }}
         </button>
         <div class="relative">
           <button
