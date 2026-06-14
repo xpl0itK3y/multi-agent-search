@@ -47,6 +47,7 @@ from src.api.schemas import (
     CitationAudit,
     SourceIndependence,
     SourceReputation,
+    StanceBalance,
     NumericCheck,
     ConfidenceReport,
     AuditTrail,
@@ -461,6 +462,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/source-reputation", response_model=SourceReputation, dependencies=research_guard)
     async def get_research_source_reputation(research_id: str, request: Request):
         return get_research_service(request).get_research_source_reputation(research_id)
+
+    @app.get("/v1/research/{research_id}/stance", response_model=StanceBalance, dependencies=research_guard)
+    async def get_research_stance(research_id: str, request: Request):
+        return get_research_service(request).get_research_stance(research_id)
 
     @app.get("/v1/research/{research_id}/confidence", response_model=ConfidenceReport, dependencies=research_guard)
     async def get_research_confidence(research_id: str, request: Request):

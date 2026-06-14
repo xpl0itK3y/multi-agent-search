@@ -155,6 +155,14 @@ const ru = {
     trail: "Аудит-трейл",
     hint: "Скачать полную трассу получения отчёта: под-вопросы, поисковые запросы, источники, шаги графа — для воспроизводимости",
   },
+  stance: {
+    title: "Баланс позиций",
+    for: "за",
+    against: "против",
+    neutral: "нейтрально",
+    oneSided: "однобоко",
+    hint: "Как доказательная база делится по отношению к центральному тезису вопроса. Дополняет независимость источников — разнообразие точек зрения, а не первоисточников.",
+  },
   reputation: {
     title: "Репутация источников",
     flagged: "помечено",
@@ -421,6 +429,14 @@ const en: typeof ru = {
     trail: "Audit trail",
     hint: "Download the full provenance: sub-questions, search queries, sources and graph steps — for reproducibility",
   },
+  stance: {
+    title: "Viewpoint balance",
+    for: "for",
+    against: "against",
+    neutral: "neutral",
+    oneSided: "one-sided",
+    hint: "How the evidence splits on the question's central claim. Complements source independence — diversity of viewpoints, not just origins.",
+  },
   reputation: {
     title: "Source credibility",
     flagged: "flagged",
@@ -686,6 +702,14 @@ const es: typeof ru = {
   audit: {
     trail: "Traza de auditoría",
     hint: "Descargar la procedencia completa: subpreguntas, consultas, fuentes y pasos del grafo — para reproducibilidad",
+  },
+  stance: {
+    title: "Equilibrio de posturas",
+    for: "a favor",
+    against: "en contra",
+    neutral: "neutral",
+    oneSided: "sesgado",
+    hint: "Cómo se divide la evidencia respecto a la afirmación central. Complementa la independencia de fuentes — diversidad de puntos de vista, no solo de orígenes.",
   },
   reputation: {
     title: "Credibilidad de fuentes",

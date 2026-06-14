@@ -51,6 +51,7 @@ from src.api.schemas import (
     CitationAudit,
     SourceIndependence,
     SourceReputation,
+    StanceBalance,
     NumericCheck,
     ConfidenceReport,
     AuditTrail,
@@ -134,6 +135,7 @@ class ResearchService:
         red_team_agent=None,
         comparison_agent=None,
         app_export_agent=None,
+        stance_agent=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -150,6 +152,7 @@ class ResearchService:
         self.red_team_agent = red_team_agent
         self.comparison_agent = comparison_agent
         self.app_export_agent = app_export_agent
+        self.stance_agent = stance_agent
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
         self.reputation_auditor = SourceReputationAgent()
@@ -1147,6 +1150,7 @@ class ResearchService:
             "citations": safe(lambda: self.get_research_citation_audit(rid)),
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
             "source_reputation": safe(lambda: self.get_research_source_reputation(rid)),
+            "stance_balance": safe(lambda: self.get_research_stance(rid)),
             "numeric_check": safe(lambda: self.get_research_numeric_check(rid)),
             "confidence": safe(lambda: self.get_research_confidence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
@@ -1596,6 +1600,61 @@ class ResearchService:
             return SourceReputation(research_id=research_id)
         return SourceReputation.model_validate(data)
 
+    # ── stance / viewpoint balance (one LLM call, contestable questions only) ─────
+
+    _STANCE_SIGNALS = (
+        "should", "better", "worth it", "worth the", "pros and cons", "good or bad", "safe",
+        "overrated", "underrated", "is it worth", "does it work", "harmful", "beneficial",
+        "right or wrong", "ethical", "vs", "versus", " or ", " better than ",
+        "стоит ли", "лучше ли", "нужно ли", "вреден", "вредно", "полезен", "полезно", "опасен",
+        "опасно", "этично", "переоценён", "стоит того", "лучше чем", "против",
+        "vale la pena", "es mejor", "deberí", "es seguro", "es ético",
+    )
+
+    def _looks_contestable(self, prompt: str) -> bool:
+        lowered = f" {(prompt or '').lower()} "
+        return any(signal in lowered for signal in self._STANCE_SIGNALS)
+
+    def _maybe_assess_stance(self, research, tasks: list) -> None:
+        """For opinion/debate-shaped questions, label each source's stance and store the balance.
+
+        Heuristic-gated (one LLM call only when the question has sides). Never raises.
+        """
+        if self.stance_agent is None:
+            return
+        if not self._looks_contestable(research.prompt):
+            return
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            sources_by_id = {
+                s["source_id"]: {"content": s.get("content"), "title": s.get("title")}
+                for s in aggregated[:14]
+                if s.get("source_id")
+            }
+            language = self._detect_report_language(research.prompt, research.final_report or "")
+            balance = self.stance_agent.assess(
+                research.prompt, sources_by_id, language=language, model=settings.red_team_model
+            )
+            if not balance.applicable:
+                return
+            balance.research_id = research.id
+            state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            state["stance_balance"] = balance.model_dump()
+            self.task_store.update_research_graph_state(research.id, state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("stance_assess_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_stance(self, research_id: str) -> StanceBalance:
+        """Stored viewpoint balance: how evidence splits for/against the central claim."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("stance_balance")
+        if not data:
+            return StanceBalance(research_id=research_id)
+        return StanceBalance.model_validate(data)
+
     # ── numeric & contradiction check (every figure traced to its source) ────────
 
     def _check_numbers(self, report: str, research, tasks: list) -> None:
@@ -1732,6 +1791,9 @@ class ResearchService:
         rep = state.get("source_reputation") or {}
         if rep.get("flagged_count"):
             out.append(f"reputation flags: {rep.get('flagged_count')} source(s) ({', '.join(rep.get('categories', []))})")
+        st = state.get("stance_balance") or {}
+        if st.get("applicable"):
+            out.append(f"viewpoint balance: {st.get('supports', 0)} for / {st.get('opposes', 0)} against / {st.get('neutral', 0)} neutral")
         return out
 
     def _render_audit_trail_md(self, trail: AuditTrail) -> str:
@@ -2175,6 +2237,7 @@ class ResearchService:
             self._assess_source_reputation(research, tasks)
             self._check_numbers(report, research, tasks)
             self._maybe_build_comparison(report, research)
+            self._maybe_assess_stance(research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -20,6 +20,7 @@ const redTeam = ref<RedTeamReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
 const reputation = ref<SourceReputation | null>(null);
+const stance = ref<StanceBalance | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
 const showNumbers = ref(false);
@@ -131,6 +132,15 @@ async function ensureReputation() {
   }
 }
 
+async function ensureStance() {
+  if (stance.value) return;
+  try {
+    stance.value = await api.getStance(props.id);
+  } catch {
+    /* stance balance is optional — only debate questions have one */
+  }
+}
+
 async function ensureConfidence() {
   if (confidence.value) return;
   try {
@@ -154,6 +164,7 @@ watch(tab, (t) => {
     ensureSources();
     ensureIndependence();
     ensureReputation();
+    ensureStance();
   }
   if (t === "confidence") {
     ensureVerification();
@@ -190,6 +201,7 @@ watch(
       ensureCitations();
       ensureIndependence();
       ensureReputation();
+      ensureStance();
       ensureConfidence();
       ensureNumbers();
       ensureWatch();
@@ -245,6 +257,16 @@ const reputationClass: Record<string, string> = {
   conspiracy: "border-red-400/40 text-red-400",
   state_media: "border-amber-500/40 text-amber-500",
 };
+
+// ── stance / viewpoint balance ────────────────────────────────────────────────
+const stanceTotal = computed(() => {
+  const s = stance.value;
+  return s && s.applicable ? s.supports + s.opposes + s.neutral : 0;
+});
+function stancePct(n: number): number {
+  return stanceTotal.value ? Math.round((n / stanceTotal.value) * 100) : 0;
+}
+const stanceOneSided = computed(() => (stance.value?.applicable ?? false) && (stance.value?.skew ?? 0) >= 0.7);
 
 // ── confidence / honesty meter ────────────────────────────────────────────────
 const gradeClass = computed(() => {
@@ -692,6 +714,18 @@ async function exportApp() {
           <span class="text-red-400">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
           <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
         </button>
+        <button
+          v-if="stance && stance.applicable"
+          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
+          :class="stanceOneSided ? 'border-amber-500/40 bg-amber-500/5' : 'border-bd bg-surface/40'"
+          @click="tab = 'sources'"
+        >
+          <span class="font-medium text-ink">{{ $t("stance.title") }}</span>
+          <span class="text-emerald-500">{{ stancePct(stance.supports) }}% {{ $t("stance.for") }}</span>
+          <span class="text-red-400">{{ stancePct(stance.opposes) }}% {{ $t("stance.against") }}</span>
+          <span class="text-muted">{{ stancePct(stance.neutral) }}% {{ $t("stance.neutral") }}</span>
+          <span v-if="stanceOneSided" class="ml-auto text-amber-500">⚠ {{ $t("stance.oneSided") }}</span>
+        </button>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
@@ -838,6 +872,30 @@ async function exportApp() {
                 </div>
               </li>
             </ul>
+          </div>
+          <!-- Viewpoint balance: how the evidence splits for/against the central claim -->
+          <div
+            v-if="stance && stance.applicable"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+          >
+            <div class="mb-1 flex items-center gap-2 text-sm font-medium text-ink">
+              {{ $t("stance.title") }}
+              <span v-if="stanceOneSided" class="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-500">
+                ⚠ {{ $t("stance.oneSided") }}
+              </span>
+            </div>
+            <p v-if="stance.proposition" class="mb-3 text-xs text-muted">«{{ stance.proposition }}»</p>
+            <div class="flex h-2 w-full overflow-hidden rounded-full bg-surface">
+              <div class="bg-emerald-500" :style="{ width: stancePct(stance.supports) + '%' }" />
+              <div class="bg-red-400" :style="{ width: stancePct(stance.opposes) + '%' }" />
+              <div class="bg-muted/40" :style="{ width: stancePct(stance.neutral) + '%' }" />
+            </div>
+            <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+              <span><span class="font-semibold text-emerald-500">{{ stance.supports }}</span> {{ $t("stance.for") }}</span>
+              <span><span class="font-semibold text-red-400">{{ stance.opposes }}</span> {{ $t("stance.against") }}</span>
+              <span><span class="font-semibold">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
+            </div>
+            <p class="mt-2 text-xs text-muted">{{ $t("stance.hint") }}</p>
           </div>
           <SourceCard v-for="(s, i) in sources" :key="s.url" :source="s" :index="i + 1" />
         </div>

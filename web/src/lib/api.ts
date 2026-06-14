@@ -11,6 +11,7 @@ import type {
   CitationAudit,
   SourceIndependence,
   SourceReputation,
+  StanceBalance,
   NumericCheck,
   ConfidenceReport,
   ResearchWatch,
@@ -167,6 +168,9 @@ export const api = {
 
   getSourceReputation: (id: string) =>
     request<SourceReputation>(`/v1/research/${id}/source-reputation`),
+
+  getStance: (id: string) =>
+    request<StanceBalance>(`/v1/research/${id}/stance`),
 
   getConfidence: (id: string) =>
     request<ConfidenceReport>(`/v1/research/${id}/confidence`),

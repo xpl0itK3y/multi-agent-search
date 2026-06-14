@@ -282,6 +282,28 @@ class NumericCheck(BaseModel):
     contradictions: List[NumericContradiction] = Field(default_factory=list)
 
 
+class StanceSource(BaseModel):
+    """One source's stance toward the question's central proposition."""
+    source_id: str = ""
+    stance: str = "neutral"   # supports | opposes | neutral
+
+
+class StanceBalance(BaseModel):
+    """Viewpoint balance: how the cited evidence splits for vs against the question's central
+    claim — surfaces a one-sided report even when it's well-cited. Complements source
+    independence (origin diversity) with *viewpoint* diversity.
+    """
+    research_id: str = ""
+    applicable: bool = False        # only contestable/opinion-shaped questions are assessed
+    proposition: str = ""           # the central claim stances are measured against
+    supports: int = 0
+    opposes: int = 0
+    neutral: int = 0
+    dominant_side: str = ""         # supports | opposes | balanced
+    skew: float = 0.0               # max(supports,opposes)/(supports+opposes); 0.5 = balanced
+    sources: List[StanceSource] = Field(default_factory=list)
+
+
 class ReputationFlag(BaseModel):
     """A cited source whose domain is on the transparent low-credibility / bias list."""
     source_id: str = ""

@@ -178,6 +178,23 @@ export interface SourceIndependence {
   echo_warnings: string[];
 }
 
+export interface StanceSource {
+  source_id: string;
+  stance: "supports" | "opposes" | "neutral";
+}
+
+export interface StanceBalance {
+  research_id: string;
+  applicable: boolean;
+  proposition: string;
+  supports: number;
+  opposes: number;
+  neutral: number;
+  dominant_side: string;
+  skew: number;
+  sources: StanceSource[];
+}
+
 export interface ReputationFlag {
   source_id: string;
   domain: string;
