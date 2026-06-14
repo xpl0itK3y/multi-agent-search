@@ -178,6 +178,27 @@ export interface SourceIndependence {
   echo_warnings: string[];
 }
 
+export interface ShareInfo {
+  shared: boolean;
+  token: string;
+}
+
+export interface PublicReport {
+  prompt: string;
+  final_report: string;
+  depth: string;
+  model: string;
+  created_at: string;
+  sources: SourcePreview[];
+  citations: CitationAudit;
+  confidence: ConfidenceReport;
+  source_independence: SourceIndependence;
+  source_reputation: SourceReputation;
+  numeric_check: NumericCheck;
+  stance: StanceBalance;
+  red_team: RedTeamReport;
+}
+
 export interface StanceSource {
   source_id: string;
   stance: "supports" | "opposes" | "neutral";

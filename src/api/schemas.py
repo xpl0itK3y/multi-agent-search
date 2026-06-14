@@ -371,6 +371,31 @@ class AuditTrail(BaseModel):
     query_count: int = 0
 
 
+class ShareInfo(BaseModel):
+    """Public-share state for a research: whether a link exists and its (opaque) token."""
+    shared: bool = False
+    token: str = ""
+
+
+class PublicReport(BaseModel):
+    """Read-only, strictly-scoped payload for a public share link. Carries the report and its
+    trust layer (the point of sharing) — never the owner, internal graph_state, or the token.
+    """
+    prompt: str = ""
+    final_report: str = ""
+    depth: str = ""
+    model: str = ""
+    created_at: str = ""
+    sources: List[SearchSourcePreview] = Field(default_factory=list)
+    citations: CitationAudit = Field(default_factory=CitationAudit)
+    confidence: ConfidenceReport = Field(default_factory=ConfidenceReport)
+    source_independence: SourceIndependence = Field(default_factory=SourceIndependence)
+    source_reputation: SourceReputation = Field(default_factory=SourceReputation)
+    numeric_check: NumericCheck = Field(default_factory=NumericCheck)
+    stance: StanceBalance = Field(default_factory=StanceBalance)
+    red_team: RedTeamReport = Field(default_factory=RedTeamReport)
+
+
 class ResearchWatch(BaseModel):
     """A standing 'watch this question': periodic auto re-runs + an alert when the answer
     materially changes. The watch follows the thread head — each scheduled re-run creates a

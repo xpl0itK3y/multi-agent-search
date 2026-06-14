@@ -12,6 +12,8 @@ import type {
   SourceIndependence,
   SourceReputation,
   StanceBalance,
+  ShareInfo,
+  PublicReport,
   NumericCheck,
   ConfidenceReport,
   ResearchWatch,
@@ -171,6 +173,15 @@ export const api = {
 
   getStance: (id: string) =>
     request<StanceBalance>(`/v1/research/${id}/stance`),
+
+  getShare: (id: string) =>
+    request<ShareInfo>(`/v1/research/${id}/share`),
+  createShare: (id: string) =>
+    request<ShareInfo>(`/v1/research/${id}/share`, { method: "POST" }),
+  revokeShare: (id: string) =>
+    request<ShareInfo>(`/v1/research/${id}/share`, { method: "DELETE" }),
+  getPublicReport: (token: string) =>
+    request<PublicReport>(`/v1/public/research/${encodeURIComponent(token)}`),
 
   getConfidence: (id: string) =>
     request<ConfidenceReport>(`/v1/research/${id}/confidence`),

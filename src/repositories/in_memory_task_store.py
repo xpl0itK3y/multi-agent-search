@@ -129,6 +129,14 @@ class InMemoryTaskStore:
             if ((r.graph_state or {}).get("watch") or {}).get("enabled")
         ]
 
+    def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
+        if not token:
+            return None
+        for r in self.researches.values():
+            if (r.graph_state or {}).get("share_token") == token:
+                return r
+        return None
+
     def list_thread_researches(
         self, thread_id: str, user_id: str | None = None
     ) -> list[ResearchHistoryItem]:

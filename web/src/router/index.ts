@@ -19,11 +19,20 @@ const router = createRouter({
       component: () => import("@/views/ThreadView.vue"),
       props: true,
     },
+    {
+      path: "/r/:token",
+      name: "public-report",
+      component: () => import("@/views/PublicReportView.vue"),
+      props: true,
+      meta: { public: true },
+    },
   ],
 });
 
 // Redirect to /login when unauthenticated (auth.user is set even in single-tenant mode).
+// Public routes (a shared read-only report) are reachable without a session.
 router.beforeEach((to) => {
+  if (to.meta.public) return true;
   const auth = useAuthStore();
   if (to.name !== "login" && !auth.user) return { name: "login" };
   if (to.name === "login" && auth.user) return { name: "home" };

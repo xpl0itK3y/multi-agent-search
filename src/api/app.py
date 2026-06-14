@@ -51,6 +51,8 @@ from src.api.schemas import (
     NumericCheck,
     ConfidenceReport,
     AuditTrail,
+    ShareInfo,
+    PublicReport,
     ResearchWatch,
     WatchRequest,
     Clarification,
@@ -478,6 +480,24 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/audit-trail", response_model=AuditTrail, dependencies=research_guard)
     async def get_research_audit_trail(research_id: str, request: Request):
         return get_research_service(request).get_research_audit_trail(research_id)
+
+    @app.get("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
+    async def get_research_share(research_id: str, request: Request):
+        return get_research_service(request).get_share_info(research_id)
+
+    @app.post("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
+    async def create_research_share(research_id: str, request: Request):
+        return get_research_service(request).create_share_link(research_id)
+
+    @app.delete("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
+    async def revoke_research_share(research_id: str, request: Request):
+        return get_research_service(request).revoke_share_link(research_id)
+
+    # PUBLIC — deliberately NO auth and NO research_guard. Security rests on the unguessable
+    # token and the strict field whitelist in get_public_report; only shared researches resolve.
+    @app.get("/v1/public/research/{token}", response_model=PublicReport)
+    async def get_public_research(token: str, request: Request):
+        return get_research_service(request).get_public_report(token)
 
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
     async def get_research_diff(research_id: str, request: Request):

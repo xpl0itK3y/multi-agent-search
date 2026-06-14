@@ -178,6 +178,15 @@ class SQLAlchemyTaskStore:
             )
             return [row[0] for row in session.execute(stmt).all()]
 
+    def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
+        """Resolve a research from its (unguessable) public share token. Exact match only."""
+        if not token:
+            return None
+        with self.session_scope() as session:
+            stmt = select(ResearchORM).where(ResearchORM.graph_state["share_token"].astext == token)
+            research = session.execute(stmt).scalars().first()
+            return research_orm_to_record(research) if research else None
+
     def list_thread_researches(
         self, thread_id: str, user_id: str | None = None
     ) -> list[ResearchHistoryItem]:

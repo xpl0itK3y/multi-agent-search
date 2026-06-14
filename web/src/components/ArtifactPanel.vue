@@ -205,6 +205,7 @@ watch(
       ensureConfidence();
       ensureNumbers();
       ensureWatch();
+      ensureShare();
       ensureDiff();
       ensureComparison();
     }
@@ -338,6 +339,48 @@ const watchIntervalKey = computed(() => {
   const s = watch_.value?.interval_seconds ?? 0;
   return WATCH_INTERVALS.find((i) => i.seconds === s)?.key ?? "custom";
 });
+
+// ── public share link ─────────────────────────────────────────────────────────
+const share = ref<import("@/lib/types").ShareInfo | null>(null);
+const shareMenuOpen = ref(false);
+const shareCopied = ref(false);
+const shareUrl = computed(() => (share.value?.token ? `${window.location.origin}/r/${share.value.token}` : ""));
+async function ensureShare() {
+  if (share.value) return;
+  try {
+    share.value = await api.getShare(props.id);
+  } catch {
+    /* share is optional */
+  }
+}
+async function toggleShareMenu() {
+  shareMenuOpen.value = !shareMenuOpen.value;
+  if (shareMenuOpen.value && !share.value?.shared) {
+    try {
+      share.value = await api.createShare(props.id);
+    } catch (e) {
+      error.value = (e as Error).message;
+    }
+  }
+}
+async function copyShare() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareCopied.value = true;
+    setTimeout(() => (shareCopied.value = false), 1500);
+  } catch {
+    /* clipboard blocked — the field is selectable as a fallback */
+  }
+}
+async function revokeShare() {
+  try {
+    share.value = await api.revokeShare(props.id);
+    shareMenuOpen.value = false;
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
 
 const tabKeys = computed<Tab[]>(() => {
   const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
@@ -503,6 +546,35 @@ async function exportApp() {
         >
           {{ refreshing ? $t("diff.refreshing") : "↻ " + $t("diff.refresh") }}
         </button>
+        <div class="relative">
+          <button
+            class="flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition"
+            :class="share && share.shared ? 'border-accent/50 text-accent' : 'border-bd text-muted hover:text-ink'"
+            :title="$t('share.hint')"
+            @click="toggleShareMenu"
+          >
+            🔗 {{ share && share.shared ? $t("share.shared") : $t("share.share") }}
+          </button>
+          <div
+            v-if="shareMenuOpen"
+            class="absolute right-0 z-30 mt-1 w-72 rounded-xl border border-bd bg-surface p-3 text-xs shadow-lg"
+          >
+            <div class="mb-1.5 font-medium text-ink">{{ $t("share.title") }}</div>
+            <p class="mb-2 text-muted">{{ $t("share.desc") }}</p>
+            <div class="flex items-center gap-1">
+              <input
+                :value="shareUrl"
+                readonly
+                class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1 text-ink focus:outline-none"
+                @focus="($event.target as HTMLInputElement).select()"
+              />
+              <button class="shrink-0 rounded-md border border-bd px-2 py-1 text-muted hover:text-ink" @click="copyShare">
+                {{ shareCopied ? "✓" : $t("share.copy") }}
+              </button>
+            </div>
+            <button class="mt-2 text-red-400 hover:underline" @click="revokeShare">{{ $t("share.revoke") }}</button>
+          </div>
+        </div>
         <button
           class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
           :disabled="!!exporting"
