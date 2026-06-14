@@ -48,6 +48,7 @@ from src.api.schemas import (
     SourceIndependence,
     SourceReputation,
     SourceIntegrity,
+    CrossLanguageReport,
     StanceBalance,
     NumericCheck,
     ConfidenceReport,
@@ -469,6 +470,10 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/research/{research_id}/source-integrity", response_model=SourceIntegrity, dependencies=research_guard)
     async def get_research_source_integrity(research_id: str, request: Request):
         return get_research_service(request).get_research_source_integrity(research_id)
+
+    @app.get("/v1/research/{research_id}/cross-language", response_model=CrossLanguageReport, dependencies=research_guard)
+    async def get_research_cross_language(research_id: str, request: Request):
+        return get_research_service(request).get_research_cross_language(research_id)
 
     @app.get("/v1/research/{research_id}/stance", response_model=StanceBalance, dependencies=research_guard)
     async def get_research_stance(research_id: str, request: Request):

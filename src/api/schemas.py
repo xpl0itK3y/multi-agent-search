@@ -304,6 +304,30 @@ class StanceBalance(BaseModel):
     sources: List[StanceSource] = Field(default_factory=list)
 
 
+class LanguageCount(BaseModel):
+    lang: str = ""
+    count: int = 0
+
+
+class CrossLanguageFinding(BaseModel):
+    lang: str = ""
+    finding: str = ""
+
+
+class CrossLanguageReport(BaseModel):
+    """Language diversity of the evidence: which languages the sources span, whether the
+    research is stuck in a single-language bubble, and what non-query-language sources uniquely
+    add — coverage no monolingual tool surfaces.
+    """
+    research_id: str = ""
+    query_language: str = ""
+    languages: List[LanguageCount] = Field(default_factory=list)
+    target_languages: List[str] = Field(default_factory=list)  # languages we deliberately searched
+    foreign_source_count: int = 0
+    monolingual: bool = True
+    unique_findings: List[CrossLanguageFinding] = Field(default_factory=list)
+
+
 class IntegrityFlag(BaseModel):
     """A cited source backed by a paper Crossref/Retraction Watch records as retracted."""
     source_id: str = ""
@@ -414,6 +438,7 @@ class PublicReport(BaseModel):
     stance: StanceBalance = Field(default_factory=StanceBalance)
     red_team: RedTeamReport = Field(default_factory=RedTeamReport)
     source_integrity: SourceIntegrity = Field(default_factory=SourceIntegrity)
+    cross_language: CrossLanguageReport = Field(default_factory=CrossLanguageReport)
 
 
 class ResearchWatch(BaseModel):

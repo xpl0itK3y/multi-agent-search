@@ -198,6 +198,7 @@ export interface PublicReport {
   stance: StanceBalance;
   red_team: RedTeamReport;
   source_integrity: SourceIntegrity;
+  cross_language: CrossLanguageReport;
 }
 
 export interface StanceSource {
@@ -215,6 +216,26 @@ export interface StanceBalance {
   dominant_side: string;
   skew: number;
   sources: StanceSource[];
+}
+
+export interface LanguageCount {
+  lang: string;
+  count: number;
+}
+
+export interface CrossLanguageFinding {
+  lang: string;
+  finding: string;
+}
+
+export interface CrossLanguageReport {
+  research_id: string;
+  query_language: string;
+  languages: LanguageCount[];
+  target_languages: string[];
+  foreign_source_count: number;
+  monolingual: boolean;
+  unique_findings: CrossLanguageFinding[];
 }
 
 export interface IntegrityFlag {

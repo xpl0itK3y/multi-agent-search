@@ -12,6 +12,7 @@ import type {
   SourceIndependence,
   SourceReputation,
   SourceIntegrity,
+  CrossLanguageReport,
   StanceBalance,
   ShareInfo,
   PublicReport,
@@ -174,6 +175,9 @@ export const api = {
 
   getSourceIntegrity: (id: string) =>
     request<SourceIntegrity>(`/v1/research/${id}/source-integrity`),
+
+  getCrossLanguage: (id: string) =>
+    request<CrossLanguageReport>(`/v1/research/${id}/cross-language`),
 
   getStance: (id: string) =>
     request<StanceBalance>(`/v1/research/${id}/stance`),

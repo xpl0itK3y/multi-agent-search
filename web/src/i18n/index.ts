@@ -176,6 +176,14 @@ const ru = {
     oneSided: "однобоко",
     hint: "Как доказательная база делится по отношению к центральному тезису вопроса. Дополняет независимость источников — разнообразие точек зрения, а не первоисточников.",
   },
+  crosslang: {
+    title: "Языки источников",
+    bubble: "один язык",
+    bubbleHint: "Все источники на одном языке — возможен языковой пузырь.",
+    added: "добавили",
+    foreignSources: "источников на других языках",
+    langs: "языков",
+  },
   integrity: {
     title: "Проверка ретракций",
     retracted: "отозвано",
@@ -470,6 +478,14 @@ const en: typeof ru = {
     oneSided: "one-sided",
     hint: "How the evidence splits on the question's central claim. Complements source independence — diversity of viewpoints, not just origins.",
   },
+  crosslang: {
+    title: "Source languages",
+    bubble: "single language",
+    bubbleHint: "All sources are in one language — possible language bubble.",
+    added: "added",
+    foreignSources: "sources in other languages",
+    langs: "languages",
+  },
   integrity: {
     title: "Retraction check",
     retracted: "retracted",
@@ -763,6 +779,14 @@ const es: typeof ru = {
     neutral: "neutral",
     oneSided: "sesgado",
     hint: "Cómo se divide la evidencia respecto a la afirmación central. Complementa la independencia de fuentes — diversidad de puntos de vista, no solo de orígenes.",
+  },
+  crosslang: {
+    title: "Idiomas de las fuentes",
+    bubble: "un solo idioma",
+    bubbleHint: "Todas las fuentes están en un idioma — posible burbuja lingüística.",
+    added: "aportan",
+    foreignSources: "fuentes en otros idiomas",
+    langs: "idiomas",
   },
   integrity: {
     title: "Verificación de retractaciones",

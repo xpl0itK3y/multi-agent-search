@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # sources backed by a retracted paper. Network — degrades gracefully, never breaks finalize.
     retraction_check_enabled: bool = True
     retraction_check_timeout: float = 5.0
+    # Cross-language: also search the question in other relevant languages and surface what
+    # non-query-language sources uniquely add. Adds one decompose-time call + one extra task.
+    cross_language_enabled: bool = True
+    cross_language_max_targets: int = 2
     langsmith_tracing: bool = False
     langsmith_api_key: Optional[str] = None
     langsmith_endpoint: str = "https://api.smith.langchain.com"

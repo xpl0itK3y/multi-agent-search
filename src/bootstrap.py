@@ -13,6 +13,7 @@ from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.agents.red_team import RedTeamAgent
 from src.agents.stance import StanceAgent
+from src.agents.cross_language import CrossLanguageAgent
 from src.agents.replan import ReplanAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
@@ -59,6 +60,7 @@ def create_research_service() -> ResearchService:
     comparison_agent = None
     app_export_agent = None
     stance_agent = None
+    cross_language_agent = None
     replan_agent: ReplanAgent = ReplanAgent()          # template-only fallback
     source_critic = SourceCriticAgent()
     evidence_mapper = EvidenceMapperAgent()
@@ -79,6 +81,7 @@ def create_research_service() -> ResearchService:
         comparison_agent = ComparisonAgent(llm)        # structured comparison table
         app_export_agent = AppExportAgent(llm)         # AI-generated custom HTML export
         stance_agent = StanceAgent(llm)                # source viewpoint-balance (debate questions)
+        cross_language_agent = CrossLanguageAgent(llm)  # cross-language coverage
         if agent_analyzer is None:
             agent_analyzer = AnalyzerAgent(
                 llm,
@@ -112,6 +115,7 @@ def create_research_service() -> ResearchService:
         comparison_agent=comparison_agent,
         app_export_agent=app_export_agent,
         stance_agent=stance_agent,
+        cross_language_agent=cross_language_agent,
         broker=broker,
     )
 

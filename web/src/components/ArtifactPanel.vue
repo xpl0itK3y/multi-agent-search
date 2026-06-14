@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -21,6 +21,7 @@ const citations = ref<CitationAudit | null>(null);
 const independence = ref<SourceIndependence | null>(null);
 const reputation = ref<SourceReputation | null>(null);
 const integrity = ref<SourceIntegrity | null>(null);
+const crossLang = ref<CrossLanguageReport | null>(null);
 const stance = ref<StanceBalance | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
@@ -151,6 +152,15 @@ async function ensureIntegrity() {
   }
 }
 
+async function ensureCrossLang() {
+  if (crossLang.value) return;
+  try {
+    crossLang.value = await api.getCrossLanguage(props.id);
+  } catch {
+    /* cross-language is optional */
+  }
+}
+
 async function ensureConfidence() {
   if (confidence.value) return;
   try {
@@ -176,6 +186,7 @@ watch(tab, (t) => {
     ensureReputation();
     ensureStance();
     ensureIntegrity();
+    ensureCrossLang();
   }
   if (t === "confidence") {
     ensureVerification();
@@ -214,6 +225,7 @@ watch(
       ensureReputation();
       ensureStance();
       ensureIntegrity();
+      ensureCrossLang();
       ensureConfidence();
       ensureNumbers();
       ensureWatch();
@@ -828,6 +840,17 @@ async function exportApp() {
           <span class="text-muted">{{ stancePct(stance.neutral) }}% {{ $t("stance.neutral") }}</span>
           <span v-if="stanceOneSided" class="ml-auto text-amber-500">⚠ {{ $t("stance.oneSided") }}</span>
         </button>
+        <button
+          v-if="crossLang && crossLang.languages.length > 1"
+          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
+          :class="crossLang.monolingual ? 'border-bd bg-surface/40' : 'border-accent/40 bg-accent/5'"
+          @click="tab = 'sources'"
+        >
+          <span class="font-medium text-ink">🌐 {{ $t("crosslang.title") }}</span>
+          <span class="text-muted">{{ crossLang.languages.slice(0, 5).map((l) => l.lang + "·" + l.count).join(" ") }}</span>
+          <span v-if="crossLang.monolingual" class="ml-auto text-amber-500">⚠ {{ $t("crosslang.bubble") }}</span>
+          <span v-else-if="crossLang.unique_findings.length" class="ml-auto text-accent">+{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
+        </button>
         <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
           <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
             <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
@@ -1024,6 +1047,35 @@ async function exportApp() {
               <span><span class="font-semibold">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
             </div>
             <p class="mt-2 text-xs text-muted">{{ $t("stance.hint") }}</p>
+          </div>
+          <!-- Cross-language coverage: language spread + what non-query-language sources add -->
+          <div
+            v-if="crossLang && crossLang.languages.length > 1"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+          >
+            <div class="mb-2 text-sm font-medium text-ink">🌐 {{ $t("crosslang.title") }}</div>
+            <div class="mb-3 flex flex-wrap gap-1.5">
+              <span
+                v-for="l in crossLang.languages"
+                :key="l.lang"
+                class="rounded-md border px-2 py-0.5 text-xs"
+                :class="l.lang === crossLang.query_language ? 'border-bd text-muted' : 'border-accent/40 text-accent'"
+              >
+                {{ l.lang }} · {{ l.count }}
+              </span>
+            </div>
+            <p v-if="crossLang.monolingual" class="text-xs text-amber-500">⚠ {{ $t("crosslang.bubbleHint") }}</p>
+            <template v-else>
+              <p class="mb-2 text-xs text-muted">
+                {{ crossLang.foreign_source_count }} {{ $t("crosslang.foreignSources") }}
+              </p>
+              <ul v-if="crossLang.unique_findings.length" class="space-y-1.5 border-t border-bd pt-2">
+                <li v-for="(f, i) in crossLang.unique_findings" :key="i" class="flex items-start gap-2 text-xs">
+                  <span class="mt-0.5 shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-accent">{{ f.lang }}</span>
+                  <span class="text-ink">{{ f.finding }}</span>
+                </li>
+              </ul>
+            </template>
           </div>
           <SourceCard v-for="(s, i) in sources" :key="s.url" :source="s" :index="i + 1" />
         </div>

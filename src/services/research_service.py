@@ -19,6 +19,7 @@ from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
 from src.agents.source_reputation import SourceReputationAgent
 from src.agents.retraction import RetractionAgent
+from src.agents.cross_language import CrossLanguageAgent, detect_language
 from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.research_diff import ResearchDiffAgent
@@ -53,6 +54,8 @@ from src.api.schemas import (
     SourceIndependence,
     SourceReputation,
     SourceIntegrity,
+    CrossLanguageReport,
+    LanguageCount,
     StanceBalance,
     NumericCheck,
     ConfidenceReport,
@@ -140,6 +143,7 @@ class ResearchService:
         comparison_agent=None,
         app_export_agent=None,
         stance_agent=None,
+        cross_language_agent=None,
         broker: RedisBroker | None = None,
     ):
         self.task_store = task_store
@@ -157,6 +161,7 @@ class ResearchService:
         self.comparison_agent = comparison_agent
         self.app_export_agent = app_export_agent
         self.stance_agent = stance_agent
+        self.cross_language_agent = cross_language_agent
         self.citation_auditor = CitationAuditAgent()
         self.independence_auditor = SourceIndependenceAgent()
         self.reputation_auditor = SourceReputationAgent()
@@ -420,6 +425,7 @@ class ResearchService:
                         return
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
                 tasks_raw = orchestrator.run_decompose(effective_prompt, request.depth)
+                self._maybe_add_cross_language_task(research_id, effective_prompt, tasks_raw)
                 if request.plan_first:
                     # Store an editable plan and wait for user approval (no tasks/jobs yet).
                     self._store_plan_for_review(research_id, tasks_raw)
@@ -1157,6 +1163,7 @@ class ResearchService:
             "source_independence": safe(lambda: self.get_research_source_independence(rid)),
             "source_reputation": safe(lambda: self.get_research_source_reputation(rid)),
             "source_integrity": safe(lambda: self.get_research_source_integrity(rid)),
+            "cross_language": safe(lambda: self.get_research_cross_language(rid)),
             "stance_balance": safe(lambda: self.get_research_stance(rid)),
             "numeric_check": safe(lambda: self.get_research_numeric_check(rid)),
             "confidence": safe(lambda: self.get_research_confidence(rid)),
@@ -1666,6 +1673,78 @@ class ResearchService:
             return SourceIntegrity(research_id=research_id)
         return SourceIntegrity.model_validate(data)
 
+    # ── cross-language coverage (search other languages, surface what they add) ───
+
+    def _maybe_add_cross_language_task(self, research_id: str, prompt: str, tasks_raw: list) -> None:
+        """Append a task that searches the question in other relevant languages. Additive +
+        defensive — a failure just leaves the plan monolingual."""
+        if not settings.cross_language_enabled or self.cross_language_agent is None:
+            return
+        try:
+            query_lang = detect_language(prompt)
+            langs, queries = self.cross_language_agent.plan(prompt, query_lang, settings.cross_language_max_targets)
+            if not queries:
+                return
+            tasks_raw.append({"description": "Coverage in other languages", "queries": queries})
+            state = dict((self.task_store.get_research(research_id).graph_state) or {})
+            state["cross_language_targets"] = langs
+            state.setdefault("query_language", query_lang)
+            self.task_store.update_research_graph_state(research_id, state)
+            logger.info("cross_language_task_added research_id=%s langs=%s", research_id, langs)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("cross_language_plan_failed research_id=%s error=%s", research_id, exc)
+
+    def _analyze_cross_language(self, research, tasks: list) -> None:
+        """Tag each source's language, build the distribution, and surface findings unique to
+        non-query-language sources. Deterministic distribution + one gated LLM call. Never raises."""
+        if not settings.cross_language_enabled:
+            return
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            state = research.graph_state or {}
+            query_lang = state.get("query_language") or detect_language(research.prompt)
+            by_lang: dict[str, int] = {}
+            foreign_snippets: dict[str, list[str]] = {}
+            for s in aggregated:
+                content = (s.get("content") or s.get("title") or "").strip()
+                if not content:
+                    continue
+                lang = detect_language(content)
+                by_lang[lang] = by_lang.get(lang, 0) + 1
+                if lang not in ("unknown", query_lang):
+                    foreign_snippets.setdefault(lang, []).append(content)
+            if not by_lang:
+                return
+            foreign_count = sum(c for lang, c in by_lang.items() if lang not in ("unknown", query_lang))
+            unique_findings = []
+            if foreign_snippets and self.cross_language_agent is not None:
+                unique_findings = self.cross_language_agent.surface(research.prompt, query_lang, foreign_snippets)
+            report = CrossLanguageReport(
+                research_id=research.id,
+                query_language=query_lang,
+                languages=[LanguageCount(lang=lang, count=c) for lang, c in sorted(by_lang.items(), key=lambda kv: -kv[1])],
+                target_languages=state.get("cross_language_targets", []),
+                foreign_source_count=foreign_count,
+                monolingual=foreign_count == 0,
+                unique_findings=unique_findings,
+            )
+            new_state = dict((self.task_store.get_research(research.id).graph_state) or {})
+            new_state["cross_language"] = report.model_dump()
+            self.task_store.update_research_graph_state(research.id, new_state)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("cross_language_analysis_failed research_id=%s error=%s", research.id, exc)
+
+    def get_research_cross_language(self, research_id: str) -> CrossLanguageReport:
+        """Stored language-diversity report: distribution + what non-query-language sources add."""
+        research = self.task_store.get_research(research_id)
+        data = ((research.graph_state if research else None) or {}).get("cross_language")
+        if not data:
+            return CrossLanguageReport(research_id=research_id)
+        return CrossLanguageReport.model_validate(data)
+
     # ── stance / viewpoint balance (one LLM call, contestable questions only) ─────
 
     _STANCE_SIGNALS = (
@@ -1863,6 +1942,10 @@ class ResearchService:
         integ = state.get("source_integrity") or {}
         if integ.get("checked_dois"):
             out.append(f"retraction check: {integ.get('checked_dois')} DOI(s) checked, {integ.get('retracted_count', 0)} retracted")
+        xl = state.get("cross_language") or {}
+        if xl.get("languages"):
+            langs = ", ".join(f"{lc.get('lang')}×{lc.get('count')}" for lc in xl.get("languages", [])[:6])
+            out.append(f"cross-language: {langs}" + (f" ({xl.get('foreign_source_count')} non-{xl.get('query_language')})" if xl.get("foreign_source_count") else ""))
         return out
 
     def _render_audit_trail_md(self, trail: AuditTrail) -> str:
@@ -1977,6 +2060,7 @@ class ResearchService:
             stance=safe(lambda: self.get_research_stance(rid), StanceBalance()),
             red_team=safe(lambda: self.get_research_red_team(rid), RedTeamReport()),
             source_integrity=safe(lambda: self.get_research_source_integrity(rid), SourceIntegrity()),
+            cross_language=safe(lambda: self.get_research_cross_language(rid), CrossLanguageReport()),
         )
 
     # ── confidence / honesty meter (fuses all trust signals into one number) ─────
@@ -2380,6 +2464,7 @@ class ResearchService:
             self._check_retractions(research, tasks)
             self._maybe_build_comparison(report, research)
             self._maybe_assess_stance(research, tasks)
+            self._analyze_cross_language(research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)
             self.task_store.update_research_status(
                 research_id,

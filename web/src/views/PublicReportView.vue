@@ -85,6 +85,9 @@ const stanceText = computed(() => {
         <span v-if="report.source_integrity.flagged.length" class="rounded-lg border border-red-500/50 px-2.5 py-1 text-red-500">
           ⛔ {{ report.source_integrity.retracted_count }} {{ $t("integrity.retracted") }}
         </span>
+        <span v-if="report.cross_language.languages.length > 1" class="rounded-lg border border-bd bg-surface/40 px-2.5 py-1">
+          🌐 {{ report.cross_language.languages.length }} {{ $t("crosslang.langs") }}
+        </span>
       </div>
 
       <MarkdownView :source="report.final_report" :grounding="report.citations.grounding" />
