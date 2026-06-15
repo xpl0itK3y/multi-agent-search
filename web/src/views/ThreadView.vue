@@ -166,6 +166,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
             :initial-prompt="it.prompt"
             @done="onTurnDone(it.id, $event)"
             @refreshed="onRefreshed"
+            @grow="scrollToBottom"
           />
           <div v-else class="space-y-3">
             <div class="flex justify-end">

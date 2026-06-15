@@ -12,7 +12,7 @@ import ClarifyCard from "./ClarifyCard.vue";
 // One deep-research run rendered as a conversation turn: the prompt, its live
 // progress, and the final report (with sources/confidence/conflicts tabs).
 const props = defineProps<{ id: string; initialPrompt?: string }>();
-const emit = defineEmits<{ done: [status: string]; refreshed: [{ id: string; prompt: string }] }>();
+const emit = defineEmits<{ done: [status: string]; refreshed: [{ id: string; prompt: string }]; grow: [] }>();
 const { t, te } = useI18n();
 
 const prompt = ref(props.initialPrompt ?? "");
@@ -88,6 +88,17 @@ function stopQueuePoll() {
   }
 }
 
+// Live running commentary: the latest trace step, shown next to the status even when the
+// trace panel is collapsed (so the user always sees what's happening right now).
+const currentActivity = computed(() => {
+  const last = trace.value[trace.value.length - 1];
+  if (!last) return "";
+  return (last.detail || "")
+    .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}✓✔]+\s*/u, "")
+    .replace(/\s*—\s*\d+\s*$/, "")
+    .trim();
+});
+
 const costLabel = computed(() => {
   const u = usage.value;
   if (!u || !u.total_tokens) return null;
@@ -98,10 +109,10 @@ const costLabel = computed(() => {
 });
 
 async function loadPlan() {
-  try { plan.value = await api.getPlan(props.id); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
 }
 async function loadClarifications() {
-  try { clarification.value = await api.getClarifications(props.id); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { clarification.value = await api.getClarifications(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
 }
 
 async function onSubmitClarify(answers: string[]) {
@@ -169,13 +180,16 @@ onMounted(async () => {
     onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
+      const wasEmpty = !report.value;
       report.value = r;
       isFinal.value = final;
+      if (wasEmpty && r) emit("grow"); // first time the report panel appears → scroll to it
     },
     onDone: (s) => {
       status.value = s;
       done.value = true;
       emit("done", s);
+      emit("grow");
       notifyDone(s);
       if (s === "completed") {
         api.getStatus(props.id).then((st) => (usage.value = st.llm_token_usage ?? null)).catch(() => {});
@@ -250,6 +264,13 @@ onBeforeUnmount(() => {
         </button>
         <span v-if="costLabel" class="ml-auto text-xs text-muted" :title="$t('research.costTitle')">{{ costLabel }}</span>
       </div>
+
+      <!-- live "what's happening now" commentary (visible even when the trace is collapsed) -->
+      <transition name="fade" mode="out-in">
+        <p v-if="!done && currentActivity" :key="currentActivity" class="line-clamp-1 pl-4 text-xs text-muted/80">
+          {{ currentActivity }}
+        </p>
+      </transition>
 
       <p v-if="errorMsg" class="text-sm text-red-400">{{ errorMsg }}</p>
 

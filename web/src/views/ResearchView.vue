@@ -167,7 +167,7 @@ onMounted(async () => {
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
-    onTrace: (step, detail) => trace.value.push({ step, detail }),
+    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;
