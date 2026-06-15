@@ -152,7 +152,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div class="relative flex h-full flex-col">
     <header class="flex items-center gap-3 border-b border-bd px-4 py-3">
       <button class="text-sm text-muted hover:text-ink" @click="router.push('/')">
         {{ $t("common.back") }}
@@ -160,7 +160,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
       <span v-if="threadTitle" class="truncate text-sm text-muted">{{ threadTitle }}</span>
     </header>
 
-    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-4 pt-6 pb-48">
       <div class="mx-auto max-w-3xl space-y-10">
         <template v-for="(it, i) in items" :key="i">
           <ResearchTurn
@@ -190,8 +190,8 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
       </div>
     </div>
 
-    <div class="shrink-0 bg-gradient-to-t from-bg via-bg to-transparent p-4 pt-6">
-      <div class="mx-auto flex max-w-3xl justify-center">
+    <div class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg via-bg/70 to-transparent p-4 pt-10">
+      <div class="pointer-events-auto mx-auto flex max-w-3xl justify-center">
         <Composer
           v-model:prompt="composerPrompt"
           :busy="busy"

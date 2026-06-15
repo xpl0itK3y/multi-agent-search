@@ -77,7 +77,7 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="w-full max-w-composer rounded-card border border-bd bg-surface px-4 py-3 shadow-lg">
+  <div class="w-full max-w-composer rounded-card border border-bd bg-surface/60 px-4 py-3 shadow-xl backdrop-blur-xl">
     <textarea
       ref="textarea"
       v-model="prompt"
