@@ -33,6 +33,8 @@ const planFirst = ref(true);
 // follow-up question on the latest report.
 const mode = ref<"research" | "quick">("research");
 const isQuick = computed(() => !!props.allowQuickQuestion && mode.value === "quick");
+// Fall back to research mode whenever quick-questions aren't available (no finished report yet).
+watch(() => props.allowQuickQuestion, (allowed) => { if (!allowed) mode.value = "research"; });
 
 const model = ref<string>("");
 watch(

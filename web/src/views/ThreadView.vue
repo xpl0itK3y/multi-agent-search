@@ -53,6 +53,9 @@ const latestCompletedResearchId = computed(() => {
   return lastResearch;
 });
 
+// Quick questions need a finished report to ground on — only allow once one has completed.
+const hasCompletedReport = computed(() => completed.value.size > 0);
+
 async function scrollToBottom() {
   await nextTick();
   scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: "smooth" });
@@ -193,7 +196,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
           v-model:prompt="composerPrompt"
           :busy="busy"
           :research-busy="anyResearchRunning"
-          allow-quick-question
+          :allow-quick-question="hasCompletedReport"
           @submit="onSubmit"
           @ask="onAsk"
         />

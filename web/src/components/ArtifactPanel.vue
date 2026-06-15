@@ -529,6 +529,12 @@ async function exportApp() {
         {{ $t("artifact." + tb) }}
       </button>
 
+      <!-- report is streaming in / being edited live -->
+      <span v-if="report && !isFinal" class="ml-auto flex shrink-0 items-center gap-1.5 pr-2 text-xs text-accent">
+        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+        {{ $t("artifact.generating") }}
+      </span>
+
       <div v-if="report && isFinal" class="ml-auto flex items-center gap-1">
         <div class="relative">
           <button

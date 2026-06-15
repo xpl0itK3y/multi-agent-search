@@ -24,6 +24,7 @@ const reasoning = ref("");
 const done = ref(false);
 const usage = ref<Record<string, number> | null>(null);
 const errorMsg = ref<string | null>(null);
+const streamLost = ref(false);
 
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
@@ -136,7 +137,9 @@ async function onApprove(items: PlanItem[]) {
   } catch (e) { errorMsg.value = (e as Error).message; } finally { planBusy.value = false; }
 }
 
-onMounted(async () => {
+// Fetch the current status/report (also used to catch up after a dropped stream). Returns
+// true if the research is already in a terminal state (no live stream needed).
+async function syncStatus(): Promise<boolean> {
   try {
     const s = await api.getStatus(props.id);
     if (!prompt.value) prompt.value = s.prompt;
@@ -149,20 +152,28 @@ onMounted(async () => {
     if (DONE.has(s.status)) {
       done.value = true;
       emit("done", s.status);
-      // Already-finished research: load its report so the panel renders immediately.
       if (s.status === "completed") {
         try {
           const r = await api.getReport(props.id);
           report.value = r.final_report ?? "";
           isFinal.value = true;
+          emit("grow");
         } catch {
           /* SSE may still deliver it */
         }
       }
+      return true;
     }
   } catch {
     /* SSE still drives status/report */
   }
+  return false;
+}
+
+// (Re)open the live SSE stream. Re-callable so a dropped connection can be resumed.
+function connect() {
+  close?.();
+  streamLost.value = false;
   close = openResearchStream(props.id, {
     onStatus: (s) => {
       status.value = s;
@@ -195,8 +206,22 @@ onMounted(async () => {
         api.getStatus(props.id).then((st) => (usage.value = st.llm_token_usage ?? null)).catch(() => {});
       }
     },
-    onError: (m) => (errorMsg.value = m),
+    onError: (m) => {
+      errorMsg.value = m;
+      if (!done.value) streamLost.value = true; // offer a resume button
+    },
   });
+}
+
+async function resume() {
+  errorMsg.value = null;
+  const terminal = await syncStatus(); // catch up on anything missed while disconnected
+  if (!terminal) connect();
+}
+
+onMounted(async () => {
+  const terminal = await syncStatus();
+  if (!terminal) connect();
 });
 
 onBeforeUnmount(() => {
@@ -272,7 +297,16 @@ onBeforeUnmount(() => {
         </p>
       </transition>
 
-      <p v-if="errorMsg" class="text-sm text-red-400">{{ errorMsg }}</p>
+      <div v-if="errorMsg" class="flex flex-wrap items-center gap-2 text-sm text-red-400">
+        <span>{{ errorMsg }}</span>
+        <button
+          v-if="streamLost && !done"
+          class="rounded-md border border-accent/50 px-2.5 py-0.5 text-xs text-accent transition hover:bg-accent/10"
+          @click="resume"
+        >
+          {{ $t("research.resume") }}
+        </button>
+      </div>
 
       <ProgressTrace
         v-if="!done && (trace.length || reasoning)"

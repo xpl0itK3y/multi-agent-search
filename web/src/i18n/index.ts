@@ -87,6 +87,7 @@ const ru = {
     busy: "Готовлю план…",
   },
   artifact: {
+    generating: "Генерируется…",
     report: "Отчёт",
     sources: "Источники",
     confidence: "Уверенность",
@@ -292,6 +293,7 @@ const ru = {
   research: {
     cancel: "Отменить",
     cancelling: "Отмена…",
+    resume: "Возобновить",
     notifyReady: "Отчёт готов",
     showMore: "Показать полностью",
     showLess: "Свернуть",
@@ -395,6 +397,7 @@ const en: typeof ru = {
     busy: "Preparing plan…",
   },
   artifact: {
+    generating: "Generating…",
     report: "Report",
     sources: "Sources",
     confidence: "Confidence",
@@ -600,6 +603,7 @@ const en: typeof ru = {
   research: {
     cancel: "Cancel",
     cancelling: "Cancelling…",
+    resume: "Resume",
     notifyReady: "Your report is ready",
     showMore: "Show full",
     showLess: "Collapse",
@@ -703,6 +707,7 @@ const es: typeof ru = {
     busy: "Preparando el plan…",
   },
   artifact: {
+    generating: "Generando…",
     report: "Informe",
     sources: "Fuentes",
     confidence: "Confianza",
@@ -908,6 +913,7 @@ const es: typeof ru = {
   research: {
     cancel: "Cancelar",
     cancelling: "Cancelando…",
+    resume: "Reanudar",
     notifyReady: "Tu informe está listo",
     showMore: "Mostrar completo",
     showLess: "Contraer",
