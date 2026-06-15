@@ -260,9 +260,10 @@ onBeforeUnmount(() => {
         :live="!done"
       />
 
-      <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within) -->
+      <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within).
+           Hidden for a cancelled run — there's no report, just the "Отменено" status. -->
       <div
-        v-if="report || done"
+        v-if="(report || done) && status !== 'cancelled'"
         class="animate-fade-in h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
       >
         <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" @refreshed="(id) => emit('refreshed', { id, prompt })" />
