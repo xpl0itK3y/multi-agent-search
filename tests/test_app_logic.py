@@ -2311,6 +2311,45 @@ def test_finalize_research_resumes_from_verify_checkpoint_without_full_restart(m
     assert "Retried [S1]" in finalized.final_report
 
 
+def test_finalize_strips_report_notes_from_served_report(mocker):
+    """The internal "Report Notes" quality section is a re-draft signal — it must
+    never reach the reader. Finalize strips it; the read path stays clean too."""
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body " * 80}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.llm = None  # skip the token-usage bookkeeping branch
+    analyzer.enable_graph_branching = False
+    analyzer.run_analysis.return_value = (
+        "## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S1].\n\n"
+        "## Report Notes\n- Weak support.\n\n"
+        "## Sources\n### Used Sources\n- [S1] https://example.com"
+    )
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    finalized = service.finalize_research(research.id)
+
+    # the notes section is gone, but the report body and sources survive
+    assert "Report Notes" not in finalized.final_report
+    assert "Weak support" not in finalized.final_report
+    assert "## Introduction" in finalized.final_report
+    assert "## Sources" in finalized.final_report
+    # and the read path serves a clean report (also protects legacy/stored reports)
+    assert "Report Notes" not in service.get_research_report(research.id).final_report
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

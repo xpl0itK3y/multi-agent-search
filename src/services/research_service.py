@@ -1118,16 +1118,20 @@ class ResearchService:
             raise HTTPException(status_code=409, detail="Report is not ready yet")
 
         from src.ui.report_export import generate_docx, generate_pdf
+        from src.ui.report_utils import clean_report
 
+        # Strip the internal "Report Notes" section once for every human-facing format
+        # (generate_pdf/docx also clean internally — calling it here is idempotent).
+        report = clean_report(research.final_report)
         depth = getattr(research.depth, "value", str(research.depth))
         created_at = research.created_at.isoformat() if research.created_at else None
         title = (research.graph_state or {}).get("title") or research.prompt
         normalized = (fmt or "").lower()
         if normalized == "pdf":
-            data = generate_pdf(research.final_report, research.prompt, depth, created_at)
+            data = generate_pdf(report, research.prompt, depth, created_at)
             return data, "application/pdf", self._export_filename(title, "pdf")
         if normalized == "docx":
-            data = generate_docx(research.final_report, research.prompt, depth, created_at)
+            data = generate_docx(report, research.prompt, depth, created_at)
             return (
                 data,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1136,16 +1140,16 @@ class ResearchService:
         if normalized == "html":
             from src.ui.report_export import generate_html
 
-            language = self._detect_report_language(research.prompt, research.final_report)
+            language = self._detect_report_language(research.prompt, report)
             labels = self._HTML_EXPORT_LABELS.get(language, self._HTML_EXPORT_LABELS["en"])
             data = generate_html(
-                research.final_report, research.prompt, depth, created_at,
+                report, research.prompt, depth, created_at,
                 scorecard=self._export_scorecard(research_id), labels=labels,
                 theme=theme, accent=accent, base=base,
             )
             return data, "text/html; charset=utf-8", self._export_filename(title, "html")
         if normalized in ("md", "markdown"):
-            return research.final_report.encode("utf-8"), "text/markdown; charset=utf-8", self._export_filename(title, "md")
+            return report.encode("utf-8"), "text/markdown; charset=utf-8", self._export_filename(title, "md")
         if normalized == "json":
             payload = self._export_json_payload(research, depth, created_at)
             data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1261,10 +1265,14 @@ class ResearchService:
         research = self.task_store.get_research(research_id)
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
+        # Safety net for reports finalized before the notes-strip landed: clean on read
+        # so legacy reports never surface the internal "Report Notes" section either.
+        from src.ui.report_utils import clean_report
+
         return ResearchReportResponse(
             research_id=research.id,
             status=research.status,
-            final_report=research.final_report,
+            final_report=clean_report(research.final_report) if research.final_report else research.final_report,
         )
 
     def get_research_graph(self, research_id: str) -> ResearchGraphResponse:
@@ -2057,6 +2065,7 @@ class ResearchService:
         if not research or not research.final_report:
             raise HTTPException(status_code=404, detail="Not found")
         rid = research.id
+        from src.ui.report_utils import clean_report
 
         def safe(fn, default):
             try:
@@ -2066,7 +2075,7 @@ class ResearchService:
 
         return PublicReport(
             prompt=research.prompt,
-            final_report=research.final_report,
+            final_report=clean_report(research.final_report),
             depth=getattr(research.depth, "value", str(research.depth)),
             model=(research.graph_state or {}).get("model", "") or "",
             created_at=research.created_at.isoformat() if research.created_at else "",
@@ -2488,6 +2497,13 @@ class ResearchService:
             self._maybe_assess_stance(research, tasks)
             self._analyze_cross_language(research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)
+            # The "Report Notes" / "Примечания к отчёту" section is an INTERNAL quality
+            # signal (the finalize graph re-drafts while it's present). It must never
+            # reach the reader — strip it (plus any LLM preamble) before persisting, so
+            # every downstream path (SSE, API, export, public share) serves the clean report.
+            from src.ui.report_utils import clean_report
+
+            report = clean_report(report)
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.COMPLETED,
