@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
 export interface TraceSource {
   domain: string;
@@ -13,7 +13,16 @@ export interface TraceEntry {
 
 defineProps<{ entries: TraceEntry[]; reasoning?: string; live?: boolean }>();
 
-const open = ref(true);
+// Remember the collapsed/expanded choice across remounts (switching researches) and reloads.
+const TRACE_OPEN_KEY = "trace.open";
+const open = ref(typeof localStorage !== "undefined" ? localStorage.getItem(TRACE_OPEN_KEY) !== "0" : true);
+watch(open, (v) => {
+  try {
+    localStorage.setItem(TRACE_OPEN_KEY, v ? "1" : "0");
+  } catch {
+    /* storage unavailable — keep in-memory only */
+  }
+});
 const reasoningOpen = ref(false);
 
 import { useI18n } from "vue-i18n";
