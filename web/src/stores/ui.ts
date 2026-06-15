@@ -18,6 +18,16 @@ export const useUiStore = defineStore("ui", () => {
   const sidebarCollapsed = ref(false);
   const userName = ref((import.meta.env.VITE_USER_NAME as string) || "denis");
 
+  // User-draggable sidebar width (persisted, clamped).
+  const SIDEBAR_MIN = 220;
+  const SIDEBAR_MAX = 480;
+  const storedWidth = typeof localStorage !== "undefined" ? Number(localStorage.getItem("sidebar.width")) : NaN;
+  const sidebarWidth = ref(storedWidth >= SIDEBAR_MIN && storedWidth <= SIDEBAR_MAX ? storedWidth : 288);
+  function setSidebarWidth(px: number) {
+    sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(px)));
+    if (typeof localStorage !== "undefined") localStorage.setItem("sidebar.width", String(sidebarWidth.value));
+  }
+
   const locale = ref<Locale>(i18n.global.locale.value as Locale);
   function setLocale(value: Locale) {
     locale.value = value;
@@ -63,6 +73,8 @@ export const useUiStore = defineStore("ui", () => {
 
   return {
     sidebarCollapsed,
+    sidebarWidth,
+    setSidebarWidth,
     userName,
     theme,
     locale,

@@ -190,7 +190,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
       </div>
     </div>
 
-    <div class="shrink-0 border-t border-bd p-4">
+    <div class="shrink-0 bg-gradient-to-t from-bg via-bg to-transparent p-4 pt-6">
       <div class="mx-auto flex max-w-3xl justify-center">
         <Composer
           v-model:prompt="composerPrompt"

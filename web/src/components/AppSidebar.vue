@@ -115,6 +115,21 @@ function openThread(item: ResearchHistoryItem) {
   router.push({ name: "thread", params: { threadId: threadKey(item) } });
 }
 
+// Drag the right edge to resize the sidebar (persisted in the ui store).
+function startResize(e: MouseEvent) {
+  const startX = e.clientX;
+  const startW = ui.sidebarWidth;
+  const onMove = (ev: MouseEvent) => ui.setSidebarWidth(startW + (ev.clientX - startX));
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.userSelect = "";
+  };
+  document.body.style.userSelect = "none";
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 const currentThreadId = computed(() => (route.name === "thread" ? route.params.threadId : null));
 
 // Local directive: autofocus the rename input when it mounts.
@@ -143,11 +158,20 @@ const vFocus = {
     </div>
   </aside>
 
-  <!-- Expanded sidebar -->
+  <!-- Expanded sidebar (user-resizable) -->
   <aside
     v-else
-    class="flex h-full w-72 flex-col border-r border-bd bg-rail"
+    class="relative flex h-full flex-col border-r border-bd bg-rail"
+    :style="{ width: ui.sidebarWidth + 'px' }"
   >
+    <!-- Drag handle to resize the sidebar -->
+    <div
+      class="group absolute inset-y-0 right-0 z-20 hidden w-1.5 translate-x-1/2 cursor-col-resize lg:block"
+      @mousedown.prevent="startResize"
+    >
+      <div class="mx-auto h-full w-px bg-transparent transition group-hover:bg-accent/50" />
+    </div>
+
     <!-- Brand -->
     <div class="flex items-center justify-between px-4 pt-4 pb-3">
       <div class="flex items-center gap-2">
