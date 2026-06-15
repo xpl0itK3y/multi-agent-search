@@ -447,6 +447,7 @@ function stepLabel(step: string): string {
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
+const exportMenuOpen = ref(false);
 const siteMenuOpen = ref(false);
 const customAccent = ref("#c15f3c");
 const customBase = ref<"light" | "dark">("light");
@@ -611,46 +612,38 @@ async function exportApp() {
             <button class="mt-2 text-red-400 hover:underline" @click="revokeShare">{{ $t("share.revoke") }}</button>
           </div>
         </div>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('artifact.export')"
-          @click="exportReport('pdf')"
-        >
-          PDF
-        </button>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('artifact.export')"
-          @click="exportReport('docx')"
-        >
-          DOCX
-        </button>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('artifact.export')"
-          @click="exportReport('md')"
-        >
-          MD
-        </button>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('artifact.exportJson')"
-          @click="exportReport('json')"
-        >
-          JSON
-        </button>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="!!exporting"
-          :title="$t('audit.hint')"
-          @click="exportReport('trail')"
-        >
-          {{ $t("audit.trail") }}
-        </button>
+        <!-- All download formats live in one menu so nothing gets clipped on a narrow panel -->
+        <div class="relative">
+          <button
+            class="flex items-center gap-1 rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
+            :disabled="!!exporting"
+            :title="$t('artifact.export')"
+            @click="exportMenuOpen = !exportMenuOpen"
+          >
+            <span>⤓</span> {{ $t("artifact.export") }} {{ exporting ? "…" : "▾" }}
+          </button>
+          <div
+            v-if="exportMenuOpen"
+            class="absolute right-0 z-20 mt-1 w-48 rounded-lg border border-bd bg-surface p-1.5 text-sm shadow-lg"
+          >
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
+              <span>PDF</span><span class="text-[10px] text-muted">.pdf</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
+              <span>Word</span><span class="text-[10px] text-muted">.docx</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
+              <span>Markdown</span><span class="text-[10px] text-muted">.md</span>
+            </button>
+            <div class="my-1 border-t border-bd" />
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
+              <span>JSON</span><span class="text-[10px] text-muted">.json</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
+              <span>{{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
+            </button>
+          </div>
+        </div>
         <div class="relative">
           <button
             class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
@@ -1254,3 +1247,25 @@ async function exportApp() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.export-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  text-align: left;
+  color: rgb(var(--c-ink));
+  transition: background-color 0.15s;
+}
+.export-item:hover {
+  background: rgb(var(--c-surface-hover));
+}
+.export-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>
