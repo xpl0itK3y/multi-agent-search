@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import type { PlanItem } from "@/lib/types";
 
 const props = defineProps<{ prompt: string; items: PlanItem[]; busy?: boolean }>();
-const emit = defineEmits<{ approve: [PlanItem[]] }>();
+const emit = defineEmits<{ approve: [PlanItem[]]; cancel: [] }>();
 
 interface EditableRow {
   id: string;
@@ -86,7 +86,10 @@ function approve() {
       {{ $t("plan.add") }}
     </button>
 
-    <div class="mt-6 flex justify-end">
+    <div class="mt-6 flex items-center justify-between">
+      <button class="text-sm text-muted transition hover:text-red-400" :disabled="busy" @click="emit('cancel')">
+        {{ $t("research.cancel") }}
+      </button>
       <button
         class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
         :disabled="busy || !rows.length"

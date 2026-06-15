@@ -2,7 +2,7 @@
 import { ref, watch } from "vue";
 
 const props = defineProps<{ prompt: string; questions: string[]; busy?: boolean }>();
-const emit = defineEmits<{ submit: [string[]] }>();
+const emit = defineEmits<{ submit: [string[]]; cancel: [] }>();
 
 const answers = ref<string[]>([]);
 
@@ -45,18 +45,23 @@ function skip() {
       </div>
     </div>
 
-    <div class="mt-6 flex items-center justify-end gap-3">
-      <button class="text-sm text-muted hover:text-ink" :disabled="busy" @click="skip">
-        {{ $t("clarify.skip") }}
+    <div class="mt-6 flex items-center justify-between gap-3">
+      <button class="text-sm text-muted transition hover:text-red-400" :disabled="busy" @click="emit('cancel')">
+        {{ $t("research.cancel") }}
       </button>
-      <button
-        class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
-        :disabled="busy"
-        @click="submit"
-      >
-        <span v-if="busy">{{ $t("clarify.busy") }}</span>
-        <span v-else>{{ $t("clarify.continue") }}</span>
-      </button>
+      <div class="flex items-center gap-3">
+        <button class="text-sm text-muted hover:text-ink" :disabled="busy" @click="skip">
+          {{ $t("clarify.skip") }}
+        </button>
+        <button
+          class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
+          :disabled="busy"
+          @click="submit"
+        >
+          <span v-if="busy">{{ $t("clarify.busy") }}</span>
+          <span v-else>{{ $t("clarify.continue") }}</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>

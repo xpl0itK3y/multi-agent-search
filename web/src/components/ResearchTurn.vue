@@ -214,6 +214,7 @@ onBeforeUnmount(() => {
       :questions="clarification.questions"
       :busy="clarifyBusy"
       @submit="onSubmitClarify"
+      @cancel="onCancel"
     />
 
     <!-- editable plan -->
@@ -223,6 +224,7 @@ onBeforeUnmount(() => {
       :items="plan.items"
       :busy="planBusy"
       @approve="onApprove"
+      @cancel="onCancel"
     />
 
     <!-- result -->
