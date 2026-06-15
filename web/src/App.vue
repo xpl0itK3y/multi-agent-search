@@ -2,6 +2,7 @@
 import { onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
 
@@ -19,6 +20,9 @@ watch(() => route.fullPath, () => ui.closeMobile());
 </script>
 
 <template>
+  <!-- Site-styled confirm modal (replaces window.confirm), available app-wide -->
+  <ConfirmDialog />
+
   <!-- Login screen: no app shell -->
   <div v-if="route.name === 'login'" class="h-screen w-screen overflow-hidden bg-bg text-ink">
     <router-view />

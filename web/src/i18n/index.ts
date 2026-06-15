@@ -8,7 +8,7 @@ export const LOCALES: { value: Locale; label: string }[] = [
 ];
 
 const ru = {
-  common: { back: "← На главную", thinking: "Думаю…", loading: "Загрузка…" },
+  common: { back: "← На главную", thinking: "Думаю…", loading: "Загрузка…", cancel: "Отмена" },
   home: {
     morning: "Доброе утро",
     day: "Добрый день",
@@ -316,7 +316,7 @@ const ru = {
 };
 
 const en: typeof ru = {
-  common: { back: "← Home", thinking: "Thinking…", loading: "Loading…" },
+  common: { back: "← Home", thinking: "Thinking…", loading: "Loading…", cancel: "Cancel" },
   home: {
     morning: "Good morning",
     day: "Good afternoon",
@@ -624,7 +624,7 @@ const en: typeof ru = {
 };
 
 const es: typeof ru = {
-  common: { back: "← Inicio", thinking: "Pensando…", loading: "Cargando…" },
+  common: { back: "← Inicio", thinking: "Pensando…", loading: "Cargando…", cancel: "Cancelar" },
   home: {
     morning: "Buenos días",
     day: "Buenas tardes",

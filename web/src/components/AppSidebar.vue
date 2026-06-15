@@ -6,6 +6,7 @@ import type { ResearchHistoryItem } from "@/lib/types";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
+import { confirm } from "@/lib/confirm";
 import SparkLogo from "@/components/SparkLogo.vue";
 
 const ui = useUiStore();
@@ -77,7 +78,13 @@ async function commitRename(id: string) {
   }
 }
 async function onDelete(item: ResearchHistoryItem) {
-  if (!window.confirm(t("sidebar.confirmDelete"))) return;
+  const ok = await confirm({
+    message: t("sidebar.confirmDelete"),
+    confirmText: t("sidebar.delete"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await store.deleteResearch(item.id);
     if (currentThreadId.value === threadKey(item)) router.push("/");
