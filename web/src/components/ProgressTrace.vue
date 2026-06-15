@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
+export interface TraceSource {
+  domain: string;
+  title?: string;
+}
 export interface TraceEntry {
   step: string;
   detail: string;
+  sources?: TraceSource[];
 }
 
 defineProps<{ entries: TraceEntry[]; reasoning?: string; live?: boolean }>();
@@ -63,9 +68,27 @@ function label(step: string): string {
             class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
             :class="live && i === entries.length - 1 ? 'animate-pulse bg-accent' : 'bg-accentSoft'"
           />
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <div class="text-ink">{{ label(entry.step) }}</div>
             <div v-if="entry.detail" class="line-clamp-2 break-words text-muted">{{ entry.detail }}</div>
+            <!-- live research map: the actual sites the agent is looking at -->
+            <div v-if="entry.sources && entry.sources.length" class="mt-1.5 flex flex-wrap gap-1">
+              <span
+                v-for="(s, j) in entry.sources"
+                :key="j"
+                class="inline-flex max-w-[220px] items-center gap-1 rounded-md border border-bd bg-surface/60 px-1.5 py-0.5 text-[11px] text-muted"
+                :title="s.title || s.domain"
+              >
+                <img
+                  :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
+                  alt=""
+                  class="h-3 w-3 shrink-0 rounded-sm"
+                  loading="lazy"
+                  @error="($event.target as HTMLImageElement).style.display = 'none'"
+                />
+                <span class="truncate">{{ s.domain }}</span>
+              </span>
+            </div>
           </div>
         </li>
       </transition-group>

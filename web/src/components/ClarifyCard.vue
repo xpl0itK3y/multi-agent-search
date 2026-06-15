@@ -28,7 +28,7 @@ function skip() {
     <div class="mb-1 flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
       <span class="text-accent">✶</span> {{ $t("clarify.tag") }}
     </div>
-    <h1 v-if="prompt" class="mb-2 font-serif text-2xl leading-snug text-ink">{{ prompt }}</h1>
+    <h1 v-if="prompt" class="mb-2 line-clamp-3 font-serif text-2xl leading-snug text-ink" :title="prompt">{{ prompt }}</h1>
     <p class="mb-6 text-sm text-muted">
       {{ $t("clarify.subtitle") }}
     </p>

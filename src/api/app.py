@@ -395,6 +395,10 @@ def register_routes(app: FastAPI) -> None:
         if not deleted:
             raise HTTPException(status_code=404, detail="Research not found")
 
+    @app.post("/v1/research/{research_id}/cancel", response_model=ResearchRecord)
+    async def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+        return get_research_service(request).cancel_research(research_id, user_id=owner)
+
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
     async def rename_research(
         research_id: str, payload: ResearchRename, request: Request, owner: str | None = Depends(scope_user_id)
@@ -673,7 +677,11 @@ def register_routes(app: FastAPI) -> None:
                     trail = research.graph_trail or []
                     if len(trail) > last_trail_len:
                         for entry in trail[last_trail_len:]:
-                            yield sse("trace_step", {"step": entry.get("step"), "detail": entry.get("detail")})
+                            yield sse("trace_step", {
+                                "step": entry.get("step"),
+                                "detail": entry.get("detail"),
+                                "sources": entry.get("sources") or [],
+                            })
                         last_trail_len = len(trail)
 
                     reasoning = graph_state.get("partial_reasoning")
@@ -686,7 +694,7 @@ def register_routes(app: FastAPI) -> None:
                         last_report = report
                         yield sse("report", {"report": report, "final": bool(research.final_report)})
 
-                    if status in ("completed", "failed"):
+                    if status in ("completed", "failed", "cancelled"):
                         yield sse("done", {"status": status})
                         return
 

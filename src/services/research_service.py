@@ -565,6 +565,20 @@ class ResearchService:
             self._ensure_research_access(research_id, user_id)
         return self.task_store.delete_research(research_id)
 
+    _TERMINAL_STATUSES = {ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED}
+
+    def cancel_research(self, research_id: str, user_id: str | None = None) -> ResearchRecord:
+        """Mark a running research cancelled. Finalize/decompose bail out on a cancelled status,
+        so no report is produced; in-flight search jobs simply finish without being used."""
+        research = self._ensure_research_access(research_id, user_id) if user_id is not None else self.task_store.get_research(research_id)
+        if not research:
+            raise HTTPException(status_code=404, detail="Research not found")
+        if research.status in self._TERMINAL_STATUSES:
+            return research
+        updated = self.task_store.update_research_status(research_id, ResearchStatus.CANCELLED, "Cancelled by user.")
+        logger.info("research_cancelled research_id=%s", research_id)
+        return updated or research
+
     def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
         research = self._ensure_research_access(research_id, user_id)
         if not research:
@@ -2442,6 +2456,9 @@ class ResearchService:
             research = self.task_store.get_research(research_id)
             if not research:
                 raise HTTPException(status_code=404, detail="Research not found")
+            if research.status == ResearchStatus.CANCELLED:
+                logger.info("finalize_skipped_cancelled research_id=%s", research_id)
+                return  # user cancelled — don't spend the analysis call or overwrite the status
 
             tasks = self.task_store.get_tasks_by_research(research_id)
             analyzer = self.require_agent(self.analyzer, "Analyzer")

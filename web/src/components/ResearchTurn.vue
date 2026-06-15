@@ -30,8 +30,35 @@ const planBusy = ref(false);
 const clarification = ref<Clarification | null>(null);
 const clarifyBusy = ref(false);
 
-const DONE = new Set(["completed", "failed", "timeout"]);
+const DONE = new Set(["completed", "failed", "timeout", "cancelled"]);
 const queuePos = ref<number | null>(null);
+const cancelling = ref(false);
+const promptExpanded = ref(false);
+
+async function onCancel() {
+  cancelling.value = true;
+  try {
+    await api.cancelResearch(props.id);
+    status.value = "cancelled";
+    done.value = true;
+    emit("done", "cancelled");
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    cancelling.value = false;
+  }
+}
+
+let notified = false;
+function notifyDone(s: string) {
+  if (notified || s !== "completed" || typeof Notification === "undefined") return;
+  notified = true;
+  // Only notify if the tab isn't focused (the user stepped away).
+  if (typeof document !== "undefined" && document.visibilityState === "visible") return;
+  const fire = () => new Notification("Veris", { body: t("research.notifyReady"), icon: "/favicon.svg" });
+  if (Notification.permission === "granted") fire();
+  else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && fire());
+}
 let close: (() => void) | undefined;
 let queuePoll: number | undefined;
 
@@ -139,7 +166,7 @@ onMounted(async () => {
         emit("done", s); // ensure the thread learns of completion even without onDone
       }
     },
-    onTrace: (step, detail) => trace.value.push({ step, detail }),
+    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;
@@ -149,6 +176,7 @@ onMounted(async () => {
       status.value = s;
       done.value = true;
       emit("done", s);
+      notifyDone(s);
       if (s === "completed") {
         api.getStatus(props.id).then((st) => (usage.value = st.llm_token_usage ?? null)).catch(() => {});
       }
@@ -165,10 +193,17 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="space-y-3">
-    <!-- user prompt bubble -->
+    <!-- user prompt bubble (long prompts clamp to keep the thread readable) -->
     <div class="flex justify-end">
-      <div class="animate-rise max-w-[80%] whitespace-pre-wrap rounded-2xl bg-surface px-4 py-2.5 text-[15px] text-ink">
-        {{ prompt }}
+      <div class="animate-rise max-w-[80%] rounded-2xl bg-surface px-4 py-2.5 text-[15px] text-ink">
+        <div class="whitespace-pre-wrap" :class="{ 'line-clamp-5': !promptExpanded }">{{ prompt }}</div>
+        <button
+          v-if="prompt.length > 280"
+          class="mt-1 text-xs text-muted transition hover:text-ink"
+          @click="promptExpanded = !promptExpanded"
+        >
+          {{ promptExpanded ? $t("research.showLess") : $t("research.showMore") }}
+        </button>
       </div>
     </div>
 
@@ -198,10 +233,19 @@ onBeforeUnmount(() => {
           :class="{
             'bg-emerald-400': status === 'completed',
             'bg-red-400': status === 'failed' || status === 'timeout',
+            'bg-muted': status === 'cancelled',
             'bg-accent animate-pulse': !DONE.has(status),
           }"
         />
         <span class="text-sm text-muted">{{ statusLabel(status) }}<template v-if="status === 'queued' && queuePos"> · #{{ queuePos }}</template></span>
+        <button
+          v-if="!DONE.has(status)"
+          class="rounded-md border border-bd px-2 py-0.5 text-xs text-muted transition hover:border-red-400/50 hover:text-red-400 disabled:opacity-50"
+          :disabled="cancelling"
+          @click="onCancel"
+        >
+          {{ cancelling ? $t("research.cancelling") : $t("research.cancel") }}
+        </button>
         <span v-if="costLabel" class="ml-auto text-xs text-muted" :title="$t('research.costTitle')">{{ costLabel }}</span>
       </div>
 

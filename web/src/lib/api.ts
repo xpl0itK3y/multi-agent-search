@@ -224,6 +224,9 @@ export const api = {
   deleteResearch: (id: string) =>
     request<void>(`/v1/research/${id}`, { method: "DELETE" }),
 
+  cancelResearch: (id: string) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/cancel`, { method: "POST" }),
+
   renameResearch: (id: string, title: string) =>
     request<{ id: string }>(`/v1/research/${id}`, {
       method: "PATCH",

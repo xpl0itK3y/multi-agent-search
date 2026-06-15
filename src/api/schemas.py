@@ -22,6 +22,7 @@ class ResearchStatus(str, Enum):
     ANALYZING = "analyzing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class FinalizeJobStatus(str, Enum):

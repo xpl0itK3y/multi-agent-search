@@ -305,14 +305,36 @@ class SearchAgent:
                 logger.warning("search_cache_put_failed error=%s", exc)
         return results
 
-    def _emit_progress(self, research_id: str | None, detail: str) -> None:
-        """Append a live search-progress step to the research trail (streamed via SSE)."""
+    def _emit_progress(self, research_id: str | None, detail: str, sources: list[dict] | None = None) -> None:
+        """Append a live search-progress step to the research trail (streamed via SSE).
+
+        ``sources`` (optional): the sites found for this step ({domain, title}) so the UI can
+        show the live "research map" of what the agent is actually looking at.
+        """
         if not research_id or not hasattr(self.task_store, "append_research_graph_event"):
             return
         try:
-            self.task_store.append_research_graph_event(research_id, {"step": "search", "detail": detail})
+            event = {"step": "search", "detail": detail}
+            if sources:
+                event["sources"] = sources[:6]
+            self.task_store.append_research_graph_event(research_id, event)
         except Exception:  # progress events must never break a search
             pass
+
+    @staticmethod
+    def _result_previews(results: list[dict]) -> list[dict]:
+        """Top {domain, title} previews of search results for the live progress map."""
+        previews: list[dict] = []
+        seen: set[str] = set()
+        for res in results:
+            domain = urlparse(res.get("url") or "").netloc.lower().removeprefix("www.")
+            if not domain or domain in seen:
+                continue
+            seen.add(domain)
+            previews.append({"domain": domain, "title": (res.get("title") or "")[:90]})
+            if len(previews) >= 6:
+                break
+        return previews
 
     def run_task(self, task_id: str):
         """
@@ -341,7 +363,11 @@ class SearchAgent:
             for query in task.queries:
                 self.task_store.update_task(task_id, TaskUpdate(log=f"Searching for: {query}"))
                 search_results = self._search_with_cache(query)
-                self._emit_progress(research_id, f"🔍 {query} — {len(search_results)}")
+                self._emit_progress(
+                    research_id,
+                    f"🔍 {query} — {len(search_results)}",
+                    sources=self._result_previews(search_results),
+                )
 
                 for res in search_results:
                     url = res.get("url")
