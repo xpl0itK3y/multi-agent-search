@@ -1,3 +1,5 @@
+# Top-level dependencies (human-maintained). Builds install the fully pinned
+# requirements.lock instead — see that file to regenerate after editing here.
 openai
 langgraph
 langsmith
