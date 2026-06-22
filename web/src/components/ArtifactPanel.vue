@@ -644,7 +644,7 @@ async function exportApp() {
         </button>
         <div
           v-if="exportMenuOpen"
-          class="absolute left-0 z-30 mt-1 w-60 rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
+          class="absolute left-0 z-30 mt-1 max-h-[55vh] w-60 overflow-y-auto overscroll-contain rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
         >
           <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.docGroup") }}</div>
           <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
