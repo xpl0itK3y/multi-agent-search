@@ -142,37 +142,37 @@ def register_routes(app: FastAPI) -> None:
     auth_rate_limit = [Depends(enforce_auth_rate_limit)]  # per-IP throttle (no-op when auth disabled)
 
     @app.get("/health")
-    async def health_check(request: Request):
+    def health_check(request: Request):
         return get_research_service(request).get_health_status()
 
     @app.post("/v1/auth/register", response_model=AuthSession, dependencies=auth_rate_limit)
-    async def register(payload: RegisterRequest, response: Response, request: Request):
+    def register(payload: RegisterRequest, response: Response, request: Request):
         user = get_research_service(request).register_user(payload.email, payload.password)
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
     @app.post("/v1/auth/login", response_model=AuthSession, dependencies=auth_rate_limit)
-    async def login(payload: LoginRequest, response: Response, request: Request):
+    def login(payload: LoginRequest, response: Response, request: Request):
         user = get_research_service(request).authenticate_user(payload.email, payload.password)
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
     @app.post("/v1/auth/logout")
-    async def logout(response: Response):
+    def logout(response: Response):
         response.delete_cookie(settings.auth_cookie_name, path="/")
         return {"status": "ok"}
 
     @app.get("/v1/auth/me", response_model=AuthUser)
-    async def me(user: AuthUser = Depends(get_current_user)):
+    def me(user: AuthUser = Depends(get_current_user)):
         return user
 
     @app.get("/v1/auth/config")
-    async def auth_config():
+    def auth_config():
         """Which auth options the SPA should offer (e.g. show the Google button)."""
         return {"google_oauth": settings.oauth_enabled}
 
     @app.get("/v1/auth/google/login")
-    async def google_login():
+    def google_login():
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         # Stateless CSRF state: a short-lived signed token carried in the URL. Avoids a
@@ -182,7 +182,7 @@ def register_routes(app: FastAPI) -> None:
         return RedirectResponse(build_authorization_url(state), status_code=302)
 
     @app.get("/v1/auth/google/callback")
-    async def google_callback(request: Request, code: str = "", state: str = ""):
+    def google_callback(request: Request, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         if not code or decode_token(state) is None:
@@ -205,23 +205,23 @@ def register_routes(app: FastAPI) -> None:
         return redirect
 
     @app.post("/v1/auth/set-password")
-    async def set_password(
+    def set_password(
         payload: SetPasswordRequest, request: Request, user: AuthUser = Depends(get_current_user)
     ):
         get_research_service(request).set_user_password(user.id, payload.password)
         return {"status": "ok"}
 
     @app.get("/metrics")
-    async def metrics_endpoint():
+    def metrics_endpoint():
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 
     @app.get("/health/queues", response_model=QueueMetrics, dependencies=auth_required)
-    async def queue_health(request: Request):
+    def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
 
     @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse, dependencies=admin_guard)
-    async def run_queue_maintenance(request: Request):
+    def run_queue_maintenance(request: Request):
         return get_research_service(request).run_queue_maintenance()
 
     @app.post(
@@ -229,7 +229,7 @@ def register_routes(app: FastAPI) -> None:
         response_model=OperationalHealth.RecommendationEntry,
         dependencies=admin_guard,
     )
-    async def acknowledge_operational_recommendation(code: str, request: Request):
+    def acknowledge_operational_recommendation(code: str, request: Request):
         return get_research_service(request).acknowledge_operational_recommendation(code)
 
     @app.post(
@@ -237,7 +237,7 @@ def register_routes(app: FastAPI) -> None:
         response_model=OperationalHealth.RecommendationEntry,
         dependencies=admin_guard,
     )
-    async def resolve_operational_recommendation(
+    def resolve_operational_recommendation(
         code: str,
         payload: OperationalRecommendationResolveRequest,
         request: Request,
@@ -245,18 +245,18 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).resolve_operational_recommendation(code, payload.note)
 
     @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=auth_required)
-    async def worker_health(worker_name: str, request: Request):
+    def worker_health(worker_name: str, request: Request):
         heartbeat = get_research_service(request).get_worker_heartbeat(worker_name)
         if not heartbeat:
             raise HTTPException(status_code=404, detail="Worker heartbeat not found")
         return heartbeat
 
     @app.get("/v1/models")
-    async def list_models():
+    def list_models():
         return list_model_catalog()
 
     @app.post("/v1/optimize", response_model=OptimizeResponse, dependencies=auth_required)
-    async def optimize_prompt(request: Request, payload: OptimizeRequest):
+    def optimize_prompt(request: Request, payload: OptimizeRequest):
         try:
             optimized = get_research_service(request).optimize_prompt(payload.prompt)
             return OptimizeResponse(optimized_prompt=optimized)
@@ -266,7 +266,7 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/v1/decompose", response_model=DecomposeResponse, dependencies=auth_required)
-    async def decompose_prompt(request: Request, payload: DecomposeRequest):
+    def decompose_prompt(request: Request, payload: DecomposeRequest):
         try:
             return get_research_service(request).decompose_prompt(
                 payload.prompt,
@@ -278,43 +278,43 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=auth_required)
-    async def list_tasks(request: Request):
+    def list_tasks(request: Request):
         return get_research_service(request).list_tasks()
 
     @app.get("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
-    async def get_task(task_id: str, request: Request):
+    def get_task(task_id: str, request: Request):
         task = get_research_service(request).get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
     @app.get("/v1/tasks/{task_id}/summary", response_model=SearchTaskSummary, dependencies=auth_required)
-    async def get_task_summary(task_id: str, request: Request):
+    def get_task_summary(task_id: str, request: Request):
         return get_research_service(request).get_task_summary(task_id)
 
     @app.patch("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
-    async def update_task(task_id: str, update: TaskUpdate, request: Request):
+    def update_task(task_id: str, update: TaskUpdate, request: Request):
         task = get_research_service(request).update_task(task_id, update)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
     @app.get("/v1/tasks/{task_id}/search-job", response_model=SearchTaskJob, dependencies=auth_required)
-    async def get_latest_search_job(task_id: str, request: Request):
+    def get_latest_search_job(task_id: str, request: Request):
         job = get_research_service(request).get_latest_search_task_job(task_id)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
     @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob, dependencies=auth_required)
-    async def get_search_job(job_id: str, request: Request):
+    def get_search_job(job_id: str, request: Request):
         job = get_research_service(request).get_search_task_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
     @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=auth_required)
-    async def list_search_jobs(status: str, request: Request):
+    def list_search_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
             return service.list_running_search_task_jobs()
@@ -323,27 +323,27 @@ def register_routes(app: FastAPI) -> None:
         raise HTTPException(status_code=422, detail="Unsupported search job status filter")
 
     @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob, dependencies=admin_guard)
-    async def requeue_search_job(job_id: str, request: Request):
+    def requeue_search_job(job_id: str, request: Request):
         return get_research_service(request).requeue_search_task_job(job_id)
 
     @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    async def recover_stale_search_jobs(request: Request):
+    def recover_stale_search_jobs(request: Request):
         return get_research_service(request).recover_stale_search_task_jobs()
 
     @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    async def cleanup_search_jobs(request: Request):
+    def cleanup_search_jobs(request: Request):
         return get_research_service(request).cleanup_old_search_task_jobs()
 
     @app.get("/v1/research", response_model=List[ResearchHistoryItem])
-    async def list_researches(request: Request, limit: int = 20, owner: str | None = Depends(scope_user_id)):
+    def list_researches(request: Request, limit: int = 20, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).list_researches(limit=limit, user_id=owner)
 
     @app.get("/v1/threads/{thread_id}", response_model=List[ResearchHistoryItem])
-    async def list_thread(thread_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+    def list_thread(thread_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).list_thread(thread_id, user_id=owner)
 
     @app.post("/v1/research", response_model=ResearchResponse)
-    async def start_research(
+    def start_research(
         request: Request,
         payload: ResearchRequest,
         background_tasks: BackgroundTasks,
@@ -361,7 +361,7 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob], dependencies=auth_required)
-    async def list_finalize_jobs(status: str, request: Request):
+    def list_finalize_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
             return service.list_running_research_finalize_jobs()
@@ -370,66 +370,66 @@ def register_routes(app: FastAPI) -> None:
         raise HTTPException(status_code=422, detail="Unsupported finalize job status filter")
 
     @app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob, dependencies=auth_required)
-    async def get_finalize_job(job_id: str, request: Request):
+    def get_finalize_job(job_id: str, request: Request):
         job = get_research_service(request).get_research_finalize_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job
 
     @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob, dependencies=research_guard)
-    async def get_latest_finalize_job(research_id: str, request: Request):
+    def get_latest_finalize_job(research_id: str, request: Request):
         job = get_research_service(request).get_latest_research_finalize_job(research_id)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job
 
     @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob, dependencies=admin_guard)
-    async def requeue_finalize_job(job_id: str, request: Request):
+    def requeue_finalize_job(job_id: str, request: Request):
         return get_research_service(request).requeue_research_finalize_job(job_id)
 
     @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    async def recover_stale_finalize_jobs(request: Request):
+    def recover_stale_finalize_jobs(request: Request):
         return get_research_service(request).recover_stale_research_finalize_jobs()
 
     @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    async def cleanup_finalize_jobs(request: Request):
+    def cleanup_finalize_jobs(request: Request):
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 
     @app.delete("/v1/research/{research_id}", status_code=204)
-    async def delete_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+    def delete_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         deleted = get_research_service(request).delete_research(research_id, user_id=owner)
         if not deleted:
             raise HTTPException(status_code=404, detail="Research not found")
 
     @app.post("/v1/research/{research_id}/cancel", response_model=ResearchRecord)
-    async def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+    def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).cancel_research(research_id, user_id=owner)
 
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
-    async def rename_research(
+    def rename_research(
         research_id: str, payload: ResearchRename, request: Request, owner: str | None = Depends(scope_user_id)
     ):
         return get_research_service(request).rename_research(research_id, payload.title, user_id=owner)
 
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord, dependencies=research_guard)
-    async def get_research_status(research_id: str, request: Request):
+    def get_research_status(research_id: str, request: Request):
         return get_research_service(request).get_research_status(research_id)
 
     @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary, dependencies=research_guard)
-    async def get_research_summary(research_id: str, request: Request):
+    def get_research_summary(research_id: str, request: Request):
         return get_research_service(request).get_research_summary(research_id)
 
     @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary, dependencies=research_guard)
-    async def get_research_status_summary(research_id: str, request: Request):
+    def get_research_status_summary(research_id: str, request: Request):
         # Cheap polling endpoint: no heavy analysis/LLM (unlike /summary).
         return get_research_service(request).get_research_status_summary(research_id)
 
     @app.get("/v1/research/{research_id}/report", response_model=ResearchReportResponse, dependencies=research_guard)
-    async def get_research_report(research_id: str, request: Request):
+    def get_research_report(research_id: str, request: Request):
         return get_research_service(request).get_research_report(research_id)
 
     @app.get("/v1/research/{research_id}/sources", response_model=List[SearchSourcePreview], dependencies=research_guard)
-    async def get_research_sources(research_id: str, request: Request):
+    def get_research_sources(research_id: str, request: Request):
         return get_research_service(request).get_research_sources(research_id)
 
     @app.get("/v1/research/{research_id}/export", dependencies=research_guard)
@@ -446,93 +446,93 @@ def register_routes(app: FastAPI) -> None:
         return Response(content=data, media_type=media_type, headers={"Content-Disposition": disposition})
 
     @app.get("/v1/research/{research_id}/conflicts", response_model=List[ResearchConflict], dependencies=research_guard)
-    async def get_research_conflicts(research_id: str, request: Request):
+    def get_research_conflicts(research_id: str, request: Request):
         return get_research_service(request).get_research_conflicts(research_id)
 
     @app.get("/v1/research/{research_id}/verification", response_model=VerificationReport, dependencies=research_guard)
-    async def get_research_verification(research_id: str, request: Request):
+    def get_research_verification(research_id: str, request: Request):
         return get_research_service(request).get_research_verification(research_id)
 
     @app.get("/v1/research/{research_id}/red-team", response_model=RedTeamReport, dependencies=research_guard)
-    async def get_research_red_team(research_id: str, request: Request):
+    def get_research_red_team(research_id: str, request: Request):
         return get_research_service(request).get_research_red_team(research_id)
 
     @app.get("/v1/research/{research_id}/citations", response_model=CitationAudit, dependencies=research_guard)
-    async def get_research_citations(research_id: str, request: Request):
+    def get_research_citations(research_id: str, request: Request):
         return get_research_service(request).get_research_citation_audit(research_id)
 
     @app.get("/v1/research/{research_id}/source-independence", response_model=SourceIndependence, dependencies=research_guard)
-    async def get_research_source_independence(research_id: str, request: Request):
+    def get_research_source_independence(research_id: str, request: Request):
         return get_research_service(request).get_research_source_independence(research_id)
 
     @app.get("/v1/research/{research_id}/source-reputation", response_model=SourceReputation, dependencies=research_guard)
-    async def get_research_source_reputation(research_id: str, request: Request):
+    def get_research_source_reputation(research_id: str, request: Request):
         return get_research_service(request).get_research_source_reputation(research_id)
 
     @app.get("/v1/research/{research_id}/source-integrity", response_model=SourceIntegrity, dependencies=research_guard)
-    async def get_research_source_integrity(research_id: str, request: Request):
+    def get_research_source_integrity(research_id: str, request: Request):
         return get_research_service(request).get_research_source_integrity(research_id)
 
     @app.get("/v1/research/{research_id}/cross-language", response_model=CrossLanguageReport, dependencies=research_guard)
-    async def get_research_cross_language(research_id: str, request: Request):
+    def get_research_cross_language(research_id: str, request: Request):
         return get_research_service(request).get_research_cross_language(research_id)
 
     @app.get("/v1/research/{research_id}/stance", response_model=StanceBalance, dependencies=research_guard)
-    async def get_research_stance(research_id: str, request: Request):
+    def get_research_stance(research_id: str, request: Request):
         return get_research_service(request).get_research_stance(research_id)
 
     @app.get("/v1/research/{research_id}/confidence", response_model=ConfidenceReport, dependencies=research_guard)
-    async def get_research_confidence(research_id: str, request: Request):
+    def get_research_confidence(research_id: str, request: Request):
         return get_research_service(request).get_research_confidence(research_id)
 
     @app.get("/v1/research/{research_id}/numeric-check", response_model=NumericCheck, dependencies=research_guard)
-    async def get_research_numeric_check(research_id: str, request: Request):
+    def get_research_numeric_check(research_id: str, request: Request):
         return get_research_service(request).get_research_numeric_check(research_id)
 
     @app.get("/v1/research/{research_id}/audit-trail", response_model=AuditTrail, dependencies=research_guard)
-    async def get_research_audit_trail(research_id: str, request: Request):
+    def get_research_audit_trail(research_id: str, request: Request):
         return get_research_service(request).get_research_audit_trail(research_id)
 
     @app.get("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
-    async def get_research_share(research_id: str, request: Request):
+    def get_research_share(research_id: str, request: Request):
         return get_research_service(request).get_share_info(research_id)
 
     @app.post("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
-    async def create_research_share(research_id: str, request: Request):
+    def create_research_share(research_id: str, request: Request):
         return get_research_service(request).create_share_link(research_id)
 
     @app.delete("/v1/research/{research_id}/share", response_model=ShareInfo, dependencies=research_guard)
-    async def revoke_research_share(research_id: str, request: Request):
+    def revoke_research_share(research_id: str, request: Request):
         return get_research_service(request).revoke_share_link(research_id)
 
     # PUBLIC — deliberately NO auth and NO research_guard. Security rests on the unguessable
     # token and the strict field whitelist in get_public_report; only shared researches resolve.
     @app.get("/v1/public/research/{token}", response_model=PublicReport)
-    async def get_public_research(token: str, request: Request):
+    def get_public_research(token: str, request: Request):
         return get_research_service(request).get_public_report(token)
 
     @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
-    async def get_research_diff(research_id: str, request: Request):
+    def get_research_diff(research_id: str, request: Request):
         return get_research_service(request).get_research_diff(research_id)
 
     @app.get("/v1/research/{research_id}/comparison", response_model=ComparisonTable, dependencies=research_guard)
-    async def get_research_comparison(research_id: str, request: Request):
+    def get_research_comparison(research_id: str, request: Request):
         return get_research_service(request).get_research_comparison(research_id)
 
     @app.get("/v1/research/{research_id}/watch", response_model=ResearchWatch, dependencies=research_guard)
-    async def get_research_watch(research_id: str, request: Request):
+    def get_research_watch(research_id: str, request: Request):
         return get_research_service(request).get_research_watch(research_id)
 
     @app.put("/v1/research/{research_id}/watch", response_model=ResearchWatch, dependencies=research_guard)
-    async def set_research_watch(research_id: str, body: WatchRequest, request: Request):
+    def set_research_watch(research_id: str, body: WatchRequest, request: Request):
         return get_research_service(request).set_research_watch(research_id, body.enabled, body.interval_seconds)
 
     @app.post("/v1/research/{research_id}/watch/ack", response_model=ResearchWatch, dependencies=research_guard)
-    async def acknowledge_research_watch(research_id: str, request: Request):
+    def acknowledge_research_watch(research_id: str, request: Request):
         return get_research_service(request).acknowledge_research_watch(research_id)
 
     @app.post("/v1/research/{research_id}/refresh", response_model=ResearchResponse, dependencies=research_guard)
-    async def refresh_research(
+    def refresh_research(
         research_id: str,
         request: Request,
         background_tasks: BackgroundTasks,
@@ -544,27 +544,27 @@ def register_routes(app: FastAPI) -> None:
         return response
 
     @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
-    async def get_research_clarifications(research_id: str, request: Request):
+    def get_research_clarifications(research_id: str, request: Request):
         return get_research_service(request).get_research_clarifications(research_id)
 
     @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord, dependencies=research_guard)
-    async def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
+    def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
         return get_research_service(request).submit_clarifications(research_id, payload.answers)
 
     @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
-    async def get_research_plan(research_id: str, request: Request):
+    def get_research_plan(research_id: str, request: Request):
         return get_research_service(request).get_research_plan(research_id)
 
     @app.put("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
-    async def update_research_plan(research_id: str, payload: ResearchPlanUpdate, request: Request):
+    def update_research_plan(research_id: str, payload: ResearchPlanUpdate, request: Request):
         return get_research_service(request).update_research_plan(research_id, payload)
 
     @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord, dependencies=research_guard)
-    async def approve_research_plan(research_id: str, request: Request):
+    def approve_research_plan(research_id: str, request: Request):
         return get_research_service(request).approve_research_plan(research_id)
 
     @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage], dependencies=research_guard)
-    async def list_research_messages(research_id: str, request: Request):
+    def list_research_messages(research_id: str, request: Request):
         return get_research_service(request).list_research_messages(research_id)
 
     @app.post("/v1/research/{research_id}/messages", response_model=ChatMessage, dependencies=research_guard)
@@ -632,7 +632,7 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse, dependencies=research_guard)
-    async def get_research_graph(research_id: str, request: Request):
+    def get_research_graph(research_id: str, request: Request):
         return get_research_service(request).get_research_graph(research_id)
 
     @app.get("/v1/research/{research_id}/events", dependencies=research_guard)
@@ -726,7 +726,7 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse, dependencies=research_guard)
-    async def finalize_research(research_id: str, request: Request):
+    def finalize_research(research_id: str, request: Request):
         research, job = get_research_service(request).enqueue_research_finalization(research_id)
         return ResearchFinalizeResponse(
             research=research,
