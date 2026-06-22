@@ -175,17 +175,23 @@ def register_routes(app: FastAPI) -> None:
     def google_login():
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
-        # Stateless CSRF state: a short-lived signed token carried in the URL. Avoids a
-        # cookie round-trip, which is fragile across the cross-site Google redirect
-        # (SameSite / localhost-vs-127.0.0.1 issues).
+        # CSRF state bound to the browser: a short-lived signed token carried in BOTH the URL
+        # and an httpOnly SameSite=Lax cookie. The callback requires them to match, so a state
+        # minted for one browser can't be used to complete a login in another (login-CSRF).
         state = create_token(secrets.token_urlsafe(8), ttl_seconds=600)
-        return RedirectResponse(build_authorization_url(state), status_code=302)
+        redirect = RedirectResponse(build_authorization_url(state), status_code=302)
+        redirect.set_cookie(
+            "oauth_state", state, max_age=600, httponly=True,
+            secure=settings.auth_cookie_secure, samesite="lax", path="/",
+        )
+        return redirect
 
     @app.get("/v1/auth/google/callback")
     def google_callback(request: Request, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
-        if not code or decode_token(state) is None:
+        cookie_state = request.cookies.get("oauth_state")
+        if not code or decode_token(state) is None or not cookie_state or cookie_state != state:
             raise HTTPException(status_code=400, detail="Invalid OAuth state")
         try:
             userinfo = fetch_userinfo(code)
@@ -201,6 +207,7 @@ def register_routes(app: FastAPI) -> None:
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
+        redirect.delete_cookie("oauth_state", path="/")
         _issue_session(redirect, user)  # sets the JWT session cookie
         return redirect
 
