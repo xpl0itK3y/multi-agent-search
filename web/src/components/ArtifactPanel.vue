@@ -463,8 +463,6 @@ const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
 const exportMenuOpen = ref(false);
 const siteMenuOpen = ref(false);
-const customAccent = ref("#c15f3c");
-const customBase = ref<"light" | "dark">("light");
 const siteThemes = [
   "auto", "light", "dark", "editorial", "sepia", "mono", "rose",
   "lavender", "ocean", "slate", "midnight", "emerald", "forest", "sunset",
@@ -654,20 +652,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               @click="exportReport('html', { theme: th }); exportMenuOpen = false"
             >
               {{ $t("site." + th) }}
-            </button>
-          </div>
-          <div class="flex items-center gap-1.5 px-1.5 pb-1">
-            <input v-model="customAccent" type="color" class="h-7 w-8 shrink-0 cursor-pointer rounded border border-bd bg-transparent" :title="$t('site.custom')" />
-            <select v-model="customBase" class="min-w-0 flex-1 rounded border border-bd bg-bg px-1 py-1 text-xs text-ink">
-              <option value="light">{{ $t("site.light") }}</option>
-              <option value="dark">{{ $t("site.dark") }}</option>
-            </select>
-            <button
-              class="shrink-0 rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
-              :disabled="!!exporting"
-              @click="exportReport('html', { theme: 'custom', accent: customAccent, base: customBase }); exportMenuOpen = false"
-            >
-              {{ $t("site.download") }}
             </button>
           </div>
         </div>
