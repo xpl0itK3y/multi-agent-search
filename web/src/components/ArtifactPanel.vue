@@ -644,26 +644,30 @@ async function exportApp() {
         </button>
         <div
           v-if="exportMenuOpen"
-          class="absolute left-0 z-30 mt-1 max-h-[55vh] w-60 overflow-y-auto overscroll-contain rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
+          class="absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] overflow-y-auto overscroll-contain rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
         >
           <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.docGroup") }}</div>
-          <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
-            <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
-          </button>
-          <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
-            <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
-          </button>
-          <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
-            <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
-          </button>
+          <div class="grid grid-cols-2 gap-1">
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
+              <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
+              <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
+              <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
+            </button>
+          </div>
 
           <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.dataGroup") }}</div>
-          <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
-            <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
-          </button>
-          <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
-            <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
-          </button>
+          <div class="grid grid-cols-2 gap-1">
+            <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
+              <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
+            </button>
+            <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
+              <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
+            </button>
+          </div>
 
           <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.webGroup") }}</div>
           <div class="flex flex-wrap gap-1 px-1.5 pb-1">
