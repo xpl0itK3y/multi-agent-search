@@ -350,9 +350,7 @@ class ContentExtractor:
         config.read_dict({"DEFAULT": dict(trafilatura.settings.DEFAULT_CONFIG.defaults())})
         config["DEFAULT"]["DOWNLOAD_TIMEOUT"] = str(settings.search_extraction_timeout_seconds)
         config["DEFAULT"]["EXTRACTION_TIMEOUT"] = str(settings.search_extraction_timeout_seconds)
-        # SSRF: never follow redirects past the validated URL — a 30x can point at an
-        # internal/metadata target that bypasses the is_safe_public_url() check.
-        config["DEFAULT"]["MAX_REDIRECTS"] = "0"
+        config["DEFAULT"]["MAX_REDIRECTS"] = str(settings.search_extraction_max_redirects)
         return config
 
     @staticmethod
@@ -365,7 +363,7 @@ class ContentExtractor:
             logger.info("content_extraction_skipped url=%s reason=%s", url, skip_reason)
             return None
 
-        from src.net_safety import is_safe_public_url
+        from src.net_safety import is_safe_public_url, safe_fetch_html
 
         ok, reason = is_safe_public_url(url)
         if not ok:
@@ -382,7 +380,13 @@ class ContentExtractor:
         config = ContentExtractor._build_trafilatura_config()
         try:
             download_start = time.perf_counter()
-            downloaded = trafilatura.fetch_url(url, config=config)
+            # SSRF-guarded fetch: validates every redirect hop (replaces trafilatura.fetch_url,
+            # which would follow redirects without re-checking the target). See net_safety.
+            downloaded = safe_fetch_html(
+                url,
+                timeout=settings.search_extraction_timeout_seconds,
+                max_redirects=settings.search_extraction_max_redirects,
+            )
             download_ms = (time.perf_counter() - download_start) * 1000
             downloaded_size = len(downloaded or "")
             if downloaded:

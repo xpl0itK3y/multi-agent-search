@@ -3,7 +3,8 @@ from src.providers.search import ContentExtractor, get_extraction_metrics_snapsh
 
 def test_content_extractor_logs_stage_metrics_on_success(mocker):
     reset_extraction_metrics()
-    mocker.patch("src.providers.search.trafilatura.fetch_url", return_value="<html>body</html>")
+    mocker.patch("src.net_safety.is_safe_public_url", return_value=(True, "ok"))
+    mocker.patch("src.net_safety.safe_fetch_html", return_value="<html>body</html>")
     mocker.patch("src.providers.search.trafilatura.extract", return_value="Useful content\nUseful content")
     info_mock = mocker.patch("src.providers.search.logger.info")
 
@@ -23,7 +24,8 @@ def test_content_extractor_logs_stage_metrics_on_success(mocker):
 
 def test_content_extractor_logs_failure_metrics_on_exception(mocker):
     reset_extraction_metrics()
-    mocker.patch("src.providers.search.trafilatura.fetch_url", side_effect=RuntimeError("boom"))
+    mocker.patch("src.net_safety.is_safe_public_url", return_value=(True, "ok"))
+    mocker.patch("src.net_safety.safe_fetch_html", side_effect=RuntimeError("boom"))
     error_mock = mocker.patch("src.providers.search.logger.error")
 
     result = ContentExtractor.extract_content("https://example.com/article")
