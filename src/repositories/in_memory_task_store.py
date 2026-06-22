@@ -44,6 +44,12 @@ class InMemoryTaskStore:
     def put_cached_search(self, cache_key: str, payload: list[dict]) -> None:
         self.search_cache[cache_key] = (datetime.now(timezone.utc), [dict(item) for item in payload])
 
+    def cleanup_search_cache(self, older_than: datetime) -> int:
+        stale = [key for key, (created, _) in self.search_cache.items() if created < older_than]
+        for key in stale:
+            del self.search_cache[key]
+        return len(stale)
+
     def add_research(
         self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
     ) -> ResearchRecord:
@@ -661,8 +667,8 @@ class InMemoryTaskStore:
     def get_task(self, task_id: str) -> SearchTask | None:
         return self.tasks.get(task_id)
 
-    def get_all_tasks(self) -> list[SearchTask]:
-        return list(self.tasks.values())
+    def get_all_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
+        return list(self.tasks.values())[offset : offset + limit]
 
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]:
         return [task for task in self.tasks.values() if task.research_id == research_id]

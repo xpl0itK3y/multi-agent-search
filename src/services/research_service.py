@@ -247,8 +247,8 @@ class ResearchService:
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
         return optimizer.run(prompt)
 
-    def list_tasks(self) -> list[SearchTask]:
-        return self.task_store.get_all_tasks()
+    def list_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
+        return self.task_store.get_all_tasks(limit=limit, offset=offset)
 
     def get_task(self, task_id: str) -> SearchTask | None:
         return self.task_store.get_task(task_id)
@@ -2780,6 +2780,13 @@ class ResearchService:
             )
         return compacted_worker_names, compacted_research_ids
 
+    def cleanup_search_cache(self) -> int:
+        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.search_cache_ttl_seconds)
+        deleted = self.task_store.cleanup_search_cache(older_than)
+        if deleted:
+            logger.info("search_cache_cleaned deleted_count=%s", deleted)
+        return deleted
+
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         self.recover_pending_decompositions()
         self.run_due_watches()
@@ -2787,6 +2794,7 @@ class ResearchService:
         finalize_recovery = self.recover_stale_research_finalize_jobs()
         search_cleanup = self.cleanup_old_search_task_jobs()
         finalize_cleanup = self.cleanup_old_research_finalize_jobs()
+        self.cleanup_search_cache()
         compacted_worker_names, compacted_research_ids = self.compact_graph_operational_data()
 
         recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count

@@ -799,6 +799,13 @@ class SQLAlchemyTaskStore:
             )
             return job_ids
 
+    def cleanup_search_cache(self, older_than: datetime) -> int:
+        with self.session_scope() as session:
+            result = session.execute(
+                delete(SearchCacheORM).where(SearchCacheORM.created_at < older_than)
+            )
+            return result.rowcount or 0
+
     def upsert_worker_heartbeat(
         self,
         worker_name: str,
@@ -917,9 +924,15 @@ class SQLAlchemyTaskStore:
                 return None
             return search_task_orm_to_schema(task)
 
-    def get_all_tasks(self) -> list[SearchTask]:
+    def get_all_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
         with self.session_scope() as session:
-            statement = select(SearchTaskORM).options(selectinload(SearchTaskORM.results))
+            statement = (
+                select(SearchTaskORM)
+                .options(selectinload(SearchTaskORM.results))
+                .order_by(SearchTaskORM.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             tasks = session.execute(statement).scalars().all()
             return [search_task_orm_to_schema(task) for task in tasks]
 

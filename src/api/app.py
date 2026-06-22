@@ -6,7 +6,7 @@ import time
 from typing import List
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from src.api.dependencies import (
@@ -132,6 +132,15 @@ def create_app() -> FastAPI:
             time.perf_counter() - started_at,
         )
         response.headers["X-Request-ID"] = request_id
+        # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
+        # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if settings.auth_cookie_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         return response
 
     @app.middleware("http")
@@ -322,8 +331,8 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=auth_required)
-    def list_tasks(request: Request):
-        return get_research_service(request).list_tasks()
+    def list_tasks(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+        return get_research_service(request).list_tasks(limit=limit, offset=offset)
 
     @app.get("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
     def get_task(task_id: str, request: Request):
@@ -379,7 +388,7 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).cleanup_old_search_task_jobs()
 
     @app.get("/v1/research", response_model=List[ResearchHistoryItem])
-    def list_researches(request: Request, limit: int = 20, owner: str | None = Depends(scope_user_id)):
+    def list_researches(request: Request, limit: int = Query(20, ge=1, le=200), owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).list_researches(limit=limit, user_id=owner)
 
     @app.get("/v1/threads/{thread_id}", response_model=List[ResearchHistoryItem])
