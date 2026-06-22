@@ -110,9 +110,6 @@ function onKeydown(e: KeyboardEvent) {
           </button>
         </div>
 
-        <button v-if="!isQuick" class="grid h-8 w-8 place-items-center rounded-full border border-bd text-muted hover:text-ink" :title="$t('composer.attach')">
-          +
-        </button>
         <button
           v-if="!isQuick"
           class="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition"
