@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
+    require_admin,
     scope_user_id,
     verify_research_access,
 )
@@ -135,6 +136,8 @@ def _issue_session(response: Response, user: AuthUser) -> str:
 def register_routes(app: FastAPI) -> None:
     # Ownership guard for per-research routes (no-op when auth is disabled).
     research_guard = [Depends(verify_research_access)]
+    auth_required = [Depends(get_current_user)]   # requires login (no-op when auth disabled)
+    admin_guard = [Depends(require_admin)]         # login + admin email (no-op when auth disabled)
 
     @app.get("/health")
     async def health_check(request: Request):
@@ -211,17 +214,18 @@ def register_routes(app: FastAPI) -> None:
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 
-    @app.get("/health/queues", response_model=QueueMetrics)
+    @app.get("/health/queues", response_model=QueueMetrics, dependencies=auth_required)
     async def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
 
-    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse)
+    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse, dependencies=admin_guard)
     async def run_queue_maintenance(request: Request):
         return get_research_service(request).run_queue_maintenance()
 
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/ack",
         response_model=OperationalHealth.RecommendationEntry,
+        dependencies=admin_guard,
     )
     async def acknowledge_operational_recommendation(code: str, request: Request):
         return get_research_service(request).acknowledge_operational_recommendation(code)
@@ -229,6 +233,7 @@ def register_routes(app: FastAPI) -> None:
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/resolve",
         response_model=OperationalHealth.RecommendationEntry,
+        dependencies=admin_guard,
     )
     async def resolve_operational_recommendation(
         code: str,
@@ -237,7 +242,7 @@ def register_routes(app: FastAPI) -> None:
     ):
         return get_research_service(request).resolve_operational_recommendation(code, payload.note)
 
-    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat)
+    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=auth_required)
     async def worker_health(worker_name: str, request: Request):
         heartbeat = get_research_service(request).get_worker_heartbeat(worker_name)
         if not heartbeat:
@@ -248,7 +253,7 @@ def register_routes(app: FastAPI) -> None:
     async def list_models():
         return list_model_catalog()
 
-    @app.post("/v1/optimize", response_model=OptimizeResponse)
+    @app.post("/v1/optimize", response_model=OptimizeResponse, dependencies=auth_required)
     async def optimize_prompt(request: Request, payload: OptimizeRequest):
         try:
             optimized = get_research_service(request).optimize_prompt(payload.prompt)
@@ -258,7 +263,7 @@ def register_routes(app: FastAPI) -> None:
                 raise e
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.post("/v1/decompose", response_model=DecomposeResponse)
+    @app.post("/v1/decompose", response_model=DecomposeResponse, dependencies=auth_required)
     async def decompose_prompt(request: Request, payload: DecomposeRequest):
         try:
             return get_research_service(request).decompose_prompt(
@@ -270,43 +275,43 @@ def register_routes(app: FastAPI) -> None:
                 raise e
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/tasks", response_model=List[SearchTask])
+    @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=auth_required)
     async def list_tasks(request: Request):
         return get_research_service(request).list_tasks()
 
-    @app.get("/v1/tasks/{task_id}", response_model=SearchTask)
+    @app.get("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
     async def get_task(task_id: str, request: Request):
         task = get_research_service(request).get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
-    @app.get("/v1/tasks/{task_id}/summary", response_model=SearchTaskSummary)
+    @app.get("/v1/tasks/{task_id}/summary", response_model=SearchTaskSummary, dependencies=auth_required)
     async def get_task_summary(task_id: str, request: Request):
         return get_research_service(request).get_task_summary(task_id)
 
-    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
+    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
     async def update_task(task_id: str, update: TaskUpdate, request: Request):
         task = get_research_service(request).update_task(task_id, update)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
-    @app.get("/v1/tasks/{task_id}/search-job", response_model=SearchTaskJob)
+    @app.get("/v1/tasks/{task_id}/search-job", response_model=SearchTaskJob, dependencies=auth_required)
     async def get_latest_search_job(task_id: str, request: Request):
         job = get_research_service(request).get_latest_search_task_job(task_id)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
-    @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob)
+    @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob, dependencies=auth_required)
     async def get_search_job(job_id: str, request: Request):
         job = get_research_service(request).get_search_task_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
-    @app.get("/v1/search-jobs", response_model=List[SearchTaskJob])
+    @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=auth_required)
     async def list_search_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
@@ -315,15 +320,15 @@ def register_routes(app: FastAPI) -> None:
             return service.list_dead_letter_search_task_jobs()
         raise HTTPException(status_code=422, detail="Unsupported search job status filter")
 
-    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob)
+    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob, dependencies=admin_guard)
     async def requeue_search_job(job_id: str, request: Request):
         return get_research_service(request).requeue_search_task_job(job_id)
 
-    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse)
+    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
     async def recover_stale_search_jobs(request: Request):
         return get_research_service(request).recover_stale_search_task_jobs()
 
-    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse)
+    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
     async def cleanup_search_jobs(request: Request):
         return get_research_service(request).cleanup_old_search_task_jobs()
 
@@ -353,7 +358,7 @@ def register_routes(app: FastAPI) -> None:
                 raise e
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob])
+    @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob], dependencies=auth_required)
     async def list_finalize_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
@@ -362,7 +367,7 @@ def register_routes(app: FastAPI) -> None:
             return service.list_dead_letter_research_finalize_jobs()
         raise HTTPException(status_code=422, detail="Unsupported finalize job status filter")
 
-    @app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob)
+    @app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob, dependencies=auth_required)
     async def get_finalize_job(job_id: str, request: Request):
         job = get_research_service(request).get_research_finalize_job(job_id)
         if not job:
@@ -376,15 +381,15 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job
 
-    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob)
+    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob, dependencies=admin_guard)
     async def requeue_finalize_job(job_id: str, request: Request):
         return get_research_service(request).requeue_research_finalize_job(job_id)
 
-    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse)
+    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
     async def recover_stale_finalize_jobs(request: Request):
         return get_research_service(request).recover_stale_research_finalize_jobs()
 
-    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse)
+    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
     async def cleanup_finalize_jobs(request: Request):
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 

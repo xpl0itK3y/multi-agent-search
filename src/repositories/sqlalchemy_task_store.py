@@ -263,6 +263,26 @@ class SQLAlchemyTaskStore:
             self._emit_change(research_id)
         return claimed
 
+    def try_begin_finalization(self, research_id: str) -> bool:
+        """Atomically flip into ANALYZING unless already terminal/finalizing. True if this caller
+        won — prevents two replicas from enqueueing duplicate finalize jobs for one research."""
+        terminal = [
+            ResearchStatus.ANALYZING.value,
+            ResearchStatus.COMPLETED.value,
+            ResearchStatus.FAILED.value,
+            ResearchStatus.CANCELLED.value,
+        ]
+        with self.session_scope() as session:
+            outcome = session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id, ResearchORM.status.notin_(terminal))
+                .values(status=ResearchStatus.ANALYZING.value, updated_at=datetime.now(timezone.utc))
+            )
+            claimed = outcome.rowcount == 1
+        if claimed:
+            self._emit_change(research_id)
+        return claimed
+
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTaskORM(
             id=task_data["id"],

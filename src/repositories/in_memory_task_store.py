@@ -199,6 +199,22 @@ class InMemoryTaskStore:
         self._emit_change(research_id)
         return True
 
+    def try_begin_finalization(self, research_id: str) -> bool:
+        """Atomically flip into ANALYZING unless already terminal/finalizing. True if this
+        caller won the transition (single-winner finalize enqueue)."""
+        research = self.researches.get(research_id)
+        if research is None or research.status in (
+            ResearchStatus.ANALYZING,
+            ResearchStatus.COMPLETED,
+            ResearchStatus.FAILED,
+            ResearchStatus.CANCELLED,
+        ):
+            return False
+        research.status = ResearchStatus.ANALYZING
+        research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
+        return True
+
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTask(**task_data)
         self.tasks[task.id] = task

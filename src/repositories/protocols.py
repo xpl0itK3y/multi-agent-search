@@ -55,6 +55,8 @@ class TaskStore(Protocol):
 
     def try_claim_queued_research(self, research_id: str) -> bool: ...
 
+    def try_begin_finalization(self, research_id: str) -> bool: ...
+
     def set_research_task_ids(
         self,
         research_id: str,

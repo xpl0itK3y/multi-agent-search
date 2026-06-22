@@ -2567,15 +2567,14 @@ class ResearchService:
 
     def enqueue_research_finalization(self, research_id: str) -> tuple[ResearchRecord, ResearchFinalizeJob | None]:
         research = self._get_research_for_finalization(research_id)
-        # CANCELLED is terminal: never resurrect a cancelled research into ANALYZING.
-        if research.status in [
-            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
-        ]:
+        self.require_agent(self.analyzer, "Analyzer")
+        # Atomic single-winner transition into ANALYZING. Concurrent callers across replicas
+        # (or a re-delivered search job completing the same research) lose the CAS and must NOT
+        # enqueue a duplicate finalize job. Also rejects terminal/already-finalizing states.
+        if not self.task_store.try_begin_finalization(research_id):
             return research, None
 
         with bind_observability_context(research_id=research_id):
-            self.require_agent(self.analyzer, "Analyzer")
-            self.task_store.update_research_status(research_id, ResearchStatus.ANALYZING)
             job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
             if self.broker:
                 self.broker.push_finalize_job(job.id)
@@ -2667,6 +2666,9 @@ class ResearchService:
                     "detail": f"Finalize job {job.id} recovered after timeout; resume_from={resume_step}",
                 },
             )
+            # Re-dispatch to Redis (see search-job recovery note above).
+            if self.broker:
+                self.broker.push_finalize_job(job.id)
             logger.warning("finalize_job_recovered job_id=%s research_id=%s", job.id, job.research_id)
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],
@@ -2723,6 +2725,10 @@ class ResearchService:
                 job.task_id,
                 TaskUpdate(status=TaskStatus.PENDING, log="Recovered stale running search job"),
             )
+            # Re-dispatch to Redis: in broker mode workers consume only from Redis (no Postgres
+            # poll fallback), so a reset-to-PENDING job would otherwise never be claimed.
+            if self.broker:
+                self.broker.push_search_job(job.id)
             logger.warning("search_job_recovered job_id=%s task_id=%s", job.id, job.task_id)
         return JobRecoveryResponse(
             recovered_job_ids=[job.id for job in recovered_jobs],

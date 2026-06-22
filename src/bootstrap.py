@@ -48,6 +48,25 @@ def _create_broker() -> RedisBroker | None:
         return None
 
 
+_INSECURE_SECRET_DEFAULT = "dev-insecure-secret-change-in-production"
+
+
+def _validate_security_config() -> None:
+    """Fail fast on insecure auth configuration when authentication is enabled."""
+    if settings.auth_disabled:
+        return
+    if settings.auth_secret_key == _INSECURE_SECRET_DEFAULT or len(settings.auth_secret_key) < 32:
+        raise RuntimeError(
+            "Insecure auth configuration: AUTH_SECRET_KEY must be overridden with a strong "
+            "(>=32 character) value when AUTH_DISABLED=false."
+        )
+    if not settings.auth_cookie_secure:
+        print(
+            "Warning: AUTH_COOKIE_SECURE is false while auth is enabled — session cookies will "
+            "not be marked Secure. Set AUTH_COOKIE_SECURE=true when served over HTTPS."
+        )
+
+
 def create_research_service() -> ResearchService:
     configure_logging()
     agent_optimizer = None
@@ -118,6 +137,7 @@ def create_research_service() -> ResearchService:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_security_config()
     service = create_research_service()
     app.state.research_service = service
     # With multiple uvicorn workers, only one process should run startup recovery/promotion

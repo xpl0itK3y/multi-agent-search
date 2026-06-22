@@ -44,6 +44,18 @@ def scope_user_id(request: Request) -> str | None:
     return get_current_user(request).id
 
 
+def require_admin(request: Request) -> AuthUser:
+    """Admin guard for job/queue maintenance routes. No-op identity when auth is disabled
+    (trusted single-tenant mode); otherwise requires login and an allow-listed admin email."""
+    user = get_current_user(request)
+    if settings.auth_disabled:
+        return user
+    allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+    if user.email.lower() not in allowed:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return user
+
+
 def verify_research_access(research_id: str, request: Request) -> None:
     """Route guard: 404 if the research belongs to another user (no-op when auth is off)."""
     if settings.auth_disabled:

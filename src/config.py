@@ -60,12 +60,14 @@ class Settings(BaseSettings):
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False
-    # Auth (off by default — flip AUTH_DISABLED=false for a public deployment).
-    auth_disabled: bool = True
+    # Auth (on by default — set AUTH_DISABLED=true only for trusted single-tenant / dev).
+    auth_disabled: bool = False
     auth_secret_key: str = "dev-insecure-secret-change-in-production"
     auth_token_ttl_seconds: int = 604800  # 7 days
     auth_cookie_name: str = "access_token"
     auth_cookie_secure: bool = False  # set True when served over HTTPS
+    # CSV of emails granted admin access to job/queue maintenance endpoints (auth-enabled mode).
+    admin_emails: str = ""
     # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""
