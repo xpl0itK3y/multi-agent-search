@@ -11,6 +11,7 @@ from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.language_utils import LANGUAGE_HINTS
 from src.agents.source_critic import SourceCriticAgent
 from src.core.agent import BaseAgent
+from src.core import domain_policy
 from src.core import rust_accel
 from src.api.schemas import SearchTask, SearchDepth
 from src.config import settings
@@ -68,18 +69,8 @@ class AnalyzerAgent(BaseAgent):
         "compare",
     }
     NEGATION_TOKENS = {"no", "not", "never", "without", "lack", "lacks", "cannot", "can't", "doesn't", "don't"}
-    TRUSTED_DOMAIN_EXACT_MATCHES = {
-        "developer.mozilla.org",
-        "docs.python.org",
-        "openai.com",
-        "platform.openai.com",
-        "wikipedia.org",
-    }
-    TRUSTED_DOMAIN_SUFFIXES = (
-        ".gov",
-        ".edu",
-        ".readthedocs.io",
-    )
+    TRUSTED_DOMAIN_EXACT_MATCHES = domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES
+    TRUSTED_DOMAIN_SUFFIXES = domain_policy.TRUSTED_DOMAIN_SUFFIXES
     LOW_VALUE_DOMAIN_EXACT_MATCHES = {
         "linkedin.com",
         "pinterest.com",

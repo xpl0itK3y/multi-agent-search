@@ -4,6 +4,7 @@ import re
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from src.core import domain_policy
 from src.source_quality_policy import TOPIC_POLICIES
 
 
@@ -54,14 +55,8 @@ def _topic_policy_payload() -> list[dict]:
 @lru_cache(maxsize=1)
 def _search_config() -> dict:
     return {
-        "trusted_domain_exact_matches": [
-            "developer.mozilla.org",
-            "docs.python.org",
-            "openai.com",
-            "platform.openai.com",
-            "wikipedia.org",
-        ],
-        "trusted_domain_suffixes": [".gov", ".edu", ".readthedocs.io"],
+        "trusted_domain_exact_matches": sorted(domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES),
+        "trusted_domain_suffixes": list(domain_policy.TRUSTED_DOMAIN_SUFFIXES),
         "low_value_domain_exact_matches": [
             "linkedin.com",
             "pinterest.com",
@@ -177,14 +172,8 @@ def _search_config() -> dict:
 @lru_cache(maxsize=1)
 def _analyzer_config() -> dict:
     return {
-        "trusted_domain_exact_matches": [
-            "developer.mozilla.org",
-            "docs.python.org",
-            "openai.com",
-            "platform.openai.com",
-            "wikipedia.org",
-        ],
-        "trusted_domain_suffixes": [".gov", ".edu", ".readthedocs.io"],
+        "trusted_domain_exact_matches": sorted(domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES),
+        "trusted_domain_suffixes": list(domain_policy.TRUSTED_DOMAIN_SUFFIXES),
         "low_value_domain_exact_matches": [
             "linkedin.com",
             "pinterest.com",

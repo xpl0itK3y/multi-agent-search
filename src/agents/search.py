@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from src.config import settings
 from src.providers.search import SearchProvider, ContentExtractor
 from src.api.schemas import SearchTaskMetrics, TaskStatus, TaskUpdate
-from src.core import rust_accel
+from src.core import domain_policy, rust_accel
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics
@@ -16,18 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class SearchAgent:
-    TRUSTED_DOMAIN_EXACT_MATCHES = {
-        "developer.mozilla.org",
-        "docs.python.org",
-        "openai.com",
-        "platform.openai.com",
-        "wikipedia.org",
-    }
-    TRUSTED_DOMAIN_SUFFIXES = (
-        ".gov",
-        ".edu",
-        ".readthedocs.io",
-    )
+    TRUSTED_DOMAIN_EXACT_MATCHES = domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES
+    TRUSTED_DOMAIN_SUFFIXES = domain_policy.TRUSTED_DOMAIN_SUFFIXES
     LOW_VALUE_DOMAIN_EXACT_MATCHES = {
         "linkedin.com",
         "www.linkedin.com",
