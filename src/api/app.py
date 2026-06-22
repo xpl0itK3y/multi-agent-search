@@ -101,6 +101,18 @@ def _is_csrf_violation(request: Request) -> bool:
     return not cookie or not header or not hmac.compare_digest(cookie, header)
 
 
+_SENSITIVE_GRAPH_STATE_KEYS = frozenset({"share_token", "webhook_url", "decompose_payload"})
+
+
+def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
+    """Strip internal/sensitive graph_state keys before returning a ResearchRecord to a client
+    (AUD-012). Returns a copy — the internal record and persistence keep the full state."""
+    if record is None or not record.graph_state:
+        return record
+    cleaned = {k: v for k, v in record.graph_state.items() if k not in _SENSITIVE_GRAPH_STATE_KEYS}
+    return record.model_copy(update={"graph_state": cleaned})
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
@@ -456,17 +468,17 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/research/{research_id}/cancel", response_model=ResearchRecord)
     def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
-        return get_research_service(request).cancel_research(research_id, user_id=owner)
+        return _public_record(get_research_service(request).cancel_research(research_id, user_id=owner))
 
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
     def rename_research(
         research_id: str, payload: ResearchRename, request: Request, owner: str | None = Depends(scope_user_id)
     ):
-        return get_research_service(request).rename_research(research_id, payload.title, user_id=owner)
+        return _public_record(get_research_service(request).rename_research(research_id, payload.title, user_id=owner))
 
     @app.get("/v1/research/{research_id}", response_model=ResearchRecord, dependencies=research_guard)
     def get_research_status(research_id: str, request: Request):
-        return get_research_service(request).get_research_status(research_id)
+        return _public_record(get_research_service(request).get_research_status(research_id))
 
     @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary, dependencies=research_guard)
     def get_research_summary(research_id: str, request: Request):
@@ -602,7 +614,7 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord, dependencies=research_guard)
     def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
-        return get_research_service(request).submit_clarifications(research_id, payload.answers)
+        return _public_record(get_research_service(request).submit_clarifications(research_id, payload.answers))
 
     @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
     def get_research_plan(research_id: str, request: Request):
@@ -614,7 +626,7 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord, dependencies=research_guard)
     def approve_research_plan(research_id: str, request: Request):
-        return get_research_service(request).approve_research_plan(research_id)
+        return _public_record(get_research_service(request).approve_research_plan(research_id))
 
     @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage], dependencies=research_guard)
     def list_research_messages(research_id: str, request: Request):
