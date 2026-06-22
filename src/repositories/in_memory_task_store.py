@@ -251,6 +251,15 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
+    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None:
+        research = self.researches.get(research_id)
+        if research is None:
+            return None
+        if patch:
+            research.graph_state = {**(research.graph_state or {}), **patch}
+            research.updated_at = datetime.now(timezone.utc)
+        return research
+
     def save_partial_report(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
         if research is None:

@@ -1545,9 +1545,7 @@ class ResearchService:
             }
             audit = self.citation_auditor.audit(report, sources_by_id)
             audit.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["citation_audit"] = audit.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"citation_audit": audit.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("citation_audit_failed research_id=%s error=%s", research.id, exc)
 
@@ -1584,9 +1582,7 @@ class ResearchService:
             }
             independence = self.independence_auditor.analyze(sources_by_id)
             independence.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["source_independence"] = independence.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"source_independence": independence.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("source_independence_failed research_id=%s error=%s", research.id, exc)
 
@@ -1619,9 +1615,7 @@ class ResearchService:
             }
             reputation = self.reputation_auditor.assess(sources_by_id)
             reputation.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["source_reputation"] = reputation.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"source_reputation": reputation.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("source_reputation_failed research_id=%s error=%s", research.id, exc)
 
@@ -1679,9 +1673,7 @@ class ResearchService:
             if integrity.checked_dois == 0:
                 return  # no academic DOIs to verify — nothing to record
             integrity.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["source_integrity"] = integrity.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"source_integrity": integrity.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("retraction_check_failed research_id=%s error=%s", research.id, exc)
 
@@ -1757,9 +1749,7 @@ class ResearchService:
                 monolingual=foreign_count == 0,
                 unique_findings=unique_findings,
             )
-            new_state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            new_state["cross_language"] = report.model_dump()
-            self.task_store.update_research_graph_state(research.id, new_state)
+            self.task_store.merge_research_graph_state(research.id, {"cross_language": report.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("cross_language_analysis_failed research_id=%s error=%s", research.id, exc)
 
@@ -1813,9 +1803,7 @@ class ResearchService:
             if not balance.applicable:
                 return
             balance.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["stance_balance"] = balance.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"stance_balance": balance.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("stance_assess_failed research_id=%s error=%s", research.id, exc)
 
@@ -1850,9 +1838,7 @@ class ResearchService:
             }
             check = self.numeric_checker.check(report, sources_by_id)
             check.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["numeric_check"] = check.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(research.id, {"numeric_check": check.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("numeric_check_failed research_id=%s error=%s", research.id, exc)
 
@@ -2548,12 +2534,10 @@ class ResearchService:
                     usage.get("completion_tokens", 0),
                     usage.get("estimated_cost_usd", 0),
                 )
-                # Re-fetch the LATEST graph_state — the finalize trust steps (citation audit,
-                # source independence, numeric check, diff) wrote to it after `research` was
-                # captured, so copying the stale snapshot here would wipe them.
-                gs = dict((self.task_store.get_research(research_id).graph_state) or {})
-                gs["llm_token_usage"] = usage
-                self.task_store.update_research_graph_state(research_id, gs)
+                # Atomic merge — the finalize trust steps wrote other graph_state keys after
+                # `research` was captured; merge_research_graph_state row-locks so this can't
+                # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
+                self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
 
             logger.info("research_finalize_completed")
 
