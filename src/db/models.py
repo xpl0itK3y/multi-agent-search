@@ -62,6 +62,7 @@ class SearchTaskORM(Base):
     research_id: Mapped[str | None] = mapped_column(
         ForeignKey("researches.id", ondelete="CASCADE"),
         nullable=True,
+        index=True,
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
     queries: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
