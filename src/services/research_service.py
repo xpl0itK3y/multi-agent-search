@@ -2472,6 +2472,18 @@ class ResearchService:
         except Exception as exc:
             logger.warning("webhook_failed url=%s error=%s", url, exc)
 
+    def _emit_finalize_progress(self, research_id: str, step: str) -> None:
+        """Append a finalize-phase step to the live trail so the progress trace keeps moving
+        during synthesis (and surfaces the trust/verification work as it happens). Labelled
+        by the frontend via trace.{step}; failures must never break finalization."""
+        store = self.task_store
+        if not research_id or not hasattr(store, "append_research_graph_event"):
+            return
+        try:
+            store.append_research_graph_event(research_id, {"step": step})
+        except Exception:
+            pass
+
     def complete_research_finalization(self, research_id: str) -> ResearchRecord:
         with bind_observability_context(research_id=research_id):
             research = self.task_store.get_research(research_id)
@@ -2499,13 +2511,16 @@ class ResearchService:
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
+            self._emit_finalize_progress(research_id, "redteam")
             report = self._maybe_red_team(report, research, tasks)
+            self._emit_finalize_progress(research_id, "audit")
             self._audit_citations(report, research, tasks)
             self._analyze_source_independence(research, tasks)
             self._assess_source_reputation(research, tasks)
             self._check_numbers(report, research, tasks)
             self._check_retractions(research, tasks)
             self._maybe_build_comparison(report, research)
+            self._emit_finalize_progress(research_id, "viewpoints")
             self._maybe_assess_stance(research, tasks)
             self._analyze_cross_language(research, tasks)
             report = self._inject_graph_execution_trail(report, research_id)

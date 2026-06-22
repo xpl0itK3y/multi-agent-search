@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import HTTPException
 
@@ -28,7 +30,10 @@ def _setup():
         "red_team": {"challenged": 2, "held": 3},
         "source_independence": {"total_sources": 2, "independent_origins": 2},
     })
-    store.append_research_graph_event(rec.id, {"step": "collect_context", "detail": "gathered 2 sources", "timestamp": "2026-06-14T10:00:00"})
+    # Use a recent relative timestamp — a hardcoded absolute one ages out of the trail
+    # retention window once the system clock passes it, dropping the event.
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    store.append_research_graph_event(rec.id, {"step": "collect_context", "detail": "gathered 2 sources", "timestamp": recent})
     store.append_research_graph_event(rec.id, {"step": "analyze", "detail": "draft generated"})
     store.update_research_status(rec.id, ResearchStatus.COMPLETED)
     return svc, rec.id

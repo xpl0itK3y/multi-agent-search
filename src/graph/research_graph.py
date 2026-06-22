@@ -112,7 +112,20 @@ class FinalizeGraphRunner:
         event = {"step": step, "detail": detail}
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
 
+    def _emit_trail(self, research_id: str, step: str) -> None:
+        """Surface this finalize step on the live progress trail (streamed via SSE) so the
+        trace keeps moving during synthesis instead of freezing after the search phase.
+        Step names reuse the existing trace.* i18n labels (collect_context/analyze/…)."""
+        store = getattr(self.service, "task_store", None)
+        if not research_id or store is None or not hasattr(store, "append_research_graph_event"):
+            return
+        try:
+            store.append_research_graph_event(research_id, {"step": step})
+        except Exception:  # progress events must never break finalize
+            pass
+
     def _run_timed_step(self, step_name: str, action, research_id: str):
+        self._emit_trail(research_id, step_name)
         started_at = perf_counter()
         try:
             result = action()
