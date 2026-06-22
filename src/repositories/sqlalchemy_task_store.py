@@ -955,6 +955,7 @@ class SQLAlchemyTaskStore:
 
             task.updated_at = datetime.now(timezone.utc)
             session.flush()
-            session.refresh(task)
-            refreshed = session.execute(statement).scalar_one()
-            return search_task_orm_to_schema(refreshed)
+            # Serialize the in-memory row directly: it was just loaded with its results and
+            # mutated here, so a refresh + second selectinload query (AUD-021) is redundant.
+            # update_task runs once per extraction log line, so that doubled every log write.
+            return search_task_orm_to_schema(task)
