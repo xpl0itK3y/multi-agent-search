@@ -15,6 +15,7 @@ from src.api.dependencies import (
     scope_user_id,
     verify_research_access,
 )
+from src.auth.login_rate_limit import enforce_auth_rate_limit
 from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
@@ -138,18 +139,19 @@ def register_routes(app: FastAPI) -> None:
     research_guard = [Depends(verify_research_access)]
     auth_required = [Depends(get_current_user)]   # requires login (no-op when auth disabled)
     admin_guard = [Depends(require_admin)]         # login + admin email (no-op when auth disabled)
+    auth_rate_limit = [Depends(enforce_auth_rate_limit)]  # per-IP throttle (no-op when auth disabled)
 
     @app.get("/health")
     async def health_check(request: Request):
         return get_research_service(request).get_health_status()
 
-    @app.post("/v1/auth/register", response_model=AuthSession)
+    @app.post("/v1/auth/register", response_model=AuthSession, dependencies=auth_rate_limit)
     async def register(payload: RegisterRequest, response: Response, request: Request):
         user = get_research_service(request).register_user(payload.email, payload.password)
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
-    @app.post("/v1/auth/login", response_model=AuthSession)
+    @app.post("/v1/auth/login", response_model=AuthSession, dependencies=auth_rate_limit)
     async def login(payload: LoginRequest, response: Response, request: Request):
         user = get_research_service(request).authenticate_user(payload.email, payload.password)
         token = _issue_session(response, user)

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, model_validator
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -555,6 +557,18 @@ class ResearchRequest(BaseModel):
         default=None,
         description="Optional conversation thread to attach this research to; a new one is created when omitted",
     )
+
+    @field_validator("webhook_url")
+    @classmethod
+    def _validate_webhook_url(cls, value: Optional[str]) -> Optional[str]:
+        # Reject non-http(s) / malformed URLs at accept-time (422). The SSRF/IP check still
+        # runs at fire-time (which honors webhook_allow_private_targets for internal deploys).
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("webhook_url must be a valid http(s) URL")
+        return value
 
 class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=200)

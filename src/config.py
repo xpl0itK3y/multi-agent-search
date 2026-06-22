@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False  # set True when served over HTTPS
     # CSV of emails granted admin access to job/queue maintenance endpoints (auth-enabled mode).
     admin_emails: str = ""
+    # Per-IP login/register attempts allowed per minute (auth-enabled mode; 0 disables).
+    auth_rate_limit_per_minute: int = 10
     # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""
