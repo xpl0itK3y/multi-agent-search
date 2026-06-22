@@ -43,7 +43,6 @@ from src.api.schemas import (
     ResearchRequest,
     ChatAsk,
     ChatMessage,
-    AppExportRequest,
     CitationAudit,
     SourceIndependence,
     SourceReputation,
@@ -436,14 +435,6 @@ def register_routes(app: FastAPI) -> None:
             research_id, format, theme=theme, accent=accent, base=base,
         )
         ascii_name = filename.encode("ascii", "ignore").decode() or "research"
-        disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
-        return Response(content=data, media_type=media_type, headers={"Content-Disposition": disposition})
-
-    @app.post("/v1/research/{research_id}/export/app", dependencies=research_guard)
-    def export_research_app(research_id: str, request: Request, payload: AppExportRequest):
-        # AI generates a custom single-file HTML from a free-text brief (blocking LLM call).
-        data, media_type, filename = get_research_service(request).generate_app_export(research_id, payload.prompt)
-        ascii_name = filename.encode("ascii", "ignore").decode() or "research-app"
         disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
         return Response(content=data, media_type=media_type, headers={"Content-Disposition": disposition})
 

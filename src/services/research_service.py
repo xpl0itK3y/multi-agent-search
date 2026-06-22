@@ -141,7 +141,6 @@ class ResearchService:
         clarifier=None,
         red_team_agent=None,
         comparison_agent=None,
-        app_export_agent=None,
         stance_agent=None,
         cross_language_agent=None,
         broker: RedisBroker | None = None,
@@ -159,7 +158,6 @@ class ResearchService:
         self.clarifier = clarifier
         self.red_team_agent = red_team_agent
         self.comparison_agent = comparison_agent
-        self.app_export_agent = app_export_agent
         self.stance_agent = stance_agent
         self.cross_language_agent = cross_language_agent
         self.citation_auditor = CitationAuditAgent()
@@ -1200,34 +1198,6 @@ class ResearchService:
             "diff": safe(lambda: self.get_research_diff(rid)),
             "sources": safe(lambda: [s.model_dump() for s in self.get_research_sources(rid)]),
         }
-
-    def generate_app_export(self, research_id: str, instruction: str) -> tuple[bytes, str, str]:
-        """AI-generated custom HTML: the user's design brief + research data -> a downloadable page."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        if not research.final_report:
-            raise HTTPException(status_code=409, detail="Report is not ready yet")
-        agent = self.require_agent(self.app_export_agent, "App export")
-
-        def safe(fn, default):
-            try:
-                return fn()
-            except Exception:  # pragma: no cover - defensive
-                return default
-
-        findings = safe(lambda: [f.model_dump() for f in self.get_research_verification(research_id).findings], [])
-        sources = safe(lambda: [s.model_dump() for s in self.get_research_sources(research_id)], [])
-        model = (research.graph_state or {}).get("model")
-        html = agent.generate(
-            instruction, research.prompt, research.final_report,
-            scorecard=self._export_scorecard(research_id),
-            findings=findings, sources=sources, model=model,
-        )
-        if not html:
-            raise HTTPException(status_code=502, detail="Could not generate the page — try again or refine the prompt.")
-        title = (research.graph_state or {}).get("title") or research.prompt
-        return html.encode("utf-8"), "text/html; charset=utf-8", self._export_filename(f"{title}-app", "html")
 
     _HTML_EXPORT_LABELS = {
         "ru": {

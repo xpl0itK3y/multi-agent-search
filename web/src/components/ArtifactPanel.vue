@@ -469,8 +469,6 @@ const siteThemes = [
   "auto", "light", "dark", "editorial", "sepia", "mono", "rose",
   "lavender", "ocean", "slate", "midnight", "emerald", "forest", "sunset",
 ] as const;
-const appOpen = ref(false);
-const appPrompt = ref("");
 
 function filenameFrom(res: Response, fallback: string): string {
   const cd = res.headers.get("Content-Disposition") || "";
@@ -506,32 +504,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
   }
 }
 
-// AI-generated custom export: send the user's brief, download the generated HTML.
-async function exportApp() {
-  if (!appPrompt.value.trim() || exporting.value) return;
-  exporting.value = "app";
-  error.value = null;
-  try {
-    const token = localStorage.getItem("access_token");
-    const res = await fetch(`${BASE}/v1/research/${props.id}/export/app`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ prompt: appPrompt.value }),
-    });
-    if (!res.ok) {
-      error.value = res.status === 502 ? t("site.appFailed") : `HTTP ${res.status}`;
-      return;
-    }
-    saveBlob(await res.blob(), filenameFrom(res, "research-app.html"));
-    siteMenuOpen.value = false;
-    appOpen.value = false;
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    exporting.value = null;
-  }
-}
 </script>
 
 <template>
@@ -698,28 +670,9 @@ async function exportApp() {
               {{ $t("site.download") }}
             </button>
           </div>
-          <button class="export-item" @click="appOpen = !appOpen">
-            <span>✨ {{ $t("site.app") }}</span><span class="text-[10px] text-muted">{{ appOpen ? "▾" : "▸" }}</span>
-          </button>
-          <div v-if="appOpen" class="px-1.5 pb-1.5">
-            <textarea
-              v-model="appPrompt"
-              :placeholder="$t('site.appPlaceholder')"
-              rows="3"
-              class="w-full resize-none rounded border border-bd bg-bg px-2 py-1 text-xs text-ink placeholder:text-muted focus:outline-none"
-            />
-            <button
-              class="mt-1 w-full rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
-              :disabled="exporting === 'app' || !appPrompt.trim()"
-              @click="exportApp"
-            >
-              {{ exporting === "app" ? $t("site.appBusy") : $t("site.appGo") }}
-            </button>
-            <p class="mt-1 text-[10px] leading-snug text-muted">{{ $t("site.appHint") }}</p>
-          </div>
         </div>
       </div>
-      <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.webGroup") }} · {{ $t("site.app") }}</span>
+      <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.dataGroup") }} · {{ $t("artifact.webGroup") }}</span>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
