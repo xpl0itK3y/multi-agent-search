@@ -1,3 +1,4 @@
+import hmac
 import json
 import secrets
 import uuid
@@ -7,7 +8,7 @@ from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
@@ -82,6 +83,24 @@ from src.config import settings
 from src.observability import bind_observability_context, observe_api_request, render_metrics
 
 
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+
+
+def _is_csrf_violation(request: Request) -> bool:
+    """Double-submit CSRF check for cookie-authenticated mutations. Bearer-token requests are
+    exempt (the header can't be forged cross-site); the check is off when auth is disabled."""
+    if settings.auth_disabled or request.method in _CSRF_SAFE_METHODS:
+        return False
+    if request.url.path in _CSRF_EXEMPT_PATHS:
+        return False
+    if request.headers.get("authorization", "").lower().startswith("bearer "):
+        return False
+    cookie = request.cookies.get(settings.csrf_cookie_name)
+    header = request.headers.get("x-csrf-token")
+    return not cookie or not header or not hmac.compare_digest(cookie, header)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
@@ -115,6 +134,12 @@ def create_app() -> FastAPI:
         response.headers["X-Request-ID"] = request_id
         return response
 
+    @app.middleware("http")
+    async def csrf_middleware(request: Request, call_next):
+        if _is_csrf_violation(request):
+            return JSONResponse(status_code=403, content={"detail": "CSRF token missing or invalid"})
+        return await call_next(request)
+
     register_routes(app)
     return app
 
@@ -126,6 +151,17 @@ def _issue_session(response: Response, user: AuthUser) -> str:
         key=settings.auth_cookie_name,
         value=token,
         httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=settings.auth_token_ttl_seconds,
+        path="/",
+    )
+    # Double-submit CSRF token: readable by JS so the SPA can echo it in a header. The
+    # csrf_middleware requires header==cookie for cookie-authenticated mutations.
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=secrets.token_urlsafe(32),
+        httponly=False,
         secure=settings.auth_cookie_secure,
         samesite="lax",
         max_age=settings.auth_token_ttl_seconds,
@@ -160,6 +196,7 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/auth/logout")
     def logout(response: Response):
         response.delete_cookie(settings.auth_cookie_name, path="/")
+        response.delete_cookie(settings.csrf_cookie_name, path="/")
         return {"status": "ok"}
 
     @app.get("/v1/auth/me", response_model=AuthUser)

@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     auth_secret_key: str = "dev-insecure-secret-change-in-production"
     auth_token_ttl_seconds: int = 604800  # 7 days
     auth_cookie_name: str = "access_token"
+    csrf_cookie_name: str = "csrf_token"
     auth_cookie_secure: bool = False  # set True when served over HTTPS
     # CSV of emails granted admin access to job/queue maintenance endpoints (auth-enabled mode).
     admin_emails: str = ""

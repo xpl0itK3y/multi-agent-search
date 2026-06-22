@@ -1149,7 +1149,7 @@ async def test_auth_register_login_me_flow(client, mocker):
     assert me.json()["email"] == "x@y.com"
 
     # Logout clears the cookie.
-    out = await client.post("/v1/auth/logout")
+    out = await client.post("/v1/auth/logout", headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""})
     assert out.status_code == 200
     after = await client.get("/v1/auth/me")
     assert after.status_code == 401
@@ -1207,9 +1207,13 @@ async def test_google_oauth_login_and_callback(client, mocker):
     assert me.json()["email"] == "g@user.com"
 
     # Set a password, then email/password login works for this Google-created account.
-    sp = await client.post("/v1/auth/set-password", json={"password": "mypass123"})
+    sp = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "mypass123"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
     assert sp.status_code == 200
-    await client.post("/v1/auth/logout")
+    await client.post("/v1/auth/logout", headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""})
     relogin = await client.post("/v1/auth/login", json={"email": "g@user.com", "password": "mypass123"})
     assert relogin.status_code == 200
 
@@ -1242,12 +1246,16 @@ async def test_research_access_scoped_to_owner(client, mocker):
 
     # User A registers and creates a research.
     await client.post("/v1/auth/register", json={"email": "a@x.com", "password": "secret12"})
-    created = await client.post("/v1/research", json={"prompt": "alpha topic", "depth": "easy"})
+    created = await client.post(
+        "/v1/research",
+        json={"prompt": "alpha topic", "depth": "easy"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
     research_id = created.json()["research_id"]
     assert (await client.get(f"/v1/research/{research_id}")).status_code == 200
 
     # Switch to user B.
-    await client.post("/v1/auth/logout")
+    await client.post("/v1/auth/logout", headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""})
     await client.post("/v1/auth/register", json={"email": "b@x.com", "password": "secret12"})
 
     # B cannot see or open A's research.
