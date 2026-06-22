@@ -34,11 +34,13 @@ _SCALE = {
     "million": ("scaled", 1e6), "millions": ("scaled", 1e6), "mn": ("scaled", 1e6), "млн": ("scaled", 1e6),
     "billion": ("scaled", 1e9), "billions": ("scaled", 1e9), "bn": ("scaled", 1e9), "млрд": ("scaled", 1e9),
     "trillion": ("scaled", 1e12), "trillions": ("scaled", 1e12), "трлн": ("scaled", 1e12),
+    # CJK myriads: Arabic digit + CJK scale (e.g. "150万", "2.3亿"). CJK numerals (一百五十) aren't parsed.
+    "万": ("scaled", 1e4), "萬": ("scaled", 1e4), "亿": ("scaled", 1e8), "億": ("scaled", 1e8),
 }
 _NUM = re.compile(
     r"(?P<cur>[$€£₽])?\s?"
     r"(?P<num>\d{1,3}(?:[ , ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)"
-    r"\s?(?P<scale>%|percents?|процент\w*|thousands?|millions?|billions?|trillions?|bn|mn|млрд|млн|тыс\.?|трлн\.?)?",
+    r"\s?(?P<scale>%|percents?|процент\w*|thousands?|millions?|billions?|trillions?|bn|mn|млрд|млн|тыс\.?|трлн\.?|万|萬|亿|億)?",
     re.IGNORECASE,
 )
 
