@@ -45,7 +45,7 @@ def test_generate_html_without_scorecard_has_no_cards():
 
 def test_html_theme_dark_uses_dark_vars():
     out = generate_html("Body.", "Q", theme="dark").decode("utf-8")
-    assert "#262624" in out  # dark background
+    assert "#1f1e1d" in out  # dark background
     assert "prefers-color-scheme" not in out  # explicit theme → no auto-switch
 
 

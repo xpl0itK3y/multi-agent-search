@@ -750,39 +750,76 @@ def _markdown_to_html(md: str) -> str:
 
 
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif"
-_SERIF = "Georgia,'Times New Roman',serif"
+_SERIF = "Georgia,'Iowan Old Style','Palatino Linotype','Times New Roman',serif"
+_EDITORIAL = "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif"
 _STATUS_VARS = "--green:#10b981;--amber:#f59e0b;--red:#ef4444"
 
-# Each theme is a block of CSS custom properties; the base rules below reference them,
-# so a new look is just a new var set. The user picks one (or a custom accent).
+# Each theme is a block of CSS custom properties (the base rules below reference them), so a
+# new look is just a new var set: bg/card/bd/ink/muted, an accent + accent2 (used for gradient
+# flourishes), and a body/head font pairing. The user picks one in the export menu.
 _THEME_VARS = {
-    "light": f"--bg:#faf9f5;--card:#fff;--bd:#e6e3da;--ink:#2b2a27;--muted:#6f6c66;--accent:#c15f3c;--font-body:{_SANS};--font-head:{_SERIF}",
-    "dark": f"--bg:#262624;--card:#302f2e;--bd:#403f3c;--ink:#ece9e3;--muted:#9a9890;--accent:#d97757;--font-body:{_SANS};--font-head:{_SERIF}",
-    "editorial": f"--bg:#f7f3ea;--card:#fffdf8;--bd:#e3dcc9;--ink:#1f1b16;--muted:#6b6457;--accent:#7c4a2d;--font-body:Georgia,'Iowan Old Style',serif;--font-head:Georgia,serif",
-    "slate": f"--bg:#0f172a;--card:#1e293b;--bd:#334155;--ink:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--font-body:{_SANS};--font-head:{_SANS}",
+    "light":     f"--bg:#faf9f5;--card:#ffffff;--bd:#eae7df;--ink:#2b2a27;--muted:#73706a;--accent:#d97757;--accent2:#c15f3c;--font-body:{_SANS};--font-head:{_SERIF}",
+    "dark":      f"--bg:#1f1e1d;--card:#2a2927;--bd:#3a3835;--ink:#ece9e3;--muted:#a4a199;--accent:#e08a6a;--accent2:#d97757;--font-body:{_SANS};--font-head:{_SERIF}",
+    "editorial": f"--bg:#f6f1e7;--card:#fffdf8;--bd:#e3dac6;--ink:#1f1b16;--muted:#6b6457;--accent:#9c4221;--accent2:#b45309;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
+    "sepia":     f"--bg:#efe5d0;--card:#f7efde;--bd:#dac9a8;--ink:#3a2f21;--muted:#7c6c50;--accent:#a05a2c;--accent2:#7c4a2d;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
+    "mono":      f"--bg:#ffffff;--card:#fafafa;--bd:#e3e3e3;--ink:#0f0f0f;--muted:#666666;--accent:#111111;--accent2:#555555;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
+    "rose":      f"--bg:#fdf2f4;--card:#ffffff;--bd:#f4dde3;--ink:#3a2a2e;--muted:#8a6f76;--accent:#db2777;--accent2:#f472b6;--font-body:{_SANS};--font-head:{_SERIF}",
+    "lavender":  f"--bg:#f5f3fb;--card:#ffffff;--bd:#e6e1f3;--ink:#2b2640;--muted:#79749a;--accent:#7c3aed;--accent2:#c026d3;--font-body:{_SANS};--font-head:{_SERIF}",
+    "ocean":     f"--bg:#eef6f7;--card:#ffffff;--bd:#cee4e7;--ink:#14302f;--muted:#5b7a79;--accent:#0d9488;--accent2:#0ea5e9;--font-body:{_SANS};--font-head:{_SANS}",
+    "slate":     f"--bg:#0f172a;--card:#1b2638;--bd:#2c3a52;--ink:#e8eef7;--muted:#93a3bb;--accent:#38bdf8;--accent2:#818cf8;--font-body:{_SANS};--font-head:{_SANS}",
+    "midnight":  f"--bg:#13111c;--card:#1d1a2b;--bd:#2f2a42;--ink:#e9e6f5;--muted:#9b96b3;--accent:#a78bfa;--accent2:#f0abfc;--font-body:{_SANS};--font-head:{_SERIF}",
+    "emerald":   f"--bg:#0b1411;--card:#13201b;--bd:#22332b;--ink:#e3efe8;--muted:#8fa89a;--accent:#34d399;--accent2:#a3e635;--font-body:{_SANS};--font-head:{_SERIF}",
+    "forest":    f"--bg:#0d1410;--card:#16201a;--bd:#26342b;--ink:#e6efe5;--muted:#93a896;--accent:#84cc16;--accent2:#22c55e;--font-body:{_SANS};--font-head:{_SERIF}",
+    "sunset":    f"--bg:#1a1014;--card:#251519;--bd:#3a2228;--ink:#f6e9e6;--muted:#bb9a93;--accent:#fb7185;--accent2:#fbbf24;--font-body:{_SANS};--font-head:{_SERIF}",
 }
 
 _HTML_BASE_CSS = """
-*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 var(--font-body);-webkit-font-smoothing:antialiased}
-main{max-width:760px;margin:0 auto;padding:48px 24px 80px}
-.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
-h1.title{font-family:var(--font-head);font-size:30px;line-height:1.25;margin:.3em 0 .2em}
-.meta{color:var(--muted);font-size:13px;margin-bottom:28px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:0 0 32px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px}
-.card .lbl{font-size:12px;color:var(--muted)}
-.card .val{font-size:26px;font-weight:700;margin-top:4px}
-.card .sub{font-size:12px;color:var(--muted)}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.7 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:color-mix(in srgb,var(--accent) 26%,transparent)}
+.topbar{height:4px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+main{max-width:740px;margin:0 auto;padding:56px 24px 96px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.eyebrow::before{content:"";width:22px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+h1.title{font-family:var(--font-head);font-size:38px;line-height:1.14;letter-spacing:-.02em;margin:.34em 0 .24em}
+.meta{color:var(--muted);font-size:13.5px;margin-bottom:34px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin:0 0 40px}
+.card{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 6%,transparent);transition:transform .15s ease,box-shadow .15s ease}
+.card::before{content:"";position:absolute;top:0;bottom:0;left:0;width:3px;background:linear-gradient(var(--accent),var(--accent2));opacity:.9}
+.card:hover{transform:translateY(-2px);box-shadow:0 10px 28px color-mix(in srgb,var(--ink) 12%,transparent)}
+.card .lbl{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.card .val{font-family:var(--font-head);font-size:30px;font-weight:700;line-height:1;margin-top:7px}
+.card .sub{font-size:12px;color:var(--muted);margin-top:5px}
 .g{color:var(--green)}.a{color:var(--amber)}.r{color:var(--red)}
-article{font-size:16px}
-article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.3;margin:1.6em 0 .5em;color:var(--ink)}
-article h1{font-size:24px}article h2{font-size:21px}article h3{font-size:18px}article h4{font-size:16px}
-article p{margin:.7em 0}article ul,article ol{margin:.6em 0;padding-left:1.4em}article li{margin:.3em 0}
-article a{color:var(--accent);text-decoration:none;word-break:break-word}article a:hover{text-decoration:underline}
-sup.cite{color:var(--accent);font-weight:600;font-size:.7em}
-hr{border:0;border-top:1px solid var(--bd);margin:2em 0}
-footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--bd);color:var(--muted);font-size:12px}
+article{font-size:17px}
+article>:first-child{margin-top:0}
+article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.25;letter-spacing:-.01em;margin:1.7em 0 .5em;color:var(--ink)}
+article h1{font-size:30px}
+article h2{font-size:25px;margin-top:1.8em;padding-bottom:.28em;border-bottom:1px solid var(--bd)}
+article h3{font-size:20px}
+article h4{font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+article p{margin:.85em 0}
+article ul,article ol{margin:.7em 0;padding-left:1.4em}
+article li{margin:.35em 0}article li::marker{color:var(--accent)}
+article a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent);word-break:break-word}
+article a:hover{border-bottom-color:var(--accent)}
+article strong{font-weight:700}
+article blockquote{margin:1.3em 0;padding:.5em 1.2em;border-left:3px solid var(--accent);border-radius:0 12px 12px 0;background:color-mix(in srgb,var(--accent) 7%,transparent)}
+article blockquote p{margin:.4em 0}
+article code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em;background:color-mix(in srgb,var(--ink) 8%,transparent);padding:.12em .42em;border-radius:6px}
+article pre{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;overflow:auto;font-size:14px}
+article pre code{background:none;padding:0}
+article table{width:100%;border-collapse:collapse;margin:1.3em 0;font-size:15px;border:1px solid var(--bd);border-radius:12px;overflow:hidden}
+article th,article td{padding:9px 13px;text-align:left;border-bottom:1px solid var(--bd)}
+article th{background:color-mix(in srgb,var(--accent) 9%,transparent);font-weight:700}
+article tr:last-child td{border-bottom:0}
+article tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+sup.cite{color:var(--accent);font-weight:700;font-size:.7em;padding:0 .05em}
+hr{border:0;border-top:1px solid var(--bd);margin:2.4em 0}
+footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--bd);color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:8px}
+footer::before{content:"";width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+@media(max-width:600px){main{padding:38px 18px 64px}h1.title{font-size:30px}article h2{font-size:22px}}
 """
 
 _HEX_RE = re.compile(r"^#?[0-9a-fA-F]{3,8}$")
@@ -803,6 +840,7 @@ def _build_css(theme: Optional[str], accent: Optional[str], base: Optional[str])
         color = _safe_color(accent)
         if color:
             base_vars = re.sub(r"--accent:[^;]+", f"--accent:{color}", base_vars)
+            base_vars = re.sub(r"--accent2:[^;]+", f"--accent2:{color}", base_vars)
         root = f":root{{{base_vars};{_STATUS_VARS}}}"
     elif theme == "auto":
         root = (
@@ -877,7 +915,7 @@ def generate_html(
         "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_html_mod.escape(prompt[:120])}</title>"
-        f"<style>{_build_css(theme, accent, base)}</style></head><body><main>"
+        f"<style>{_build_css(theme, accent, base)}</style></head><body><div class=\"topbar\"></div><main>"
         f'<div class="eyebrow">{_html_mod.escape(labels.get("eyebrow", "Research report"))}</div>'
         f'<h1 class="title">{_html_mod.escape(prompt)}</h1>'
         f'<div class="meta">{meta}</div>'

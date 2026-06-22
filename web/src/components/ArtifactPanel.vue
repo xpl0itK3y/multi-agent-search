@@ -465,7 +465,10 @@ const exportMenuOpen = ref(false);
 const siteMenuOpen = ref(false);
 const customAccent = ref("#c15f3c");
 const customBase = ref<"light" | "dark">("light");
-const siteThemes = ["auto", "light", "dark", "editorial", "slate"] as const;
+const siteThemes = [
+  "auto", "light", "dark", "editorial", "sepia", "mono", "rose",
+  "lavender", "ocean", "slate", "midnight", "emerald", "forest", "sunset",
+] as const;
 const appOpen = ref(false);
 const appPrompt = ref("");
 
