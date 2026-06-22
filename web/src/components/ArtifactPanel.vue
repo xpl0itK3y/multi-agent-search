@@ -626,98 +626,93 @@ async function exportApp() {
             <button class="mt-2 text-red-400 hover:underline" @click="revokeShare">{{ $t("share.revoke") }}</button>
           </div>
         </div>
-        <!-- All download formats live in one menu so nothing gets clipped on a narrow panel -->
-        <div class="relative">
-          <button
-            class="flex items-center gap-1 rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-            :disabled="!!exporting"
-            :title="$t('artifact.export')"
-            @click="exportMenuOpen = !exportMenuOpen"
-          >
-            <span>⤓</span> {{ $t("artifact.export") }} {{ exporting ? "…" : "▾" }}
+      </div>
+    </div>
+
+    <!-- Always-visible download bar (outside the scroll area so the menu never clips). -->
+    <div
+      v-if="tab === 'report' && report && isFinal"
+      class="flex shrink-0 items-center gap-2 border-b border-bd px-6 py-2"
+    >
+      <div class="relative">
+        <button
+          class="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent transition hover:bg-accent/15 disabled:opacity-50"
+          :disabled="!!exporting"
+          @click="exportMenuOpen = !exportMenuOpen"
+        >
+          <span>⤓</span> {{ $t("artifact.download") }} <span class="text-xs">{{ exporting ? "…" : "▾" }}</span>
+        </button>
+        <div
+          v-if="exportMenuOpen"
+          class="absolute left-0 z-30 mt-1 w-60 rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
+        >
+          <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.docGroup") }}</div>
+          <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
+            <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
           </button>
-          <div
-            v-if="exportMenuOpen"
-            class="absolute right-0 z-20 mt-1 w-48 rounded-lg border border-bd bg-surface p-1.5 text-sm shadow-lg"
-          >
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
-              <span>PDF</span><span class="text-[10px] text-muted">.pdf</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
-              <span>Word</span><span class="text-[10px] text-muted">.docx</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
-              <span>Markdown</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-            <div class="my-1 border-t border-bd" />
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
-              <span>JSON</span><span class="text-[10px] text-muted">.json</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
-              <span>{{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-          </div>
-        </div>
-        <div class="relative">
-          <button
-            class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-            :disabled="!!exporting"
-            :title="$t('artifact.exportHtml')"
-            @click="siteMenuOpen = !siteMenuOpen"
-          >
-            {{ $t("artifact.site") }} ▾
+          <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
+            <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
           </button>
-          <div v-if="siteMenuOpen" class="absolute right-0 z-20 mt-1 w-52 rounded-lg border border-bd bg-surface p-2 shadow-lg">
-            <div class="mb-1 px-1 text-[11px] uppercase tracking-wide text-muted">{{ $t("site.title") }}</div>
+          <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
+            <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
+          </button>
+
+          <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.dataGroup") }}</div>
+          <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
+            <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
+          </button>
+          <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
+            <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
+          </button>
+
+          <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.webGroup") }}</div>
+          <div class="flex flex-wrap gap-1 px-1.5 pb-1">
             <button
               v-for="th in siteThemes"
               :key="th"
-              class="block w-full rounded px-2 py-1 text-left text-sm text-ink transition-colors hover:bg-surfaceHover"
-              @click="exportReport('html', { theme: th })"
+              class="rounded-md border border-bd px-2 py-0.5 text-xs text-ink transition hover:bg-surfaceHover"
+              :disabled="!!exporting"
+              @click="exportReport('html', { theme: th }); exportMenuOpen = false"
             >
               {{ $t("site." + th) }}
             </button>
-            <div class="mt-2 border-t border-bd pt-2">
-              <div class="mb-1 px-1 text-[11px] text-muted">{{ $t("site.custom") }}</div>
-              <div class="flex items-center gap-1.5 px-1">
-                <input v-model="customAccent" type="color" class="h-7 w-8 shrink-0 cursor-pointer rounded border border-bd bg-transparent" />
-                <select v-model="customBase" class="min-w-0 flex-1 rounded border border-bd bg-bg px-1 py-1 text-xs text-ink">
-                  <option value="light">{{ $t("site.light") }}</option>
-                  <option value="dark">{{ $t("site.dark") }}</option>
-                </select>
-                <button
-                  class="shrink-0 rounded bg-accent px-2 py-1 text-xs font-medium text-bg"
-                  @click="exportReport('html', { theme: 'custom', accent: customAccent, base: customBase })"
-                >
-                  {{ $t("site.download") }}
-                </button>
-              </div>
-            </div>
-            <div class="mt-2 border-t border-bd pt-2">
-              <button class="flex w-full items-center justify-between px-1 text-[11px] text-muted hover:text-ink" @click="appOpen = !appOpen">
-                <span>✨ {{ $t("site.app") }}</span>
-                <span>{{ appOpen ? "▾" : "▸" }}</span>
-              </button>
-              <div v-if="appOpen" class="mt-1 px-1">
-                <textarea
-                  v-model="appPrompt"
-                  :placeholder="$t('site.appPlaceholder')"
-                  rows="3"
-                  class="w-full resize-none rounded border border-bd bg-bg px-2 py-1 text-xs text-ink placeholder:text-muted focus:outline-none"
-                />
-                <button
-                  class="mt-1 w-full rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
-                  :disabled="exporting === 'app' || !appPrompt.trim()"
-                  @click="exportApp"
-                >
-                  {{ exporting === "app" ? $t("site.appBusy") : $t("site.appGo") }}
-                </button>
-                <p class="mt-1 text-[10px] leading-snug text-muted">{{ $t("site.appHint") }}</p>
-              </div>
-            </div>
+          </div>
+          <div class="flex items-center gap-1.5 px-1.5 pb-1">
+            <input v-model="customAccent" type="color" class="h-7 w-8 shrink-0 cursor-pointer rounded border border-bd bg-transparent" :title="$t('site.custom')" />
+            <select v-model="customBase" class="min-w-0 flex-1 rounded border border-bd bg-bg px-1 py-1 text-xs text-ink">
+              <option value="light">{{ $t("site.light") }}</option>
+              <option value="dark">{{ $t("site.dark") }}</option>
+            </select>
+            <button
+              class="shrink-0 rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
+              :disabled="!!exporting"
+              @click="exportReport('html', { theme: 'custom', accent: customAccent, base: customBase }); exportMenuOpen = false"
+            >
+              {{ $t("site.download") }}
+            </button>
+          </div>
+          <button class="export-item" @click="appOpen = !appOpen">
+            <span>✨ {{ $t("site.app") }}</span><span class="text-[10px] text-muted">{{ appOpen ? "▾" : "▸" }}</span>
+          </button>
+          <div v-if="appOpen" class="px-1.5 pb-1.5">
+            <textarea
+              v-model="appPrompt"
+              :placeholder="$t('site.appPlaceholder')"
+              rows="3"
+              class="w-full resize-none rounded border border-bd bg-bg px-2 py-1 text-xs text-ink placeholder:text-muted focus:outline-none"
+            />
+            <button
+              class="mt-1 w-full rounded bg-accent px-2 py-1 text-xs font-medium text-bg disabled:opacity-50"
+              :disabled="exporting === 'app' || !appPrompt.trim()"
+              @click="exportApp"
+            >
+              {{ exporting === "app" ? $t("site.appBusy") : $t("site.appGo") }}
+            </button>
+            <p class="mt-1 text-[10px] leading-snug text-muted">{{ $t("site.appHint") }}</p>
           </div>
         </div>
       </div>
+      <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.webGroup") }} · {{ $t("site.app") }}</span>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
