@@ -1506,7 +1506,21 @@ class ResearchService:
 
     # ── citation audit (deterministic claim↔source grounding) ───────────────────
 
-    def _audit_citations(self, report: str, research, tasks: list) -> None:
+    def _aggregated_sources(self, research, tasks: list) -> list | None:
+        """Reconstruct the analyzer's exact [Sn] source numbering once, to share across the
+        finalize trust steps (each would otherwise recompute it — AUD-013). None for a minimal
+        analyzer; defensive so a prep failure can't break finalization."""
+        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
+        if not callable(prepare):
+            return None
+        try:
+            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            return aggregated
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("aggregate_sources_failed research_id=%s error=%s", research.id, exc)
+            return None
+
+    def _audit_citations(self, report: str, research, tasks: list, aggregated: list | None = None) -> None:
         """Check each [Sn] citation against its source text; store grounding + integrity.
 
         Reconstructs the analyzer's exact source numbering so [Sn] line up, then matches
@@ -1518,7 +1532,8 @@ class ResearchService:
         if not callable(prepare):
             return  # minimal analyzer — no [Sn] numbering to reconstruct
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 source["source_id"]: {
                     "content": source.get("content"),
@@ -1546,7 +1561,7 @@ class ResearchService:
 
     # ── source independence (echo-chamber / circular-sourcing detector) ─────────
 
-    def _analyze_source_independence(self, research, tasks: list) -> None:
+    def _analyze_source_independence(self, research, tasks: list, aggregated: list | None = None) -> None:
         """Cluster the cited sources into independent origins; store the result.
 
         Reuses the analyzer's exact source numbering so cluster source_ids line up with
@@ -1556,7 +1571,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 source["source_id"]: {
                     "content": source.get("content"),
@@ -1584,7 +1600,7 @@ class ResearchService:
 
     # ── source reputation (low-credibility / state-media domain flags) ───────────
 
-    def _assess_source_reputation(self, research, tasks: list) -> None:
+    def _assess_source_reputation(self, research, tasks: list, aggregated: list | None = None) -> None:
         """Flag cited sources from satire/fabricated/conspiracy/state-controlled domains.
 
         Reuses the analyzer's [Sn] numbering so flags line up with the report. Deterministic
@@ -1594,7 +1610,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 s["source_id"]: {"url": s.get("url"), "domain": s.get("domain")}
                 for s in aggregated
@@ -1639,7 +1656,7 @@ class ResearchService:
         self._crossref_cache[doi] = message
         return message
 
-    def _check_retractions(self, research, tasks: list) -> None:
+    def _check_retractions(self, research, tasks: list, aggregated: list | None = None) -> None:
         """Flag cited sources backed by a retracted paper (Crossref/Retraction Watch).
 
         Network step — gated by a flag, capped, and fully defensive: any failure degrades to
@@ -1651,7 +1668,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 s["source_id"]: {"url": s.get("url"), "content": s.get("content")}
                 for s in aggregated
@@ -1701,7 +1719,7 @@ class ResearchService:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("cross_language_plan_failed research_id=%s error=%s", research_id, exc)
 
-    def _analyze_cross_language(self, research, tasks: list) -> None:
+    def _analyze_cross_language(self, research, tasks: list, aggregated: list | None = None) -> None:
         """Tag each source's language, build the distribution, and surface findings unique to
         non-query-language sources. Deterministic distribution + one gated LLM call. Never raises."""
         if not settings.cross_language_enabled:
@@ -1710,7 +1728,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             state = research.graph_state or {}
             query_lang = state.get("query_language") or detect_language(research.prompt)
             by_lang: dict[str, int] = {}
@@ -1767,7 +1786,7 @@ class ResearchService:
         lowered = f" {(prompt or '').lower()} "
         return any(signal in lowered for signal in self._STANCE_SIGNALS)
 
-    def _maybe_assess_stance(self, research, tasks: list) -> None:
+    def _maybe_assess_stance(self, research, tasks: list, aggregated: list | None = None) -> None:
         """For opinion/debate-shaped questions, label each source's stance and store the balance.
 
         Heuristic-gated (one LLM call only when the question has sides). Never raises.
@@ -1780,7 +1799,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 s["source_id"]: {"content": s.get("content"), "title": s.get("title")}
                 for s in aggregated[:14]
@@ -1809,7 +1829,7 @@ class ResearchService:
 
     # ── numeric & contradiction check (every figure traced to its source) ────────
 
-    def _check_numbers(self, report: str, research, tasks: list) -> None:
+    def _check_numbers(self, report: str, research, tasks: list, aggregated: list | None = None) -> None:
         """Verify each cited figure against its source text and flag internal contradictions.
 
         Reconstructs the analyzer's [Sn] numbering so figures line up with their sources.
@@ -1821,7 +1841,8 @@ class ResearchService:
         if not callable(prepare):
             return
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            if aggregated is None:
+                aggregated, _ = prepare(research.prompt, tasks, research.depth)
             sources_by_id = {
                 source["source_id"]: {"content": source.get("content")}
                 for source in aggregated
@@ -2484,15 +2505,18 @@ class ResearchService:
             self._emit_finalize_progress(research_id, "redteam")
             report = self._maybe_red_team(report, research, tasks)
             self._emit_finalize_progress(research_id, "audit")
-            self._audit_citations(report, research, tasks)
-            self._analyze_source_independence(research, tasks)
-            self._assess_source_reputation(research, tasks)
-            self._check_numbers(report, research, tasks)
-            self._check_retractions(research, tasks)
+            # Reconstruct the analyzer's source numbering ONCE and share it across the trust
+            # steps — each used to recompute it independently (AUD-013).
+            aggregated = self._aggregated_sources(research, tasks)
+            self._audit_citations(report, research, tasks, aggregated=aggregated)
+            self._analyze_source_independence(research, tasks, aggregated=aggregated)
+            self._assess_source_reputation(research, tasks, aggregated=aggregated)
+            self._check_numbers(report, research, tasks, aggregated=aggregated)
+            self._check_retractions(research, tasks, aggregated=aggregated)
             self._maybe_build_comparison(report, research)
             self._emit_finalize_progress(research_id, "viewpoints")
-            self._maybe_assess_stance(research, tasks)
-            self._analyze_cross_language(research, tasks)
+            self._maybe_assess_stance(research, tasks, aggregated=aggregated)
+            self._analyze_cross_language(research, tasks, aggregated=aggregated)
             report = self._inject_graph_execution_trail(report, research_id)
             # The "Report Notes" / "Примечания к отчёту" section is an INTERNAL quality
             # signal (the finalize graph re-drafts while it's present). It must never
