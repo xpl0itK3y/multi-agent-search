@@ -156,6 +156,7 @@ export interface CitationAudit {
   total: number;
   supported: number;
   integrity: number;
+  unverified?: number;
   unsupported_claims: string[];
   grounding: CitationGround[];
 }

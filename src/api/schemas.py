@@ -186,9 +186,10 @@ class CitationAudit(BaseModel):
     whose source doesn't even mention the claim's terms (the big Gemini/Perplexity failure).
     """
     research_id: str = ""
-    total: int = 0          # inline citations checked
-    supported: int = 0      # citations whose source text matches the claim
-    integrity: float = 0.0  # supported / total
+    total: int = 0          # VERIFIABLE claims checked (supported + unsupported)
+    supported: int = 0      # claims whose cited source text actually backs them
+    integrity: float = 0.0  # supported / total (over verifiable claims)
+    unverified: int = 0     # claims whose source is in another language with too few anchors to judge
     unsupported_claims: List[str] = Field(default_factory=list)
     grounding: List[CitationGround] = Field(default_factory=list)
 

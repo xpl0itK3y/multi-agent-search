@@ -142,6 +142,8 @@ const ru = {
     integrity: "Цитаты",
     matched: "сопоставлено с источником",
     weak: "не подтверждены источником",
+    unverified: "не проверено (иноязычный источник)",
+    unverifiedHint: "Утверждение ссылается на источник на другом языке — лексическая проверка невозможна, поэтому оно не засчитано ни в плюс, ни в минус.",
   },
   verify: {
     toggle: "Проверка",
@@ -474,6 +476,8 @@ const en: typeof ru = {
     integrity: "Citations",
     matched: "matched to source",
     weak: "not backed by source",
+    unverified: "unverified (other-language source)",
+    unverifiedHint: "The claim cites a source in another language — lexical matching can't judge it, so it counts neither for nor against.",
   },
   verify: {
     toggle: "Verify",
@@ -806,6 +810,8 @@ const es: typeof ru = {
     integrity: "Citas",
     matched: "coinciden con la fuente",
     weak: "sin respaldo en la fuente",
+    unverified: "sin verificar (fuente en otro idioma)",
+    unverifiedHint: "La afirmación cita una fuente en otro idioma — la coincidencia léxica no puede juzgarla, así que no cuenta ni a favor ni en contra.",
   },
   verify: {
     toggle: "Verificar",

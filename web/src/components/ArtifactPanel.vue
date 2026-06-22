@@ -691,11 +691,14 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <span class="text-muted">{{ $t("watch.changedHint") }}</span>
           <button class="ml-auto text-accent hover:underline" @click="ackWatch">{{ $t("watch.markSeen") }}</button>
         </div>
-        <div v-if="citations && citations.total" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
+        <div v-if="citations && (citations.total || citations.unverified)" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span class="font-medium text-ink">{{ $t("citations.integrity") }}</span>
-            <span class="font-semibold" :class="integrityClass">{{ Math.round(citations.integrity * 100) }}%</span>
-            <span class="text-muted">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
+            <span v-if="citations.total" class="font-semibold" :class="integrityClass">{{ Math.round(citations.integrity * 100) }}%</span>
+            <span v-if="citations.total" class="text-muted">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
+            <span v-if="citations.unverified" class="text-muted" :title="$t('citations.unverifiedHint')">
+              · {{ citations.unverified }} {{ $t("citations.unverified") }}
+            </span>
             <button
               v-if="citations.unsupported_claims.length"
               class="ml-auto text-red-400 hover:underline"

@@ -59,3 +59,22 @@ def test_citation_audit_still_flags_fabrication_across_all_sources():
     sources = {"S1": {"content": "A guide to baking sourdough bread."}, "S2": {"content": "Tips for indoor gardening."}}
     audit = CitationAuditAgent().audit(report, sources)
     assert audit.total == 1 and audit.supported == 0
+
+
+def test_citation_audit_cross_language_supported_via_anchors():
+    # A Russian claim citing an English source is backed by shared anchors (names + numbers).
+    report = "OpenAI готовит GPT-5.6 с контекстным окном 1500000 токенов к июню 2026 года [S1]."
+    sources = {"S1": {"content": "OpenAI is preparing GPT-5.6 with a 1500000 token context window, expected June 2026."}}
+    audit = CitationAuditAgent().audit(report, sources)
+    assert audit.supported == 1 and audit.total == 1
+    assert audit.unsupported_claims == []
+
+
+def test_citation_audit_cross_language_unverifiable_is_not_flagged():
+    # Russian prose citing an English source with no shared anchors -> 'unverified', never a red flag.
+    report = "Системы находятся на переходном этапе развития и масштабирования всей отрасли [S1]."
+    sources = {"S1": {"content": "The market is transitioning through a scaling phase across the industry."}}
+    audit = CitationAuditAgent().audit(report, sources)
+    assert audit.unverified == 1
+    assert audit.total == 0  # nothing verifiable
+    assert audit.unsupported_claims == []  # honest: not falsely flagged as fabricated
