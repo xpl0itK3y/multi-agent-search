@@ -27,6 +27,20 @@ const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
 const showNumbers = ref(false);
 const showWeak = ref(false);
+
+// Inline verification: a persisted toggle plus the signals MarkdownView decorates with.
+const verifyInline = ref((typeof localStorage !== "undefined" ? localStorage.getItem("verify.inline") : null) !== "0");
+watch(verifyInline, (v) => {
+  if (typeof localStorage !== "undefined") localStorage.setItem("verify.inline", v ? "1" : "0");
+});
+const weakClaims = computed<string[]>(() => {
+  const a = citations.value?.unsupported_claims || [];
+  const b = (numbers.value?.unsupported || []).map((u) => u.sentence).filter(Boolean);
+  return [...a, ...b];
+});
+const contradictionSentences = computed<string[]>(() =>
+  (numbers.value?.contradictions || []).flatMap((c) => c.sentences || []),
+);
 const diff = ref<ResearchDiff | null>(null);
 const showDiff = ref(false);
 const refreshing = ref(false);
@@ -708,6 +722,27 @@ async function exportApp() {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
       <template v-if="tab === 'report'">
+        <div v-if="report && isFinal" class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+          <button
+            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition"
+            :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
+            @click="verifyInline = !verifyInline"
+          >
+            <span>{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
+          </button>
+          <template v-if="verifyInline">
+            <span class="text-muted">{{ $t("verify.legend") }}</span>
+            <span class="inline-flex items-center gap-1 text-muted">
+              <span class="h-2 w-2 rounded-full bg-emerald-500" /> {{ $t("verify.strong") }}
+            </span>
+            <span class="inline-flex items-center gap-1 text-muted">
+              <span class="h-2 w-2 rounded-full bg-amber-500" /> {{ $t("verify.weak") }}
+            </span>
+            <span class="inline-flex items-center gap-1 text-muted">
+              <span class="h-2 w-2 rounded-full bg-red-400" /> {{ $t("verify.contested") }}
+            </span>
+          </template>
+        </div>
         <div
           v-if="watch_ && watch_.has_unseen_change"
           class="mb-4 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs animate-rise"
@@ -878,7 +913,16 @@ async function exportApp() {
             </div>
           </div>
         </div>
-        <MarkdownView v-if="report" :source="report" :grounding="citations?.grounding" :class="{ 'opacity-80': !isFinal }" />
+        <MarkdownView
+          v-if="report"
+          :source="report"
+          :grounding="citations?.grounding"
+          :independence="independence"
+          :weak-claims="weakClaims"
+          :contradictions="contradictionSentences"
+          :verify="verifyInline && isFinal"
+          :class="{ 'opacity-80': !isFinal }"
+        />
         <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>
       </template>
 
