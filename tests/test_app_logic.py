@@ -2350,6 +2350,41 @@ def test_finalize_strips_report_notes_from_served_report(mocker):
     assert "Report Notes" not in service.get_research_report(research.id).final_report
 
 
+def test_cancelled_research_is_not_resurrected_by_finishing_search(mocker):
+    """Cancelling must be sticky: a cancelled research whose last search task finishes must
+    stay CANCELLED — never flip back to ANALYZING, which would block a new research (409)."""
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=["task-1"],
+    )
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "done task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body " * 40}],
+        }
+    )
+    analyzer = mocker.Mock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer)
+
+    service.cancel_research(research.id)
+    assert task_store.get_research(research.id).status == ResearchStatus.CANCELLED
+
+    # The completion of the last search task triggers this — it must not re-enqueue finalize.
+    service._maybe_enqueue_finalization(research.id)
+    assert task_store.get_research(research.id).status == ResearchStatus.CANCELLED
+
+    # An explicit finalize enqueue is also a no-op on a cancelled research.
+    _, job = service.enqueue_research_finalization(research.id)
+    assert job is None
+    assert task_store.get_research(research.id).status == ResearchStatus.CANCELLED
+    analyzer.run_analysis.assert_not_called()
+
+
 def test_enqueue_research_finalization_fails_immediately_when_all_tasks_failed(mocker):
     task_store = InMemoryTaskStore()
     research = task_store.add_research(

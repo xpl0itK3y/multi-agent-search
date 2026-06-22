@@ -408,6 +408,10 @@ class ResearchService:
                 if research is not None and research.status == ResearchStatus.QUEUED:
                     logger.info("decompose_deferred_queued research_id=%s", research_id)
                     return
+                # User cancelled before decompose ran — don't spend the LLM call or enqueue jobs.
+                if research is not None and research.status in self._TERMINAL_STATUSES:
+                    logger.info("decompose_skipped_terminal research_id=%s status=%s", research_id, research.status.value)
+                    return
                 graph_state = (research.graph_state if research else None) or {}
                 # Clarify step (plan-first only, once): ask up to 3 questions before planning.
                 if (
@@ -426,6 +430,12 @@ class ResearchService:
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
                 tasks_raw = orchestrator.run_decompose(effective_prompt, request.depth)
                 self._maybe_add_cross_language_task(research_id, effective_prompt, tasks_raw)
+                # Cancellation can land while decompose was running — re-check before we
+                # create tasks and flood the queue with search jobs.
+                current = self.task_store.get_research(research_id)
+                if current is not None and current.status in self._TERMINAL_STATUSES:
+                    logger.info("decompose_aborted_terminal research_id=%s status=%s", research_id, current.status.value)
+                    return
                 if request.plan_first:
                     # Store an editable plan and wait for user approval (no tasks/jobs yet).
                     self._store_plan_for_review(research_id, tasks_raw)
@@ -2415,7 +2425,9 @@ class ResearchService:
         if not research:
             raise HTTPException(status_code=404, detail="Research not found")
 
-        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+        if research.status in [
+            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
+        ]:
             return research
 
         tasks = self.task_store.get_tasks_by_research(research_id)
@@ -2504,6 +2516,12 @@ class ResearchService:
             from src.ui.report_utils import clean_report
 
             report = clean_report(report)
+            # The user may have cancelled while this analysis was running — honour it
+            # rather than overwriting CANCELLED with a COMPLETED report.
+            latest = self.task_store.get_research(research_id)
+            if latest is not None and latest.status == ResearchStatus.CANCELLED:
+                logger.info("finalize_discarded_cancelled research_id=%s", research_id)
+                return latest
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.COMPLETED,
@@ -2564,7 +2582,10 @@ class ResearchService:
 
     def enqueue_research_finalization(self, research_id: str) -> tuple[ResearchRecord, ResearchFinalizeJob | None]:
         research = self._get_research_for_finalization(research_id)
-        if research.status in [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED]:
+        # CANCELLED is terminal: never resurrect a cancelled research into ANALYZING.
+        if research.status in [
+            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
+        ]:
             return research, None
 
         with bind_observability_context(research_id=research_id):
@@ -3716,7 +3737,7 @@ class ResearchService:
     def _maybe_enqueue_finalization(self, research_id: str) -> None:
         research = self.task_store.get_research(research_id)
         if research is None or research.status in (
-            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED
+            ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
         ):
             return
         tasks = self.task_store.get_tasks_by_research(research_id)
@@ -3741,6 +3762,14 @@ class ResearchService:
             )
 
         with bind_observability_context(job_id=job.id, task_id=task.id, research_id=task.research_id):
+            # If the user cancelled (or the research otherwise ended) while this job sat in
+            # the queue, don't spend search/extraction on it — drain the job and move on.
+            research = self.task_store.get_research(task.research_id) if task.research_id else None
+            if research is not None and research.status in self._TERMINAL_STATUSES:
+                logger.info("search_job_skipped_terminal status=%s", research.status.value)
+                return self.task_store.update_search_task_job(
+                    job_id, SearchJobStatus.COMPLETED, "Research no longer active — search skipped"
+                )
             try:
                 logger.info("search_job_processing depth=%s", job.depth.value)
                 self.run_search_task(task.id, job.depth)
