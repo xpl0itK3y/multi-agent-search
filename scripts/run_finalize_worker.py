@@ -51,7 +51,14 @@ def main() -> int:
         return 0
 
     while not _shutdown.is_set():
-        run_once()
+        try:
+            run_once()
+        except Exception as exc:
+            # A transient failure (DB hiccup, Redis blip) must not crash the replica into a
+            # Docker restart loop — log, back off, and keep polling.
+            print(f"job-worker: run_once failed, backing off then retrying: {exc}", flush=True)
+            _shutdown.wait(timeout=min(30.0, max(args.interval * 5, 1.0)))
+            continue
         _shutdown.wait(timeout=args.interval)
 
     print("job-worker: shutdown complete")

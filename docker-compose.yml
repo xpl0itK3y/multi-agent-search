@@ -19,6 +19,9 @@ x-worker-base: &worker-base
     LOG_FORMAT: json
   command: ["python", "scripts/run_finalize_worker.py"]
   restart: unless-stopped
+  # Let an in-flight job finish on SIGTERM before Docker SIGKILLs the replica; anything
+  # still running past this is recovered by stale-job recovery (which re-queues to Redis).
+  stop_grace_period: 30s
 
 services:
   api:
