@@ -83,7 +83,7 @@ class DuckDuckGoBackend(SearchBackend):
             for future in as_completed(futures):
                 backend = futures[future]
                 try:
-                    results = future.result()
+                    results = future.result(timeout=30.0)  # backend HTTP timeout is ~20s
                     if results:
                         logger.info(
                             "ddg_search_success backend=%s results=%d query_prefix=%r",

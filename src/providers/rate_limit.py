@@ -47,7 +47,9 @@ class LLMLimiter:
             try:
                 import redis
 
-                self._redis = redis.from_url(settings.redis_url, decode_responses=True)
+                self._redis = redis.from_url(
+                    settings.redis_url, decode_responses=True, socket_timeout=5, socket_connect_timeout=3
+                )
                 self._redis.ping()
                 self._script = self._redis.register_script(_ACQUIRE_LUA)
                 logger.info("llm_limiter_redis cap=%d", self._cap)

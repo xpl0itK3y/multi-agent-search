@@ -1386,7 +1386,9 @@ class AnalyzerAgent(BaseAgent):
         with ThreadPoolExecutor(max_workers=min(n, max(1, settings.analyzer_section_concurrency))) as executor:
             futures = [executor.submit(_run_section, i, chunk) for i, chunk in enumerate(chunks)]
             for future in as_completed(futures):
-                future.result()  # surface any exceptions
+                # Bound the wait (the section's LLM call has its own 120s client timeout);
+                # surfaces exceptions, so a stuck section fails the pass instead of hanging.
+                future.result(timeout=300.0)
 
         completed_drafts = [d for d in section_drafts if d]
         synthesis_prompt = self._build_synthesis_user_prompt(

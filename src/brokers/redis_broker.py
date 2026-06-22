@@ -22,7 +22,14 @@ class RedisBroker:
     """
 
     def __init__(self, redis_url: str, pop_timeout_seconds: int = 2) -> None:
-        self._client = redis.from_url(redis_url, decode_responses=True)
+        # socket_timeout must exceed the BLPOP server-side timeout so a normal empty poll
+        # doesn't trip it, while still bounding a silently-dropped connection.
+        self._client = redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=pop_timeout_seconds + 5,
+            socket_connect_timeout=3,
+        )
         self._pop_timeout = pop_timeout_seconds
 
     # ------------------------------------------------------------------
