@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from src.graph.history import compact_graph_step_events
+from src.core.graph_history import compact_graph_step_events
 
 
 def test_compact_graph_step_events_dedupes_and_keeps_latest_limit(mocker):
@@ -18,8 +18,8 @@ def test_compact_graph_step_events_dedupes_and_keeps_latest_limit(mocker):
         {"timestamp": newer_timestamp, "step": "tie_break", "elapsed_ms": 300.0, "worker_name": "job-worker"},
     ]
 
-    mocker.patch("src.graph.history.settings.graph_step_event_retention_seconds", 3600)
-    mocker.patch("src.graph.history.settings.graph_step_event_history_limit", 2)
+    mocker.patch("src.core.graph_history.settings.graph_step_event_retention_seconds", 3600)
+    mocker.patch("src.core.graph_history.settings.graph_step_event_history_limit", 2)
 
     compacted = compact_graph_step_events(existing, incoming)
 
@@ -33,8 +33,8 @@ def test_compact_graph_step_events_drops_expired_entries(mocker):
     expired_timestamp = (now - timedelta(days=2)).isoformat()
     recent_timestamp = (now - timedelta(minutes=5)).isoformat()
 
-    mocker.patch("src.graph.history.settings.graph_step_event_retention_seconds", 3600)
-    mocker.patch("src.graph.history.settings.graph_step_event_history_limit", 10)
+    mocker.patch("src.core.graph_history.settings.graph_step_event_retention_seconds", 3600)
+    mocker.patch("src.core.graph_history.settings.graph_step_event_history_limit", 10)
 
     compacted = compact_graph_step_events(
         [{"timestamp": expired_timestamp, "step": "collect_context", "elapsed_ms": 100.0}],

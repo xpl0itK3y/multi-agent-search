@@ -11,7 +11,7 @@ from src.api.schemas import (
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 from src.workers import MaintenanceWorker
-from src.graph.history import compact_graph_trail
+from src.core.graph_history import compact_graph_trail
 
 
 def test_maintenance_worker_recovers_stale_search_and_finalize_jobs(monkeypatch):
@@ -145,8 +145,8 @@ def test_maintenance_worker_compacts_graph_operational_data(monkeypatch):
     monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", 60)
     monkeypatch.setattr("src.services.research_service.settings.search_job_retention_seconds", 3600)
     monkeypatch.setattr("src.services.research_service.settings.finalize_job_retention_seconds", 3600)
-    monkeypatch.setattr("src.graph.history.settings.graph_step_event_retention_seconds", 60)
-    monkeypatch.setattr("src.graph.history.settings.graph_trail_retention_seconds", 60)
+    monkeypatch.setattr("src.core.graph_history.settings.graph_step_event_retention_seconds", 60)
+    monkeypatch.setattr("src.core.graph_history.settings.graph_trail_retention_seconds", 60)
 
     old_ts = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     task_store.upsert_worker_heartbeat(

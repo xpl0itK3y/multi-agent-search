@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from src.graph.history import compact_graph_step_events, compact_graph_trail
+from src.core.graph_history import compact_graph_step_events, compact_graph_trail
 from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,

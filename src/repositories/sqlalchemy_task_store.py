@@ -32,7 +32,7 @@ from src.db.models import (
     UserORM,
     WorkerHeartbeatORM,
 )
-from src.graph.history import compact_graph_step_events, compact_graph_trail
+from src.core.graph_history import compact_graph_step_events, compact_graph_trail
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
