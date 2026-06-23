@@ -605,14 +605,71 @@ class AnalyzerAgent(BaseAgent):
             return "en" if latin_count else "unknown"
         return best_language
 
+    _LANGUAGE_NAMES = {"ru": "Russian", "es": "Spanish", "en": "English"}
+
     def _language_instruction(self, language: str) -> str:
-        if language == "ru":
-            return "Write the full report in Russian."
-        if language == "es":
-            return "Write the full report in Spanish."
-        if language == "en":
-            return "Write the full report in English."
-        return "Write the full report in the same language as the original prompt."
+        name = self._LANGUAGE_NAMES.get(language)
+        if name:
+            return (
+                f"CRITICAL LANGUAGE REQUIREMENT: write the ENTIRE report in {name}. The sources and any "
+                f"partial analyses may be in other languages (often English) — you MUST still write every "
+                f"heading, sentence and bullet in {name}. Keep only inline [Sn] citations, URLs and proper "
+                f"names/acronyms in their original form."
+            )
+        return (
+            "CRITICAL: write the ENTIRE report in the SAME LANGUAGE as the original prompt, even if the "
+            "sources or partial analyses are in another language. Keep [Sn] citations and proper names as-is."
+        )
+
+    def _language_reminder(self, language: str) -> str:
+        """A short trailing re-assertion to place AFTER source/draft text, where recency fights drift."""
+        name = self._LANGUAGE_NAMES.get(language)
+        if name:
+            return (
+                f"FINAL REMINDER: the material above may be in English; write your entire report in {name}."
+            )
+        return (
+            "FINAL REMINDER: write your entire report in the same language as the research question above, "
+            "regardless of the language of the material."
+        )
+
+    def _enforce_report_language(self, report: str, language: str, model: str | None) -> str:
+        """Guarantee the report is in `language` — the HARD/parallel path has no generation-time retry.
+
+        Detect the report's language; on a confident mismatch do ONE targeted rewrite that preserves
+        [Sn] citations, URLs and structure. Falls back to the original on any failure or if the rewrite
+        drops citations / still isn't in the target language — never returns empty or a worse report.
+        """
+        if language == "unknown" or not (report or "").strip():
+            return report
+        detected = self._detect_language(report)
+        if detected in (language, "unknown"):
+            return report
+        name = self._LANGUAGE_NAMES.get(language, "the original prompt's language")
+        logger.warning("analyzer_language_mismatch_rewriting target=%s detected=%s", language, detected)
+        try:
+            rewritten = (self.llm.generate(
+                system_prompt=(
+                    f"You are a professional translator. Rewrite the user's Markdown research report "
+                    f"ENTIRELY in {name}, preserving meaning, structure, headings, tables and every inline "
+                    f"[Sn] citation and URL EXACTLY. Translate all prose and headings; do not add, drop or "
+                    f"reorder content. Output only the rewritten report."
+                ),
+                user_prompt=report,
+                model=model,
+                temperature=0.2,
+            ) or "").strip()
+        except Exception:
+            logger.warning("analyzer_language_rewrite_failed", exc_info=True)
+            return report
+        if (
+            rewritten
+            and self._editor_preserved_citations(report, rewritten)
+            and self._detect_language(rewritten) in (language, "unknown")
+        ):
+            logger.info("analyzer_language_rewrite_applied before=%d after=%d", len(report), len(rewritten))
+            return rewritten
+        return report
 
     def _sources_heading(self, language: str) -> str:
         return "## Источники" if language == "ru" else "## Sources"
@@ -1215,7 +1272,8 @@ class AnalyzerAgent(BaseAgent):
             "Analyze ONLY these sources and write detailed analytical findings. "
             "Cite every factual claim with [Sn] using the exact source_id values from gathered_data. "
             "Do NOT write Introduction, Conclusion, or Sources sections — only the body content sections.\n\n"
-            f"{json.dumps(section_input, ensure_ascii=False)}"
+            f"{json.dumps(section_input, ensure_ascii=False)}\n\n"
+            f"{self._language_reminder(language)}"
         )
 
     def _build_synthesis_user_prompt(
@@ -1263,7 +1321,8 @@ class AnalyzerAgent(BaseAgent):
             f"{self._plan_outline_block(plan_questions)}"
             f"Research question: {prompt}"
             f"{meta_block}\n\n"
-            f"{drafts_text}"
+            f"{drafts_text}\n\n"
+            f"{self._language_reminder(language)}"
         )
 
     def _build_editor_prompt(self, report: str, prompt: str, language: str, plan_questions: list[str] | None) -> str:
@@ -1496,6 +1555,9 @@ class AnalyzerAgent(BaseAgent):
                     )
         # Final editorial pass (MEDIUM/HARD): tighten prose, enforce answer-first structure, dedupe.
         result = self._maybe_edit_report(result, prompt, prompt_language, depth, model, plan_questions)
+        # Guarantee output language even on the parallel/HARD path (which has no generation-time
+        # language retry): rewrite once if the model drifted to the sources' language (language-fix).
+        result = self._enforce_report_language(result, prompt_language, model)
         # Stream the final (possibly edited) report once so the UI lands on the polished version.
         if streaming_callback:
             streaming_callback(result)
