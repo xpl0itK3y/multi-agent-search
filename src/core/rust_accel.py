@@ -57,18 +57,8 @@ def _search_config() -> dict:
     return {
         "trusted_domain_exact_matches": sorted(domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES),
         "trusted_domain_suffixes": list(domain_policy.TRUSTED_DOMAIN_SUFFIXES),
-        "low_value_domain_exact_matches": [
-            "linkedin.com",
-            "pinterest.com",
-            "facebook.com",
-            "x.com",
-            "twitter.com",
-            "tiktok.com",
-            "vk.com",
-            "medium.com",
-            "behance.net",
-        ],
-        "low_value_domain_substrings": ["bookmark", "trendhunter", "grokipedia", "outmaxshop"],
+        "low_value_domain_exact_matches": sorted(domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES),
+        "low_value_domain_substrings": list(domain_policy.LOW_VALUE_DOMAIN_SUBSTRINGS),
         "low_signal_title_tokens": [
             "discover",
             "gallery",
@@ -174,20 +164,8 @@ def _analyzer_config() -> dict:
     return {
         "trusted_domain_exact_matches": sorted(domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES),
         "trusted_domain_suffixes": list(domain_policy.TRUSTED_DOMAIN_SUFFIXES),
-        "low_value_domain_exact_matches": [
-            "linkedin.com",
-            "pinterest.com",
-            "facebook.com",
-            "x.com",
-            "twitter.com",
-            "eventify.io",
-        ],
-        "low_value_domain_substrings": [
-            "bookmark",
-            "newsnviews",
-            "techandgadgetreviews",
-            "techspymagazine",
-        ],
+        "low_value_domain_exact_matches": sorted(domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES),
+        "low_value_domain_substrings": list(domain_policy.LOW_VALUE_DOMAIN_SUBSTRINGS),
         "speculative_title_tokens": [
             "predictions",
             "prediction",

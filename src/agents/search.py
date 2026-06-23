@@ -18,35 +18,9 @@ logger = logging.getLogger(__name__)
 class SearchAgent:
     TRUSTED_DOMAIN_EXACT_MATCHES = domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES
     TRUSTED_DOMAIN_SUFFIXES = domain_policy.TRUSTED_DOMAIN_SUFFIXES
-    LOW_VALUE_DOMAIN_EXACT_MATCHES = {
-        "linkedin.com",
-        "www.linkedin.com",
-        "pinterest.com",
-        "www.pinterest.com",
-        "facebook.com",
-        "www.facebook.com",
-        "x.com",
-        "twitter.com",
-        "tiktok.com",
-        "www.tiktok.com",
-        "vk.com",
-        "www.vk.com",
-        "medium.com",
-        "www.medium.com",
-        "behance.net",
-        "www.behance.net",
-        "youtube.com",
-        "www.youtube.com",
-        "m.youtube.com",
-        "youtu.be",
-        "passport.yandex.ru",
-    }
-    LOW_VALUE_DOMAIN_SUBSTRINGS = (
-        "bookmark",
-        "trendhunter",
-        "grokipedia",
-        "outmaxshop",
-    )
+    # Unified across stages via domain_policy (AUD-006) — see that module for the eval check.
+    LOW_VALUE_DOMAIN_EXACT_MATCHES = domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES
+    LOW_VALUE_DOMAIN_SUBSTRINGS = domain_policy.LOW_VALUE_DOMAIN_SUBSTRINGS
     LOW_SIGNAL_TITLE_TOKENS = (
         "discover",
         "gallery",

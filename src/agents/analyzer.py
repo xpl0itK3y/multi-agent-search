@@ -71,20 +71,9 @@ class AnalyzerAgent(BaseAgent):
     NEGATION_TOKENS = {"no", "not", "never", "without", "lack", "lacks", "cannot", "can't", "doesn't", "don't"}
     TRUSTED_DOMAIN_EXACT_MATCHES = domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES
     TRUSTED_DOMAIN_SUFFIXES = domain_policy.TRUSTED_DOMAIN_SUFFIXES
-    LOW_VALUE_DOMAIN_EXACT_MATCHES = {
-        "linkedin.com",
-        "pinterest.com",
-        "facebook.com",
-        "x.com",
-        "twitter.com",
-        "eventify.io",
-    }
-    LOW_VALUE_DOMAIN_SUBSTRINGS = (
-        "bookmark",
-        "newsnviews",
-        "techandgadgetreviews",
-        "techspymagazine",
-    )
+    # Unified across stages via domain_policy (AUD-006) — see that module for the eval check.
+    LOW_VALUE_DOMAIN_EXACT_MATCHES = domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES
+    LOW_VALUE_DOMAIN_SUBSTRINGS = domain_policy.LOW_VALUE_DOMAIN_SUBSTRINGS
     SPECULATIVE_TITLE_TOKENS = {
         "predictions",
         "prediction",
