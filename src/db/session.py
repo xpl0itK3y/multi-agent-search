@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase
 
 from src.config import settings
 
@@ -32,6 +32,3 @@ def _engine_kwargs(url: str) -> dict:
 def create_engine_from_settings():
     url = get_database_url()
     return create_engine(url, **_engine_kwargs(url))
-
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=None)
