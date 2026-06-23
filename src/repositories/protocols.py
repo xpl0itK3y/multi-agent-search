@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Protocol
 
-from src.api.schemas import (
+from src.domain import (
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,

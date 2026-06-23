@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Optional
 
-from src.api.schemas import StanceBalance, StanceSource
+from src.domain import StanceBalance, StanceSource
 from src.core.llm import LLMProvider
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from src.api.schemas import (
+from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,

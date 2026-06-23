@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Callable, Optional
 
-from src.api.schemas import RedTeamFinding, RedTeamReport
+from src.domain import RedTeamFinding, RedTeamReport
 from src.core.llm import LLMProvider
 
 logger = logging.getLogger(__name__)

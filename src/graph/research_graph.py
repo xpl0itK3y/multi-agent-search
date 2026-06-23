@@ -6,7 +6,7 @@ import time
 from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
-from src.api.schemas import ReplanRecommendation, SearchDepth, SearchTask
+from src.domain import ReplanRecommendation, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
     record_graph_analyze,

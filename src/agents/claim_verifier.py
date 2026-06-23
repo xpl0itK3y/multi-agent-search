@@ -1,6 +1,6 @@
 import re
 
-from src.api.schemas import ClaimVerificationSummary
+from src.domain import ClaimVerificationSummary
 
 
 class ClaimVerifierAgent:

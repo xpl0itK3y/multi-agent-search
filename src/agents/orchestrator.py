@@ -2,7 +2,7 @@ import json
 import re
 import uuid
 from src.core.agent import BaseAgent
-from src.api.schemas import SearchDepth, TaskStatus
+from src.domain import SearchDepth, TaskStatus
 from src.agents.language_utils import LANGUAGE_HINTS
 from src.observability import maybe_traceable
 from src.search_depth_profiles import get_depth_profile

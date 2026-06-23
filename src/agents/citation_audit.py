@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from src.api.schemas import CitationAudit, CitationGround
+from src.domain import CitationAudit, CitationGround
 
 _CITATION = re.compile(r"\[S(\d+)\]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")

@@ -6,7 +6,7 @@ from typing import Callable
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from src.api.schemas import (
+from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,

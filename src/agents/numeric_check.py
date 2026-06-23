@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from src.api.schemas import NumericCheck, NumericClaim, NumericContradiction
+from src.domain import NumericCheck, NumericClaim, NumericContradiction
 
 _CITATION = re.compile(r"\[S(\d+)\]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")

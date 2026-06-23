@@ -1,4 +1,4 @@
-from src.api.schemas import EvidenceCoverageSummary
+from src.domain import EvidenceCoverageSummary
 from src.core import rust_accel
 
 

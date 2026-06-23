@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Optional
 
-from src.api.schemas import ComparisonCell, ComparisonRow, ComparisonTable
+from src.domain import ComparisonCell, ComparisonRow, ComparisonTable
 from src.core.llm import LLMProvider
 
 logger = logging.getLogger(__name__)

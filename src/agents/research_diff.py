@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from src.api.schemas import DiffClaim, ResearchDiff
+from src.domain import DiffClaim, ResearchDiff
 
 _WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
 _MATCH_THRESHOLD = 0.45  # Jaccard over claim tokens to treat two claims as "the same"

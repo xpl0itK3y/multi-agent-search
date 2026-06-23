@@ -15,7 +15,7 @@ down — producing the "X% solid / Y% contested / Z% speculative" headline.
 """
 from __future__ import annotations
 
-from src.api.schemas import (
+from src.domain import (
     CitationAudit,
     ConfidenceClaim,
     ConfidenceComponent,

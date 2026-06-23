@@ -26,7 +26,7 @@ from src.agents.research_diff import ResearchDiffAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.brokers.redis_broker import RedisBroker
-from src.api.schemas import (
+from src.domain import (
     AuthUser,
     JobCleanupResponse,
     MaintenanceSummary,

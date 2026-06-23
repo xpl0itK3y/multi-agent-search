@@ -3,7 +3,7 @@ import logging
 from collections import Counter
 from typing import Optional
 
-from src.api.schemas import ReplanRecommendation, SearchDepth, SearchTask, SourceCriticSummary
+from src.domain import ReplanRecommendation, SearchDepth, SearchTask, SourceCriticSummary
 from src.config import settings
 from src.core.llm import LLMProvider
 

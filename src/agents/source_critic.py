@@ -1,7 +1,7 @@
 from collections import Counter
 from urllib.parse import urlparse
 
-from src.api.schemas import SourceCriticSummary
+from src.domain import SourceCriticSummary
 from src.source_quality_policy import PRIMARY_DOMAINS
 
 

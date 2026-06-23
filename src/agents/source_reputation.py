@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from src.api.schemas import ReputationFlag, SourceReputation
+from src.domain import ReputationFlag, SourceReputation
 from src.source_reputation_policy import REPUTATION_FLAGS
 
 

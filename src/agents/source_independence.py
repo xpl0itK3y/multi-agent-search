@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from src.api.schemas import OriginCluster, SourceIndependence
+from src.domain import OriginCluster, SourceIndependence
 
 _WORD_MIN = 3
 _SYNDICATION_THRESHOLD = 0.50  # Jaccard over content tokens above which two sources are "the same text"

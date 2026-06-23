@@ -1,6 +1,6 @@
 from typing import Any, TypedDict
 
-from src.api.schemas import SearchDepth, SearchTask
+from src.domain import SearchDepth, SearchTask
 
 
 class FinalizeGraphState(TypedDict, total=False):

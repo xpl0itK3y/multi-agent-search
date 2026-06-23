@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from src.config import settings
 from src.providers.search import SearchProvider, ContentExtractor
-from src.api.schemas import SearchTaskMetrics, TaskStatus, TaskUpdate
+from src.domain import SearchTaskMetrics, TaskStatus, TaskUpdate
 from src.core import domain_policy, rust_accel
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict

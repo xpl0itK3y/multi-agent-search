@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 
 from src.graph.history import compact_graph_step_events, compact_graph_trail
-from src.api.schemas import (
+from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,

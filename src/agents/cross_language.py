@@ -19,7 +19,7 @@ from collections import Counter
 from typing import Optional
 
 from src.agents.language_utils import LANGUAGE_HINTS
-from src.api.schemas import CrossLanguageFinding
+from src.domain import CrossLanguageFinding
 from src.core.llm import LLMProvider
 
 logger = logging.getLogger(__name__)

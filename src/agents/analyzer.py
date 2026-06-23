@@ -13,7 +13,7 @@ from src.agents.source_critic import SourceCriticAgent
 from src.core.agent import BaseAgent
 from src.core import domain_policy
 from src.core import rust_accel
-from src.api.schemas import SearchTask, SearchDepth
+from src.domain import SearchTask, SearchDepth
 from src.config import settings
 from src.observability import maybe_traceable
 from src.source_quality_policy import TOPIC_POLICIES, combined_topics

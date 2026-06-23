@@ -15,7 +15,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
-from src.api.schemas import IntegrityFlag, SourceIntegrity
+from src.domain import IntegrityFlag, SourceIntegrity
 
 # DOI syntax: 10.<registrant>/<suffix>. DOIs may contain parentheses (e.g. Lancet
 # 10.1016/S0140-6736(97)11096-0), so allow them and trim a trailing markdown-wrapping ")"

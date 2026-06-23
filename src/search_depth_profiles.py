@@ -1,4 +1,4 @@
-from src.api.schemas import SearchDepth
+from src.domain import SearchDepth
 
 
 SEARCH_DEPTH_PROFILES = {
