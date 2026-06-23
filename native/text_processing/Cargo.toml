@@ -8,8 +8,13 @@ name = "multi_agent_search_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.22" }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[features]
+# Enabled by maturin + the build script for the Python extension build; left OFF under
+# `cargo test` so the test binary links libpython normally and unit tests can run (AUD-037).
+extension-module = ["pyo3/extension-module"]
 

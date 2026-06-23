@@ -24,5 +24,5 @@ if ! "$VENV_PYTHON" -m pip show maturin >/dev/null 2>&1; then
 fi
 
 echo "Building native text-processing module from $MANIFEST_PATH"
-"$VENV_PYTHON" -m maturin develop --release --manifest-path "$MANIFEST_PATH"
+"$VENV_PYTHON" -m maturin develop --release --features extension-module --manifest-path "$MANIFEST_PATH"
 echo "Native module build finished."

@@ -168,12 +168,30 @@ fn content_fingerprint_impl(title: &str, content: &str, prefix_len: usize) -> St
 }
 
 fn split_sentences(content: &str) -> Vec<String> {
-    let sentence_re = Regex::new(r"(?<=[.!?])\s+").unwrap();
-    sentence_re
-        .split(content)
-        .map(normalize_text_impl)
-        .filter(|item| !item.is_empty())
-        .collect()
+    // Mirror Python's re.split(r"(?<=[.!?])\s+", content): split on a whitespace run that
+    // follows a sentence terminator. The Rust `regex` crate has NO look-behind, so the old
+    // Regex::new(r"(?<=[.!?])\s+") panicked at runtime — done by hand here instead (AUD-037).
+    let mut sentences: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = content.chars().peekable();
+    while let Some(c) = chars.next() {
+        current.push(c);
+        if matches!(c, '.' | '!' | '?') && chars.peek().map_or(false, |n| n.is_whitespace()) {
+            while chars.peek().map_or(false, |n| n.is_whitespace()) {
+                chars.next();
+            }
+            let normalized = normalize_text_impl(&current);
+            if !normalized.is_empty() {
+                sentences.push(normalized);
+            }
+            current.clear();
+        }
+    }
+    let normalized = normalize_text_impl(&current);
+    if !normalized.is_empty() {
+        sentences.push(normalized);
+    }
+    sentences
 }
 
 fn is_likely_year(value: &str) -> bool {
@@ -1159,4 +1177,72 @@ fn multi_agent_search_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> P
     module.add_function(wrap_pyfunction!(select_analyzer_sources, module)?)?;
     module.add_function(wrap_pyfunction!(extract_evidence_groups, module)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(items: &[&str]) -> Vec<String> {
+        items.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn normalize_text_collapses_whitespace() {
+        assert_eq!(normalize_text_impl("  a  b\tc\n d "), "a b c d");
+        assert_eq!(normalize_text_impl(""), "");
+    }
+
+    #[test]
+    fn normalized_domain_strips_scheme_www_and_lowercases() {
+        assert_eq!(normalized_domain("https://www.Example.com/path?q=1"), "example.com");
+        assert_eq!(normalized_domain("http://YouTube.com"), "youtube.com");
+        assert_eq!(normalized_domain("example.org"), "example.org");
+    }
+
+    #[test]
+    fn contains_any_matches_substrings() {
+        assert!(contains_any("foobarbaz", &s(&["bar"])));
+        assert!(!contains_any("foo", &s(&["xyz"])));
+        assert!(!contains_any("anything", &s(&[])));
+    }
+
+    #[test]
+    fn content_fingerprint_lowercases_and_truncates_prefix() {
+        assert_eq!(content_fingerprint_impl("Title", "Hello World Content", 5), "title|hello");
+    }
+
+    #[test]
+    fn is_likely_year_bounds_and_rejects_non_years() {
+        assert!(is_likely_year("2024"));
+        assert!(is_likely_year("1900"));
+        assert!(is_likely_year("2100"));
+        assert!(!is_likely_year("1899"));
+        assert!(!is_likely_year("2101"));
+        assert!(!is_likely_year("2024.5")); // a decimal is a measurement, not a year
+        assert!(!is_likely_year("notayear"));
+    }
+
+    #[test]
+    fn trusted_domain_score_ranks_exact_then_suffix_then_github_io() {
+        assert_eq!(trusted_domain_score("docs.python.org", &s(&["docs.python.org"]), &s(&[])), 200);
+        assert_eq!(trusted_domain_score("agency.gov", &s(&[]), &s(&[".gov"])), 150);
+        assert_eq!(trusted_domain_score("user.github.io", &s(&[]), &s(&[])), 40);
+        assert_eq!(trusted_domain_score("random.com", &s(&[]), &s(&[])), 0);
+        assert_eq!(trusted_domain_score("", &s(&["random.com"]), &s(&[".gov"])), 0);
+    }
+
+    #[test]
+    fn low_value_domain_penalty_exact_then_substring() {
+        assert_eq!(low_value_domain_penalty("linkedin.com", &s(&["linkedin.com"]), &s(&[])), 120);
+        assert_eq!(low_value_domain_penalty("foo-bookmark.net", &s(&[]), &s(&["bookmark"])), 90);
+        assert_eq!(low_value_domain_penalty("good.com", &s(&[]), &s(&["bookmark"])), 0);
+        assert_eq!(low_value_domain_penalty("", &s(&["x"]), &s(&["y"])), 0);
+    }
+
+    #[test]
+    fn split_sentences_splits_on_terminators_and_normalizes() {
+        let out = split_sentences("First one. Second  two!  Third three?");
+        assert_eq!(out, vec!["First one.", "Second two!", "Third three?"]);
+    }
 }
