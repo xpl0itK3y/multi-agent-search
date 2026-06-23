@@ -31,6 +31,8 @@ from src.services.operational_health_mixin import OperationalHealthMixin
 from src.services.export_mixin import ExportMixin
 from src.services.job_queue_mixin import JobQueueMixin
 from src.services.trust_report_mixin import TrustReportMixin
+from src.services.share_mixin import ShareMixin
+from src.services.watch_mixin import WatchMixin
 from src.domain import (
     AuthUser,
     JobCleanupResponse,
@@ -104,7 +106,9 @@ from src.search_depth_profiles import get_depth_profile
 logger = logging.getLogger(__name__)
 
 
-class ResearchService(AuthMixin, OperationalHealthMixin, ExportMixin, JobQueueMixin, TrustReportMixin):
+class ResearchService(
+    AuthMixin, OperationalHealthMixin, ExportMixin, JobQueueMixin, TrustReportMixin, ShareMixin, WatchMixin
+):
     TASK_SUMMARY_LOG_LIMIT = 6
     TASK_SUMMARY_SOURCE_LIMIT = 4
     GRAPH_STEP_WARNING_MS = 1500.0
@@ -1302,82 +1306,6 @@ class ResearchService(AuthMixin, OperationalHealthMixin, ExportMixin, JobQueueMi
             logger.warning("red_team_pass_failed research_id=%s error=%s", research.id, exc)
             return report
 
-    # ── public share link (read-only, token-scoped) ─────────────────────────────
-
-    def create_share_link(self, research_id: str) -> ShareInfo:
-        """Mint (or return the existing) unguessable public token for a completed research."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        if not research.final_report:
-            raise HTTPException(status_code=409, detail="Report is not ready yet")
-        state = dict(research.graph_state or {})
-        token = state.get("share_token")
-        if not token:
-            token = secrets.token_urlsafe(32)  # 256-bit, non-sequential
-            state["share_token"] = token
-            self.task_store.update_research_graph_state(research_id, state)
-            logger.info("share_link_created research_id=%s", research_id)
-        return ShareInfo(shared=True, token=token)
-
-    def revoke_share_link(self, research_id: str) -> ShareInfo:
-        """Invalidate the public link immediately (the token stops resolving)."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        state = dict(research.graph_state or {})
-        if state.pop("share_token", None) is not None:
-            self.task_store.update_research_graph_state(research_id, state)
-            logger.info("share_link_revoked research_id=%s", research_id)
-        return ShareInfo(shared=False, token="")
-
-    def get_share_info(self, research_id: str) -> ShareInfo:
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        token = (research.graph_state or {}).get("share_token") or ""
-        return ShareInfo(shared=bool(token), token=token)
-
-    def get_public_report(self, token: str) -> PublicReport:
-        """Resolve a shared research by its token and return a STRICTLY-SCOPED, read-only view.
-
-        No auth — security rests entirely on the unguessable token and the explicit field
-        whitelist below. Never expose the owner, raw graph_state, or the token itself.
-        """
-        if not token or len(token) < 20:
-            raise HTTPException(status_code=404, detail="Not found")
-        research = self.task_store.get_research_by_share_token(token)
-        if not research or not research.final_report:
-            raise HTTPException(status_code=404, detail="Not found")
-        rid = research.id
-        from src.ui.report_utils import clean_report
-
-        def safe(fn, default):
-            try:
-                return fn()
-            except Exception:  # pragma: no cover - a missing artifact must not break the page
-                return default
-
-        return PublicReport(
-            prompt=research.prompt,
-            final_report=clean_report(research.final_report),
-            depth=getattr(research.depth, "value", str(research.depth)),
-            model=(research.graph_state or {}).get("model", "") or "",
-            created_at=research.created_at.isoformat() if research.created_at else "",
-            sources=safe(lambda: self.get_research_sources(rid), []),
-            citations=safe(lambda: self.get_research_citation_audit(rid), CitationAudit()),
-            confidence=safe(lambda: self.get_research_confidence(rid), ConfidenceReport()),
-            source_independence=safe(lambda: self.get_research_source_independence(rid), SourceIndependence()),
-            source_reputation=safe(lambda: self.get_research_source_reputation(rid), SourceReputation()),
-            numeric_check=safe(lambda: self.get_research_numeric_check(rid), NumericCheck()),
-            stance=safe(lambda: self.get_research_stance(rid), StanceBalance()),
-            red_team=safe(lambda: self.get_research_red_team(rid), RedTeamReport()),
-            source_integrity=safe(lambda: self.get_research_source_integrity(rid), SourceIntegrity()),
-            cross_language=safe(lambda: self.get_research_cross_language(rid), CrossLanguageReport()),
-        )
-
-    # ── confidence / honesty meter (fuses all trust signals into one number) ─────
-
     def get_research_confidence(self, research_id: str) -> ConfidenceReport:
         """Honesty meter (no LLM): fuse citation grounding, claim verification, red-team and
         source independence into one calibrated confidence. Recomputed on demand, same cheap
@@ -1498,134 +1426,6 @@ class ResearchService(AuthMixin, OperationalHealthMixin, ExportMixin, JobQueueMi
         if not data:
             return ResearchDiff(research_id=research_id)
         return ResearchDiff.model_validate(data)
-
-    # ── watch / monitoring (re-run on a schedule, alert when the answer changes) ──
-
-    def set_research_watch(self, research_id: str, enabled: bool, interval_seconds: int | None) -> ResearchWatch:
-        """Enable/disable a standing watch. When enabled, the worker sweep re-runs this
-        question every interval and flags a change if the answer materially shifts."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        state = dict(research.graph_state or {})
-        watch = dict(state.get("watch") or {})
-        if enabled:
-            interval = interval_seconds or watch.get("interval_seconds") or settings.watch_default_interval_seconds
-            interval = max(settings.watch_min_interval_seconds, int(interval))
-            now = datetime.now(timezone.utc)
-            watch.update(
-                enabled=True,
-                interval_seconds=interval,
-                next_run_at=(now + timedelta(seconds=interval)).isoformat(),
-            )
-            watch.setdefault("runs", 0)
-        else:
-            watch["enabled"] = False
-            watch["next_run_at"] = ""
-        state["watch"] = watch
-        self.task_store.update_research_graph_state(research_id, state)
-        return self._watch_view(research_id, watch)
-
-    def get_research_watch(self, research_id: str) -> ResearchWatch:
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        return self._watch_view(research_id, (research.graph_state or {}).get("watch") or {})
-
-    def acknowledge_research_watch(self, research_id: str) -> ResearchWatch:
-        """Dismiss the 'answer changed' badge (mark the latest change as seen)."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
-        state = dict(research.graph_state or {})
-        watch = dict(state.get("watch") or {})
-        watch["acknowledged_at"] = watch.get("last_change_at") or datetime.now(timezone.utc).isoformat()
-        state["watch"] = watch
-        self.task_store.update_research_graph_state(research_id, state)
-        return self._watch_view(research_id, watch)
-
-    def _watch_view(self, research_id: str, watch: dict) -> ResearchWatch:
-        last_change = watch.get("last_change_at") or ""
-        ack = watch.get("acknowledged_at") or ""
-        return ResearchWatch(
-            research_id=research_id,
-            enabled=bool(watch.get("enabled")),
-            interval_seconds=int(watch.get("interval_seconds") or 0),
-            next_run_at=watch.get("next_run_at") or "",
-            last_run_at=watch.get("last_run_at") or "",
-            last_change_at=last_change,
-            acknowledged_at=ack,
-            runs=int(watch.get("runs") or 0),
-            has_unseen_change=bool(last_change) and last_change > ack,
-        )
-
-    def run_due_watches(self) -> int:
-        """Fire a re-run for every watch whose next_run_at has passed. Single-flight across
-        workers via a short Redis lock so a watch never double-fires; called each maintenance
-        tick. The watch migrates to the new run (the thread head)."""
-        if not settings.watch_enabled:
-            return 0
-        if self.broker and not self.broker.try_acquire_lock("watch_sweep", settings.watch_sweep_lock_ttl_seconds):
-            return 0  # another worker owns this window
-        try:
-            watch_ids = self.task_store.list_active_watch_research_ids()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("watch_list_failed error=%s", exc)
-            return 0
-        now = datetime.now(timezone.utc)
-        fired = 0
-        for rid in watch_ids:
-            try:
-                research = self.task_store.get_research(rid)
-                watch = ((research.graph_state if research else None) or {}).get("watch") or {}
-                if not watch.get("enabled"):
-                    continue
-                due_at = self._parse_iso(watch.get("next_run_at"))
-                if due_at is None or due_at > now:
-                    continue
-                if research.status not in (ResearchStatus.COMPLETED, ResearchStatus.FAILED):
-                    continue  # previous run still in flight — retry next sweep
-                fired += self._trigger_watch(research, dict(watch))
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("watch_trigger_failed research_id=%s error=%s", rid, exc)
-        return fired
-
-    def _trigger_watch(self, head, watch: dict) -> int:
-        """Re-run the watched question and move the watch onto the new run."""
-        head_id = head.id
-        now = datetime.now(timezone.utc)
-        interval = max(
-            settings.watch_min_interval_seconds,
-            int(watch.get("interval_seconds") or settings.watch_default_interval_seconds),
-        )
-        # Disable the watch on the old head FIRST, so a crash mid-trigger can't double-fire it.
-        old_state = dict((self.task_store.get_research(head_id).graph_state) or {})
-        old_watch = dict(old_state.get("watch") or {})
-        old_watch["enabled"] = False
-        old_watch["next_run_at"] = ""
-        old_state["watch"] = old_watch
-        self.task_store.update_research_graph_state(head_id, old_state)
-
-        _resp, new_id, request = self.refresh_research(head_id, user_id=getattr(head, "user_id", None))
-        import threading as _threading
-        _threading.Thread(
-            target=self.decompose_and_enqueue, args=(new_id, request),
-            daemon=True, name=f"watch-{new_id[:8]}",
-        ).start()
-
-        new_state = dict((self.task_store.get_research(new_id).graph_state) or {})
-        new_state["watch"] = {
-            "enabled": True,
-            "interval_seconds": interval,
-            "next_run_at": (now + timedelta(seconds=interval)).isoformat(),
-            "last_run_at": now.isoformat(),
-            "last_change_at": watch.get("last_change_at") or "",
-            "acknowledged_at": watch.get("acknowledged_at") or "",
-            "runs": int(watch.get("runs") or 0) + 1,
-        }
-        self.task_store.update_research_graph_state(new_id, new_state)
-        logger.info("watch_fired head_id=%s new_id=%s", head_id, new_id)
-        return 1
 
     def _maybe_flag_watch_change(self, research_id: str) -> None:
         """After a watched re-run finalizes, set last_change_at if its diff is a material change."""
