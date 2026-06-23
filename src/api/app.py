@@ -9,6 +9,8 @@ from urllib.parse import quote
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+
+from src.domain.errors import ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
@@ -115,6 +117,12 @@ def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+
+    @app.exception_handler(ServiceError)
+    async def _service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        # Translate framework-agnostic service errors (ARCH-004) into HTTP responses, matching
+        # the {"detail": ...} shape FastAPI produced for the old HTTPException raises.
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     allowed_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
     app.add_middleware(
@@ -668,7 +676,7 @@ def register_routes(app: FastAPI) -> None:
                         research_id, question, streaming_callback=on_delta, status_callback=on_status
                     )
                     channel.put(("final", answer))
-                except HTTPException as exc:
+                except ServiceError as exc:
                     channel.put(("error", str(exc.detail)))
                 except Exception as exc:  # pragma: no cover - defensive
                     channel.put(("error", str(exc)))

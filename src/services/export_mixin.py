@@ -5,7 +5,7 @@ ResearchService, via normal composition.
 """
 import json
 
-from fastapi import HTTPException
+from src.domain.errors import ConflictError, NotFoundError, UnprocessableError
 
 from src.domain import *  # noqa: F401,F403
 
@@ -23,9 +23,9 @@ class ExportMixin:
         """Render the final report to PDF/DOCX/HTML bytes. Returns (data, media_type, filename)."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if not research.final_report:
-            raise HTTPException(status_code=409, detail="Report is not ready yet")
+            raise ConflictError("Report is not ready yet")
 
         from src.ui.report_export import generate_docx, generate_pdf
         from src.ui.report_utils import clean_report
@@ -67,7 +67,7 @@ class ExportMixin:
         if normalized in ("trail", "audit"):
             md = self._render_audit_trail_md(self.get_research_audit_trail(research_id))
             return md.encode("utf-8"), "text/markdown; charset=utf-8", self._export_filename(f"{title}-audit-trail", "md")
-        raise HTTPException(status_code=422, detail="Unsupported export format (use pdf, docx, html, md, json or trail)")
+        raise UnprocessableError("Unsupported export format (use pdf, docx, html, md, json or trail)")
 
     def _export_json_payload(self, research, depth: str, created_at: str | None) -> dict:
         """Full structured export — the report plus all trust artifacts as machine-readable data."""

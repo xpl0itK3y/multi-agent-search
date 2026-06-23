@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from fastapi import HTTPException
+from src.domain.errors import ServiceError
 
 from src.agents.analyzer import AnalyzerAgent
 from src.api.schemas import ExtractionMetrics, GraphMetrics
@@ -71,7 +71,7 @@ class SequentialLLM(LLMProvider):
 def test_decompose_requires_initialized_orchestrator(mocker):
     service = ResearchService(task_store=InMemoryTaskStore(), orchestrator=None)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ServiceError) as exc_info:
         service.decompose_prompt(
             "test",
             SearchDepth.EASY,
@@ -2428,7 +2428,7 @@ def test_finalize_research_rejects_incomplete_tasks():
     )
     service = ResearchService(task_store=task_store)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ServiceError) as exc_info:
         service.finalize_research(research.id)
 
     assert exc_info.value.status_code == 409
@@ -2583,7 +2583,7 @@ def test_research_plan_approve_rejects_when_not_in_review():
     )
     service = ResearchService(task_store=task_store)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ServiceError) as exc_info:
         service.approve_research_plan(research.id)
 
     assert exc_info.value.status_code == 409
@@ -2625,12 +2625,12 @@ def test_auth_register_and_authenticate():
     user = service.register_user("A@Example.com", "password1")
     assert user.email == "a@example.com"
 
-    with pytest.raises(HTTPException) as dup:
+    with pytest.raises(ServiceError) as dup:
         service.register_user("a@example.com", "password1")
     assert dup.value.status_code == 409
 
     assert service.authenticate_user("a@example.com", "password1").id == user.id
-    with pytest.raises(HTTPException) as bad:
+    with pytest.raises(ServiceError) as bad:
         service.authenticate_user("a@example.com", "nope")
     assert bad.value.status_code == 401
 
@@ -2715,12 +2715,12 @@ def test_start_research_groups_into_conversation_threads():
 
 def test_start_research_blocks_while_one_is_active():
     from datetime import datetime, timedelta, timezone
-    from fastapi import HTTPException
+    from src.domain.errors import ServiceError
     service = ResearchService(task_store=InMemoryTaskStore())
     _, id1 = service.start_research(ResearchRequest(prompt="first deep topic", depth=SearchDepth.MEDIUM))
 
     # A fresh in-flight research rejects a second start (system guard).
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         service.start_research(ResearchRequest(prompt="second deep topic", depth=SearchDepth.EASY))
     assert exc.value.status_code == 409
 

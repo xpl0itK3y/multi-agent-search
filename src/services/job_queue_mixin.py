@@ -6,7 +6,7 @@ on self.task_store and self.broker (set in ResearchService.__init__).
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException
+from src.domain.errors import ConflictError, NotFoundError
 
 from src.config import settings
 from src.domain import *  # noqa: F401,F403
@@ -30,15 +30,15 @@ class JobQueueMixin:
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob:
         job = self.task_store.get_research_finalize_job(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="Finalize job not found")
+            raise NotFoundError("Finalize job not found")
         if job.status != FinalizeJobStatus.DEAD_LETTER:
-            raise HTTPException(status_code=409, detail="Only dead-letter finalize jobs can be requeued")
+            raise ConflictError("Only dead-letter finalize jobs can be requeued")
 
         self.require_agent(self.analyzer, "Analyzer")
         self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
         requeued = self.task_store.requeue_research_finalize_job(job_id)
         if requeued is None:
-            raise HTTPException(status_code=404, detail="Finalize job not found")
+            raise NotFoundError("Finalize job not found")
         if self.broker:
             self.broker.push_finalize_job(requeued.id)
         logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)
@@ -94,13 +94,13 @@ class JobQueueMixin:
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob:
         job = self.task_store.get_search_task_job(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="Search job not found")
+            raise NotFoundError("Search job not found")
         if job.status != SearchJobStatus.DEAD_LETTER:
-            raise HTTPException(status_code=409, detail="Only dead-letter search jobs can be requeued")
+            raise ConflictError("Only dead-letter search jobs can be requeued")
 
         task = self.task_store.get_task(job.task_id)
         if task is None:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise NotFoundError("Task not found")
 
         self.task_store.update_task(
             task.id,
@@ -108,7 +108,7 @@ class JobQueueMixin:
         )
         requeued = self.task_store.requeue_search_task_job(job_id)
         if requeued is None:
-            raise HTTPException(status_code=404, detail="Search job not found")
+            raise NotFoundError("Search job not found")
         if self.broker:
             self.broker.push_search_job(requeued.id)
         logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)

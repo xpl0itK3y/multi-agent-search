@@ -6,7 +6,7 @@ ResearchService; run_due_watches uses self.broker (sweep lock) + self.task_store
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException
+from src.domain.errors import NotFoundError
 
 from src.config import settings
 from src.domain import *  # noqa: F401,F403
@@ -20,7 +20,7 @@ class WatchMixin:
         question every interval and flags a change if the answer materially shifts."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         state = dict(research.graph_state or {})
         watch = dict(state.get("watch") or {})
         if enabled:
@@ -43,14 +43,14 @@ class WatchMixin:
     def get_research_watch(self, research_id: str) -> ResearchWatch:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         return self._watch_view(research_id, (research.graph_state or {}).get("watch") or {})
 
     def acknowledge_research_watch(self, research_id: str) -> ResearchWatch:
         """Dismiss the 'answer changed' badge (mark the latest change as seen)."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         state = dict(research.graph_state or {})
         watch = dict(state.get("watch") or {})
         watch["acknowledged_at"] = watch.get("last_change_at") or datetime.now(timezone.utc).isoformat()

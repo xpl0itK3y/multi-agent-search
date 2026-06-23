@@ -1,5 +1,5 @@
 import pytest
-from fastapi import HTTPException
+from src.domain.errors import ServiceError
 
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth
 from src.repositories.in_memory_task_store import InMemoryTaskStore
@@ -25,7 +25,7 @@ def test_create_resolve_revoke():
     assert pub.prompt == "share me" and pub.final_report.startswith("# Report")
 
     svc.revoke_share_link(rid)
-    with pytest.raises(HTTPException) as e:
+    with pytest.raises(ServiceError) as e:
         svc.get_public_report(info.token)
     assert e.value.status_code == 404  # revoked token stops resolving
 
@@ -35,7 +35,7 @@ def test_unshared_research_is_unreachable():
     svc = ResearchService(task_store=store)
     rid = _completed(store)  # never shared
     for tok in ["", "short", "z" * 50, rid]:  # random/empty/short tokens and even the id itself
-        with pytest.raises(HTTPException) as e:
+        with pytest.raises(ServiceError) as e:
             svc.get_public_report(tok)
         assert e.value.status_code == 404
 
@@ -56,7 +56,7 @@ def test_cannot_share_incomplete_research():
     store = InMemoryTaskStore()
     svc = ResearchService(task_store=store)
     rec = store.add_research(ResearchRequest(prompt="work in progress", depth=SearchDepth.EASY), task_ids=[])
-    with pytest.raises(HTTPException) as e:
+    with pytest.raises(ServiceError) as e:
         svc.create_share_link(rec.id)
     assert e.value.status_code == 409
 

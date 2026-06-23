@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi import HTTPException
+from src.domain.errors import ServiceError
 
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus
 from src.repositories.in_memory_task_store import InMemoryTaskStore
@@ -79,5 +79,5 @@ def test_audit_trail_export_format():
 
 def test_audit_trail_missing_research_404():
     svc = ResearchService(task_store=InMemoryTaskStore())
-    with pytest.raises(HTTPException):
+    with pytest.raises(ServiceError):
         svc.get_research_audit_trail("does-not-exist")

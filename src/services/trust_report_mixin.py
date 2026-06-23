@@ -8,7 +8,7 @@ import json
 import logging
 import uuid
 
-from fastapi import HTTPException
+from src.domain.errors import NotFoundError
 
 from src.agents.cross_language import detect_language
 from src.config import settings
@@ -385,7 +385,7 @@ class TrustReportMixin:
         graph steps and decisions — deterministically from what the pipeline already records."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
         state = research.graph_state or {}
 

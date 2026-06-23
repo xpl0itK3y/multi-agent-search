@@ -5,7 +5,7 @@ from the self.get_research_* getters that remain on ResearchService / TrustRepor
 import logging
 import secrets
 
-from fastapi import HTTPException
+from src.domain.errors import ConflictError, NotFoundError
 
 from src.domain import *  # noqa: F401,F403
 
@@ -17,9 +17,9 @@ class ShareMixin:
         """Mint (or return the existing) unguessable public token for a completed research."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if not research.final_report:
-            raise HTTPException(status_code=409, detail="Report is not ready yet")
+            raise ConflictError("Report is not ready yet")
         state = dict(research.graph_state or {})
         token = state.get("share_token")
         if not token:
@@ -33,7 +33,7 @@ class ShareMixin:
         """Invalidate the public link immediately (the token stops resolving)."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         state = dict(research.graph_state or {})
         if state.pop("share_token", None) is not None:
             self.task_store.update_research_graph_state(research_id, state)
@@ -43,7 +43,7 @@ class ShareMixin:
     def get_share_info(self, research_id: str) -> ShareInfo:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         token = (research.graph_state or {}).get("share_token") or ""
         return ShareInfo(shared=bool(token), token=token)
 
@@ -54,10 +54,10 @@ class ShareMixin:
         whitelist below. Never expose the owner, raw graph_state, or the token itself.
         """
         if not token or len(token) < 20:
-            raise HTTPException(status_code=404, detail="Not found")
+            raise NotFoundError("Not found")
         research = self.task_store.get_research_by_share_token(token)
         if not research or not research.final_report:
-            raise HTTPException(status_code=404, detail="Not found")
+            raise NotFoundError("Not found")
         rid = research.id
         from src.ui.report_utils import clean_report
 

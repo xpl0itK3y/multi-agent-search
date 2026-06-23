@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException
+from src.domain.errors import ConflictError, NotFoundError, ServiceUnavailableError
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
@@ -185,9 +185,8 @@ class ResearchService(
 
     def require_agent(self, agent, agent_name: str):
         if agent is None:
-            raise HTTPException(
-                status_code=503,
-                detail=f"{agent_name} is unavailable. Check service configuration.",
+            raise ServiceUnavailableError(
+                f"{agent_name} is unavailable. Check service configuration."
             )
         return agent
 
@@ -308,9 +307,8 @@ class ResearchService(
         """Create research record immediately and return. Decompose runs in background."""
         limit = settings.max_concurrent_researches
         if limit > 0 and self._active_research_count(user_id) >= limit:
-            raise HTTPException(
-                status_code=409,
-                detail="A research is already in progress. Please wait for it to finish before starting another.",
+            raise ConflictError(
+                "A research is already in progress. Please wait for it to finish before starting another."
             )
         # Global admission control: queue the research when the system is at capacity.
         global_cap = settings.max_global_active_researches
@@ -518,7 +516,7 @@ class ResearchService(
         """
         research = self.task_store.get_research(research_id)
         if not research or (user_id is not None and research.user_id != user_id):
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         return research
 
     def delete_research(self, research_id: str, user_id: str | None = None) -> bool:
@@ -533,7 +531,7 @@ class ResearchService(
         so no report is produced; in-flight search jobs simply finish without being used."""
         research = self._ensure_research_access(research_id, user_id) if user_id is not None else self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if research.status in self._TERMINAL_STATUSES:
             return research
         updated = self.task_store.update_research_status(research_id, ResearchStatus.CANCELLED, "Cancelled by user.")
@@ -543,7 +541,7 @@ class ResearchService(
     def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
         research = self._ensure_research_access(research_id, user_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         state = dict(research.graph_state or {})
         state["title"] = title.strip()
         self.task_store.update_research_graph_state(research_id, state)
@@ -552,20 +550,20 @@ class ResearchService(
     def get_research_status(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         return research
 
     def get_task_summary(self, task_id: str) -> SearchTaskSummary:
         task = self.task_store.get_task(task_id)
         if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise NotFoundError("Task not found")
         return self._build_task_summary(task)
 
     def get_research_summary(self, research_id: str) -> ResearchSummary:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
         task_summaries = [self._build_task_summary(task) for task in tasks]
@@ -652,7 +650,7 @@ class ResearchService(
         """Cheap status snapshot for polling — no source-critic/evidence/claim/replan/LLM."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
         completed = sum(1 for task in tasks if task.status == TaskStatus.COMPLETED)
@@ -711,7 +709,7 @@ class ResearchService(
     def get_research_clarifications(self, research_id: str) -> Clarification:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         clar = (research.graph_state or {}).get("clarifications") or {}
         return Clarification(
             research_id=research.id,
@@ -723,9 +721,9 @@ class ResearchService(
     def submit_clarifications(self, research_id: str, answers: list[str]) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if research.status != ResearchStatus.CLARIFYING:
-            raise HTTPException(status_code=409, detail="Research is not awaiting clarification")
+            raise ConflictError("Research is not awaiting clarification")
 
         state = dict(research.graph_state or {})
         clar = dict(state.get("clarifications") or {})
@@ -781,7 +779,7 @@ class ResearchService(
     def get_research_plan(self, research_id: str) -> ResearchPlan:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         items = (research.graph_state or {}).get("plan") or []
         return ResearchPlan(
             research_id=research.id,
@@ -792,9 +790,9 @@ class ResearchService(
     def update_research_plan(self, research_id: str, update: ResearchPlanUpdate) -> ResearchPlan:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if research.status != ResearchStatus.PLAN_REVIEW:
-            raise HTTPException(status_code=409, detail="Plan can only be edited while awaiting approval")
+            raise ConflictError("Plan can only be edited while awaiting approval")
         state = dict(research.graph_state or {})
         state["plan"] = [item.model_dump() for item in update.items]
         self.task_store.update_research_graph_state(research_id, state)
@@ -803,12 +801,12 @@ class ResearchService(
     def approve_research_plan(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         if research.status != ResearchStatus.PLAN_REVIEW:
-            raise HTTPException(status_code=409, detail="Research is not awaiting plan approval")
+            raise ConflictError("Research is not awaiting plan approval")
         plan = (research.graph_state or {}).get("plan") or []
         if not plan:
-            raise HTTPException(status_code=409, detail="No plan to approve")
+            raise ConflictError("No plan to approve")
 
         registered_tasks = []
         task_ids = []
@@ -838,7 +836,7 @@ class ResearchService(
     def list_research_messages(self, research_id: str) -> list[ChatMessage]:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         messages = (research.graph_state or {}).get("messages") or []
         return [ChatMessage.model_validate(message) for message in messages]
 
@@ -949,7 +947,7 @@ class ResearchService(
         source pool does not cover the question, then answers over the enriched pool."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
@@ -987,7 +985,7 @@ class ResearchService(
         """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
         pool = self._build_research_source_pool(tasks)
         return [
@@ -1010,7 +1008,7 @@ class ResearchService(
         """
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         raw = (research.graph_state or {}).get("detected_conflicts")
         if raw is None:
@@ -1043,7 +1041,7 @@ class ResearchService(
         """
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
         pool = self._build_research_source_pool(tasks)
         evidence_pool = [
@@ -1072,7 +1070,7 @@ class ResearchService(
     def get_research_report(self, research_id: str) -> ResearchReportResponse:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         # Safety net for reports finalized before the notes-strip landed: clean on read
         # so legacy reports never surface the internal "Report Notes" section either.
         from src.ui.report_utils import clean_report
@@ -1086,7 +1084,7 @@ class ResearchService(
     def get_research_graph(self, research_id: str) -> ResearchGraphResponse:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         return ResearchGraphResponse(
             research_id=research.id,
             status=research.status,
@@ -1158,7 +1156,7 @@ class ResearchService(
     ) -> list[SearchTask]:
         research = self.task_store.get_research(research_id)
         if research is None:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         created_tasks: list[SearchTask] = []
         existing_task_ids = list(research.task_ids)
@@ -1325,7 +1323,7 @@ class ResearchService(
         """
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         verification = self.get_research_verification(research_id)
         citations = self.get_research_citation_audit(research_id)
         red_team = self.get_research_red_team(research_id)
@@ -1389,7 +1387,7 @@ class ResearchService(
         """
         parent = self.task_store.get_research(parent_id)
         if not parent:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
         graph_state = parent.graph_state or {}
         request = ResearchRequest(
             prompt=parent.prompt,
@@ -1510,7 +1508,7 @@ class ResearchService(
     def _get_research_for_finalization(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
         if not research:
-            raise HTTPException(status_code=404, detail="Research not found")
+            raise NotFoundError("Research not found")
 
         if research.status in [
             ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
@@ -1522,10 +1520,10 @@ class ResearchService(
         any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
         if not tasks:
-            raise HTTPException(status_code=409, detail="Research has no tasks to finalize")
+            raise ConflictError("Research has no tasks to finalize")
 
         if not all_done:
-            raise HTTPException(status_code=409, detail="Research tasks are still in progress")
+            raise ConflictError("Research tasks are still in progress")
 
         if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
             self.task_store.update_research_status(
@@ -1573,7 +1571,7 @@ class ResearchService(
         with bind_observability_context(research_id=research_id):
             research = self.task_store.get_research(research_id)
             if not research:
-                raise HTTPException(status_code=404, detail="Research not found")
+                raise NotFoundError("Research not found")
             if research.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_skipped_cancelled research_id=%s", research_id)
                 # user cancelled — don't spend the analysis call or overwrite the status; return
@@ -1830,7 +1828,7 @@ class ResearchService(
     ) -> OperationalHealth.RecommendationEntry:
         heartbeat = self.task_store.get_worker_heartbeat("maintenance")
         if heartbeat is None:
-            raise HTTPException(status_code=404, detail="Maintenance heartbeat not found")
+            raise NotFoundError("Maintenance heartbeat not found")
 
         maintenance_summary = heartbeat.maintenance_summary.model_dump(mode="json")
         recommendations = list(maintenance_summary.get("recent_operational_recommendations") or [])
@@ -1852,7 +1850,7 @@ class ResearchService(
             break
 
         if updated_recommendation is None:
-            raise HTTPException(status_code=404, detail="Operational recommendation not found")
+            raise NotFoundError("Operational recommendation not found")
 
         if updated_recommendation is not None:
             event_type = "acknowledged"

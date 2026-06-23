@@ -1,7 +1,7 @@
 """AUD-011: when auth is on, a research is reachable only by its owner — unowned (NULL-owner)
 rows are NOT cross-readable by an arbitrary authenticated user."""
 import pytest
-from fastapi import HTTPException
+from src.domain.errors import ServiceError
 
 from src.api.schemas import ResearchRequest, SearchDepth
 from src.repositories import InMemoryTaskStore
@@ -27,7 +27,7 @@ def test_owner_can_access_their_research():
 def test_other_user_cannot_access():
     svc = _svc()
     rec = _add(svc, "userA")
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         svc._ensure_research_access(rec.id, "userB")
     assert exc.value.status_code == 404
 
@@ -35,7 +35,7 @@ def test_other_user_cannot_access():
 def test_unowned_research_not_cross_readable_when_auth_on():
     svc = _svc()
     rec = _add(svc, None)  # NULL owner (created under AUTH_DISABLED)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         svc._ensure_research_access(rec.id, "anyUser")
     assert exc.value.status_code == 404
 
