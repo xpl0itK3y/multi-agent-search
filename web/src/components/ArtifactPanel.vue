@@ -2,13 +2,12 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, ResearchDiff, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
-const emit = defineEmits<{ refreshed: [string] }>();
 
 type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
@@ -41,16 +40,6 @@ const weakClaims = computed<string[]>(() => {
 const contradictionSentences = computed<string[]>(() =>
   (numbers.value?.contradictions || []).flatMap((c) => c.sentences || []),
 );
-const diff = ref<ResearchDiff | null>(null);
-const showDiff = ref(false);
-const refreshing = ref(false);
-const watch_ = ref<import("@/lib/types").ResearchWatch | null>(null);
-const watchMenuOpen = ref(false);
-const WATCH_INTERVALS = [
-  { key: "hourly", seconds: 3600 },
-  { key: "daily", seconds: 86400 },
-  { key: "weekly", seconds: 604800 },
-];
 const comparison = ref<ComparisonTable | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
 const loading = ref(false);
@@ -211,15 +200,6 @@ watch(tab, (t) => {
   if (t === "trail") ensureTrail();
 });
 
-async function ensureDiff() {
-  if (diff.value) return;
-  try {
-    diff.value = await api.getDiff(props.id);
-  } catch {
-    /* no diff (first run) — banner stays hidden */
-  }
-}
-
 async function ensureComparison() {
   if (comparison.value) return;
   try {
@@ -242,9 +222,7 @@ watch(
       ensureCrossLang();
       ensureConfidence();
       ensureNumbers();
-      ensureWatch();
       ensureShare();
-      ensureDiff();
       ensureComparison();
     }
   },
@@ -330,59 +308,6 @@ const bandClass: Record<string, string> = {
   speculative: "bg-red-400",
 };
 
-const diffHasChanges = computed(() => {
-  const d = diff.value;
-  return !!d && (d.new_claims.length > 0 || d.dropped_claims.length > 0 || d.shifted_claims.length > 0 || d.new_sources > 0);
-});
-
-async function onRefresh() {
-  refreshing.value = true;
-  error.value = null;
-  try {
-    const res = await api.refreshResearch(props.id);
-    emit("refreshed", res.research_id);
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    refreshing.value = false;
-  }
-}
-
-async function ensureWatch() {
-  if (watch_.value) return;
-  try {
-    watch_.value = await api.getWatch(props.id);
-  } catch {
-    /* watch is optional */
-  }
-}
-async function startWatch(seconds: number) {
-  watchMenuOpen.value = false;
-  try {
-    watch_.value = await api.setWatch(props.id, true, seconds);
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
-}
-async function stopWatch() {
-  watchMenuOpen.value = false;
-  try {
-    watch_.value = await api.setWatch(props.id, false);
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
-}
-async function ackWatch() {
-  try {
-    watch_.value = await api.ackWatch(props.id);
-  } catch {
-    /* ignore */
-  }
-}
-const watchIntervalKey = computed(() => {
-  const s = watch_.value?.interval_seconds ?? 0;
-  return WATCH_INTERVALS.find((i) => i.seconds === s)?.key ?? "custom";
-});
 
 // ── public share link ─────────────────────────────────────────────────────────
 const share = ref<import("@/lib/types").ShareInfo | null>(null);
@@ -526,52 +451,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
         <div class="relative">
           <button
             class="flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition"
-            :class="watch_ && watch_.enabled ? 'border-accent/50 text-accent' : 'border-bd text-muted hover:text-ink'"
-            :title="$t('watch.hint')"
-            @click="watchMenuOpen = !watchMenuOpen"
-          >
-            <span>👁</span>
-            <span>{{ watch_ && watch_.enabled ? $t("watch.intervals." + watchIntervalKey) : $t("watch.watch") }}</span>
-            <span
-              v-if="watch_ && watch_.has_unseen_change"
-              class="ml-0.5 h-1.5 w-1.5 rounded-full bg-amber-500"
-              :style="{ animation: 'soft-pulse 1.6s ease-in-out infinite' }"
-            />
-          </button>
-          <div
-            v-if="watchMenuOpen"
-            class="absolute right-0 z-30 mt-1 w-44 rounded-xl border border-bd bg-surface p-1 text-xs shadow-lg"
-          >
-            <div class="px-2 py-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("watch.every") }}</div>
-            <button
-              v-for="iv in WATCH_INTERVALS"
-              :key="iv.key"
-              class="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-ink hover:bg-surface-hover"
-              @click="startWatch(iv.seconds)"
-            >
-              {{ $t("watch.intervals." + iv.key) }}
-              <span v-if="watch_ && watch_.enabled && watchIntervalKey === iv.key" class="text-accent">✓</span>
-            </button>
-            <button
-              v-if="watch_ && watch_.enabled"
-              class="mt-1 w-full rounded-lg border-t border-bd px-2 py-1.5 text-left text-red-400 hover:bg-surface-hover"
-              @click="stopWatch"
-            >
-              {{ $t("watch.stop") }}
-            </button>
-          </div>
-        </div>
-        <button
-          class="rounded-md border border-bd px-2 py-1 text-xs text-muted transition hover:text-ink disabled:opacity-50"
-          :disabled="refreshing"
-          :title="$t('diff.refreshHint')"
-          @click="onRefresh"
-        >
-          {{ refreshing ? $t("diff.refreshing") : "↻ " + $t("diff.refresh") }}
-        </button>
-        <div class="relative">
-          <button
-            class="flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition"
             :class="share && share.shared ? 'border-accent/50 text-accent' : 'border-bd text-muted hover:text-ink'"
             :title="$t('share.hint')"
             @click="toggleShareMenu"
@@ -680,15 +559,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               <span class="h-2 w-2 rounded-full bg-red-400" /> {{ $t("verify.contested") }}
             </span>
           </template>
-        </div>
-        <div
-          v-if="watch_ && watch_.has_unseen_change"
-          class="mb-4 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs animate-rise"
-        >
-          <span class="text-amber-500">🔔</span>
-          <span class="font-medium text-ink">{{ $t("watch.changed") }}</span>
-          <span class="text-muted">{{ $t("watch.changedHint") }}</span>
-          <button class="ml-auto text-accent hover:underline" @click="ackWatch">{{ $t("watch.markSeen") }}</button>
         </div>
         <div v-if="citations && (citations.total || citations.unverified)" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -826,34 +696,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <span v-if="crossLang.monolingual" class="ml-auto text-amber-500">⚠ {{ $t("crosslang.bubble") }}</span>
           <span v-else-if="crossLang.unique_findings.length" class="ml-auto text-accent">+{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
         </button>
-        <div v-if="diffHasChanges && diff" class="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-xs">
-          <button class="flex w-full items-center gap-2 text-left" @click="showDiff = !showDiff">
-            <span class="font-medium text-ink">↻ {{ $t("diff.title") }}</span>
-            <span class="text-muted">
-              +{{ diff.new_claims.length }} {{ $t("diff.new") }} · {{ diff.shifted_claims.length }} {{ $t("diff.shifted") }} · {{ diff.new_sources }} {{ $t("diff.sources") }}
-            </span>
-            <span class="ml-auto text-muted">{{ showDiff ? "▾" : "▸" }}</span>
-          </button>
-          <div v-if="showDiff" class="mt-2 space-y-3 border-t border-bd pt-2">
-            <div v-if="diff.shifted_claims.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("diff.shiftedH") }}</div>
-              <div v-for="(s, i) in diff.shifted_claims" :key="i" class="line-clamp-2 text-ink">
-                <span :class="levelClass[s.old_level]">{{ $t("confidence." + s.old_level) }}</span>
-                →
-                <span :class="levelClass[s.new_level]">{{ $t("confidence." + s.new_level) }}</span>
-                {{ s.statement }}
-              </div>
-            </div>
-            <div v-if="diff.new_claims.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("diff.newH") }}</div>
-              <div v-for="(c, i) in diff.new_claims" :key="i" class="line-clamp-2 text-emerald-600 dark:text-emerald-400">+ {{ c }}</div>
-            </div>
-            <div v-if="diff.dropped_claims.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("diff.droppedH") }}</div>
-              <div v-for="(c, i) in diff.dropped_claims" :key="i" class="line-clamp-2 text-muted">− {{ c }}</div>
-            </div>
-          </div>
-        </div>
         <MarkdownView
           v-if="report"
           :source="report"
