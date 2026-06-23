@@ -53,6 +53,14 @@ class ClaimVerifierAgent:
     def _softener(self, language: str) -> str:
         return self.SOFTENER_BY_LANGUAGE.get(language, self.SOFTENER_BY_LANGUAGE["en"])
 
+    _STRUCTURAL_MD = re.compile(r"^(\||[-*+]\s|\d+\.\s|>)")
+
+    def _is_structural_md(self, stripped: str) -> bool:
+        """Markdown structure — table rows/separators, list items, blockquotes. Never prepend a
+        softener prefix or rewrite words here: the prefix becomes a stray cell and markdown stops
+        parsing the table (and a list item turns into 'По имеющимся данным, - …')."""
+        return bool(self._STRUCTURAL_MD.match(stripped))
+
     def _soften_absolute_terms(self, line: str) -> str:
         """Replace absolute-language tokens in uncited or weakly-cited lines.
 
@@ -61,7 +69,7 @@ class ClaimVerifierAgent:
         degrading clear, well-cited analytical language.
         """
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith("#") or self._is_structural_md(stripped):
             return line
         # Skip well-cited lines — two or more [Sn] references is adequate support.
         if len(re.findall(r"\[S\d+\]", stripped)) >= 2:
@@ -74,7 +82,7 @@ class ClaimVerifierAgent:
     def _soften_line(self, line: str, language: str) -> str:
         """Prepend the hedging prefix to a flagged line (after absolute-term pass)."""
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith("#") or self._is_structural_md(stripped):
             return line
 
         lowered = stripped.lower()
@@ -86,7 +94,7 @@ class ClaimVerifierAgent:
 
     def _looks_strong_or_overbroad(self, line: str) -> bool:
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped or stripped.startswith("#") or self._is_structural_md(stripped):
             return False
         citation_count = len(re.findall(r"\[S\d+\]", stripped))
         if citation_count >= 2:

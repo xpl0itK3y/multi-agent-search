@@ -16,6 +16,7 @@ const router = useRouter();
 const { t, te } = useI18n();
 
 const prompt = ref<string>("");
+const titleExpanded = ref(false); // long report titles clamp to 2 lines; click to expand
 const status = ref<string>("processing");
 const report = ref<string>("");
 const isFinal = ref(false);
@@ -224,7 +225,13 @@ onBeforeUnmount(() => close?.());
           {{ $t("common.back") }}
         </button>
 
-        <h1 v-if="prompt" class="mb-4 font-serif text-xl leading-snug text-ink">
+        <h1
+          v-if="prompt"
+          class="mb-4 cursor-pointer font-serif text-xl leading-snug text-ink transition-colors hover:text-ink/75"
+          :class="{ 'line-clamp-2': !titleExpanded }"
+          :title="titleExpanded ? '' : prompt"
+          @click="titleExpanded = !titleExpanded"
+        >
           {{ prompt }}
         </h1>
 
