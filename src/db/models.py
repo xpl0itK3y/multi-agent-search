@@ -52,6 +52,7 @@ class ResearchORM(Base):
     tasks: Mapped[list["SearchTaskORM"]] = relationship(
         back_populates="research",
         cascade="all, delete-orphan",
+        passive_deletes=True,  # rely on the DB ON DELETE CASCADE (AUD-025) instead of loading children
     )
 
 
@@ -84,6 +85,7 @@ class SearchTaskORM(Base):
     results: Mapped[list["SearchResultORM"]] = relationship(
         back_populates="task",
         cascade="all, delete-orphan",
+        passive_deletes=True,  # rely on the DB ON DELETE CASCADE (AUD-025)
     )
 
 
