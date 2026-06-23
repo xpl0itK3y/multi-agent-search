@@ -510,9 +510,14 @@ class ResearchService(
         return self.task_store.list_thread_researches(thread_id, user_id=user_id)
 
     def _ensure_research_access(self, research_id: str, user_id: str | None) -> ResearchRecord:
-        """Load a research and 404 if it belongs to a different user (when scoping is on)."""
+        """Load a research and 404 unless it belongs to this user (when scoping is on).
+
+        When auth is enabled (user_id is not None) an unowned/NULL-owner research is NOT
+        accessible — legacy rows created under AUTH_DISABLED stay private until ownership is
+        backfilled (AUD-011); previously the None exemption made them cross-readable.
+        """
         research = self.task_store.get_research(research_id)
-        if not research or (user_id is not None and research.user_id not in (None, user_id)):
+        if not research or (user_id is not None and research.user_id != user_id):
             raise HTTPException(status_code=404, detail="Research not found")
         return research
 
