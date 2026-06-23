@@ -1578,7 +1578,9 @@ class ResearchService(
                 raise HTTPException(status_code=404, detail="Research not found")
             if research.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_skipped_cancelled research_id=%s", research_id)
-                return  # user cancelled — don't spend the analysis call or overwrite the status
+                # user cancelled — don't spend the analysis call or overwrite the status; return
+                # the (cancelled) record so the contract stays ResearchRecord, never None (AUD-033)
+                return research
 
             tasks = self.task_store.get_tasks_by_research(research_id)
             analyzer = self.require_agent(self.analyzer, "Analyzer")
