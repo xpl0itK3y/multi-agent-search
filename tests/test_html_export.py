@@ -54,7 +54,7 @@ def test_generate_html_without_scorecard_has_no_cards():
 
 def test_html_theme_dark_uses_dark_vars():
     out = generate_html("Body.", "Q", theme="dark").decode("utf-8")
-    assert "#1f1e1d" in out  # dark background
+    assert "#0e0f17" in out  # web-app dark background
     assert "prefers-color-scheme" not in out  # explicit theme → no auto-switch
 
 
@@ -71,9 +71,11 @@ def test_html_custom_accent_applied_and_sanitized():
     assert "}body{display:none" not in bad  # the injection payload is not reflected into the CSS
 
 
-def test_html_editorial_theme_is_serif_body():
-    out = generate_html("Body.", "Q", theme="editorial").decode("utf-8")
-    assert "Iowan Old Style" in out  # editorial uses a serif body stack
+def test_html_uses_web_app_fonts_and_palette():
+    out = generate_html("Body.", "Q", theme="light").decode("utf-8")
+    assert "#5b54e8" in out  # brand indigo accent — matches the web app, not the old coral
+    assert "Lora" in out and "Inter" in out  # web-app serif + sans
+    assert "fonts.googleapis.com" in out  # fonts loaded for fidelity
 
 
 def test_export_html_via_service():

@@ -799,29 +799,24 @@ def _markdown_to_html(md: str) -> tuple[str, list[tuple[int, str, str]]]:
     return "\n".join(out), toc
 
 
-_SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif"
-_SERIF = "Georgia,'Iowan Old Style','Palatino Linotype','Times New Roman',serif"
-_EDITORIAL = "'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif"
+# Fonts mirror the web app (web/tailwind.config.js: Inter sans, Lora serif); generate_html loads
+# them from Google Fonts with a system fallback so the export still degrades gracefully offline.
+_SANS = "Inter,system-ui,-apple-system,'Segoe UI',sans-serif"
+_SERIF = "Lora,Georgia,'Times New Roman',serif"
 _STATUS_VARS = "--green:#10b981;--amber:#f59e0b;--red:#ef4444"
 
-# Each theme is a block of CSS custom properties (the base rules below reference them), so a
-# new look is just a new var set: bg/card/bd/ink/muted, an accent + accent2 (used for gradient
-# flourishes), and a body/head font pairing. The user picks one in the export menu.
+# Palettes copied 1:1 from the web app's themes (web/src/style.css) so an exported report looks
+# like it came straight off the site (brand indigo, not the previous generic set). --accent2 is
+# each theme's brand-gradient far stop (violet→cyan, etc.), used for the gradient flourishes.
 _THEME_VARS = {
-    "light":     f"--bg:#faf9f5;--card:#ffffff;--bd:#eae7df;--ink:#2b2a27;--muted:#73706a;--accent:#d97757;--accent2:#c15f3c;--font-body:{_SANS};--font-head:{_SERIF}",
-    "dark":      f"--bg:#1f1e1d;--card:#2a2927;--bd:#3a3835;--ink:#ece9e3;--muted:#a4a199;--accent:#e08a6a;--accent2:#d97757;--font-body:{_SANS};--font-head:{_SERIF}",
-    "editorial": f"--bg:#f6f1e7;--card:#fffdf8;--bd:#e3dac6;--ink:#1f1b16;--muted:#6b6457;--accent:#9c4221;--accent2:#b45309;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
-    "sepia":     f"--bg:#efe5d0;--card:#f7efde;--bd:#dac9a8;--ink:#3a2f21;--muted:#7c6c50;--accent:#a05a2c;--accent2:#7c4a2d;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
-    "mono":      f"--bg:#ffffff;--card:#fafafa;--bd:#e3e3e3;--ink:#0f0f0f;--muted:#666666;--accent:#111111;--accent2:#555555;--font-body:{_EDITORIAL};--font-head:{_EDITORIAL}",
-    "rose":      f"--bg:#fdf2f4;--card:#ffffff;--bd:#f4dde3;--ink:#3a2a2e;--muted:#8a6f76;--accent:#db2777;--accent2:#f472b6;--font-body:{_SANS};--font-head:{_SERIF}",
-    "lavender":  f"--bg:#f5f3fb;--card:#ffffff;--bd:#e6e1f3;--ink:#2b2640;--muted:#79749a;--accent:#7c3aed;--accent2:#c026d3;--font-body:{_SANS};--font-head:{_SERIF}",
-    "ocean":     f"--bg:#eef6f7;--card:#ffffff;--bd:#cee4e7;--ink:#14302f;--muted:#5b7a79;--accent:#0d9488;--accent2:#0ea5e9;--font-body:{_SANS};--font-head:{_SANS}",
-    "slate":     f"--bg:#0f172a;--card:#1b2638;--bd:#2c3a52;--ink:#e8eef7;--muted:#93a3bb;--accent:#38bdf8;--accent2:#818cf8;--font-body:{_SANS};--font-head:{_SANS}",
-    "midnight":  f"--bg:#13111c;--card:#1d1a2b;--bd:#2f2a42;--ink:#e9e6f5;--muted:#9b96b3;--accent:#a78bfa;--accent2:#f0abfc;--font-body:{_SANS};--font-head:{_SERIF}",
-    "emerald":   f"--bg:#0b1411;--card:#13201b;--bd:#22332b;--ink:#e3efe8;--muted:#8fa89a;--accent:#34d399;--accent2:#a3e635;--font-body:{_SANS};--font-head:{_SERIF}",
-    "forest":    f"--bg:#0d1410;--card:#16201a;--bd:#26342b;--ink:#e6efe5;--muted:#93a896;--accent:#84cc16;--accent2:#22c55e;--font-body:{_SANS};--font-head:{_SERIF}",
-    "sunset":    f"--bg:#1a1014;--card:#251519;--bd:#3a2228;--ink:#f6e9e6;--muted:#bb9a93;--accent:#fb7185;--accent2:#fbbf24;--font-body:{_SANS};--font-head:{_SERIF}",
+    "light":    f"--bg:#f7f8fc;--card:#ffffff;--bd:#e0e3ee;--ink:#171926;--muted:#686c80;--accent:#5b54e8;--accent2:#22d3ee;--font-body:{_SANS};--font-head:{_SERIF}",
+    "dark":     f"--bg:#0e0f17;--card:#191b28;--bd:#2c2f44;--ink:#e9eaf6;--muted:#9397b0;--accent:#8b7cff;--accent2:#38dcf5;--font-body:{_SANS};--font-head:{_SERIF}",
+    "midnight": f"--bg:#090e1c;--card:#141c30;--bd:#26324e;--ink:#e0e8f7;--muted:#8a98b6;--accent:#38a0ff;--accent2:#5ae6dc;--font-body:{_SANS};--font-head:{_SERIF}",
+    "emerald":  f"--bg:#091210;--card:#12201c;--bd:#243a32;--ink:#e4f0ea;--muted:#8aa89e;--accent:#10c88c;--accent2:#78e6c8;--font-body:{_SANS};--font-head:{_SERIF}",
+    "rose":     f"--bg:#160c12;--card:#25161f;--bd:#402836;--ink:#f6e8f0;--muted:#b898aa;--accent:#f46096;--accent2:#ffa578;--font-body:{_SANS};--font-head:{_SERIF}",
+    "sand":     f"--bg:#faf8f3;--card:#ffffff;--bd:#e4ded2;--ink:#292520;--muted:#787064;--accent:#c88228;--accent2:#e6c46e;--font-body:{_SANS};--font-head:{_SERIF}",
 }
+_DARK_THEMES = frozenset({"dark", "midnight", "emerald", "rose"})
 
 _HTML_BASE_CSS = """
 *{box-sizing:border-box}
@@ -912,19 +907,21 @@ def _safe_color(value: Optional[str]) -> Optional[str]:
 def _build_css(theme: Optional[str], accent: Optional[str], base: Optional[str]) -> str:
     theme = (theme or "auto").lower()
     if theme == "custom":
-        base_vars = _THEME_VARS["dark" if (base or "").lower() == "dark" else "light"]
+        is_dark = (base or "").lower() == "dark"
+        base_vars = _THEME_VARS["dark" if is_dark else "light"]
         color = _safe_color(accent)
         if color:
             base_vars = re.sub(r"--accent:[^;]+", f"--accent:{color}", base_vars)
             base_vars = re.sub(r"--accent2:[^;]+", f"--accent2:{color}", base_vars)
-        root = f":root{{{base_vars};{_STATUS_VARS}}}"
+        root = f":root{{{base_vars};{_STATUS_VARS};color-scheme:{'dark' if is_dark else 'light'}}}"
     elif theme == "auto":
         root = (
-            f":root{{{_THEME_VARS['light']};{_STATUS_VARS}}}"
+            f":root{{{_THEME_VARS['light']};{_STATUS_VARS};color-scheme:light dark}}"
             f"@media (prefers-color-scheme:dark){{:root{{{_THEME_VARS['dark']}}}}}"
         )
     else:
-        root = f":root{{{_THEME_VARS.get(theme, _THEME_VARS['light'])};{_STATUS_VARS}}}"
+        scheme = "dark" if theme in _DARK_THEMES else "light"
+        root = f":root{{{_THEME_VARS.get(theme, _THEME_VARS['light'])};{_STATUS_VARS};color-scheme:{scheme}}}"
     return root + _HTML_BASE_CSS
 
 
@@ -1028,6 +1025,9 @@ def generate_html(
         "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_html_mod.escape(prompt[:120])}</title>"
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@500;600;700&display=swap" rel="stylesheet">'
         f"<style>{_build_css(theme, accent, base)}</style></head><body>"
         '<div class="progress"></div>'
         '<div class="shell"><div class="layout"><main>'

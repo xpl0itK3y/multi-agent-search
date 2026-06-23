@@ -464,8 +464,7 @@ const exporting = ref<string | null>(null);
 const exportMenuOpen = ref(false);
 const siteMenuOpen = ref(false);
 const siteThemes = [
-  "auto", "light", "dark", "editorial", "sepia", "mono", "rose",
-  "lavender", "ocean", "slate", "midnight", "emerald", "forest", "sunset",
+  "auto", "light", "dark", "midnight", "emerald", "rose", "sand",
 ] as const;
 
 function filenameFrom(res: Response, fallback: string): string {
