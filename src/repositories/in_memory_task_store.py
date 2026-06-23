@@ -32,6 +32,9 @@ class InMemoryTaskStore:
         self.users: dict[str, UserRecord] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
 
+    def ping(self) -> bool:
+        return True
+
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         entry = self.search_cache.get(cache_key)
         if entry is None:

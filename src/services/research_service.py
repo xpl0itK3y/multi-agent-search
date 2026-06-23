@@ -1874,11 +1874,18 @@ class ResearchService(
         return OperationalHealth.RecommendationEntry.model_validate(updated_recommendation)
 
     def get_health_status(self) -> dict:
+        # Probe dependencies first so /health is a real readiness signal (AUD-036).
+        db_ok = self.task_store.ping()
+        redis_status = "disabled" if self.broker is None else ("ok" if self.broker.ping() else "down")
+        dependencies = {"database": "ok" if db_ok else "down", "redis": redis_status}
+        if not db_ok:
+            return {"status": "degraded", "dependencies": dependencies}
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         step_events = self._filter_graph_step_events()
         queue_metrics = self.get_queue_metrics()
         return {
-            "status": "ok",
+            "status": "ok" if redis_status != "down" else "degraded",
+            "dependencies": dependencies,
             "extraction_metrics": get_extraction_metrics_snapshot(),
             "graph_metrics": graph_metrics.model_dump(),
             "graph_alerts": [alert.model_dump() for alert in self._build_graph_alerts(graph_metrics)],

@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -58,6 +58,15 @@ class SQLAlchemyTaskStore:
             raise
         finally:
             session.close()
+
+    def ping(self) -> bool:
+        """Lightweight DB connectivity check for /health (AUD-036)."""
+        try:
+            with self.session_scope() as session:
+                session.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
 
     def add_research(
         self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
