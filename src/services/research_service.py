@@ -1540,18 +1540,16 @@ class ResearchService(
     def _fire_webhook(self, url: str, research_id: str, payload: dict[str, Any]) -> None:
         """POST completion notification to user-supplied webhook URL (best-effort).
 
-        Guards against SSRF: by default the URL must resolve to a public IP, so a
-        user cannot make the server reach internal/loopback/metadata endpoints.
+        Guards against SSRF: by default the connection is pinned to a validated public IP, so a
+        user cannot make the server reach internal/loopback/metadata endpoints — and a host that
+        DNS-rebinds between validation and connect still can't be reached (SEC-007).
         """
         if not settings.webhook_allow_private_targets:
-            from src.net_safety import is_safe_public_url
+            from src.net_safety import safe_post_json
 
-            ok, reason = is_safe_public_url(url)
-            if not ok:
-                logger.warning(
-                    "webhook_blocked_unsafe_url research_id=%s reason=%s", research_id, reason
-                )
-                return
+            if safe_post_json(url, payload, timeout=10.0):
+                logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+            return
         try:
             import httpx
             httpx.post(url, json=payload, timeout=10.0)
