@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { api } from "@/lib/api";
-import type { CitationAudit, ComparisonTable, RedTeamReport, ResearchDiff, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonTable, RedTeamReport, SourcePreview, VerificationReport } from "@/lib/types";
 
 const props = defineProps<{ id: string }>();
 const emit = defineEmits<{ navigate: [string] }>();
@@ -10,24 +10,21 @@ const verification = ref<VerificationReport | null>(null);
 const citations = ref<CitationAudit | null>(null);
 const redTeam = ref<RedTeamReport | null>(null);
 const comparison = ref<ComparisonTable | null>(null);
-const diff = ref<ResearchDiff | null>(null);
 const sources = ref<SourcePreview[]>([]);
 const loading = ref(true);
 
 onMounted(async () => {
-  const [v, c, r, cmp, d, s] = await Promise.allSettled([
+  const [v, c, r, cmp, s] = await Promise.allSettled([
     api.getVerification(props.id),
     api.getCitations(props.id),
     api.getRedTeam(props.id),
     api.getComparison(props.id),
-    api.getDiff(props.id),
     api.getSources(props.id),
   ]);
   if (v.status === "fulfilled") verification.value = v.value;
   if (c.status === "fulfilled") citations.value = c.value;
   if (r.status === "fulfilled") redTeam.value = r.value;
   if (cmp.status === "fulfilled") comparison.value = cmp.value;
-  if (d.status === "fulfilled") diff.value = d.value;
   if (s.status === "fulfilled") sources.value = s.value;
   loading.value = false;
 });
@@ -60,10 +57,6 @@ const integrityPct = computed(() =>
 const coveragePct = computed(() =>
   verification.value ? Math.round(verification.value.coverage_ratio * 100) : null,
 );
-const diffChanged = computed(() => {
-  const d = diff.value;
-  return d ? d.new_claims.length + d.dropped_claims.length + d.shifted_claims.length + d.new_sources : 0;
-});
 const integrityColor = computed(() => {
   const p = integrityPct.value ?? 0;
   return p >= 80 ? "text-emerald-500" : p >= 50 ? "text-amber-500" : "text-red-400";
@@ -106,9 +99,6 @@ function pct(n: number): string {
     <div class="flex flex-wrap gap-2">
       <button v-if="comparison && comparison.options.length >= 2" class="rounded-full border border-accent/40 bg-accent/5 px-3 py-1 text-xs text-ink hover:bg-accent/10" @click="emit('navigate', 'comparison')">
         ⊞ {{ $t("dashboard.openComparison") }}
-      </button>
-      <button v-if="diffChanged" class="rounded-full border border-accent/40 bg-accent/5 px-3 py-1 text-xs text-ink hover:bg-accent/10" @click="emit('navigate', 'report')">
-        ↻ {{ $t("dashboard.changes", { n: diffChanged }) }}
       </button>
       <button v-if="redTeam && redTeam.findings.length" class="rounded-full border border-bd px-3 py-1 text-xs text-muted hover:text-ink" @click="emit('navigate', 'redteam')">
         ⚔ {{ $t("dashboard.openRedteam") }}

@@ -131,13 +131,6 @@ class InMemoryTaskStore:
             for r in sorted_records[:max(1, min(limit, 100))]
         ]
 
-    def list_active_watch_research_ids(self) -> list[str]:
-        return [
-            r.id
-            for r in self.researches.values()
-            if ((r.graph_state or {}).get("watch") or {}).get("enabled")
-        ]
-
     def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
         if not token:
             return None

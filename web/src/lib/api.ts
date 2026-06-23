@@ -18,10 +18,8 @@ import type {
   PublicReport,
   NumericCheck,
   ConfidenceReport,
-  ResearchWatch,
   PlanItem,
   RedTeamReport,
-  ResearchDiff,
   ResearchGraph,
   ResearchHistoryItem,
   ResearchPlan,
@@ -210,26 +208,8 @@ export const api = {
   getNumericCheck: (id: string) =>
     request<NumericCheck>(`/v1/research/${id}/numeric-check`),
 
-  getWatch: (id: string) =>
-    request<ResearchWatch>(`/v1/research/${id}/watch`),
-
-  setWatch: (id: string, enabled: boolean, interval_seconds?: number) =>
-    request<ResearchWatch>(`/v1/research/${id}/watch`, {
-      method: "PUT",
-      body: JSON.stringify({ enabled, interval_seconds: interval_seconds ?? null }),
-    }),
-
-  ackWatch: (id: string) =>
-    request<ResearchWatch>(`/v1/research/${id}/watch/ack`, { method: "POST" }),
-
-  getDiff: (id: string) =>
-    request<ResearchDiff>(`/v1/research/${id}/diff`),
-
   getComparison: (id: string) =>
     request<ComparisonTable>(`/v1/research/${id}/comparison`),
-
-  refreshResearch: (id: string) =>
-    request<CreateResearchResponse>(`/v1/research/${id}/refresh`, { method: "POST" }),
 
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),

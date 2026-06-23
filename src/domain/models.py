@@ -445,28 +445,6 @@ class PublicReport(BaseModel):
     cross_language: CrossLanguageReport = Field(default_factory=CrossLanguageReport)
 
 
-class ResearchWatch(BaseModel):
-    """A standing 'watch this question': periodic auto re-runs + an alert when the answer
-    materially changes. The watch follows the thread head — each scheduled re-run creates a
-    new run and the watch moves to it. Turns one-shot research into a monitor.
-    """
-    research_id: str = ""        # current head of the watched thread
-    enabled: bool = False
-    interval_seconds: int = 0
-    next_run_at: str = ""        # ISO; when the next re-run is due
-    last_run_at: str = ""        # ISO; when a scheduled re-run last fired
-    last_change_at: str = ""     # ISO; when a re-run last produced a material change
-    acknowledged_at: str = ""    # ISO; user dismissed the change badge
-    runs: int = 0                # scheduled re-runs fired so far
-    has_unseen_change: bool = False  # derived: last_change_at later than acknowledged_at
-
-
-class WatchRequest(BaseModel):
-    """Enable/disable a watch and (optionally) set its cadence."""
-    enabled: bool = True
-    interval_seconds: Optional[int] = None
-
-
 class ComparisonCell(BaseModel):
     """One (option × criterion) value with the source ids that back it."""
     option: str = ""
@@ -489,29 +467,6 @@ class ComparisonTable(BaseModel):
     @property
     def has_table(self) -> bool:
         return len(self.options) >= 2 and len(self.rows) >= 1
-
-
-class DiffClaim(BaseModel):
-    """A claim whose confidence shifted between two runs of the same research."""
-    statement: str = ""
-    old_level: str = ""
-    new_level: str = ""
-
-
-class ResearchDiff(BaseModel):
-    """What changed vs the previous run of this research (living-research diff)."""
-    research_id: str = ""
-    compared_to: str = ""   # parent research id
-    compared_at: str = ""   # parent run timestamp (ISO)
-    new_claims: List[str] = Field(default_factory=list)
-    dropped_claims: List[str] = Field(default_factory=list)
-    shifted_claims: List[DiffClaim] = Field(default_factory=list)
-    new_sources: int = 0
-    new_domains: List[str] = Field(default_factory=list)
-
-    @property
-    def has_changes(self) -> bool:
-        return bool(self.new_claims or self.dropped_claims or self.shifted_claims or self.new_sources)
 
 
 class ReplanRecommendation(BaseModel):

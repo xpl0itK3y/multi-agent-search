@@ -317,18 +317,6 @@ export interface NumericCheck {
   contradictions: NumericContradiction[];
 }
 
-export interface ResearchWatch {
-  research_id: string;
-  enabled: boolean;
-  interval_seconds: number;
-  next_run_at: string;
-  last_run_at: string;
-  last_change_at: string;
-  acknowledged_at: string;
-  runs: number;
-  has_unseen_change: boolean;
-}
-
 export interface ComparisonCell {
   option: string;
   value: string;
@@ -345,23 +333,6 @@ export interface ComparisonTable {
   options: string[];
   rows: ComparisonRow[];
   recommendation: string;
-}
-
-export interface DiffClaim {
-  statement: string;
-  old_level: string;
-  new_level: string;
-}
-
-export interface ResearchDiff {
-  research_id: string;
-  compared_to: string;
-  compared_at: string;
-  new_claims: string[];
-  dropped_claims: string[];
-  shifted_claims: DiffClaim[];
-  new_sources: number;
-  new_domains: string[];
 }
 
 export interface GraphTrailEntry {

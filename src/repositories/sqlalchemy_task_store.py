@@ -179,14 +179,6 @@ class SQLAlchemyTaskStore:
                 for r in rows
             ]
 
-    def list_active_watch_research_ids(self) -> list[str]:
-        """Ids of researches with an enabled watch (server-side JSONB filter)."""
-        with self.session_scope() as session:
-            stmt = select(ResearchORM.id).where(
-                ResearchORM.graph_state["watch"]["enabled"].astext == "true"
-            )
-            return [row[0] for row in session.execute(stmt).all()]
-
     def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
         """Resolve a research from its (unguessable) public share token. Exact match only."""
         if not token:

@@ -59,14 +59,11 @@ from src.api.schemas import (
     AuditTrail,
     ShareInfo,
     PublicReport,
-    ResearchWatch,
-    WatchRequest,
     Clarification,
     ClarifyAnswers,
     ComparisonTable,
     RedTeamReport,
     ResearchConflict,
-    ResearchDiff,
     VerificationReport,
     ResearchPlan,
     ResearchPlanUpdate,
@@ -584,37 +581,9 @@ def register_routes(app: FastAPI) -> None:
     def get_public_research(token: str, request: Request):
         return get_research_service(request).get_public_report(token)
 
-    @app.get("/v1/research/{research_id}/diff", response_model=ResearchDiff, dependencies=research_guard)
-    def get_research_diff(research_id: str, request: Request):
-        return get_research_service(request).get_research_diff(research_id)
-
     @app.get("/v1/research/{research_id}/comparison", response_model=ComparisonTable, dependencies=research_guard)
     def get_research_comparison(research_id: str, request: Request):
         return get_research_service(request).get_research_comparison(research_id)
-
-    @app.get("/v1/research/{research_id}/watch", response_model=ResearchWatch, dependencies=research_guard)
-    def get_research_watch(research_id: str, request: Request):
-        return get_research_service(request).get_research_watch(research_id)
-
-    @app.put("/v1/research/{research_id}/watch", response_model=ResearchWatch, dependencies=research_guard)
-    def set_research_watch(research_id: str, body: WatchRequest, request: Request):
-        return get_research_service(request).set_research_watch(research_id, body.enabled, body.interval_seconds)
-
-    @app.post("/v1/research/{research_id}/watch/ack", response_model=ResearchWatch, dependencies=research_guard)
-    def acknowledge_research_watch(research_id: str, request: Request):
-        return get_research_service(request).acknowledge_research_watch(research_id)
-
-    @app.post("/v1/research/{research_id}/refresh", response_model=ResearchResponse, dependencies=research_guard)
-    def refresh_research(
-        research_id: str,
-        request: Request,
-        background_tasks: BackgroundTasks,
-        owner: str | None = Depends(scope_user_id),
-    ):
-        service = get_research_service(request)
-        response, new_id, payload = service.refresh_research(research_id, user_id=owner)
-        background_tasks.add_task(service.decompose_and_enqueue, new_id, payload)
-        return response
 
     @app.get("/v1/research/{research_id}/clarifications", response_model=Clarification, dependencies=research_guard)
     def get_research_clarifications(research_id: str, request: Request):

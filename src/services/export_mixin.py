@@ -97,7 +97,6 @@ class ExportMixin:
             "confidence": safe(lambda: self.get_research_confidence(rid)),
             "red_team": safe(lambda: self.get_research_red_team(rid)),
             "comparison": safe(lambda: self.get_research_comparison(rid)),
-            "diff": safe(lambda: self.get_research_diff(rid)),
             "sources": safe(lambda: [s.model_dump() for s in self.get_research_sources(rid)]),
         }
 

@@ -162,7 +162,6 @@ class JobQueueMixin:
 
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         self.recover_pending_decompositions()
-        self.run_due_watches()
         search_recovery = self.recover_stale_search_task_jobs()
         finalize_recovery = self.recover_stale_research_finalize_jobs()
         search_cleanup = self.cleanup_old_search_task_jobs()
