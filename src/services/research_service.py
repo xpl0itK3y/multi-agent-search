@@ -597,11 +597,18 @@ class ResearchService(
             [],
             [],
         )[1]
-        replan_recommendations = self.replan_agent.suggest_follow_up(
-            research.prompt,
-            research.depth,
-            tasks,
-            source_summary=source_critic_summary,
+        # Follow-up recommendations require LLM calls and only make sense once every task branch
+        # has finished — skip them while the research is still in progress (AUD-022) so an
+        # on-demand /summary fetch mid-run doesn't burn LLM calls on premature suggestions.
+        replan_recommendations = (
+            self.replan_agent.suggest_follow_up(
+                research.prompt,
+                research.depth,
+                tasks,
+                source_summary=source_critic_summary,
+            )
+            if finalize_ready
+            else []
         )
         graph_execution_summary = self._build_graph_execution_summary(tasks)
 
