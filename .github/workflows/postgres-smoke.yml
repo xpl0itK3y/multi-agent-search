@@ -13,7 +13,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -36,9 +36,9 @@ jobs:
       POSTGRES_DB: multi_agent_search
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.11"
 

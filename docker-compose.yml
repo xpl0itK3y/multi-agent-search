@@ -96,7 +96,7 @@ services:
       WORKER_NAME: job-worker-3
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: multi-agent-search-redis
     ports:
       - "6379:6379"
@@ -108,7 +108,7 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     container_name: multi-agent-search-db
     # Raise max_connections so the API + workers' bigger pools fit (default is 100).
     command: ["postgres", "-c", "max_connections=200"]
@@ -130,7 +130,7 @@ services:
   # Connection pooler: multiplexes many app connections onto few Postgres backends
   # (transaction mode), so the API + workers can scale without exhausting Postgres.
   pgbouncer:
-    image: edoburu/pgbouncer:latest
+    image: edoburu/pgbouncer@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd
     container_name: multi-agent-search-pgbouncer
     depends_on:
       db:
@@ -173,7 +173,7 @@ services:
     restart: "no"
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
     container_name: multi-agent-search-prometheus
     depends_on:
       api:
@@ -185,7 +185,7 @@ services:
     restart: unless-stopped
 
   loki:
-    image: grafana/loki:3.3.2
+    image: grafana/loki:3.3.2@sha256:8af2de1abbdd7aa92b27c9bcc96f0f4140c9096b507c77921ffddf1c6ad6c48f
     container_name: multi-agent-search-loki
     ports:
       - "3100:3100"
@@ -201,7 +201,7 @@ services:
     restart: unless-stopped
 
   promtail:
-    image: grafana/promtail:3.3.2
+    image: grafana/promtail:3.3.2@sha256:cb4990801ec58975c5e231057c2bcf204c85fac428eec65ad66e0016c64b9608
     container_name: multi-agent-search-promtail
     volumes:
       - ./ops/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
@@ -213,7 +213,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.2.0@sha256:408afb9726de5122b00a2576763a8a57a3c86d5b0eff5305bc994ceb3eb96c3f
     container_name: multi-agent-search-grafana
     depends_on:
       prometheus:
