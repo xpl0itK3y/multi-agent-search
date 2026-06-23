@@ -701,14 +701,37 @@ def _md_inline(text: str) -> str:
     return text
 
 
-def _markdown_to_html(md: str) -> str:
+def _slugify(text: str, used: set[str]) -> str:
+    base = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE).strip().lower()
+    base = re.sub(r"[\s_-]+", "-", base)[:60] or "section"
+    slug, i = base, 2
+    while slug in used:
+        slug, i = f"{base}-{i}", i + 1
+    used.add(slug)
+    return slug
+
+
+_MD_TABLE_SEP = re.compile(r"^\|?[\s:|-]+\|?$")
+
+
+def _markdown_to_html(md: str) -> tuple[str, list[tuple[int, str, str]]]:
+    """Markdown → HTML, also returning a (level, slug, text) outline for the table of contents.
+
+    Headings get id anchors; the first paragraph is tagged as the lead; pipe tables render as
+    real <table> (previously they leaked through as literal `| a | b |` paragraphs)."""
     out: list[str] = []
     para: list[str] = []
     list_type: Optional[str] = None
+    toc: list[tuple[int, str, str]] = []
+    used_slugs: set[str] = set()
+    lead_done = False
 
     def flush_para() -> None:
+        nonlocal lead_done
         if para:
-            out.append("<p>" + _md_inline(_html_mod.escape(" ".join(para))) + "</p>")
+            cls = "" if lead_done else ' class="lead"'
+            out.append(f"<p{cls}>" + _md_inline(_html_mod.escape(" ".join(para))) + "</p>")
+            lead_done = True
             para.clear()
 
     def close_list() -> None:
@@ -717,18 +740,43 @@ def _markdown_to_html(md: str) -> str:
             out.append(f"</{list_type}>")
             list_type = None
 
-    for raw in (md or "").split("\n"):
-        stripped = raw.strip()
+    lines = (md or "").split("\n")
+    idx = 0
+    while idx < len(lines):
+        stripped = lines[idx].strip()
+        nxt = lines[idx + 1].strip() if idx + 1 < len(lines) else ""
+        if stripped.startswith("|") and "-" in nxt and _MD_TABLE_SEP.match(nxt):
+            flush_para()
+            close_list()
+            header = _split_table_row(stripped)
+            idx += 2  # consume header + separator rows
+            rows: list[list[str]] = []
+            while idx < len(lines) and lines[idx].strip().startswith("|"):
+                rows.append(_split_table_row(lines[idx].strip()))
+                idx += 1
+            thead = "".join(f"<th>{_md_inline(_html_mod.escape(c))}</th>" for c in header)
+            tbody = "".join(
+                "<tr>" + "".join(f"<td>{_md_inline(_html_mod.escape(c))}</td>" for c in r) + "</tr>"
+                for r in rows
+            )
+            out.append(f'<div class="table-wrap"><table><thead><tr>{thead}</tr></thead><tbody>{tbody}</tbody></table></div>')
+            continue
         if not stripped:
             flush_para()
             close_list()
+            idx += 1
             continue
         heading = _MD_HEADING.match(stripped)
         if heading:
             flush_para()
             close_list()
             level = len(heading.group(1))
-            out.append(f"<h{level}>" + _md_inline(_html_mod.escape(heading.group(2))) + f"</h{level}>")
+            text = heading.group(2)
+            slug = _slugify(text, used_slugs)
+            out.append(f'<h{level} id="{slug}">' + _md_inline(_html_mod.escape(text)) + f"</h{level}>")
+            if level in (1, 2):
+                toc.append((level, slug, text))
+            idx += 1
             continue
         bullet = _MD_BULLET.match(stripped)
         numbered = _MD_NUMBERED.match(stripped)
@@ -740,13 +788,15 @@ def _markdown_to_html(md: str) -> str:
                 out.append(f"<{want}>")
                 list_type = want
             out.append("<li>" + _md_inline(_html_mod.escape((bullet or numbered).group(1))) + "</li>")
+            idx += 1
             continue
         close_list()
         para.append(stripped)
+        idx += 1
 
     flush_para()
     close_list()
-    return "\n".join(out)
+    return "\n".join(out), toc
 
 
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,system-ui,sans-serif"
@@ -776,15 +826,23 @@ _THEME_VARS = {
 _HTML_BASE_CSS = """
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.7 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.75 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 ::selection{background:color-mix(in srgb,var(--accent) 26%,transparent)}
-.topbar{height:4px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
-main{max-width:740px;margin:0 auto;padding:56px 24px 96px}
-.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
-.eyebrow::before{content:"";width:22px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
-h1.title{font-family:var(--font-head);font-size:38px;line-height:1.14;letter-spacing:-.02em;margin:.34em 0 .24em}
+.progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:60;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.totop{position:fixed;right:22px;bottom:22px;width:42px;height:42px;border:1px solid var(--bd);border-radius:50%;background:var(--card);color:var(--ink);font-size:18px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s,border-color .2s;z-index:60;box-shadow:0 6px 20px color-mix(in srgb,var(--ink) 12%,transparent)}
+.totop.show{opacity:1;transform:none}
+.totop:hover{border-color:var(--accent);color:var(--accent)}
+.shell{max-width:1100px;margin:0 auto;padding:0 24px}
+.layout{display:grid;gap:56px;grid-template-columns:minmax(0,1fr);align-items:start;padding:0 0 100px}
+@media(min-width:1060px){.layout{grid-template-columns:minmax(0,1fr) 230px}}
+main{min-width:0;width:100%;max-width:760px;padding-top:60px}
+@media(min-width:1060px){main{justify-self:end}}
+.eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.eyebrow::before{content:"";width:24px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+h1.title{font-family:var(--font-head);font-size:40px;line-height:1.12;letter-spacing:-.022em;margin:.34em 0 .26em}
 .meta{color:var(--muted);font-size:13.5px;margin-bottom:34px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin:0 0 40px}
+.meta .dot{margin:0 9px;opacity:.5}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin:0 0 16px}
 .card{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 6%,transparent);transition:transform .15s ease,box-shadow .15s ease}
 .card::before{content:"";position:absolute;top:0;bottom:0;left:0;width:3px;background:linear-gradient(var(--accent),var(--accent2));opacity:.9}
 .card:hover{transform:translateY(-2px);box-shadow:0 10px 28px color-mix(in srgb,var(--ink) 12%,transparent)}
@@ -792,34 +850,52 @@ h1.title{font-family:var(--font-head);font-size:38px;line-height:1.14;letter-spa
 .card .val{font-family:var(--font-head);font-size:30px;font-weight:700;line-height:1;margin-top:7px}
 .card .sub{font-size:12px;color:var(--muted);margin-top:5px}
 .g{color:var(--green)}.a{color:var(--amber)}.r{color:var(--red)}
+.rail{order:2;padding-top:60px}
+.toc{font-size:13.5px}
+.toc summary{list-style:none;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:14px}
+.toc summary::-webkit-details-marker{display:none}
+.toc nav{display:flex;flex-direction:column}
+.toc a{color:var(--muted);text-decoration:none;padding:5px 0 5px 14px;border-left:2px solid var(--bd);line-height:1.35;transition:color .15s,border-color .15s}
+.toc a.lv2{padding-left:26px;font-size:12.5px}
+.toc a:hover,.toc a.active{color:var(--accent);border-left-color:var(--accent)}
+@media(min-width:1060px){.toc{position:sticky;top:30px}.toc summary{pointer-events:none}}
+@media(max-width:1059px){
+.rail{order:-1;padding-top:0;margin-bottom:6px}
+.toc{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px 18px}
+.toc summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;margin:0}
+.toc summary::after{content:"⌄";font-size:17px;transition:transform .2s}
+.toc[open] summary{margin-bottom:12px}.toc[open] summary::after{transform:rotate(180deg)}
+}
 article{font-size:17px}
 article>:first-child{margin-top:0}
-article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.25;letter-spacing:-.01em;margin:1.7em 0 .5em;color:var(--ink)}
+article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.25;letter-spacing:-.01em;margin:1.85em 0 .55em;color:var(--ink);scroll-margin-top:22px}
 article h1{font-size:30px}
-article h2{font-size:25px;margin-top:1.8em;padding-bottom:.28em;border-bottom:1px solid var(--bd)}
+article h2{font-size:25px;margin-top:1.95em;padding-bottom:.3em;border-bottom:1px solid var(--bd)}
 article h3{font-size:20px}
-article h4{font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-article p{margin:.85em 0}
-article ul,article ol{margin:.7em 0;padding-left:1.4em}
-article li{margin:.35em 0}article li::marker{color:var(--accent)}
+article h4{font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+article p{margin:.95em 0}
+article p.lead{font-family:var(--font-head);font-size:21px;line-height:1.55;color:var(--ink);margin:.2em 0 1em}
+article ul,article ol{margin:.8em 0;padding-left:1.4em}
+article li{margin:.4em 0}article li::marker{color:var(--accent)}
 article a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent);word-break:break-word}
 article a:hover{border-bottom-color:var(--accent)}
-article strong{font-weight:700}
-article blockquote{margin:1.3em 0;padding:.5em 1.2em;border-left:3px solid var(--accent);border-radius:0 12px 12px 0;background:color-mix(in srgb,var(--accent) 7%,transparent)}
+article strong{font-weight:700;color:var(--ink)}
+article blockquote{margin:1.4em 0;padding:.6em 1.3em;border-left:3px solid var(--accent);border-radius:0 12px 12px 0;background:color-mix(in srgb,var(--accent) 7%,transparent)}
 article blockquote p{margin:.4em 0}
 article code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em;background:color-mix(in srgb,var(--ink) 8%,transparent);padding:.12em .42em;border-radius:6px}
 article pre{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;overflow:auto;font-size:14px}
 article pre code{background:none;padding:0}
-article table{width:100%;border-collapse:collapse;margin:1.3em 0;font-size:15px;border:1px solid var(--bd);border-radius:12px;overflow:hidden}
-article th,article td{padding:9px 13px;text-align:left;border-bottom:1px solid var(--bd)}
-article th{background:color-mix(in srgb,var(--accent) 9%,transparent);font-weight:700}
-article tr:last-child td{border-bottom:0}
-article tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--ink) 3%,transparent)}
-sup.cite{color:var(--accent);font-weight:700;font-size:.7em;padding:0 .05em}
-hr{border:0;border-top:1px solid var(--bd);margin:2.4em 0}
-footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--bd);color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:8px}
+.table-wrap{margin:1.5em 0;overflow-x:auto;border:1px solid var(--bd);border-radius:14px;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 5%,transparent)}
+.table-wrap table{width:100%;border-collapse:collapse;font-size:14.5px;min-width:480px}
+.table-wrap th,.table-wrap td{padding:11px 15px;text-align:left;border-bottom:1px solid var(--bd);vertical-align:top}
+.table-wrap thead th{background:color-mix(in srgb,var(--accent) 11%,transparent);font-weight:700}
+.table-wrap tbody tr:last-child td{border-bottom:0}
+.table-wrap tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+sup.cite{display:inline-block;color:var(--accent);font-weight:700;font-size:.66em;vertical-align:super;padding:0 .12em;line-height:0}
+hr{border:0;border-top:1px solid var(--bd);margin:2.6em 0}
+footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--bd);color:var(--muted);font-size:12.5px;display:flex;align-items:center;gap:9px}
 footer::before{content:"";width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
-@media(max-width:600px){main{padding:38px 18px 64px}h1.title{font-size:30px}article h2{font-size:22px}}
+@media(max-width:600px){main{padding-top:40px}h1.title{font-size:30px}article h2{font-size:22px}article p.lead{font-size:19px}.shell{padding:0 18px}.layout{padding-bottom:64px}}
 """
 
 _HEX_RE = re.compile(r"^#?[0-9a-fA-F]{3,8}$")
@@ -859,6 +935,40 @@ def _card(label: str, value: str, sub: str = "", value_cls: str = "") -> str:
         f'<div class="card"><div class="lbl">{_html_mod.escape(label)}</div>'
         f'<div class="val{cls}">{_html_mod.escape(value)}</div>{sub_html}</div>'
     )
+
+
+def _build_toc(toc: list[tuple[int, str, str]], labels: dict) -> str:
+    entries = [(lvl, slug, text) for lvl, slug, text in toc if lvl in (1, 2)]
+    if len(entries) < 3:
+        return ""  # not worth a contents rail for a short report
+    head = _html_mod.escape(labels.get("contents", "Contents"))
+    links = "".join(
+        f'<a class="lv{lvl}" href="#{slug}">{_html_mod.escape(text)}</a>'
+        for lvl, slug, text in entries
+    )
+    return (
+        f'<aside class="rail"><details class="toc" open>'
+        f"<summary>{head}</summary><nav>{links}</nav></details></aside>"
+    )
+
+
+# Reading-progress bar, back-to-top toggle, and active-section highlighting in the TOC.
+_TOC_SCRIPT = (
+    "<script>(function(){"
+    "var bar=document.querySelector('.progress'),top=document.querySelector('.totop');"
+    "function s(){var h=document.documentElement,b=document.body,"
+    "y=h.scrollTop||b.scrollTop,m=(h.scrollHeight||b.scrollHeight)-h.clientHeight;"
+    "if(bar)bar.style.width=(m>0?y/m*100:0)+'%';if(top)top.classList.toggle('show',y>600);}"
+    "document.addEventListener('scroll',s,{passive:true});s();"
+    "if(top)top.addEventListener('click',function(){window.scrollTo({top:0,behavior:'smooth'});});"
+    "var ls=[].slice.call(document.querySelectorAll('.toc a')),mp={};"
+    "ls.forEach(function(a){mp[a.getAttribute('href').slice(1)]=a;});"
+    "if('IntersectionObserver' in window){var o=new IntersectionObserver(function(es){"
+    "es.forEach(function(e){if(e.isIntersecting){ls.forEach(function(a){a.classList.remove('active');});"
+    "var a=mp[e.target.id];if(a)a.classList.add('active');}});},{rootMargin:'-12% 0px -78% 0px'});"
+    "document.querySelectorAll('article h1[id],article h2[id]').forEach(function(h){o.observe(h);});}"
+    "})();</script>"
+)
 
 
 def generate_html(
@@ -906,22 +1016,32 @@ def generate_html(
         )
     cards_html = f'<div class="cards">{cards}</div>' if cards else ""
 
-    meta_bits = [b for b in [depth, when] if b]
-    meta = " · ".join(_html_mod.escape(b) for b in meta_bits)
-    body = _markdown_to_html(report)
+    body, toc = _markdown_to_html(report)
+    toc_html = _build_toc(toc, labels)
+    words = len(re.findall(r"\w+", report, flags=re.UNICODE))
+    reading = f"{max(1, round(words / 200))} {labels.get('readingTime', 'min read')}"
+    meta_bits = [b for b in [depth, when, reading] if b]
+    meta = '<span class="dot">·</span>'.join(_html_mod.escape(b) for b in meta_bits)
     footer = labels.get("footer", "Generated with verifiable research — every claim traceable to its source.")
 
     page = (
         "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_html_mod.escape(prompt[:120])}</title>"
-        f"<style>{_build_css(theme, accent, base)}</style></head><body><div class=\"topbar\"></div><main>"
+        f"<style>{_build_css(theme, accent, base)}</style></head><body>"
+        '<div class="progress"></div>'
+        '<div class="shell"><div class="layout"><main>'
         f'<div class="eyebrow">{_html_mod.escape(labels.get("eyebrow", "Research report"))}</div>'
         f'<h1 class="title">{_html_mod.escape(prompt)}</h1>'
         f'<div class="meta">{meta}</div>'
         f"{cards_html}"
         f"<article>{body}</article>"
         f"<footer>{_html_mod.escape(footer)}</footer>"
-        "</main></body></html>"
+        "</main>"
+        f"{toc_html}"
+        "</div></div>"
+        '<button class="totop" aria-label="Top">↑</button>'
+        f"{_TOC_SCRIPT}"
+        "</body></html>"
     )
     return page.encode("utf-8")

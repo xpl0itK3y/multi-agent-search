@@ -6,17 +6,26 @@ from src.ui.report_export import _markdown_to_html, generate_html
 
 def test_markdown_to_html_basics():
     md = "## Heading\n\nSome **bold** text [S1].\n\n- one\n- two\n\nSee [link](https://a.com)."
-    html = _markdown_to_html(md)
-    assert "<h2>Heading</h2>" in html
+    html, toc = _markdown_to_html(md)
+    assert '<h2 id="heading">Heading</h2>' in html
     assert "<strong>bold</strong>" in html
     assert 'sup class="cite">[S1]</sup>' in html
     assert "<ul>" in html and "<li>one</li>" in html
     assert '<a href="https://a.com"' in html
+    assert toc == [(2, "heading", "Heading")]  # outline drives the table of contents
+
+
+def test_markdown_renders_pipe_tables():
+    md = "Intro.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+    html, _ = _markdown_to_html(md)
+    assert '<div class="table-wrap"><table>' in html
+    assert "<th>A</th>" in html and "<td>1</td>" in html
+    assert "<p>|" not in html  # not leaked as a literal-pipe paragraph
 
 
 def test_markdown_escapes_raw_html():
-    html = _markdown_to_html("A <script>alert(1)</script> & co")
-    assert "<script>" not in html
+    html, _ = _markdown_to_html("A <script>alert(1)</script> & co")
+    assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
 
 
@@ -59,7 +68,7 @@ def test_html_custom_accent_applied_and_sanitized():
     assert "--accent:#ff0066" in ok
     # a CSS-injection attempt via the accent param is rejected (not a hex color)
     bad = generate_html("Body.", "Q", theme="custom", accent="red;}body{display:none").decode("utf-8")
-    assert "display:none" not in bad
+    assert "}body{display:none" not in bad  # the injection payload is not reflected into the CSS
 
 
 def test_html_editorial_theme_is_serif_body():
