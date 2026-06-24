@@ -29,6 +29,15 @@ def test_markdown_escapes_raw_html():
     assert "&lt;script&gt;" in html
 
 
+def test_escaped_citations_normalized_and_no_katex_collision():
+    # \[Sn\] (escaped citation the LLM sometimes emits) must render as a citation, not leak as
+    # literal text or collide with KaTeX's \[…\] delimiter; inline \(…\) math is left for KaTeX.
+    html, _ = _markdown_to_html("Утверждение \\[S15\\], формула \\(T_2\\) и обычная [S20].")
+    assert html.count('class="cite"') == 2  # both \[S15\] and [S20] become citations
+    assert "\\[S15\\]" not in html  # no raw escaped citation survives
+    assert "\\(T_2\\)" in html  # inline math preserved (rendered by KaTeX at view time)
+
+
 def test_generate_html_includes_report_and_scorecard():
     out = generate_html(
         "## Report\nBody [S1].",

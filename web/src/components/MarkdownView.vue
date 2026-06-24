@@ -141,7 +141,9 @@ function splitSentences(text: string): string[] {
 }
 
 const html = computed(() => {
-  const source = props.source || "";
+  // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
+  // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
+  const source = (props.source || "").replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
   const urls = sourceUrlMap(source);
   const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
 
@@ -227,7 +229,6 @@ watch(
         renderMathInElement(articleEl.value, {
           delimiters: [
             { left: "$$", right: "$$", display: true },
-            { left: "\\[", right: "\\]", display: true },
             { left: "\\(", right: "\\)", display: false },
           ],
           throwOnError: false,

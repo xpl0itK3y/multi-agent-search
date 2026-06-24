@@ -740,7 +740,10 @@ def _markdown_to_html(md: str) -> tuple[str, list[tuple[int, str, str]]]:
             out.append(f"</{list_type}>")
             list_type = None
 
-    lines = (md or "").split("\n")
+    # Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations rather
+    # than leaking as literal text / colliding with KaTeX's \[…\] delimiter.
+    md = re.sub(r"\\\[(S\d+(?:[,\s]+S\d+)*)\\\]", r"[\1]", md or "")
+    lines = md.split("\n")
     idx = 0
     while idx < len(lines):
         stripped = lines[idx].strip()
@@ -976,7 +979,6 @@ _KATEX_SCRIPT = (
     '<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>'
     "<script>try{renderMathInElement(document.body,{delimiters:["
     '{left:"$$",right:"$$",display:true},'
-    '{left:"\\\\[",right:"\\\\]",display:true},'
     '{left:"\\\\(",right:"\\\\)",display:false}'
     "],throwOnError:false});}catch(e){}</script>"
 )
