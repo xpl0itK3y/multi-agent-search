@@ -188,7 +188,11 @@ const html = computed(() => {
       .join("\n");
   }
 
-  let rendered = md.render(prepared);
+  // markdown-it treats "\(" / "\)" as escaped punctuation and strips the backslash, which would
+  // destroy KaTeX's inline-math delimiters before renderMathInElement runs. Shield them across
+  // render with ASCII sentinels, then restore so renderMathInElement can find the math.
+  prepared = prepared.replace(/\\\(/g, "@@KMO@@").replace(/\\\)/g, "@@KMC@@");
+  let rendered = md.render(prepared).replace(/@@KMO@@/g, "\\(").replace(/@@KMC@@/g, "\\)");
 
   // 2. Turn the sentinels into a styled span + a trailing support badge.
   if (props.verify) {
