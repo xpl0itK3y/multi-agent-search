@@ -967,6 +967,20 @@ _TOC_SCRIPT = (
     "})();</script>"
 )
 
+# KaTeX renders the report's LaTeX math (\(...\), \[...\], $$...$$). Loaded from a CDN; degrades
+# gracefully to the raw \(…\) text if offline (auto-render off-by-default for single $, so prose
+# dollar signs are safe; throwOnError off + try/catch).
+_KATEX_HEAD = '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">'
+_KATEX_SCRIPT = (
+    '<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>'
+    '<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>'
+    "<script>try{renderMathInElement(document.body,{delimiters:["
+    '{left:"$$",right:"$$",display:true},'
+    '{left:"\\\\[",right:"\\\\]",display:true},'
+    '{left:"\\\\(",right:"\\\\)",display:false}'
+    "],throwOnError:false});}catch(e){}</script>"
+)
+
 
 def generate_html(
     report: str,
@@ -1028,6 +1042,7 @@ def generate_html(
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
         '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:wght@500;600;700&display=swap" rel="stylesheet">'
+        f"{_KATEX_HEAD}"
         f"<style>{_build_css(theme, accent, base)}</style></head><body>"
         '<div class="progress"></div>'
         '<div class="shell"><div class="layout"><main>'
@@ -1042,6 +1057,7 @@ def generate_html(
         "</div></div>"
         '<button class="totop" aria-label="Top">↑</button>'
         f"{_TOC_SCRIPT}"
+        f"{_KATEX_SCRIPT}"
         "</body></html>"
     )
     return page.encode("utf-8")

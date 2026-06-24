@@ -9,6 +9,16 @@ from src.agents.analyzer import AnalyzerAgent
 AZ = AnalyzerAgent.__new__(AnalyzerAgent)
 
 
+def test_structural_headings_localized_to_report_language():
+    md = "## Executive Summary\n\nТекст.\n\n## Время когерентности\n\n## Conclusion"
+    out = AZ._localize_structural_headings(md, "ru")
+    assert "## Исполнительное резюме" in out  # English structural heading translated
+    assert "## Заключение" in out
+    assert "## Время когерентности" in out  # an unknown (already-RU) heading is left as-is
+    assert AZ._localize_structural_headings("# Executive Summary", "es") == "# Resumen ejecutivo"
+    assert AZ._localize_structural_headings("## Executive Summary", "en") == "## Executive Summary"
+
+
 def test_language_instruction_is_forceful():
     instr = AZ._language_instruction("ru")
     assert "Russian" in instr and "CRITICAL" in instr

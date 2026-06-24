@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownIt from "markdown-it";
+import renderMathInElement from "katex/contrib/auto-render";
+import "katex/dist/katex.min.css";
 import type { CitationGround, SourceIndependence } from "@/lib/types";
 
 const props = defineProps<{
@@ -213,10 +215,35 @@ const html = computed(() => {
       : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
   });
 });
+
+// Render LaTeX math (\(…\), \[…\], $$…$$) in the article after each html update (KaTeX).
+const articleEl = ref<HTMLElement | null>(null);
+watch(
+  html,
+  () => {
+    nextTick(() => {
+      if (!articleEl.value) return;
+      try {
+        renderMathInElement(articleEl.value, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "\\[", right: "\\]", display: true },
+            { left: "\\(", right: "\\)", display: false },
+          ],
+          throwOnError: false,
+        });
+      } catch {
+        /* ignore malformed math */
+      }
+    });
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
   <article
+    ref="articleEl"
     class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-headings:font-serif prose-headings:text-ink prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
     v-html="html"
   />

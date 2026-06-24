@@ -563,6 +563,49 @@ class AnalyzerAgent(BaseAgent):
             return m.group(2) if m.group(2).count("|") >= 2 else m.group(0)
         return self._POLLUTED_TABLE_ROW.sub(_fix, text)
 
+    _STRUCTURAL_HEADINGS = {
+        "ru": {
+            "executive summary": "Исполнительное резюме",
+            "key findings": "Ключевые выводы",
+            "key takeaways": "Ключевые выводы",
+            "conclusion / bottom line": "Заключение",
+            "conclusion": "Заключение",
+            "bottom line": "Итог",
+            "introduction": "Введение",
+            "summary": "Резюме",
+            "recommendations": "Рекомендации",
+            "open questions": "Открытые вопросы",
+            "background": "Контекст",
+        },
+        "es": {
+            "executive summary": "Resumen ejecutivo",
+            "key findings": "Conclusiones clave",
+            "key takeaways": "Conclusiones clave",
+            "conclusion / bottom line": "Conclusión",
+            "conclusion": "Conclusión",
+            "bottom line": "Conclusión",
+            "introduction": "Introducción",
+            "summary": "Resumen",
+            "recommendations": "Recomendaciones",
+            "open questions": "Preguntas abiertas",
+            "background": "Contexto",
+        },
+    }
+
+    def _localize_structural_headings(self, report: str, language: str) -> str:
+        """Translate the handful of English structural headings the writer copies verbatim from
+        the prompt (e.g. 'Executive Summary') into the report language, so a RU/ES report doesn't
+        carry one stray English heading. Only exact known matches are touched (language-fix)."""
+        mapping = self._STRUCTURAL_HEADINGS.get(language)
+        if not mapping:
+            return report
+
+        def repl(match):
+            localized = mapping.get(match.group(2).strip().lower())
+            return f"{match.group(1)} {localized}" if localized else match.group(0)
+
+        return re.sub(r"(?m)^(#{1,4})\s+(.+?)\s*$", repl, report)
+
     def _post_process_report(self, report: str, language: str) -> str:
         normalized = report.replace("\r\n", "\n").strip()
         normalized = re.sub(r"\n{3,}", "\n\n", normalized)
@@ -570,6 +613,7 @@ class AnalyzerAgent(BaseAgent):
         # Strip LLM meta-commentary preamble that sometimes appears before the first heading.
         normalized = self._LLM_PREAMBLE.sub("", normalized).strip()
         normalized = self._clean_table_rows(normalized)
+        normalized = self._localize_structural_headings(normalized, language)
 
         localized_sources_heading = self._sources_heading(language)
         if re.search(r"(?im)^sources:\s*$", normalized):
