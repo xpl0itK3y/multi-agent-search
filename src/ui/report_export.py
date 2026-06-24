@@ -825,6 +825,7 @@ _HTML_BASE_CSS = """
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.75 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(1000px 520px at 50% -260px,color-mix(in srgb,var(--accent) 14%,transparent),transparent 68%)}
 ::selection{background:color-mix(in srgb,var(--accent) 26%,transparent)}
 .progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:60;background:linear-gradient(90deg,var(--accent),var(--accent2))}
 .totop{position:fixed;right:22px;bottom:22px;width:42px;height:42px;border:1px solid var(--bd);border-radius:50%;background:var(--card);color:var(--ink);font-size:18px;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s,border-color .2s;z-index:60;box-shadow:0 6px 20px color-mix(in srgb,var(--ink) 12%,transparent)}
@@ -835,18 +836,20 @@ body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.75 var(--font-bo
 @media(min-width:1060px){.layout{grid-template-columns:minmax(0,1fr) 230px}}
 main{min-width:0;width:100%;max-width:760px;padding-top:60px}
 @media(min-width:1060px){main{justify-self:end}}
-.eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);font-weight:700}
-.eyebrow::before{content:"";width:24px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;padding:5px 13px 5px 11px;border-radius:999px;background:color-mix(in srgb,var(--accent) 9%,transparent);border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+.eyebrow::before{content:"";width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 8px color-mix(in srgb,var(--accent) 80%,transparent)}
 h1.title{font-family:var(--font-head);font-size:40px;line-height:1.12;letter-spacing:-.022em;margin:.34em 0 .26em}
 .meta{color:var(--muted);font-size:13.5px;margin-bottom:34px}
 .meta .dot{margin:0 9px;opacity:.5}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:12px;margin:0 0 16px}
 .card{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px;box-shadow:0 1px 2px color-mix(in srgb,var(--ink) 6%,transparent);transition:transform .15s ease,box-shadow .15s ease}
 .card::before{content:"";position:absolute;top:0;bottom:0;left:0;width:3px;background:linear-gradient(var(--accent),var(--accent2));opacity:.9}
+.card::after{content:"";position:absolute;top:-55%;right:-15%;width:130px;height:130px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 16%,transparent),transparent 70%);pointer-events:none}
 .card:hover{transform:translateY(-2px);box-shadow:0 10px 28px color-mix(in srgb,var(--ink) 12%,transparent)}
 .card .lbl{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .card .val{font-family:var(--font-head);font-size:30px;font-weight:700;line-height:1;margin-top:7px}
 .card .sub{font-size:12px;color:var(--muted);margin-top:5px}
+.card>div{position:relative;z-index:1}
 .g{color:var(--green)}.a{color:var(--amber)}.r{color:var(--red)}
 .rail{order:2;padding-top:60px}
 .toc{font-size:13.5px}
@@ -868,7 +871,8 @@ article{font-size:17px}
 article>:first-child{margin-top:0}
 article h1,article h2,article h3,article h4{font-family:var(--font-head);line-height:1.25;letter-spacing:-.01em;margin:1.85em 0 .55em;color:var(--ink);scroll-margin-top:22px}
 article h1{font-size:30px}
-article h2{font-size:25px;margin-top:1.95em;padding-bottom:.3em;border-bottom:1px solid var(--bd)}
+article h2{font-size:25px;margin-top:1.95em;padding-bottom:.34em;position:relative}
+article h2::after{content:"";position:absolute;left:0;bottom:0;width:100%;height:1px;background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 55%,transparent),var(--bd),transparent)}
 article h3{font-size:20px}
 article h4{font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 article p{margin:.95em 0}
