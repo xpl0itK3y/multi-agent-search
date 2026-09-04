@@ -169,12 +169,9 @@ def seed_task() -> tuple[str, str, str]:
 
 def verify_db_rows(research_id: str, task_id: str) -> None:
     from sqlalchemy import create_engine, text
+    from src.config import settings
 
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+psycopg://app:app@localhost:5433/multi_agent_search",
-    )
-    engine = create_engine(database_url, pool_pre_ping=True)
+    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
     with engine.connect() as connection:
         task_row = connection.execute(
             text("select status, logs from search_tasks where id = :task_id"),
