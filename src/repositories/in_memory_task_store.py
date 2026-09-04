@@ -416,14 +416,56 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def renew_research_finalize_job_lease(self, job_id: str, lease_epoch: int) -> bool:
+        job = self.finalize_jobs.get(job_id)
+        if (
+            job is None
+            or job.status != FinalizeJobStatus.RUNNING
+            or job.lease_epoch != lease_epoch
+        ):
+            return False
+        job.updated_at = datetime.now(timezone.utc)
+        return True
+
+    def complete_research_finalize_job(
+        self,
+        job_id: str,
+        research_id: str,
+        lease_epoch: int,
+        report: str,
+    ) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        research = self.researches.get(research_id)
+        if (
+            job is None
+            or research is None
+            or job.research_id != research_id
+            or job.status != FinalizeJobStatus.RUNNING
+            or job.lease_epoch != lease_epoch
+        ):
+            return None
+        if research.status != ResearchStatus.CANCELLED:
+            self.update_research_status(research_id, ResearchStatus.COMPLETED, report)
+        job.status = FinalizeJobStatus.COMPLETED
+        job.error = None
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
     def update_research_finalize_job(
         self,
         job_id: str,
         status: FinalizeJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or (
+            lease_epoch is not None
+            and (
+                job.status != FinalizeJobStatus.RUNNING
+                or job.lease_epoch != lease_epoch
+            )
+        ):
             return None
 
         job.status = status
@@ -435,9 +477,16 @@ class InMemoryTaskStore:
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or (
+            lease_epoch is not None
+            and (
+                job.status != FinalizeJobStatus.RUNNING
+                or job.lease_epoch != lease_epoch
+            )
+        ):
             return None
 
         job.error = error
@@ -468,6 +517,7 @@ class InMemoryTaskStore:
         for job in self.finalize_jobs.values():
             if job.status == FinalizeJobStatus.RUNNING and job.updated_at < stale_before:
                 job.status = FinalizeJobStatus.PENDING
+                job.lease_epoch += 1
                 job.error = None
                 job.updated_at = datetime.now(timezone.utc)
                 recovered_jobs.append(job)

@@ -724,6 +724,7 @@ class ResearchFinalizeJob(BaseModel):
     id: str
     research_id: str
     status: FinalizeJobStatus = FinalizeJobStatus.PENDING
+    lease_epoch: int = 0
     attempt_count: int = 0
     max_attempts: int = 3
     error: Optional[str] = None

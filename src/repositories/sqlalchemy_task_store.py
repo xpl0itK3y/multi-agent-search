@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -606,43 +606,113 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
+    def renew_research_finalize_job_lease(self, job_id: str, lease_epoch: int) -> bool:
+        with self.session_scope() as session:
+            statement = (
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+                .values(updated_at=datetime.now(timezone.utc))
+                .returning(ResearchFinalizeJobORM.id)
+            )
+            return session.execute(statement).scalar_one_or_none() is not None
+
+    def complete_research_finalize_job(
+        self,
+        job_id: str,
+        research_id: str,
+        lease_epoch: int,
+        report: str,
+    ) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.research_id == research_id,
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+                .with_for_update()
+            )
+            job = session.execute(statement).scalar_one_or_none()
+            if job is None:
+                return None
+            research = session.get(ResearchORM, research_id, with_for_update=True)
+            if research is None:
+                return None
+
+            if research.status != ResearchStatus.CANCELLED.value:
+                research.status = ResearchStatus.COMPLETED.value
+                research.final_report = report
+                research.updated_at = datetime.now(timezone.utc)
+            job.status = FinalizeJobStatus.COMPLETED.value
+            job.error = None
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            result = research_finalize_job_orm_to_schema(job)
+        self._emit_change(research_id)
+        return result
+
     def update_research_finalize_job(
         self,
         job_id: str,
         status: FinalizeJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = update(ResearchFinalizeJobORM).where(
+                ResearchFinalizeJobORM.id == job_id
+            )
+            if lease_epoch is not None:
+                statement = statement.where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+            statement = statement.values(
+                status=status.value,
+                error=error,
+                updated_at=datetime.now(timezone.utc),
+            ).returning(ResearchFinalizeJobORM)
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.status = status.value
-            job.error = error
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
     def record_research_finalize_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = update(ResearchFinalizeJobORM).where(
+                ResearchFinalizeJobORM.id == job_id
+            )
+            if lease_epoch is not None:
+                statement = statement.where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+            statement = statement.values(
+                error=error,
+                status=case(
+                    (
+                        ResearchFinalizeJobORM.attempt_count
+                        >= ResearchFinalizeJobORM.max_attempts,
+                        FinalizeJobStatus.DEAD_LETTER.value,
+                    ),
+                    else_=FinalizeJobStatus.PENDING.value,
+                ),
+                updated_at=datetime.now(timezone.utc),
+            ).returning(ResearchFinalizeJobORM)
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.error = error
-            job.status = (
-                FinalizeJobStatus.DEAD_LETTER.value
-                if job.attempt_count >= job.max_attempts
-                else FinalizeJobStatus.PENDING.value
-            )
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
@@ -665,19 +735,22 @@ class SQLAlchemyTaskStore:
     ) -> list[ResearchFinalizeJob]:
         with self.session_scope() as session:
             statement = (
-                select(ResearchFinalizeJobORM)
-                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value)
-                .where(ResearchFinalizeJobORM.updated_at < stale_before)
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.updated_at < stale_before,
+                )
+                .values(
+                    status=FinalizeJobStatus.PENDING.value,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    error=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(ResearchFinalizeJobORM)
             )
             jobs = session.execute(statement).scalars().all()
-            recovered = []
-            for job in jobs:
-                job.status = FinalizeJobStatus.PENDING.value
-                job.error = None
-                job.updated_at = datetime.now(timezone.utc)
-                recovered.append(job)
-            session.flush()
-            return [research_finalize_job_orm_to_schema(job) for job in recovered]
+            jobs.sort(key=lambda item: item.created_at)
+            return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
     def cleanup_old_research_finalize_jobs(
         self,

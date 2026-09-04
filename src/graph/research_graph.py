@@ -26,6 +26,10 @@ class FinalizeCancelled(RuntimeError):
     """Raised between graph steps after a user cancels the research."""
 
 
+class FinalizeLeaseLost(RuntimeError):
+    """Raised when stale-job recovery fences off a previous finalize runner."""
+
+
 try:
     from langgraph.graph import END, StateGraph
 except Exception:  # pragma: no cover - optional dependency
@@ -37,13 +41,37 @@ class FinalizeGraphRunner:
     def __init__(self, service):
         self.service = service
 
-    def run(self, research_id: str, prompt: str, tasks: list[SearchTask], depth) -> str:
-        state = self._build_initial_state(research_id, prompt, tasks, depth)
+    def run(
+        self,
+        research_id: str,
+        prompt: str,
+        tasks: list[SearchTask],
+        depth,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> str:
+        state = self._build_initial_state(
+            research_id,
+            prompt,
+            tasks,
+            depth,
+            finalize_job_id=finalize_job_id,
+            lease_epoch=lease_epoch,
+        )
         if StateGraph is not None and not state.get("resume_from_step"):
             return self._run_langgraph(state)
         return self._run_fallback(state)
 
-    def _build_initial_state(self, research_id: str, prompt: str, tasks: list[SearchTask], depth) -> FinalizeGraphState:
+    def _build_initial_state(
+        self,
+        research_id: str,
+        prompt: str,
+        tasks: list[SearchTask],
+        depth,
+        *,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> FinalizeGraphState:
         state: FinalizeGraphState = {
             "research_id": research_id,
             "prompt": prompt,
@@ -58,6 +86,9 @@ class FinalizeGraphRunner:
             "should_tie_break": False,
             "should_retry_analysis": False,
         }
+        if finalize_job_id is not None and lease_epoch is not None:
+            state["finalize_job_id"] = finalize_job_id
+            state["finalize_lease_epoch"] = lease_epoch
         research = self.service.task_store.get_research(research_id)
         graph_state = (research.graph_state if research else None) or {}
         # User-selected model (persisted at creation); carried through the graph runtime.
@@ -94,6 +125,10 @@ class FinalizeGraphRunner:
         return resumed_state
 
     def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
+        self.service.ensure_finalize_job_lease(
+            state.get("finalize_job_id"),
+            state.get("finalize_lease_epoch"),
+        )
         snapshot = {
             "step": step,
             "prompt": state.get("prompt"),

@@ -312,7 +312,13 @@ def test_sqlalchemy_task_store_recovers_stale_running_jobs(postgres_session_fact
     store.update_search_task_job(search_job.id, SearchJobStatus.RUNNING)
 
     finalize_job = store.add_research_finalize_job(research.id)
-    store.update_research_finalize_job(finalize_job.id, FinalizeJobStatus.RUNNING)
+    claimed_finalize = store.claim_research_finalize_job_by_id(finalize_job.id)
+    assert claimed_finalize is not None
+    stale_epoch = claimed_finalize.lease_epoch
+    assert store.renew_research_finalize_job_lease(finalize_job.id, stale_epoch) is True
+    assert store.recover_stale_research_finalize_jobs(
+        datetime.now(timezone.utc) - timedelta(minutes=1)
+    ) == []
 
     stale_before = datetime.now(timezone.utc) + timedelta(minutes=1)
     recovered_search = store.recover_stale_search_task_jobs(stale_before)
@@ -321,7 +327,31 @@ def test_sqlalchemy_task_store_recovers_stale_running_jobs(postgres_session_fact
     assert [job.id for job in recovered_search] == [search_job.id]
     assert [job.id for job in recovered_finalize] == [finalize_job.id]
     assert store.get_search_task_job(search_job.id).status == SearchJobStatus.PENDING
-    assert store.get_research_finalize_job(finalize_job.id).status == FinalizeJobStatus.PENDING
+    recovered_job = store.get_research_finalize_job(finalize_job.id)
+    assert recovered_job.status == FinalizeJobStatus.PENDING
+    assert recovered_job.lease_epoch == stale_epoch + 1
+    assert store.renew_research_finalize_job_lease(finalize_job.id, stale_epoch) is False
+    assert (
+        store.complete_research_finalize_job(
+            finalize_job.id,
+            research.id,
+            stale_epoch,
+            "stale report",
+        )
+        is None
+    )
+
+    reclaimed = store.claim_research_finalize_job_by_id(finalize_job.id)
+    assert reclaimed is not None
+    completed = store.complete_research_finalize_job(
+        finalize_job.id,
+        research.id,
+        reclaimed.lease_epoch,
+        "fresh report",
+    )
+    assert completed is not None
+    assert completed.status == FinalizeJobStatus.COMPLETED
+    assert store.get_research(research.id).final_report == "fresh report"
 
 
 @pytest.mark.postgres

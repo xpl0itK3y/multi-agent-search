@@ -117,17 +117,29 @@ class TaskStore(Protocol):
 
     def claim_research_finalize_job_by_id(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
+    def renew_research_finalize_job_lease(self, job_id: str, lease_epoch: int) -> bool: ...
+
+    def complete_research_finalize_job(
+        self,
+        job_id: str,
+        research_id: str,
+        lease_epoch: int,
+        report: str,
+    ) -> ResearchFinalizeJob | None: ...
+
     def update_research_finalize_job(
         self,
         job_id: str,
         status: FinalizeJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None: ...
 
     def record_research_finalize_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None: ...
 
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...

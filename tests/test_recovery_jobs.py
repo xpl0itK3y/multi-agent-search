@@ -52,6 +52,7 @@ def test_in_memory_store_recovers_only_stale_running_finalize_jobs():
 
     assert [job.id for job in recovered] == [stale.id]
     assert stale.status.value == "pending"
+    assert stale.lease_epoch == 1
     assert fresh.status.value == "running"
 
 

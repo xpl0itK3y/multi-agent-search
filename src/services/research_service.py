@@ -91,7 +91,7 @@ from src.domain import (
     ReplanRecommendation,
 )
 from src.config import settings
-from src.graph import FinalizeCancelled, FinalizeGraphRunner
+from src.graph import FinalizeCancelled, FinalizeGraphRunner, FinalizeLeaseLost
 from src.model_catalog import resolve_model_id
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context, set_queue_metrics
@@ -1475,10 +1475,29 @@ class ResearchService(
         except Exception as exc:
             logger.warning("webhook_failed url=%s error=%s", url, exc)
 
-    def _emit_finalize_progress(self, research_id: str, step: str) -> None:
+    def ensure_finalize_job_lease(
+        self,
+        job_id: str | None,
+        lease_epoch: int | None,
+    ) -> None:
+        """Renew a finalize lease or stop a runner fenced off by stale-job recovery."""
+        if job_id is None or lease_epoch is None:
+            return
+        if not self.task_store.renew_research_finalize_job_lease(job_id, lease_epoch):
+            raise FinalizeLeaseLost(f"Finalize job {job_id} lease was lost")
+
+    def _emit_finalize_progress(
+        self,
+        research_id: str,
+        step: str,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> None:
         """Append a finalize-phase step to the live trail so the progress trace keeps moving
         during synthesis (and surfaces the trust/verification work as it happens). Labelled
-        by the frontend via trace.{step}; failures must never break finalization."""
+        by the frontend via trace.{step}. Trail failures are best-effort; a lost lease must
+        stop the fenced runner before it can publish a result."""
+        self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
         store = self.task_store
         if not research_id or not hasattr(store, "append_research_graph_event"):
             return
@@ -1487,7 +1506,12 @@ class ResearchService(
         except Exception:
             pass
 
-    def complete_research_finalization(self, research_id: str) -> ResearchRecord:
+    def complete_research_finalization(
+        self,
+        research_id: str,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> ResearchRecord:
         with bind_observability_context(research_id=research_id):
             research = self.task_store.get_research(research_id)
             if not research:
@@ -1514,6 +1538,8 @@ class ResearchService(
                         research.prompt,
                         tasks,
                         research.depth,
+                        finalize_job_id=finalize_job_id,
+                        lease_epoch=lease_epoch,
                     )
                 except FinalizeCancelled:
                     latest = self.task_store.get_research(research_id)
@@ -1528,9 +1554,13 @@ class ResearchService(
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
-            self._emit_finalize_progress(research_id, "redteam")
+            self._emit_finalize_progress(
+                research_id, "redteam", finalize_job_id, lease_epoch
+            )
             report = self._maybe_red_team(report, research, tasks)
-            self._emit_finalize_progress(research_id, "audit")
+            self._emit_finalize_progress(
+                research_id, "audit", finalize_job_id, lease_epoch
+            )
             # Reconstruct the analyzer's source numbering ONCE and share it across the trust
             # steps — each used to recompute it independently (AUD-013).
             aggregated = self._aggregated_sources(research, tasks)
@@ -1540,7 +1570,9 @@ class ResearchService(
             self._check_numbers(report, research, tasks, aggregated=aggregated)
             self._check_retractions(research, tasks, aggregated=aggregated)
             self._maybe_build_comparison(report, research)
-            self._emit_finalize_progress(research_id, "viewpoints")
+            self._emit_finalize_progress(
+                research_id, "viewpoints", finalize_job_id, lease_epoch
+            )
             self._maybe_assess_stance(research, tasks, aggregated=aggregated)
             self._analyze_cross_language(research, tasks, aggregated=aggregated)
             report = self._inject_graph_execution_trail(report, research_id)
@@ -1557,12 +1589,6 @@ class ResearchService(
             if latest is not None and latest.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_discarded_cancelled research_id=%s", research_id)
                 return latest
-            self.task_store.update_research_status(
-                research_id,
-                ResearchStatus.COMPLETED,
-                report,
-            )
-
             # persist token usage into graph_state (U-3)
             if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
                 usage = analyzer_llm.token_usage
@@ -1575,7 +1601,33 @@ class ResearchService(
                 # Atomic merge — the finalize trust steps wrote other graph_state keys after
                 # `research` was captured; merge_research_graph_state row-locks so this can't
                 # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
+                self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
                 self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
+
+            if finalize_job_id is not None and lease_epoch is not None:
+                completed_job = self.task_store.complete_research_finalize_job(
+                    finalize_job_id,
+                    research_id,
+                    lease_epoch,
+                    report,
+                )
+                if completed_job is None:
+                    raise FinalizeLeaseLost(
+                        f"Finalize job {finalize_job_id} lease was lost before commit"
+                    )
+            else:
+                self.task_store.update_research_status(
+                    research_id,
+                    ResearchStatus.COMPLETED,
+                    report,
+                )
+
+            finalized_research = self.task_store.get_research(research_id)
+            if finalized_research is None:
+                raise NotFoundError("Research not found")
+            if finalized_research.status == ResearchStatus.CANCELLED:
+                logger.info("finalize_discarded_cancelled research_id=%s", research_id)
+                return finalized_research
 
             logger.info("research_finalize_completed")
 
@@ -1589,7 +1641,7 @@ class ResearchService(
                     {"research_id": research_id, "status": "completed"},
                 )
 
-            return self.task_store.get_research(research_id)
+            return finalized_research
 
     @staticmethod
     def _failure_message(exc: Exception) -> str:
@@ -1631,19 +1683,54 @@ class ResearchService(
         job = self.task_store.get_research_finalize_job(job_id)
         if job is None:
             return None
+        if job.status == FinalizeJobStatus.PENDING:
+            job = self.task_store.claim_research_finalize_job_by_id(job_id)
+            if job is None:
+                return self.task_store.get_research_finalize_job(job_id)
+        if job.status != FinalizeJobStatus.RUNNING:
+            return job
+        lease_epoch = job.lease_epoch
 
         with bind_observability_context(job_id=job.id, research_id=job.research_id):
             try:
                 logger.info("finalize_job_processing")
-                self.complete_research_finalization(job.research_id)
-                completed_job = self.task_store.update_research_finalize_job(
-                    job_id,
-                    FinalizeJobStatus.COMPLETED,
+                finalized_research = self.complete_research_finalization(
+                    job.research_id,
+                    finalize_job_id=job.id,
+                    lease_epoch=lease_epoch,
                 )
+                completed_job = self.task_store.get_research_finalize_job(job_id)
+                if finalized_research.status == ResearchStatus.CANCELLED and (
+                    completed_job is not None
+                    and completed_job.status == FinalizeJobStatus.RUNNING
+                ):
+                    completed_job = self.task_store.update_research_finalize_job(
+                        job_id,
+                        FinalizeJobStatus.COMPLETED,
+                        lease_epoch=lease_epoch,
+                    )
+                if completed_job is None or completed_job.status != FinalizeJobStatus.COMPLETED:
+                    raise FinalizeLeaseLost(f"Finalize job {job_id} lease was lost")
                 logger.info("finalize_job_completed")
                 return completed_job
+            except FinalizeLeaseLost:
+                logger.warning(
+                    "finalize_job_lease_lost lease_epoch=%s",
+                    lease_epoch,
+                )
+                return self.task_store.get_research_finalize_job(job_id)
             except Exception as exc:
-                failed_job = self.task_store.record_research_finalize_job_failure(job_id, str(exc))
+                failed_job = self.task_store.record_research_finalize_job_failure(
+                    job_id,
+                    str(exc),
+                    lease_epoch=lease_epoch,
+                )
+                if failed_job is None:
+                    logger.warning(
+                        "finalize_job_failure_discarded_after_lease_loss lease_epoch=%s",
+                        lease_epoch,
+                    )
+                    return self.task_store.get_research_finalize_job(job_id)
                 logger.warning(
                     "finalize_job_failed error=%s next_status=%s",
                     str(exc),
