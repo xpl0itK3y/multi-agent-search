@@ -63,7 +63,7 @@ def wait_for_health() -> None:
     for _ in range(40):
         try:
             payload = http_json("GET", "/health")
-            if payload == {"status": "ok"}:
+            if isinstance(payload, dict) and payload.get("status") == "ok":
                 return
         except URLError:
             time.sleep(0.25)
