@@ -184,19 +184,20 @@ class FinalizeGraphRunner:
                 negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
                 max_groups=5,
             )
-            recommendations = self.service.replan_agent.suggest_follow_up(
-                state["prompt"],
-                state["depth"],
-                state["tasks"],
-                source_summary=source_summary,
-            ) if self._supports_graph_branching(analyzer) else []
-            should_replan = (
-                bool(recommendations)
+            branch_possible = (
+                self._supports_graph_branching(analyzer)
                 and self._is_deep_loop(state)
                 and state["replan_attempts"] < settings.langgraph_replan_max_loops
                 and self._budget_ok(state)
                 and not state.get("branch_stalled")
             )
+            recommendations = self.service.replan_agent.suggest_follow_up(
+                state["prompt"],
+                state["depth"],
+                state["tasks"],
+                source_summary=source_summary,
+            ) if branch_possible else []
+            should_replan = branch_possible and bool(recommendations)
             next_state = {
                 **state,
                 "detected_conflicts": conflicts,
