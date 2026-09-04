@@ -54,3 +54,6 @@ jobs:
 
       - name: Run postgres runtime smoke
         run: python scripts/smoke_postgres_runtime.py
+
+      - name: Run full backend test suite
+        run: python -m pytest -q
