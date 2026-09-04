@@ -534,6 +534,46 @@ def test_search_agent_stops_early_after_enough_successful_results(mocker):
     assert any("Stopped extraction early" in entry for entry in final_task.logs)
 
 
+def test_search_agent_stops_early_with_hard_profile_limits(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {
+            "id": "task-1",
+            "description": "test",
+            "queries": ["query"],
+            "status": "pending",
+        }
+    )
+    candidates = [
+        {
+            "url": f"https://docs.python.org/3/library/module-{index}.html",
+            "title": f"Python module {index}",
+        }
+        for index in range(48)
+    ]
+    mocker.patch("src.providers.search.SearchProvider.search", return_value=candidates)
+    extract_mock = mocker.patch(
+        "src.providers.search.ContentExtractor.extract_content",
+        side_effect=lambda url: f"unique content for {url} " * 40,
+    )
+
+    agent = SearchAgent(
+        task_store=task_store,
+        max_sources=24,
+        search_results_per_query=24,
+        max_candidate_urls=48,
+        extraction_concurrency=4,
+    )
+    agent.run_task("task-1")
+
+    final_task = task_store.get_task("task-1")
+    assert final_task is not None
+    assert final_task.status == TaskStatus.COMPLETED
+    assert 24 <= extract_mock.call_count < 48
+    assert len(final_task.result) == 24
+    assert any("Stopped extraction early" in entry for entry in final_task.logs)
+
+
 def test_search_agent_boosts_mobile_tech_authority_domains(mocker):
     task_store = InMemoryTaskStore()
     task_store.add_task(

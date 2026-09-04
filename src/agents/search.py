@@ -223,9 +223,7 @@ class SearchAgent:
         return rust_accel.select_best_results(scored_results, self.max_sources)
 
     def _early_stop_success_target(self, candidate_count: int) -> int:
-        if candidate_count <= self.max_sources:
-            return candidate_count
-        return min(candidate_count, max(self.max_sources * 2, self.extraction_concurrency))
+        return min(candidate_count, self.max_sources)
 
     def _has_enough_strong_results(self, successful_results: list[dict], candidate_count: int) -> bool:
         target = self._early_stop_success_target(candidate_count)
