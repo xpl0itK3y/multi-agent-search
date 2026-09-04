@@ -65,6 +65,21 @@ class ResearchORM(Base):
     )
 
 
+Index(
+    "ix_researches_thread_id",
+    ResearchORM.graph_state["thread_id"].astext,
+)
+Index(
+    "ix_researches_share_token",
+    ResearchORM.graph_state["share_token"].astext,
+)
+Index(
+    "ix_researches_user_created",
+    ResearchORM.user_id,
+    ResearchORM.created_at.desc(),
+)
+
+
 class SearchTaskORM(Base):
     __tablename__ = "search_tasks"
     __table_args__ = (Index("ix_search_tasks_status", "status"),)

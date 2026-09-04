@@ -45,6 +45,7 @@ from src.repositories.mappers import (
 
 class SQLAlchemyTaskStore:
     _ADMISSION_LOCK_KEY = 1_297_304_387
+    _THREAD_HISTORY_LIMIT = 200
 
     def __init__(self, session_factory: Callable[[], Session]):
         self.session_factory = session_factory
@@ -329,26 +330,41 @@ class SQLAlchemyTaskStore:
             session.delete(research)
             return True
 
+    @staticmethod
+    def _research_history_select():
+        return select(
+            ResearchORM.id,
+            ResearchORM.prompt,
+            ResearchORM.graph_state["title"].astext.label("title"),
+            ResearchORM.graph_state["thread_id"].astext.label("thread_id"),
+            ResearchORM.depth,
+            ResearchORM.status,
+            ResearchORM.created_at,
+            ResearchORM.updated_at,
+            ResearchORM.final_report.is_not(None).label("has_final_report"),
+        )
+
+    @staticmethod
+    def _history_item(row) -> ResearchHistoryItem:
+        return ResearchHistoryItem(
+            id=row.id,
+            prompt=row.prompt,
+            title=row.title,
+            thread_id=row.thread_id,
+            depth=row.depth,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            has_final_report=row.has_final_report,
+        )
+
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
-            stmt = select(ResearchORM).order_by(ResearchORM.created_at.desc())
+            stmt = self._research_history_select().order_by(ResearchORM.created_at.desc())
             if user_id is not None:
                 stmt = stmt.where(ResearchORM.user_id == user_id)
-            rows = session.execute(stmt.limit(max(1, min(limit, 100)))).scalars().all()
-            return [
-                ResearchHistoryItem(
-                    id=r.id,
-                    prompt=r.prompt,
-                    title=(r.graph_state or {}).get("title"),
-                    thread_id=(r.graph_state or {}).get("thread_id"),
-                    depth=r.depth,
-                    status=r.status,
-                    created_at=r.created_at,
-                    updated_at=r.updated_at,
-                    has_final_report=bool(r.final_report),
-                )
-                for r in rows
-            ]
+            rows = session.execute(stmt.limit(max(1, min(limit, 100)))).all()
+            return [self._history_item(row) for row in rows]
 
     def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
         """Resolve a research from its (unguessable) public share token. Exact match only."""
@@ -364,7 +380,7 @@ class SQLAlchemyTaskStore:
     ) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
             stmt = (
-                select(ResearchORM)
+                self._research_history_select()
                 # Match by thread_id, or by research id (a single-research thread whose
                 # thread_id was never set / got lost still resolves via /thread/<id>).
                 .where(or_(ResearchORM.graph_state["thread_id"].astext == thread_id, ResearchORM.id == thread_id))
@@ -372,21 +388,8 @@ class SQLAlchemyTaskStore:
             )
             if user_id is not None:
                 stmt = stmt.where(ResearchORM.user_id == user_id)
-            rows = session.execute(stmt).scalars().all()
-            return [
-                ResearchHistoryItem(
-                    id=r.id,
-                    prompt=r.prompt,
-                    title=(r.graph_state or {}).get("title"),
-                    thread_id=(r.graph_state or {}).get("thread_id"),
-                    depth=r.depth,
-                    status=r.status,
-                    created_at=r.created_at,
-                    updated_at=r.updated_at,
-                    has_final_report=bool(r.final_report),
-                )
-                for r in rows
-            ]
+            rows = session.execute(stmt.limit(self._THREAD_HISTORY_LIMIT)).all()
+            return [self._history_item(row) for row in rows]
 
     def set_event_notifier(self, notifier) -> None:
         """Optional callback(research_id) fired after a committed state change (SSE pub/sub)."""

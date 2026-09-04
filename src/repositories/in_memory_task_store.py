@@ -283,7 +283,7 @@ class InMemoryTaskStore:
                 updated_at=r.updated_at,
                 has_final_report=bool(r.final_report),
             )
-            for r in records
+            for r in records[:200]
         ]
 
     def set_event_notifier(self, notifier) -> None:

@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import text
+
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchRequest,
@@ -113,6 +115,53 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
     assert fetched_research is not None
     assert fetched_research.graph_state["step"] == "collect_context"
     assert fetched_research.graph_trail[0]["detail"] == "Collected 5 sources"
+
+
+@pytest.mark.postgres
+def test_research_history_uses_lookup_indexes_and_preserves_summary_fields(
+    postgres_session_factory,
+):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    research = store.add_research(
+        ResearchRequest(prompt="indexed history topic", depth=SearchDepth.MEDIUM),
+        task_ids=[],
+        user_id="history-user",
+    )
+    store.update_research_graph_state(
+        research.id,
+        {
+            "title": "Indexed history",
+            "thread_id": "thread-indexed",
+            "share_token": "share-indexed",
+        },
+    )
+    store.update_research_status(research.id, ResearchStatus.COMPLETED, "x" * 100_000)
+
+    history = store.list_researches(user_id="history-user")
+    thread = store.list_thread_researches("thread-indexed", user_id="history-user")
+    shared = store.get_research_by_share_token("share-indexed")
+
+    assert len(history) == 1
+    assert history[0].title == "Indexed history"
+    assert history[0].thread_id == "thread-indexed"
+    assert history[0].has_final_report is True
+    assert [item.id for item in thread] == [research.id]
+    assert shared is not None and shared.id == research.id
+
+    with postgres_session_factory() as session:
+        index_names = set(
+            session.execute(
+                text(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE schemaname = current_schema() AND tablename = 'researches'"
+                )
+            ).scalars()
+        )
+    assert {
+        "ix_researches_thread_id",
+        "ix_researches_share_token",
+        "ix_researches_user_created",
+    } <= index_names
 
 
 @pytest.mark.postgres
