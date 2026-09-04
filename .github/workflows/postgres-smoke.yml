@@ -34,6 +34,10 @@ jobs:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
       POSTGRES_DB: multi_agent_search
+      # The smoke exercises persistence and queue transitions, not authentication.
+      # Bootstrap otherwise rejects the development JWT-secret default before Uvicorn
+      # can bind its health endpoint.
+      AUTH_DISABLED: "true"
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
