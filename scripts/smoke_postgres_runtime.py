@@ -59,15 +59,36 @@ def http_json(method: str, path: str, payload: dict | None = None) -> dict | lis
     return body
 
 
-def wait_for_health() -> None:
+def _server_diagnostics(server: subprocess.Popen) -> str:
+    """Return a bounded server-log tail when the smoke app exits before readiness."""
+    if server.poll() is None or server.stdout is None:
+        return ""
+    return server.stdout.read()[-4000:]
+
+
+def wait_for_health(server: subprocess.Popen) -> None:
+    last_response: dict | list | None = None
+    last_connection_error: URLError | None = None
     for _ in range(40):
+        if server.poll() is not None:
+            diagnostics = _server_diagnostics(server)
+            raise RuntimeError(
+                f"API exited before becoming healthy (exit code {server.returncode}).\n{diagnostics}"
+            )
         try:
             payload = http_json("GET", "/health")
-            if payload == {"status": "ok"}:
+            last_response = payload
+            if isinstance(payload, dict) and payload.get("status") == "ok":
                 return
-        except URLError:
+        except URLError as exc:
+            last_connection_error = exc
             time.sleep(0.25)
-    raise RuntimeError("API did not become healthy in time")
+    diagnostics = _server_diagnostics(server)
+    if diagnostics:
+        raise RuntimeError(f"API did not become healthy in time.\n{diagnostics}")
+    if last_response is not None:
+        raise RuntimeError(f"API returned an unhealthy response: {last_response}")
+    raise RuntimeError(f"API did not become healthy in time: {last_connection_error}")
 
 
 def wait_for_research_status(research_id: str, expected_status: str) -> dict:
@@ -148,12 +169,9 @@ def seed_task() -> tuple[str, str, str]:
 
 def verify_db_rows(research_id: str, task_id: str) -> None:
     from sqlalchemy import create_engine, text
+    from src.config import settings
 
-    database_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+psycopg://app:app@localhost:5433/multi_agent_search",
-    )
-    engine = create_engine(database_url, pool_pre_ping=True)
+    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
     with engine.connect() as connection:
         task_row = connection.execute(
             text("select status, logs from search_tasks where id = :task_id"),
@@ -200,7 +218,7 @@ def main() -> int:
     )
 
     try:
-        wait_for_health()
+        wait_for_health(server)
         research_id, task_id, seeded_search_job_id = seed_task()
 
         tasks = http_json("GET", "/v1/tasks")

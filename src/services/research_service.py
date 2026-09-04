@@ -1623,6 +1623,9 @@ class ResearchService(
                     str(exc),
                     failed_job.status.value if failed_job else "missing",
                 )
+                if failed_job and failed_job.status == FinalizeJobStatus.PENDING and self.broker:
+                    self.broker.push_finalize_job(failed_job.id)
+                    logger.info("finalize_job_retry_scheduled")
                 if failed_job and failed_job.status == FinalizeJobStatus.DEAD_LETTER:
                     self.task_store.update_research_status(
                         job.research_id,
@@ -1973,6 +1976,8 @@ class ResearchService(
                                 log="Search job scheduled for retry",
                             ),
                         )
+                        if self.broker:
+                            self.broker.push_search_job(failed_job.id)
                         logger.info("search_job_retry_scheduled")
                     if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                         logger.error("search_job_dead_letter")
@@ -1996,6 +2001,8 @@ class ResearchService(
                             log="Search job scheduled for retry",
                         ),
                     )
+                    if self.broker:
+                        self.broker.push_search_job(failed_job.id)
                     logger.info("search_job_retry_scheduled")
                 if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                     logger.error("search_job_dead_letter")

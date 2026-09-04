@@ -48,9 +48,13 @@ services:
     # Multiple uvicorn worker processes for request/SSE concurrency. Safe across workers:
     # startup recovery is single-flighted (Redis lock), queue promotion claims atomically,
     # and SSE wakes via Redis pub/sub shared by all workers.
-    command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2}"
+    # The only externally reachable route is the web proxy (the API port below
+    # binds to loopback). Trust its forwarded client address without a startup-time
+    # dependency on Docker's dynamically assigned web-container IP.
+    command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2} --proxy-headers --forwarded-allow-ips='*'"
     ports:
-      - "8000:8000"
+      # Keep direct API access local; the web proxy and Prometheus use the Docker network.
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 15s
