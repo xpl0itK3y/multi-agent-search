@@ -53,3 +53,18 @@ def test_no_false_missing_heading_notes_for_new_structure():
     messages = agent._quality_note_messages("en")
     assert messages["missing_intro"] not in notes
     assert messages["missing_conclusion"] not in notes
+
+
+def test_conflicts_are_inserted_before_extended_conclusion_heading():
+    agent = _agent()
+    report = "## Analysis\nEvidence differs.\n\n## Conclusion / Bottom Line\nChoose carefully."
+    conflicts = [{
+        "topic": "cost",
+        "reason": "different figures",
+        "source_ids": ["S1", "S2"],
+        "sentences": ["Cost was 10 in 2024.", "Cost was 20 in 2024."],
+    }]
+
+    result = agent._inject_conflicts_section(report, conflicts, "en")
+
+    assert result.index("## Conflicts And Uncertainties") < result.index("## Conclusion / Bottom Line")
