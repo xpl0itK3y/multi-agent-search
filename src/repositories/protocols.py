@@ -23,6 +23,17 @@ class TaskStore(Protocol):
         self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
     ) -> ResearchRecord: ...
 
+    def add_research_if_under_limit(
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None,
+        graph_state: dict,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> ResearchRecord | None: ...
+
     def get_research(self, research_id: str) -> ResearchRecord | None: ...
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]: ...
@@ -59,7 +70,21 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
-    def try_claim_queued_research(self, research_id: str) -> bool: ...
+    def try_admit_research(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> bool: ...
+
+    def try_claim_queued_research(
+        self,
+        research_id: str,
+        global_limit: int = 0,
+        stale_before: datetime | None = None,
+    ) -> bool: ...
 
     def try_begin_finalization(self, research_id: str) -> bool: ...
 

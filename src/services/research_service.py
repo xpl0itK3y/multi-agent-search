@@ -257,6 +257,28 @@ class ResearchService(
         """Researches actively RUNNING across all users (excludes queued) — for admission."""
         return self._count_active(None, self._RUNNING_STATUSES)
 
+    def _admission_cutoff(self) -> datetime:
+        return datetime.now(timezone.utc) - timedelta(
+            seconds=settings.research_stale_active_seconds
+        )
+
+    def _admit_or_raise(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+    ) -> None:
+        admitted = self.task_store.try_admit_research(
+            research_id,
+            expected_status,
+            settings.max_concurrent_researches,
+            settings.max_global_active_researches,
+            self._admission_cutoff(),
+        )
+        if not admitted:
+            raise ConflictError(
+                "Research capacity is currently full or the research state changed. Please retry."
+            )
+
     def _queued_ordered(self) -> list:
         """All QUEUED researches across users, oldest-first (FIFO order)."""
         queued = [
@@ -280,11 +302,11 @@ class ResearchService(
 
         promoted = 0
         for item in self._queued_ordered():
-            if self._global_running_count() >= cap:
-                break
             # Atomic claim: only the process that flips QUEUED->PROCESSING runs decompose,
             # so concurrent workers/API processes never double-promote the same research.
-            if not self.task_store.try_claim_queued_research(item.id):
+            if not self.task_store.try_claim_queued_research(
+                item.id, cap, self._admission_cutoff()
+            ):
                 continue
             research = self.task_store.get_research(item.id)
             payload = (research.graph_state or {}).get("decompose_payload") if research else None
@@ -309,19 +331,7 @@ class ResearchService(
         self, request: ResearchRequest, user_id: str | None = None
     ) -> tuple["ResearchResponse", str]:
         """Create research record immediately and return. Decompose runs in background."""
-        limit = settings.max_concurrent_researches
-        if limit > 0 and self._active_research_count(user_id) >= limit:
-            raise ConflictError(
-                "A research is already in progress. Please wait for it to finish before starting another."
-            )
-        # Global admission control: queue the research when the system is at capacity.
-        global_cap = settings.max_global_active_researches
-        queued = global_cap > 0 and self._global_running_count() >= global_cap
-
-        research = self.task_store.add_research(request, task_ids=[], user_id=user_id)
-        logger.info("research_created research_id=%s depth=%s queued=%s", research.id, request.depth.value, queued)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
-        # update_research_graph_state replaces the entire dict, so merge everything in one call.
         # Group researches into a conversation thread; a new id starts a new thread.
         thread_id = (request.thread_id or "").strip() or str(uuid.uuid4())
         graph_state: dict = {
@@ -333,11 +343,21 @@ class ResearchService(
         }
         if request.webhook_url:
             graph_state["webhook_url"] = str(request.webhook_url)
-        self.task_store.update_research_graph_state(research.id, graph_state)
-        if queued:
-            # Park it; decompose_and_enqueue will defer, and promote_queued_researches
-            # will start it when a slot frees up.
-            self.task_store.update_research_status(research.id, ResearchStatus.QUEUED)
+        research = self.task_store.add_research_if_under_limit(
+            request,
+            task_ids=[],
+            user_id=user_id,
+            graph_state=graph_state,
+            per_user_limit=settings.max_concurrent_researches,
+            global_limit=settings.max_global_active_researches,
+            stale_before=self._admission_cutoff(),
+        )
+        if research is None:
+            raise ConflictError(
+                "A research is already in progress. Please wait for it to finish before starting another."
+            )
+        queued = research.status == ResearchStatus.QUEUED
+        logger.info("research_created research_id=%s depth=%s queued=%s", research.id, request.depth.value, queued)
         return ResearchResponse(
             research_id=research.id,
             status="queued" if queued else "success",
@@ -745,8 +765,6 @@ class ResearchService(
         state["clarifications"] = clar
         state["clarified"] = True
         state["decompose_pending"] = True
-        self.task_store.update_research_graph_state(research_id, state)
-        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
 
         payload = state.get("decompose_payload")
         try:
@@ -755,6 +773,9 @@ class ResearchService(
             )
         except Exception:
             request = ResearchRequest(prompt=research.prompt, depth=research.depth, plan_first=True)
+
+        self._admit_or_raise(research_id, ResearchStatus.CLARIFYING)
+        self.task_store.update_research_graph_state(research_id, state)
 
         import threading
 
@@ -816,6 +837,8 @@ class ResearchService(
         if not plan:
             raise ConflictError("No plan to approve")
 
+        self._admit_or_raise(research_id, ResearchStatus.PLAN_REVIEW)
+
         registered_tasks = []
         task_ids = []
         for item in plan:
@@ -832,7 +855,6 @@ class ResearchService(
             registered_tasks.append(task)
             task_ids.append(task.id)
         self.task_store.set_research_task_ids(research_id, task_ids)
-        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
         for task in registered_tasks:
             if task.status == TaskStatus.PENDING and task.queries:
                 job = self.task_store.add_search_task_job(task.id, research.depth.value, settings.job_max_attempts)

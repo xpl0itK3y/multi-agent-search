@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import threading
 import uuid
 
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
@@ -31,6 +32,7 @@ class InMemoryTaskStore:
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
+        self._admission_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -72,6 +74,95 @@ class InMemoryTaskStore:
         )
         self.researches[research_id] = record
         return record
+
+    @staticmethod
+    def _is_fresh_running(research: ResearchRecord, stale_before: datetime) -> bool:
+        updated_at = research.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        return (
+            research.status in (ResearchStatus.PROCESSING, ResearchStatus.ANALYZING)
+            and updated_at >= stale_before
+        )
+
+    def _active_count(
+        self,
+        user_id: str | None,
+        stale_before: datetime,
+        *,
+        include_queued: bool,
+    ) -> int:
+        records = self.researches.values()
+        if user_id is not None:
+            records = (record for record in records if record.user_id == user_id)
+        return sum(
+            1
+            for record in records
+            if self._is_fresh_running(record, stale_before)
+            or (include_queued and record.status == ResearchStatus.QUEUED)
+        )
+
+    def add_research_if_under_limit(
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None,
+        graph_state: dict,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> ResearchRecord | None:
+        """Atomically reserve user capacity and either a running slot or a queue place."""
+        with self._admission_lock:
+            if (
+                per_user_limit > 0
+                and self._active_count(user_id, stale_before, include_queued=True) >= per_user_limit
+            ):
+                return None
+            queued = (
+                global_limit > 0
+                and self._active_count(None, stale_before, include_queued=False) >= global_limit
+            )
+            record = ResearchRecord(
+                id=str(uuid.uuid4()),
+                prompt=request.prompt,
+                user_id=user_id,
+                depth=request.depth,
+                status=ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING,
+                task_ids=task_ids,
+                graph_state=graph_state,
+            )
+            self.researches[record.id] = record
+            return record
+
+    def try_admit_research(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> bool:
+        """Atomically move a parked research back into a capacity-consuming state."""
+        with self._admission_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != expected_status:
+                return False
+            if (
+                per_user_limit > 0
+                and self._active_count(research.user_id, stale_before, include_queued=True)
+                >= per_user_limit
+            ):
+                return False
+            if (
+                global_limit > 0
+                and self._active_count(None, stale_before, include_queued=False) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING
+            research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
+            return True
 
     def create_user(
         self,
@@ -222,15 +313,27 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
-    def try_claim_queued_research(self, research_id: str) -> bool:
-        """Atomically flip QUEUED -> PROCESSING (only if still queued)."""
-        research = self.researches.get(research_id)
-        if research is None or research.status != ResearchStatus.QUEUED:
-            return False
-        research.status = ResearchStatus.PROCESSING
-        research.updated_at = datetime.now(timezone.utc)
-        self._emit_change(research_id)
-        return True
+    def try_claim_queued_research(
+        self,
+        research_id: str,
+        global_limit: int = 0,
+        stale_before: datetime | None = None,
+    ) -> bool:
+        """Atomically claim QUEUED only while a global running slot is available."""
+        with self._admission_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != ResearchStatus.QUEUED:
+                return False
+            cutoff = stale_before or datetime.min.replace(tzinfo=timezone.utc)
+            if (
+                global_limit > 0
+                and self._active_count(None, cutoff, include_queued=False) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING
+            research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
+            return True
 
     def try_begin_finalization(self, research_id: str) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this
