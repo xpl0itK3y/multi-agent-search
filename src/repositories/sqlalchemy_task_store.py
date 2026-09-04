@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -44,6 +44,9 @@ from src.repositories.mappers import (
 
 
 class SQLAlchemyTaskStore:
+    _ADMISSION_LOCK_KEY = 1_297_304_387
+    _THREAD_HISTORY_LIMIT = 200
+
     def __init__(self, session_factory: Callable[[], Session]):
         self.session_factory = session_factory
 
@@ -84,6 +87,106 @@ class SQLAlchemyTaskStore:
             session.flush()
             session.refresh(research)
             return research_orm_to_record(research)
+
+    def _lock_admission(self, session: Session) -> None:
+        # Serialize count-and-transition across API replicas. The lock is scoped
+        # to this transaction, so it also works with transaction-pooled connections.
+        session.execute(select(func.pg_advisory_xact_lock(self._ADMISSION_LOCK_KEY)))
+
+    @staticmethod
+    def _active_count(
+        session: Session,
+        user_id: str | None,
+        stale_before: datetime,
+        *,
+        include_queued: bool,
+    ) -> int:
+        running = and_(
+            ResearchORM.status.in_(
+                [ResearchStatus.PROCESSING.value, ResearchStatus.ANALYZING.value]
+            ),
+            ResearchORM.updated_at >= stale_before,
+        )
+        status_filter = (
+            or_(running, ResearchORM.status == ResearchStatus.QUEUED.value)
+            if include_queued
+            else running
+        )
+        statement = select(func.count()).select_from(ResearchORM).where(status_filter)
+        if user_id is not None:
+            statement = statement.where(ResearchORM.user_id == user_id)
+        return int(session.execute(statement).scalar_one())
+
+    def add_research_if_under_limit(
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None,
+        graph_state: dict,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            self._lock_admission(session)
+            if (
+                per_user_limit > 0
+                and self._active_count(
+                    session, user_id, stale_before, include_queued=True
+                ) >= per_user_limit
+            ):
+                return None
+            queued = (
+                global_limit > 0
+                and self._active_count(
+                    session, None, stale_before, include_queued=False
+                ) >= global_limit
+            )
+            research = ResearchORM(
+                id=str(uuid.uuid4()),
+                prompt=request.prompt,
+                user_id=user_id,
+                depth=request.depth.value,
+                status=(ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING).value,
+                task_ids=task_ids,
+                graph_state=graph_state,
+            )
+            session.add(research)
+            session.flush()
+            session.refresh(research)
+            return research_orm_to_record(research)
+
+    def try_admit_research(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> bool:
+        with self.session_scope() as session:
+            self._lock_admission(session)
+            research = session.get(ResearchORM, research_id)
+            if research is None or research.status != expected_status.value:
+                return False
+            if (
+                per_user_limit > 0
+                and self._active_count(
+                    session, research.user_id, stale_before, include_queued=True
+                ) >= per_user_limit
+            ):
+                return False
+            if (
+                global_limit > 0
+                and self._active_count(
+                    session, None, stale_before, include_queued=False
+                ) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING.value
+            research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
+        return True
 
     def create_user(
         self,
@@ -227,26 +330,41 @@ class SQLAlchemyTaskStore:
             session.delete(research)
             return True
 
+    @staticmethod
+    def _research_history_select():
+        return select(
+            ResearchORM.id,
+            ResearchORM.prompt,
+            ResearchORM.graph_state["title"].astext.label("title"),
+            ResearchORM.graph_state["thread_id"].astext.label("thread_id"),
+            ResearchORM.depth,
+            ResearchORM.status,
+            ResearchORM.created_at,
+            ResearchORM.updated_at,
+            ResearchORM.final_report.is_not(None).label("has_final_report"),
+        )
+
+    @staticmethod
+    def _history_item(row) -> ResearchHistoryItem:
+        return ResearchHistoryItem(
+            id=row.id,
+            prompt=row.prompt,
+            title=row.title,
+            thread_id=row.thread_id,
+            depth=row.depth,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            has_final_report=row.has_final_report,
+        )
+
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
-            stmt = select(ResearchORM).order_by(ResearchORM.created_at.desc())
+            stmt = self._research_history_select().order_by(ResearchORM.created_at.desc())
             if user_id is not None:
                 stmt = stmt.where(ResearchORM.user_id == user_id)
-            rows = session.execute(stmt.limit(max(1, min(limit, 100)))).scalars().all()
-            return [
-                ResearchHistoryItem(
-                    id=r.id,
-                    prompt=r.prompt,
-                    title=(r.graph_state or {}).get("title"),
-                    thread_id=(r.graph_state or {}).get("thread_id"),
-                    depth=r.depth,
-                    status=r.status,
-                    created_at=r.created_at,
-                    updated_at=r.updated_at,
-                    has_final_report=bool(r.final_report),
-                )
-                for r in rows
-            ]
+            rows = session.execute(stmt.limit(max(1, min(limit, 100)))).all()
+            return [self._history_item(row) for row in rows]
 
     def get_research_by_share_token(self, token: str) -> ResearchRecord | None:
         """Resolve a research from its (unguessable) public share token. Exact match only."""
@@ -262,7 +380,7 @@ class SQLAlchemyTaskStore:
     ) -> list[ResearchHistoryItem]:
         with self.session_scope() as session:
             stmt = (
-                select(ResearchORM)
+                self._research_history_select()
                 # Match by thread_id, or by research id (a single-research thread whose
                 # thread_id was never set / got lost still resolves via /thread/<id>).
                 .where(or_(ResearchORM.graph_state["thread_id"].astext == thread_id, ResearchORM.id == thread_id))
@@ -270,21 +388,8 @@ class SQLAlchemyTaskStore:
             )
             if user_id is not None:
                 stmt = stmt.where(ResearchORM.user_id == user_id)
-            rows = session.execute(stmt).scalars().all()
-            return [
-                ResearchHistoryItem(
-                    id=r.id,
-                    prompt=r.prompt,
-                    title=(r.graph_state or {}).get("title"),
-                    thread_id=(r.graph_state or {}).get("thread_id"),
-                    depth=r.depth,
-                    status=r.status,
-                    created_at=r.created_at,
-                    updated_at=r.updated_at,
-                    has_final_report=bool(r.final_report),
-                )
-                for r in rows
-            ]
+            rows = session.execute(stmt.limit(self._THREAD_HISTORY_LIMIT)).all()
+            return [self._history_item(row) for row in rows]
 
     def set_event_notifier(self, notifier) -> None:
         """Optional callback(research_id) fired after a committed state change (SSE pub/sub)."""
@@ -319,16 +424,27 @@ class SQLAlchemyTaskStore:
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
         return result
 
-    def try_claim_queued_research(self, research_id: str) -> bool:
-        """Atomically flip QUEUED -> PROCESSING (only if still queued). True if this caller
-        won the slot — prevents two processes from promoting the same research."""
+    def try_claim_queued_research(
+        self,
+        research_id: str,
+        global_limit: int = 0,
+        stale_before: datetime | None = None,
+    ) -> bool:
+        """Atomically claim QUEUED only while a global running slot is available."""
         with self.session_scope() as session:
-            outcome = session.execute(
-                update(ResearchORM)
-                .where(ResearchORM.id == research_id, ResearchORM.status == ResearchStatus.QUEUED.value)
-                .values(status=ResearchStatus.PROCESSING.value, updated_at=datetime.now(timezone.utc))
-            )
-            claimed = outcome.rowcount == 1
+            self._lock_admission(session)
+            research = session.get(ResearchORM, research_id)
+            if research is None or research.status != ResearchStatus.QUEUED.value:
+                return False
+            cutoff = stale_before or datetime.min.replace(tzinfo=timezone.utc)
+            if (
+                global_limit > 0
+                and self._active_count(session, None, cutoff, include_queued=False) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING.value
+            research.updated_at = datetime.now(timezone.utc)
+            claimed = True
         if claimed:
             self._emit_change(research_id)
         return claimed
@@ -606,43 +722,113 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
+    def renew_research_finalize_job_lease(self, job_id: str, lease_epoch: int) -> bool:
+        with self.session_scope() as session:
+            statement = (
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+                .values(updated_at=datetime.now(timezone.utc))
+                .returning(ResearchFinalizeJobORM.id)
+            )
+            return session.execute(statement).scalar_one_or_none() is not None
+
+    def complete_research_finalize_job(
+        self,
+        job_id: str,
+        research_id: str,
+        lease_epoch: int,
+        report: str,
+    ) -> ResearchFinalizeJob | None:
+        with self.session_scope() as session:
+            statement = (
+                select(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.research_id == research_id,
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+                .with_for_update()
+            )
+            job = session.execute(statement).scalar_one_or_none()
+            if job is None:
+                return None
+            research = session.get(ResearchORM, research_id, with_for_update=True)
+            if research is None:
+                return None
+
+            if research.status != ResearchStatus.CANCELLED.value:
+                research.status = ResearchStatus.COMPLETED.value
+                research.final_report = report
+                research.updated_at = datetime.now(timezone.utc)
+            job.status = FinalizeJobStatus.COMPLETED.value
+            job.error = None
+            job.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            result = research_finalize_job_orm_to_schema(job)
+        self._emit_change(research_id)
+        return result
+
     def update_research_finalize_job(
         self,
         job_id: str,
         status: FinalizeJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = update(ResearchFinalizeJobORM).where(
+                ResearchFinalizeJobORM.id == job_id
+            )
+            if lease_epoch is not None:
+                statement = statement.where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+            statement = statement.values(
+                status=status.value,
+                error=error,
+                updated_at=datetime.now(timezone.utc),
+            ).returning(ResearchFinalizeJobORM)
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.status = status.value
-            job.error = error
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
     def record_research_finalize_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = update(ResearchFinalizeJobORM).where(
+                ResearchFinalizeJobORM.id == job_id
+            )
+            if lease_epoch is not None:
+                statement = statement.where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.lease_epoch == lease_epoch,
+                )
+            statement = statement.values(
+                error=error,
+                status=case(
+                    (
+                        ResearchFinalizeJobORM.attempt_count
+                        >= ResearchFinalizeJobORM.max_attempts,
+                        FinalizeJobStatus.DEAD_LETTER.value,
+                    ),
+                    else_=FinalizeJobStatus.PENDING.value,
+                ),
+                updated_at=datetime.now(timezone.utc),
+            ).returning(ResearchFinalizeJobORM)
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.error = error
-            job.status = (
-                FinalizeJobStatus.DEAD_LETTER.value
-                if job.attempt_count >= job.max_attempts
-                else FinalizeJobStatus.PENDING.value
-            )
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
@@ -665,19 +851,22 @@ class SQLAlchemyTaskStore:
     ) -> list[ResearchFinalizeJob]:
         with self.session_scope() as session:
             statement = (
-                select(ResearchFinalizeJobORM)
-                .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value)
-                .where(ResearchFinalizeJobORM.updated_at < stale_before)
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+                    ResearchFinalizeJobORM.updated_at < stale_before,
+                )
+                .values(
+                    status=FinalizeJobStatus.PENDING.value,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    error=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(ResearchFinalizeJobORM)
             )
             jobs = session.execute(statement).scalars().all()
-            recovered = []
-            for job in jobs:
-                job.status = FinalizeJobStatus.PENDING.value
-                job.error = None
-                job.updated_at = datetime.now(timezone.utc)
-                recovered.append(job)
-            session.flush()
-            return [research_finalize_job_orm_to_schema(job) for job in recovered]
+            jobs.sort(key=lambda item: item.created_at)
+            return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
     def cleanup_old_research_finalize_jobs(
         self,

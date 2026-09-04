@@ -7,7 +7,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from src.config import settings
 from src.core.llm import LLMProvider
-from src.observability import maybe_wrap_openai_client
+from src.observability import maybe_wrap_openai_client, observe_llm_cost
 from src.providers.rate_limit import get_llm_limiter
 
 logger = logging.getLogger(__name__)
@@ -41,10 +41,20 @@ class DeepSeekProvider(LLMProvider):
 
     # ── token tracking ────────────────────────────────────────────────────────
 
-    def _record_usage(self, prompt_tokens: int, completion_tokens: int) -> None:
+    def _record_usage(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model: str,
+    ) -> None:
         with self._lock:
             self._prompt_tokens     += prompt_tokens
             self._completion_tokens += completion_tokens
+        cost = (
+            prompt_tokens * _PRICE_INPUT_PER_M
+            + completion_tokens * _PRICE_OUTPUT_PER_M
+        ) / 1_000_000
+        observe_llm_cost(cost, model)
 
     @property
     def token_usage(self) -> dict:
@@ -107,6 +117,7 @@ class DeepSeekProvider(LLMProvider):
                             self._record_usage(
                                 response.usage.prompt_tokens,
                                 response.usage.completion_tokens,
+                                model,
                             )
                         return response.choices[0].message.content
 
@@ -118,6 +129,7 @@ class DeepSeekProvider(LLMProvider):
                             self._record_usage(
                                 chunk.usage.prompt_tokens,
                                 chunk.usage.completion_tokens,
+                                model,
                             )
                         if not chunk.choices:
                             continue

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from src.config import settings
+from src.observability.context import get_observability_context
 
 try:  # pragma: no cover - import behavior depends on optional dependency presence
     from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
@@ -37,12 +38,18 @@ if Counter is not None and settings.prometheus_metrics_enabled:
         "Current queue counts by kind and status.",
         ["job_type", "status"],
     )
+    LLM_COST_USD_TOTAL = Counter(
+        "mas_llm_cost_usd",
+        "Estimated LLM cost in US dollars.",
+        ["user_id", "research_id", "model"],
+    )
 else:  # pragma: no cover
     API_REQUESTS_TOTAL = None
     API_REQUEST_DURATION_SECONDS = None
     WORKER_JOBS_TOTAL = None
     QUEUE_BACKLOG = None
     QUEUE_JOBS = None
+    LLM_COST_USD_TOTAL = None
 
 
 def observe_api_request(method: str, path: str, status_code: int, elapsed_seconds: float) -> None:
@@ -80,6 +87,17 @@ def observe_worker_job(worker_name: str, job_type: str, status: str, count: int 
         job_type=job_type or "unknown",
         status=status or "unknown",
     ).inc(count)
+
+
+def observe_llm_cost(cost_usd: float, model: str) -> None:
+    if LLM_COST_USD_TOTAL is None or cost_usd <= 0:
+        return
+    context = get_observability_context()
+    LLM_COST_USD_TOTAL.labels(
+        user_id=context.get("user_id", "-"),
+        research_id=context.get("research_id", "-"),
+        model=model or "unknown",
+    ).inc(cost_usd)
 
 
 def set_queue_metrics(metrics) -> None:

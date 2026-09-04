@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import threading
 import uuid
 
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
@@ -31,6 +32,7 @@ class InMemoryTaskStore:
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
+        self._admission_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -72,6 +74,95 @@ class InMemoryTaskStore:
         )
         self.researches[research_id] = record
         return record
+
+    @staticmethod
+    def _is_fresh_running(research: ResearchRecord, stale_before: datetime) -> bool:
+        updated_at = research.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        return (
+            research.status in (ResearchStatus.PROCESSING, ResearchStatus.ANALYZING)
+            and updated_at >= stale_before
+        )
+
+    def _active_count(
+        self,
+        user_id: str | None,
+        stale_before: datetime,
+        *,
+        include_queued: bool,
+    ) -> int:
+        records = self.researches.values()
+        if user_id is not None:
+            records = (record for record in records if record.user_id == user_id)
+        return sum(
+            1
+            for record in records
+            if self._is_fresh_running(record, stale_before)
+            or (include_queued and record.status == ResearchStatus.QUEUED)
+        )
+
+    def add_research_if_under_limit(
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None,
+        graph_state: dict,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> ResearchRecord | None:
+        """Atomically reserve user capacity and either a running slot or a queue place."""
+        with self._admission_lock:
+            if (
+                per_user_limit > 0
+                and self._active_count(user_id, stale_before, include_queued=True) >= per_user_limit
+            ):
+                return None
+            queued = (
+                global_limit > 0
+                and self._active_count(None, stale_before, include_queued=False) >= global_limit
+            )
+            record = ResearchRecord(
+                id=str(uuid.uuid4()),
+                prompt=request.prompt,
+                user_id=user_id,
+                depth=request.depth,
+                status=ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING,
+                task_ids=task_ids,
+                graph_state=graph_state,
+            )
+            self.researches[record.id] = record
+            return record
+
+    def try_admit_research(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+        per_user_limit: int,
+        global_limit: int,
+        stale_before: datetime,
+    ) -> bool:
+        """Atomically move a parked research back into a capacity-consuming state."""
+        with self._admission_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != expected_status:
+                return False
+            if (
+                per_user_limit > 0
+                and self._active_count(research.user_id, stale_before, include_queued=True)
+                >= per_user_limit
+            ):
+                return False
+            if (
+                global_limit > 0
+                and self._active_count(None, stale_before, include_queued=False) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING
+            research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
+            return True
 
     def create_user(
         self,
@@ -192,7 +283,7 @@ class InMemoryTaskStore:
                 updated_at=r.updated_at,
                 has_final_report=bool(r.final_report),
             )
-            for r in records
+            for r in records[:200]
         ]
 
     def set_event_notifier(self, notifier) -> None:
@@ -222,15 +313,27 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
-    def try_claim_queued_research(self, research_id: str) -> bool:
-        """Atomically flip QUEUED -> PROCESSING (only if still queued)."""
-        research = self.researches.get(research_id)
-        if research is None or research.status != ResearchStatus.QUEUED:
-            return False
-        research.status = ResearchStatus.PROCESSING
-        research.updated_at = datetime.now(timezone.utc)
-        self._emit_change(research_id)
-        return True
+    def try_claim_queued_research(
+        self,
+        research_id: str,
+        global_limit: int = 0,
+        stale_before: datetime | None = None,
+    ) -> bool:
+        """Atomically claim QUEUED only while a global running slot is available."""
+        with self._admission_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != ResearchStatus.QUEUED:
+                return False
+            cutoff = stale_before or datetime.min.replace(tzinfo=timezone.utc)
+            if (
+                global_limit > 0
+                and self._active_count(None, cutoff, include_queued=False) >= global_limit
+            ):
+                return False
+            research.status = ResearchStatus.PROCESSING
+            research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
+            return True
 
     def try_begin_finalization(self, research_id: str) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this
@@ -416,14 +519,56 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def renew_research_finalize_job_lease(self, job_id: str, lease_epoch: int) -> bool:
+        job = self.finalize_jobs.get(job_id)
+        if (
+            job is None
+            or job.status != FinalizeJobStatus.RUNNING
+            or job.lease_epoch != lease_epoch
+        ):
+            return False
+        job.updated_at = datetime.now(timezone.utc)
+        return True
+
+    def complete_research_finalize_job(
+        self,
+        job_id: str,
+        research_id: str,
+        lease_epoch: int,
+        report: str,
+    ) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        research = self.researches.get(research_id)
+        if (
+            job is None
+            or research is None
+            or job.research_id != research_id
+            or job.status != FinalizeJobStatus.RUNNING
+            or job.lease_epoch != lease_epoch
+        ):
+            return None
+        if research.status != ResearchStatus.CANCELLED:
+            self.update_research_status(research_id, ResearchStatus.COMPLETED, report)
+        job.status = FinalizeJobStatus.COMPLETED
+        job.error = None
+        job.updated_at = datetime.now(timezone.utc)
+        return job
+
     def update_research_finalize_job(
         self,
         job_id: str,
         status: FinalizeJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or (
+            lease_epoch is not None
+            and (
+                job.status != FinalizeJobStatus.RUNNING
+                or job.lease_epoch != lease_epoch
+            )
+        ):
             return None
 
         job.status = status
@@ -435,9 +580,16 @@ class InMemoryTaskStore:
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or (
+            lease_epoch is not None
+            and (
+                job.status != FinalizeJobStatus.RUNNING
+                or job.lease_epoch != lease_epoch
+            )
+        ):
             return None
 
         job.error = error
@@ -468,6 +620,7 @@ class InMemoryTaskStore:
         for job in self.finalize_jobs.values():
             if job.status == FinalizeJobStatus.RUNNING and job.updated_at < stale_before:
                 job.status = FinalizeJobStatus.PENDING
+                job.lease_epoch += 1
                 job.error = None
                 job.updated_at = datetime.now(timezone.utc)
                 recovered_jobs.append(job)

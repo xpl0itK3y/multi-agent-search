@@ -5,6 +5,8 @@ from src.domain import SearchDepth, SearchTask
 
 class FinalizeGraphState(TypedDict, total=False):
     research_id: str
+    finalize_job_id: str
+    finalize_lease_epoch: int
     prompt: str
     effective_prompt: str
     depth: SearchDepth

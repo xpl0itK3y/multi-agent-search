@@ -166,6 +166,7 @@ def research_finalize_job_orm_to_schema(job: ResearchFinalizeJobORM) -> Research
         id=job.id,
         research_id=job.research_id,
         status=FinalizeJobStatus(job.status),
+        lease_epoch=job.lease_epoch,
         attempt_count=job.attempt_count,
         max_attempts=job.max_attempts,
         error=job.error,

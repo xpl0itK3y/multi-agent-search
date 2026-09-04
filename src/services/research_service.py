@@ -1,6 +1,5 @@
 import json
 import logging
-import time
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -91,7 +90,7 @@ from src.domain import (
     ReplanRecommendation,
 )
 from src.config import settings
-from src.graph import FinalizeCancelled, FinalizeGraphRunner
+from src.graph import FinalizeCancelled, FinalizeGraphRunner, FinalizeLeaseLost
 from src.model_catalog import resolve_model_id
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context, set_queue_metrics
@@ -185,9 +184,10 @@ class ResearchService(
             )
         return agent
 
-    def optimize_prompt(self, prompt: str) -> str:
+    def optimize_prompt(self, prompt: str, user_id: str | None = None) -> str:
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
-        return optimizer.run(prompt)
+        with bind_observability_context(user_id=user_id or "local"):
+            return optimizer.run(prompt)
 
     def list_tasks(
         self,
@@ -212,20 +212,18 @@ class ResearchService(
         self,
         prompt: str,
         depth: SearchDepth,
+        user_id: str | None = None,
     ) -> DecomposeResponse:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
-        tasks_raw = orchestrator.run_decompose(prompt, depth)
+        with bind_observability_context(user_id=user_id or "local"):
+            tasks_raw = orchestrator.run_decompose(prompt, depth)
 
-        registered_tasks = []
-        for task_dict in tasks_raw:
-            task = self.task_store.add_task(task_dict)
-            registered_tasks.append(task)
-            if task.status == TaskStatus.PENDING and task.queries:
-                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
-                if self.broker:
-                    self.broker.push_search_job(job.id)
-
-        return DecomposeResponse(tasks=registered_tasks, depth=depth)
+        # This endpoint is a preview. Persisting these tasks or enqueueing jobs would
+        # create orphaned work because no ResearchRecord owns the returned plan.
+        return DecomposeResponse(
+            tasks=[SearchTask.model_validate(task) for task in tasks_raw],
+            depth=depth,
+        )
 
     # Researches actively consuming search/LLM resources (vs. terminal or waiting on user).
     _RUNNING_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
@@ -258,6 +256,28 @@ class ResearchService(
         """Researches actively RUNNING across all users (excludes queued) — for admission."""
         return self._count_active(None, self._RUNNING_STATUSES)
 
+    def _admission_cutoff(self) -> datetime:
+        return datetime.now(timezone.utc) - timedelta(
+            seconds=settings.research_stale_active_seconds
+        )
+
+    def _admit_or_raise(
+        self,
+        research_id: str,
+        expected_status: ResearchStatus,
+    ) -> None:
+        admitted = self.task_store.try_admit_research(
+            research_id,
+            expected_status,
+            settings.max_concurrent_researches,
+            settings.max_global_active_researches,
+            self._admission_cutoff(),
+        )
+        if not admitted:
+            raise ConflictError(
+                "Research capacity is currently full or the research state changed. Please retry."
+            )
+
     def _queued_ordered(self) -> list:
         """All QUEUED researches across users, oldest-first (FIFO order)."""
         queued = [
@@ -281,11 +301,11 @@ class ResearchService(
 
         promoted = 0
         for item in self._queued_ordered():
-            if self._global_running_count() >= cap:
-                break
             # Atomic claim: only the process that flips QUEUED->PROCESSING runs decompose,
             # so concurrent workers/API processes never double-promote the same research.
-            if not self.task_store.try_claim_queued_research(item.id):
+            if not self.task_store.try_claim_queued_research(
+                item.id, cap, self._admission_cutoff()
+            ):
                 continue
             research = self.task_store.get_research(item.id)
             payload = (research.graph_state or {}).get("decompose_payload") if research else None
@@ -310,19 +330,7 @@ class ResearchService(
         self, request: ResearchRequest, user_id: str | None = None
     ) -> tuple["ResearchResponse", str]:
         """Create research record immediately and return. Decompose runs in background."""
-        limit = settings.max_concurrent_researches
-        if limit > 0 and self._active_research_count(user_id) >= limit:
-            raise ConflictError(
-                "A research is already in progress. Please wait for it to finish before starting another."
-            )
-        # Global admission control: queue the research when the system is at capacity.
-        global_cap = settings.max_global_active_researches
-        queued = global_cap > 0 and self._global_running_count() >= global_cap
-
-        research = self.task_store.add_research(request, task_ids=[], user_id=user_id)
-        logger.info("research_created research_id=%s depth=%s queued=%s", research.id, request.depth.value, queued)
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
-        # update_research_graph_state replaces the entire dict, so merge everything in one call.
         # Group researches into a conversation thread; a new id starts a new thread.
         thread_id = (request.thread_id or "").strip() or str(uuid.uuid4())
         graph_state: dict = {
@@ -334,11 +342,21 @@ class ResearchService(
         }
         if request.webhook_url:
             graph_state["webhook_url"] = str(request.webhook_url)
-        self.task_store.update_research_graph_state(research.id, graph_state)
-        if queued:
-            # Park it; decompose_and_enqueue will defer, and promote_queued_researches
-            # will start it when a slot frees up.
-            self.task_store.update_research_status(research.id, ResearchStatus.QUEUED)
+        research = self.task_store.add_research_if_under_limit(
+            request,
+            task_ids=[],
+            user_id=user_id,
+            graph_state=graph_state,
+            per_user_limit=settings.max_concurrent_researches,
+            global_limit=settings.max_global_active_researches,
+            stale_before=self._admission_cutoff(),
+        )
+        if research is None:
+            raise ConflictError(
+                "A research is already in progress. Please wait for it to finish before starting another."
+            )
+        queued = research.status == ResearchStatus.QUEUED
+        logger.info("research_created research_id=%s depth=%s queued=%s", research.id, request.depth.value, queued)
         return ResearchResponse(
             research_id=research.id,
             status="queued" if queued else "success",
@@ -350,9 +368,13 @@ class ResearchService(
     def decompose_and_enqueue(self, research_id: str, request: ResearchRequest) -> None:
         """Background: run LLM decompose, create tasks, push to worker queue."""
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
-        with bind_observability_context(research_id=research_id):
+        research_context = self.task_store.get_research(research_id)
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=(research_context.user_id if research_context else None) or "local",
+        ):
             try:
-                research = self.task_store.get_research(research_id)
+                research = research_context
                 # Admission control: a queued research waits for promote_queued_researches.
                 if research is not None and research.status == ResearchStatus.QUEUED:
                     logger.info("decompose_deferred_queued research_id=%s", research_id)
@@ -746,8 +768,6 @@ class ResearchService(
         state["clarifications"] = clar
         state["clarified"] = True
         state["decompose_pending"] = True
-        self.task_store.update_research_graph_state(research_id, state)
-        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
 
         payload = state.get("decompose_payload")
         try:
@@ -756,6 +776,9 @@ class ResearchService(
             )
         except Exception:
             request = ResearchRequest(prompt=research.prompt, depth=research.depth, plan_first=True)
+
+        self._admit_or_raise(research_id, ResearchStatus.CLARIFYING)
+        self.task_store.update_research_graph_state(research_id, state)
 
         import threading
 
@@ -817,6 +840,8 @@ class ResearchService(
         if not plan:
             raise ConflictError("No plan to approve")
 
+        self._admit_or_raise(research_id, ResearchStatus.PLAN_REVIEW)
+
         registered_tasks = []
         task_ids = []
         for item in plan:
@@ -833,7 +858,6 @@ class ResearchService(
             registered_tasks.append(task)
             task_ids.append(task.id)
         self.task_store.set_research_task_ids(research_id, task_ids)
-        self.task_store.update_research_status(research_id, ResearchStatus.PROCESSING)
         for task in registered_tasks:
             if task.status == TaskStatus.PENDING and task.queries:
                 job = self.task_store.add_search_task_job(task.id, research.depth.value, settings.job_max_attempts)
@@ -981,14 +1005,18 @@ class ResearchService(
         ]
         history = list((research.graph_state or {}).get("messages") or [])
         model = (research.graph_state or {}).get("model")
-        return chat.answer(
-            question,
-            research.final_report or "",
-            sources,
-            history,
-            model=model,
-            streaming_callback=streaming_callback,
-        )
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=research.user_id or "local",
+        ):
+            return chat.answer(
+                question,
+                research.final_report or "",
+                sources,
+                history,
+                model=model,
+                streaming_callback=streaming_callback,
+            )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
         """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
@@ -1191,30 +1219,11 @@ class ResearchService(
 
         self.task_store.set_research_task_ids(research_id, existing_task_ids)
 
-        if self.broker:
-            # Push to queue — let the parallel workers handle them concurrently
-            for task in created_tasks:
-                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
-                self.broker.push_search_job(job.id)
-                logger.info("replan_task_enqueued task_id=%s job_id=%s", task.id, job.id)
-
-            # Poll until all replan tasks finish (timeout: same as search job timeout)
-            deadline = time.monotonic() + settings.search_job_timeout_seconds
-            poll_interval = 2.0
-            while time.monotonic() < deadline:
-                pending = [
-                    t for t in created_tasks
-                    if (self.task_store.get_task(t.id) or t).status
-                    not in (TaskStatus.COMPLETED, TaskStatus.FAILED)
-                ]
-                if not pending:
-                    break
-                logger.debug("replan_waiting pending_count=%d", len(pending))
-                time.sleep(poll_interval)
-        else:
-            # No broker — fallback to sequential execution in current thread
-            for task in created_tasks:
-                self.run_search_task(task.id, depth)
+        # A finalize worker must not enqueue follow-up work and then block waiting for the
+        # same shared worker pool to consume it. Running the bounded replan wave inline
+        # guarantees progress even when every worker is currently finalizing a HARD run.
+        for task in created_tasks:
+            self.run_search_task(task.id, depth)
 
         return [
             refreshed
@@ -1475,10 +1484,29 @@ class ResearchService(
         except Exception as exc:
             logger.warning("webhook_failed url=%s error=%s", url, exc)
 
-    def _emit_finalize_progress(self, research_id: str, step: str) -> None:
+    def ensure_finalize_job_lease(
+        self,
+        job_id: str | None,
+        lease_epoch: int | None,
+    ) -> None:
+        """Renew a finalize lease or stop a runner fenced off by stale-job recovery."""
+        if job_id is None or lease_epoch is None:
+            return
+        if not self.task_store.renew_research_finalize_job_lease(job_id, lease_epoch):
+            raise FinalizeLeaseLost(f"Finalize job {job_id} lease was lost")
+
+    def _emit_finalize_progress(
+        self,
+        research_id: str,
+        step: str,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> None:
         """Append a finalize-phase step to the live trail so the progress trace keeps moving
         during synthesis (and surfaces the trust/verification work as it happens). Labelled
-        by the frontend via trace.{step}; failures must never break finalization."""
+        by the frontend via trace.{step}. Trail failures are best-effort; a lost lease must
+        stop the fenced runner before it can publish a result."""
+        self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
         store = self.task_store
         if not research_id or not hasattr(store, "append_research_graph_event"):
             return
@@ -1487,9 +1515,18 @@ class ResearchService(
         except Exception:
             pass
 
-    def complete_research_finalization(self, research_id: str) -> ResearchRecord:
-        with bind_observability_context(research_id=research_id):
-            research = self.task_store.get_research(research_id)
+    def complete_research_finalization(
+        self,
+        research_id: str,
+        finalize_job_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> ResearchRecord:
+        research_context = self.task_store.get_research(research_id)
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=(research_context.user_id if research_context else None) or "local",
+        ):
+            research = research_context
             if not research:
                 raise NotFoundError("Research not found")
             if research.status == ResearchStatus.CANCELLED:
@@ -1514,6 +1551,8 @@ class ResearchService(
                         research.prompt,
                         tasks,
                         research.depth,
+                        finalize_job_id=finalize_job_id,
+                        lease_epoch=lease_epoch,
                     )
                 except FinalizeCancelled:
                     latest = self.task_store.get_research(research_id)
@@ -1528,9 +1567,13 @@ class ResearchService(
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
-            self._emit_finalize_progress(research_id, "redteam")
+            self._emit_finalize_progress(
+                research_id, "redteam", finalize_job_id, lease_epoch
+            )
             report = self._maybe_red_team(report, research, tasks)
-            self._emit_finalize_progress(research_id, "audit")
+            self._emit_finalize_progress(
+                research_id, "audit", finalize_job_id, lease_epoch
+            )
             # Reconstruct the analyzer's source numbering ONCE and share it across the trust
             # steps — each used to recompute it independently (AUD-013).
             aggregated = self._aggregated_sources(research, tasks)
@@ -1540,7 +1583,9 @@ class ResearchService(
             self._check_numbers(report, research, tasks, aggregated=aggregated)
             self._check_retractions(research, tasks, aggregated=aggregated)
             self._maybe_build_comparison(report, research)
-            self._emit_finalize_progress(research_id, "viewpoints")
+            self._emit_finalize_progress(
+                research_id, "viewpoints", finalize_job_id, lease_epoch
+            )
             self._maybe_assess_stance(research, tasks, aggregated=aggregated)
             self._analyze_cross_language(research, tasks, aggregated=aggregated)
             report = self._inject_graph_execution_trail(report, research_id)
@@ -1557,12 +1602,6 @@ class ResearchService(
             if latest is not None and latest.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_discarded_cancelled research_id=%s", research_id)
                 return latest
-            self.task_store.update_research_status(
-                research_id,
-                ResearchStatus.COMPLETED,
-                report,
-            )
-
             # persist token usage into graph_state (U-3)
             if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
                 usage = analyzer_llm.token_usage
@@ -1575,7 +1614,33 @@ class ResearchService(
                 # Atomic merge — the finalize trust steps wrote other graph_state keys after
                 # `research` was captured; merge_research_graph_state row-locks so this can't
                 # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
+                self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
                 self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
+
+            if finalize_job_id is not None and lease_epoch is not None:
+                completed_job = self.task_store.complete_research_finalize_job(
+                    finalize_job_id,
+                    research_id,
+                    lease_epoch,
+                    report,
+                )
+                if completed_job is None:
+                    raise FinalizeLeaseLost(
+                        f"Finalize job {finalize_job_id} lease was lost before commit"
+                    )
+            else:
+                self.task_store.update_research_status(
+                    research_id,
+                    ResearchStatus.COMPLETED,
+                    report,
+                )
+
+            finalized_research = self.task_store.get_research(research_id)
+            if finalized_research is None:
+                raise NotFoundError("Research not found")
+            if finalized_research.status == ResearchStatus.CANCELLED:
+                logger.info("finalize_discarded_cancelled research_id=%s", research_id)
+                return finalized_research
 
             logger.info("research_finalize_completed")
 
@@ -1589,7 +1654,7 @@ class ResearchService(
                     {"research_id": research_id, "status": "completed"},
                 )
 
-            return self.task_store.get_research(research_id)
+            return finalized_research
 
     @staticmethod
     def _failure_message(exc: Exception) -> str:
@@ -1631,19 +1696,54 @@ class ResearchService(
         job = self.task_store.get_research_finalize_job(job_id)
         if job is None:
             return None
+        if job.status == FinalizeJobStatus.PENDING:
+            job = self.task_store.claim_research_finalize_job_by_id(job_id)
+            if job is None:
+                return self.task_store.get_research_finalize_job(job_id)
+        if job.status != FinalizeJobStatus.RUNNING:
+            return job
+        lease_epoch = job.lease_epoch
 
         with bind_observability_context(job_id=job.id, research_id=job.research_id):
             try:
                 logger.info("finalize_job_processing")
-                self.complete_research_finalization(job.research_id)
-                completed_job = self.task_store.update_research_finalize_job(
-                    job_id,
-                    FinalizeJobStatus.COMPLETED,
+                finalized_research = self.complete_research_finalization(
+                    job.research_id,
+                    finalize_job_id=job.id,
+                    lease_epoch=lease_epoch,
                 )
+                completed_job = self.task_store.get_research_finalize_job(job_id)
+                if finalized_research.status == ResearchStatus.CANCELLED and (
+                    completed_job is not None
+                    and completed_job.status == FinalizeJobStatus.RUNNING
+                ):
+                    completed_job = self.task_store.update_research_finalize_job(
+                        job_id,
+                        FinalizeJobStatus.COMPLETED,
+                        lease_epoch=lease_epoch,
+                    )
+                if completed_job is None or completed_job.status != FinalizeJobStatus.COMPLETED:
+                    raise FinalizeLeaseLost(f"Finalize job {job_id} lease was lost")
                 logger.info("finalize_job_completed")
                 return completed_job
+            except FinalizeLeaseLost:
+                logger.warning(
+                    "finalize_job_lease_lost lease_epoch=%s",
+                    lease_epoch,
+                )
+                return self.task_store.get_research_finalize_job(job_id)
             except Exception as exc:
-                failed_job = self.task_store.record_research_finalize_job_failure(job_id, str(exc))
+                failed_job = self.task_store.record_research_finalize_job_failure(
+                    job_id,
+                    str(exc),
+                    lease_epoch=lease_epoch,
+                )
+                if failed_job is None:
+                    logger.warning(
+                        "finalize_job_failure_discarded_after_lease_loss lease_epoch=%s",
+                        lease_epoch,
+                    )
+                    return self.task_store.get_research_finalize_job(job_id)
                 logger.warning(
                     "finalize_job_failed error=%s next_status=%s",
                     str(exc),

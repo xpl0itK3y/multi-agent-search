@@ -65,6 +65,21 @@ class ResearchORM(Base):
     )
 
 
+Index(
+    "ix_researches_thread_id",
+    ResearchORM.graph_state["thread_id"].astext,
+)
+Index(
+    "ix_researches_share_token",
+    ResearchORM.graph_state["share_token"].astext,
+)
+Index(
+    "ix_researches_user_created",
+    ResearchORM.user_id,
+    ResearchORM.created_at.desc(),
+)
+
+
 class SearchTaskORM(Base):
     __tablename__ = "search_tasks"
     __table_args__ = (Index("ix_search_tasks_status", "status"),)
@@ -138,6 +153,9 @@ class ResearchFinalizeJobORM(Base):
         ForeignKey("researches.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    lease_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
