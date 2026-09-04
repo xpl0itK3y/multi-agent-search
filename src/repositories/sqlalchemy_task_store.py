@@ -428,9 +428,19 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
-    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+    def get_research_finalize_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = select(ResearchFinalizeJobORM).where(ResearchFinalizeJobORM.id == job_id)
+            if user_id is not None:
+                statement = statement.join(
+                    ResearchORM,
+                    ResearchFinalizeJobORM.research_id == ResearchORM.id,
+                ).where(ResearchORM.user_id == user_id)
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
             return research_finalize_job_orm_to_schema(job)
@@ -438,6 +448,7 @@ class SQLAlchemyTaskStore:
     def get_latest_research_finalize_job(
         self,
         research_id: str,
+        user_id: str | None = None,
     ) -> ResearchFinalizeJob | None:
         with self.session_scope() as session:
             statement = (
@@ -445,6 +456,11 @@ class SQLAlchemyTaskStore:
                 .where(ResearchFinalizeJobORM.research_id == research_id)
                 .order_by(ResearchFinalizeJobORM.created_at.desc())
             )
+            if user_id is not None:
+                statement = statement.join(
+                    ResearchORM,
+                    ResearchFinalizeJobORM.research_id == ResearchORM.id,
+                ).where(ResearchORM.user_id == user_id)
             job = session.execute(statement).scalars().first()
             if job is None:
                 return None
@@ -634,20 +650,43 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return search_task_job_orm_to_schema(job)
 
-    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+    def get_search_task_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id)
+            statement = select(SearchTaskJobORM).where(SearchTaskJobORM.id == job_id)
+            if user_id is not None:
+                statement = (
+                    statement
+                    .join(SearchTaskORM, SearchTaskJobORM.task_id == SearchTaskORM.id)
+                    .join(ResearchORM, SearchTaskORM.research_id == ResearchORM.id)
+                    .where(ResearchORM.user_id == user_id)
+                )
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
             return search_task_job_orm_to_schema(job)
 
-    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
+    def get_latest_search_task_job(
+        self,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
         with self.session_scope() as session:
             statement = (
                 select(SearchTaskJobORM)
                 .where(SearchTaskJobORM.task_id == task_id)
                 .order_by(SearchTaskJobORM.created_at.desc())
             )
+            if user_id is not None:
+                statement = (
+                    statement
+                    .join(SearchTaskORM, SearchTaskJobORM.task_id == SearchTaskORM.id)
+                    .join(ResearchORM, SearchTaskORM.research_id == ResearchORM.id)
+                    .where(ResearchORM.user_id == user_id)
+                )
             job = session.execute(statement).scalars().first()
             if job is None:
                 return None
@@ -930,23 +969,38 @@ class SQLAlchemyTaskStore:
                 graph_metrics=graph_metrics,
             )
 
-    def get_task(self, task_id: str) -> SearchTask | None:
+    def get_task(self, task_id: str, user_id: str | None = None) -> SearchTask | None:
         with self.session_scope() as session:
             statement = (
                 select(SearchTaskORM)
                 .options(selectinload(SearchTaskORM.results))
                 .where(SearchTaskORM.id == task_id)
             )
+            if user_id is not None:
+                statement = statement.join(
+                    ResearchORM,
+                    SearchTaskORM.research_id == ResearchORM.id,
+                ).where(ResearchORM.user_id == user_id)
             task = session.execute(statement).scalar_one_or_none()
             if task is None:
                 return None
             return search_task_orm_to_schema(task)
 
-    def get_all_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
+    def get_all_tasks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[SearchTask]:
         with self.session_scope() as session:
+            statement = select(SearchTaskORM).options(selectinload(SearchTaskORM.results))
+            if user_id is not None:
+                statement = statement.join(
+                    ResearchORM,
+                    SearchTaskORM.research_id == ResearchORM.id,
+                ).where(ResearchORM.user_id == user_id)
             statement = (
-                select(SearchTaskORM)
-                .options(selectinload(SearchTaskORM.results))
+                statement
                 .order_by(SearchTaskORM.created_at.desc())
                 .limit(limit)
                 .offset(offset)
@@ -964,13 +1018,23 @@ class SQLAlchemyTaskStore:
             tasks = session.execute(statement).scalars().all()
             return [search_task_orm_to_schema(task) for task in tasks]
 
-    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
+    def update_task(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        user_id: str | None = None,
+    ) -> SearchTask | None:
         with self.session_scope() as session:
             statement = (
                 select(SearchTaskORM)
                 .options(selectinload(SearchTaskORM.results))
                 .where(SearchTaskORM.id == task_id)
             )
+            if user_id is not None:
+                statement = statement.join(
+                    ResearchORM,
+                    SearchTaskORM.research_id == ResearchORM.id,
+                ).where(ResearchORM.user_id == user_id)
             task = session.execute(statement).scalar_one_or_none()
             if task is None:
                 return None

@@ -151,6 +151,43 @@ def test_sqlalchemy_task_store_persists_search_jobs(postgres_session_factory):
 
 
 @pytest.mark.postgres
+def test_sqlalchemy_task_and_jobs_are_scoped_to_research_owner(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    research = store.add_research(
+        ResearchRequest(prompt="owned research topic", depth=SearchDepth.EASY),
+        task_ids=[],
+        user_id="owner-a",
+    )
+    task = store.add_task(
+        {
+            "id": str(uuid.uuid4()),
+            "research_id": research.id,
+            "description": "owned task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    search_job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    finalize_job = store.add_research_finalize_job(research.id)
+
+    assert store.get_task(task.id, user_id="owner-a") is not None
+    assert [item.id for item in store.get_all_tasks(user_id="owner-a")] == [task.id]
+    assert store.get_search_task_job(search_job.id, user_id="owner-a") is not None
+    assert store.get_latest_search_task_job(task.id, user_id="owner-a") is not None
+    assert store.get_research_finalize_job(finalize_job.id, user_id="owner-a") is not None
+    assert store.get_latest_research_finalize_job(research.id, user_id="owner-a") is not None
+
+    assert store.get_task(task.id, user_id="owner-b") is None
+    assert store.get_all_tasks(user_id="owner-b") == []
+    assert store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED), user_id="owner-b") is None
+    assert store.get_search_task_job(search_job.id, user_id="owner-b") is None
+    assert store.get_latest_search_task_job(task.id, user_id="owner-b") is None
+    assert store.get_research_finalize_job(finalize_job.id, user_id="owner-b") is None
+    assert store.get_latest_research_finalize_job(research.id, user_id="owner-b") is None
+    assert store.get_task(task.id).status == TaskStatus.PENDING
+
+
+@pytest.mark.postgres
 def test_sqlalchemy_task_store_lists_running_and_dead_letter_jobs(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
 

@@ -189,14 +189,24 @@ class ResearchService(
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
         return optimizer.run(prompt)
 
-    def list_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
-        return self.task_store.get_all_tasks(limit=limit, offset=offset)
+    def list_tasks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[SearchTask]:
+        return self.task_store.get_all_tasks(limit=limit, offset=offset, user_id=user_id)
 
-    def get_task(self, task_id: str) -> SearchTask | None:
-        return self.task_store.get_task(task_id)
+    def get_task(self, task_id: str, user_id: str | None = None) -> SearchTask | None:
+        return self.task_store.get_task(task_id, user_id=user_id)
 
-    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
-        return self.task_store.update_task(task_id, update)
+    def update_task(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        user_id: str | None = None,
+    ) -> SearchTask | None:
+        return self.task_store.update_task(task_id, update, user_id=user_id)
 
     def decompose_prompt(
         self,
@@ -549,8 +559,12 @@ class ResearchService(
 
         return research
 
-    def get_task_summary(self, task_id: str) -> SearchTaskSummary:
-        task = self.task_store.get_task(task_id)
+    def get_task_summary(
+        self,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskSummary:
+        task = self.task_store.get_task(task_id, user_id=user_id)
         if not task:
             raise NotFoundError("Task not found")
         return self._build_task_summary(task)

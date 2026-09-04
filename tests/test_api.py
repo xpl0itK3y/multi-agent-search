@@ -1274,6 +1274,14 @@ async def test_research_access_scoped_to_owner(client, mocker):
     )
     research_id = created.json()["research_id"]
     assert (await client.get(f"/v1/research/{research_id}")).status_code == 200
+    app_service = client._transport.app.state.research_service
+    task = app_service.task_store.get_tasks_by_research(research_id)[0]
+    search_job = app_service.task_store.get_latest_search_task_job(task.id)
+    finalize_job = app_service.task_store.add_research_finalize_job(research_id)
+    assert search_job is not None
+    assert (await client.get(f"/v1/tasks/{task.id}")).status_code == 200
+    assert (await client.get(f"/v1/search-jobs/{search_job.id}")).status_code == 200
+    assert (await client.get(f"/v1/research/finalize-jobs/{finalize_job.id}")).status_code == 200
 
     # Switch to user B.
     await client.post("/v1/auth/logout", headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""})
@@ -1284,3 +1292,22 @@ async def test_research_access_scoped_to_owner(client, mocker):
     assert (await client.get(f"/v1/research/{research_id}")).status_code == 404
     assert (await client.get(f"/v1/research/{research_id}/status")).status_code == 404
     assert (await client.get(f"/v1/research/{research_id}/report")).status_code == 404
+
+    # Parallel task/job routes must enforce the same owner boundary.
+    assert (await client.get(f"/v1/tasks/{task.id}")).status_code == 404
+    assert (await client.get(f"/v1/tasks/{task.id}/summary")).status_code == 404
+    assert (await client.get(f"/v1/tasks/{task.id}/search-job")).status_code == 404
+    assert (await client.get(f"/v1/search-jobs/{search_job.id}")).status_code == 404
+    assert (await client.get(f"/v1/research/finalize-jobs/{finalize_job.id}")).status_code == 404
+    csrf = client.cookies.get("csrf_token") or ""
+    task_update = await client.patch(
+        f"/v1/tasks/{task.id}",
+        json={"status": "failed"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert task_update.status_code == 404
+
+    # Global operational listings are admin-only, not cross-user feeds.
+    assert (await client.get("/v1/tasks")).status_code == 403
+    assert (await client.get("/v1/search-jobs?status=running")).status_code == 403
+    assert (await client.get("/v1/research/finalize-jobs?status=running")).status_code == 403
