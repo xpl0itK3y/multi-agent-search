@@ -30,7 +30,8 @@ def test_settings_uses_explicit_database_url():
     )
 
 
-def test_settings_defaults_to_postgres_task_store():
+def test_settings_defaults_to_postgres_task_store(monkeypatch):
+    monkeypatch.delenv("TASK_STORE_BACKEND", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.task_store_backend == "postgres"
