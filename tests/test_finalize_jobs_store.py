@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
-from src.api.schemas import FinalizeJobStatus, ResearchRequest, ResearchStatus, SearchDepth
+from src.api.schemas import (
+    FinalizeJobStatus,
+    ResearchRequest,
+    ResearchStatus,
+    SearchDepth,
+    TaskStatus,
+)
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 
@@ -109,7 +115,23 @@ def test_finalize_service_discards_result_after_lease_recovery(monkeypatch):
     service = ResearchService(task_store=store, analyzer=analyzer)
     research = store.add_research(
         ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
-        task_ids=[],
+        task_ids=["task-1"],
+    )
+    store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "completed task",
+            "queries": ["query"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "content": "Evidence",
+                }
+            ],
+        }
     )
     _, job = service.enqueue_research_finalization(research.id)
     assert job is not None
