@@ -172,7 +172,7 @@ def create_app() -> FastAPI:
 
 def _issue_session(response: Response, user: AuthUser) -> str:
     """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer)."""
-    token = create_token(user.id, email=user.email)
+    token = create_token(user.id, email=user.email, token_version=user.token_version)
     response.set_cookie(
         key=settings.auth_cookie_name,
         value=token,
@@ -265,7 +265,10 @@ def register_routes(app: FastAPI) -> None:
         if not email or verified not in (True, "true"):
             raise HTTPException(status_code=400, detail="Google account email is not verified")
         user, created = get_research_service(request).get_or_create_oauth_user(
-            email, name=userinfo.get("name"), avatar_url=userinfo.get("picture")
+            email,
+            google_subject=userinfo.get("sub") or "",
+            name=userinfo.get("name"),
+            avatar_url=userinfo.get("picture"),
         )
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
@@ -274,12 +277,20 @@ def register_routes(app: FastAPI) -> None:
         _issue_session(redirect, user)  # sets the JWT session cookie
         return redirect
 
-    @app.post("/v1/auth/set-password")
+    @app.post("/v1/auth/set-password", response_model=AuthSession)
     def set_password(
-        payload: SetPasswordRequest, request: Request, user: AuthUser = Depends(get_current_user)
+        payload: SetPasswordRequest,
+        response: Response,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
     ):
-        get_research_service(request).set_user_password(user.id, payload.password)
-        return {"status": "ok"}
+        updated_user = get_research_service(request).set_user_password(
+            user.id,
+            payload.password,
+            current_password=payload.current_password,
+        )
+        token = _issue_session(response, updated_user)
+        return AuthSession(access_token=token, user=updated_user)
 
     @app.get("/metrics")
     def metrics_endpoint():

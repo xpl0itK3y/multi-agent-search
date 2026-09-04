@@ -73,8 +73,19 @@ class InMemoryTaskStore:
         self.researches[research_id] = record
         return record
 
-    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord:
-        user = UserRecord(id=user_id, email=email, password_hash=password_hash)
+    def create_user(
+        self,
+        user_id: str,
+        email: str,
+        password_hash: str | None,
+        google_subject: str | None = None,
+    ) -> UserRecord:
+        user = UserRecord(
+            id=user_id,
+            email=email,
+            password_hash=password_hash,
+            google_subject=google_subject,
+        )
         self.users[user_id] = user
         return user
 
@@ -85,10 +96,24 @@ class InMemoryTaskStore:
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         return self.users.get(user_id)
 
-    def update_user_password(self, user_id: str, password_hash: str) -> None:
+    def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None:
+        return next(
+            (user for user in self.users.values() if user.google_subject == google_subject),
+            None,
+        )
+
+    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         user = self.users.get(user_id)
-        if user:
-            self.users[user_id] = user.model_copy(update={"password_hash": password_hash})
+        if user is None:
+            return None
+        updated = user.model_copy(
+            update={
+                "password_hash": password_hash,
+                "token_version": user.token_version + 1,
+            }
+        )
+        self.users[user_id] = updated
+        return updated
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
         user = self.users.get(user_id)

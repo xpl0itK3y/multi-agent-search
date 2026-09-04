@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 
 from src.api.schemas import AuthUser
-from src.auth.security import verify_token
+from src.auth.security import decode_token
 from src.config import settings
 from src.services import ResearchService
 
@@ -28,11 +28,16 @@ def get_current_user(request: Request) -> AuthUser:
     if settings.auth_disabled:
         return LOCAL_USER
     token = _extract_token(request)
-    user_id = verify_token(token) if token else None
+    claims = decode_token(token) if token else None
+    user_id = claims.get("sub") if claims else None
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     user = get_research_service(request).get_auth_user(user_id)
-    if user is None:
+    try:
+        token_version = int(claims.get("ver", 0)) if claims is not None else -1
+    except (TypeError, ValueError):
+        token_version = -1
+    if user is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user
 

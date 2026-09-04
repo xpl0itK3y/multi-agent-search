@@ -17,6 +17,27 @@ import pytest
 
 
 @pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_oauth_identity_and_session_version(
+    postgres_session_factory,
+):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    user_id = str(uuid.uuid4())
+    email = f"oauth-{user_id}@example.com"
+
+    created = store.create_user(user_id, email, None, google_subject=user_id)
+    assert created.password_hash is None
+    assert created.google_subject == user_id
+    assert created.token_version == 0
+    assert store.get_user_by_google_subject(user_id).id == user_id
+
+    updated = store.update_user_password(user_id, "password-hash")
+    assert updated is not None
+    assert updated.password_hash == "password-hash"
+    assert updated.token_version == 1
+    assert store.get_user_by_id(user_id).token_version == 1
+
+
+@pytest.mark.postgres
 def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
 

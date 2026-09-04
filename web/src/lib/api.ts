@@ -113,11 +113,14 @@ export const api = {
 
   authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
 
-  setPassword: (password: string) =>
-    request<{ status: string }>("/v1/auth/set-password", {
+  setPassword: async (password: string, currentPassword?: string) => {
+    const res = await request<AuthSession>("/v1/auth/set-password", {
       method: "POST",
-      body: JSON.stringify({ password }),
-    }),
+      body: JSON.stringify({ password, current_password: currentPassword }),
+    });
+    setAuthToken(res.access_token);
+    return res;
+  },
 
   // Full-page navigation to start the Google OAuth redirect flow.
   googleLoginUrl: () => `${BASE}/v1/auth/google/login`,

@@ -58,12 +58,23 @@ def _encode_segment(data: dict) -> str:
     return _b64encode(json.dumps(data, separators=(",", ":")).encode())
 
 
-def create_token(user_id: str, *, email: str | None = None, ttl_seconds: int | None = None) -> str:
+def create_token(
+    user_id: str,
+    *,
+    email: str | None = None,
+    ttl_seconds: int | None = None,
+    token_version: int = 0,
+) -> str:
     """Issue a signed HS256 JWT for ``user_id`` with iat/exp claims."""
     ttl = ttl_seconds if ttl_seconds is not None else settings.auth_token_ttl_seconds
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
-    payload: dict = {"sub": user_id, "iat": now, "exp": now + ttl}
+    payload: dict = {
+        "sub": user_id,
+        "iat": now,
+        "exp": now + ttl,
+        "ver": token_version,
+    }
     if email:
         payload["email"] = email
     signing_input = f"{_encode_segment(header)}.{_encode_segment(payload)}"

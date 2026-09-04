@@ -85,12 +85,31 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
-    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord:
-        user = UserORM(id=user_id, email=email.strip().lower(), password_hash=password_hash)
+    def create_user(
+        self,
+        user_id: str,
+        email: str,
+        password_hash: str | None,
+        google_subject: str | None = None,
+    ) -> UserRecord:
+        user = UserORM(
+            id=user_id,
+            email=email.strip().lower(),
+            password_hash=password_hash,
+            google_subject=google_subject,
+        )
         with self.session_scope() as session:
             session.add(user)
             session.flush()
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
+            return UserRecord(
+                id=user.id,
+                email=user.email,
+                password_hash=user.password_hash,
+                google_subject=user.google_subject,
+                token_version=user.token_version,
+                name=user.name,
+                avatar_url=user.avatar_url,
+            )
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -99,20 +118,70 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
+            return UserRecord(
+                id=user.id,
+                email=user.email,
+                password_hash=user.password_hash,
+                google_subject=user.google_subject,
+                token_version=user.token_version,
+                name=user.name,
+                avatar_url=user.avatar_url,
+            )
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is None:
                 return None
-            return UserRecord(id=user.id, email=user.email, password_hash=user.password_hash, name=user.name, avatar_url=user.avatar_url)
+            return UserRecord(
+                id=user.id,
+                email=user.email,
+                password_hash=user.password_hash,
+                google_subject=user.google_subject,
+                token_version=user.token_version,
+                name=user.name,
+                avatar_url=user.avatar_url,
+            )
 
-    def update_user_password(self, user_id: str, password_hash: str) -> None:
+    def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None:
         with self.session_scope() as session:
-            user = session.get(UserORM, user_id)
-            if user is not None:
-                user.password_hash = password_hash
+            statement = select(UserORM).where(UserORM.google_subject == google_subject)
+            user = session.execute(statement).scalar_one_or_none()
+            if user is None:
+                return None
+            return UserRecord(
+                id=user.id,
+                email=user.email,
+                password_hash=user.password_hash,
+                google_subject=user.google_subject,
+                token_version=user.token_version,
+                name=user.name,
+                avatar_url=user.avatar_url,
+            )
+
+    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+        with self.session_scope() as session:
+            statement = (
+                update(UserORM)
+                .where(UserORM.id == user_id)
+                .values(
+                    password_hash=password_hash,
+                    token_version=UserORM.token_version + 1,
+                )
+                .returning(UserORM)
+            )
+            user = session.execute(statement).scalar_one_or_none()
+            if user is None:
+                return None
+            return UserRecord(
+                id=user.id,
+                email=user.email,
+                password_hash=user.password_hash,
+                google_subject=user.google_subject,
+                token_version=user.token_version,
+                name=user.name,
+                avatar_url=user.avatar_url,
+            )
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
         with self.session_scope() as session:

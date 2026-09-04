@@ -1195,6 +1195,65 @@ async def test_bearer_jwt_authenticates_without_cookie(client, mocker):
 
 
 @pytest.mark.anyio
+async def test_password_change_requires_current_password_and_revokes_old_token(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    reg = await client.post(
+        "/v1/auth/register",
+        json={"email": "rotate@x.com", "password": "secret12"},
+    )
+    old_token = reg.json()["access_token"]
+
+    missing = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert missing.status_code == 400
+
+    wrong = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12", "current_password": "not-the-password"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert wrong.status_code == 401
+
+    changed = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12", "current_password": "secret12"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert changed.status_code == 200
+    new_token = changed.json()["access_token"]
+    assert new_token != old_token
+
+    old_session = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {old_token}"},
+    )
+    assert old_session.status_code == 401
+
+    new_session = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {new_token}"},
+    )
+    assert new_session.status_code == 200
+    assert new_session.json()["email"] == "rotate@x.com"
+
+    assert (
+        await client.post(
+            "/v1/auth/login",
+            json={"email": "rotate@x.com", "password": "secret12"},
+        )
+    ).status_code == 401
+    assert (
+        await client.post(
+            "/v1/auth/login",
+            json={"email": "rotate@x.com", "password": "replacement12"},
+        )
+    ).status_code == 200
+
+
+@pytest.mark.anyio
 async def test_google_oauth_login_and_callback(client, mocker):
     mocker.patch("src.api.dependencies.settings.auth_disabled", False)
     mocker.patch("src.config.settings.google_client_id", "cid")
