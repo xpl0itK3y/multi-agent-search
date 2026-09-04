@@ -22,14 +22,19 @@ signal.signal(signal.SIGTERM, _handle_signal)
 signal.signal(signal.SIGINT,  _handle_signal)
 
 
-def run_once() -> int:
+def _create_worker():
     from src.bootstrap import create_research_service
     from src.workers import JobWorker
 
-    worker = JobWorker(
+    return JobWorker(
         create_research_service(),
         worker_name=os.environ.get("WORKER_NAME", "job-worker"),
     )
+
+
+def run_once(worker=None) -> int:
+    if worker is None:
+        worker = _create_worker()
     processed = worker.run_once()
     print(f"job-worker: processed={processed}")
     return processed
@@ -45,14 +50,15 @@ def main() -> int:
         help="Polling interval in seconds for loop mode",
     )
     args = parser.parse_args()
+    worker = _create_worker()
 
     if args.once:
-        run_once()
+        run_once(worker)
         return 0
 
     while not _shutdown.is_set():
         try:
-            run_once()
+            run_once(worker)
         except Exception as exc:
             # A transient failure (DB hiccup, Redis blip) must not crash the replica into a
             # Docker restart loop — log, back off, and keep polling.

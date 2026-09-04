@@ -40,3 +40,20 @@ def test_job_worker_counts_recovered_jobs_as_work(mocker):
     assert heartbeat.processed_jobs == 4
     assert heartbeat.extraction_metrics.attempts == 0
     assert heartbeat.graph_metrics.resume_count == 0
+
+
+def test_job_worker_runs_maintenance_on_its_own_interval(mocker):
+    task_store = InMemoryTaskStore()
+    service = ResearchService(task_store=task_store)
+    clock = mocker.patch("src.workers.job_worker.time.monotonic", side_effect=[100.0, 110.0, 161.0])
+    maintenance = mocker.patch("src.workers.job_worker.MaintenanceWorker.run_once", return_value=2)
+    mocker.patch("src.workers.job_worker.SearchWorker.run_once", return_value=0)
+    mocker.patch("src.workers.job_worker.FinalizeWorker.run_once", return_value=0)
+    worker = JobWorker(service, maintenance_interval_seconds=60)
+
+    assert worker.run_once() == 2
+    assert worker.run_once() == 0
+    assert worker.run_once() == 2
+
+    assert clock.call_count == 3
+    assert maintenance.call_count == 2
