@@ -15,11 +15,19 @@ logger = logging.getLogger(__name__)
 
 
 class JobQueueMixin:
-    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
-        return self.task_store.get_research_finalize_job(job_id)
+    def get_research_finalize_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> ResearchFinalizeJob | None:
+        return self.task_store.get_research_finalize_job(job_id, user_id=user_id)
 
-    def get_latest_research_finalize_job(self, research_id: str) -> ResearchFinalizeJob | None:
-        return self.task_store.get_latest_research_finalize_job(research_id)
+    def get_latest_research_finalize_job(
+        self,
+        research_id: str,
+        user_id: str | None = None,
+    ) -> ResearchFinalizeJob | None:
+        return self.task_store.get_latest_research_finalize_job(research_id, user_id=user_id)
 
     def list_running_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         return self.task_store.get_running_research_finalize_jobs()
@@ -82,8 +90,12 @@ class JobQueueMixin:
             deleted_count=len(deleted_ids),
         )
 
-    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
-        return self.task_store.get_search_task_job(job_id)
+    def get_search_task_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
+        return self.task_store.get_search_task_job(job_id, user_id=user_id)
 
     def list_running_search_task_jobs(self) -> list[SearchTaskJob]:
         return self.task_store.get_running_search_task_jobs()
@@ -186,6 +198,9 @@ class JobQueueMixin:
             total_count=recovered_count + deleted_count + compacted_count,
         )
 
-    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
-        return self.task_store.get_latest_search_task_job(task_id)
-
+    def get_latest_search_task_job(
+        self,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
+        return self.task_store.get_latest_search_task_job(task_id, user_id=user_id)

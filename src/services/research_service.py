@@ -91,7 +91,7 @@ from src.domain import (
     ReplanRecommendation,
 )
 from src.config import settings
-from src.graph import FinalizeGraphRunner
+from src.graph import FinalizeCancelled, FinalizeGraphRunner
 from src.model_catalog import resolve_model_id
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context, set_queue_metrics
@@ -189,14 +189,24 @@ class ResearchService(
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
         return optimizer.run(prompt)
 
-    def list_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
-        return self.task_store.get_all_tasks(limit=limit, offset=offset)
+    def list_tasks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[SearchTask]:
+        return self.task_store.get_all_tasks(limit=limit, offset=offset, user_id=user_id)
 
-    def get_task(self, task_id: str) -> SearchTask | None:
-        return self.task_store.get_task(task_id)
+    def get_task(self, task_id: str, user_id: str | None = None) -> SearchTask | None:
+        return self.task_store.get_task(task_id, user_id=user_id)
 
-    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
-        return self.task_store.update_task(task_id, update)
+    def update_task(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        user_id: str | None = None,
+    ) -> SearchTask | None:
+        return self.task_store.update_task(task_id, update, user_id=user_id)
 
     def decompose_prompt(
         self,
@@ -549,8 +559,12 @@ class ResearchService(
 
         return research
 
-    def get_task_summary(self, task_id: str) -> SearchTaskSummary:
-        task = self.task_store.get_task(task_id)
+    def get_task_summary(
+        self,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskSummary:
+        task = self.task_store.get_task(task_id, user_id=user_id)
         if not task:
             raise NotFoundError("Task not found")
         return self._build_task_summary(task)
@@ -1494,7 +1508,19 @@ class ResearchService(
                 analyzer_llm.reset_usage()
 
             if settings.use_langgraph_finalize_graph:
-                report = self.finalize_graph_runner.run(research_id, research.prompt, tasks, research.depth)
+                try:
+                    report = self.finalize_graph_runner.run(
+                        research_id,
+                        research.prompt,
+                        tasks,
+                        research.depth,
+                    )
+                except FinalizeCancelled:
+                    latest = self.task_store.get_research(research_id)
+                    if latest is None:
+                        raise NotFoundError("Research not found")
+                    logger.info("finalize_stopped_cancelled research_id=%s", research_id)
+                    return latest
             else:
                 report = analyzer.run_analysis(
                     research.prompt,

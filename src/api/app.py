@@ -172,7 +172,7 @@ def create_app() -> FastAPI:
 
 def _issue_session(response: Response, user: AuthUser) -> str:
     """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer)."""
-    token = create_token(user.id, email=user.email)
+    token = create_token(user.id, email=user.email, token_version=user.token_version)
     response.set_cookie(
         key=settings.auth_cookie_name,
         value=token,
@@ -265,7 +265,10 @@ def register_routes(app: FastAPI) -> None:
         if not email or verified not in (True, "true"):
             raise HTTPException(status_code=400, detail="Google account email is not verified")
         user, created = get_research_service(request).get_or_create_oauth_user(
-            email, name=userinfo.get("name"), avatar_url=userinfo.get("picture")
+            email,
+            google_subject=userinfo.get("sub") or "",
+            name=userinfo.get("name"),
+            avatar_url=userinfo.get("picture"),
         )
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
@@ -274,12 +277,20 @@ def register_routes(app: FastAPI) -> None:
         _issue_session(redirect, user)  # sets the JWT session cookie
         return redirect
 
-    @app.post("/v1/auth/set-password")
+    @app.post("/v1/auth/set-password", response_model=AuthSession)
     def set_password(
-        payload: SetPasswordRequest, request: Request, user: AuthUser = Depends(get_current_user)
+        payload: SetPasswordRequest,
+        response: Response,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
     ):
-        get_research_service(request).set_user_password(user.id, payload.password)
-        return {"status": "ok"}
+        updated_user = get_research_service(request).set_user_password(
+            user.id,
+            payload.password,
+            current_password=payload.current_password,
+        )
+        token = _issue_session(response, updated_user)
+        return AuthSession(access_token=token, user=updated_user)
 
     @app.get("/metrics")
     def metrics_endpoint():
@@ -337,43 +348,56 @@ def register_routes(app: FastAPI) -> None:
             payload.depth,
         )
 
-    @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=auth_required)
+    @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=admin_guard)
     def list_tasks(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
         return get_research_service(request).list_tasks(limit=limit, offset=offset)
 
     @app.get("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
-    def get_task(task_id: str, request: Request):
-        task = get_research_service(request).get_task(task_id)
+    def get_task(task_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+        task = get_research_service(request).get_task(task_id, user_id=owner)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
     @app.get("/v1/tasks/{task_id}/summary", response_model=SearchTaskSummary, dependencies=auth_required)
-    def get_task_summary(task_id: str, request: Request):
-        return get_research_service(request).get_task_summary(task_id)
+    def get_task_summary(task_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
+        return get_research_service(request).get_task_summary(task_id, user_id=owner)
 
     @app.patch("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
-    def update_task(task_id: str, update: TaskUpdate, request: Request):
-        task = get_research_service(request).update_task(task_id, update)
+    def update_task(
+        task_id: str,
+        update: TaskUpdate,
+        request: Request,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        task = get_research_service(request).update_task(task_id, update, user_id=owner)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
 
     @app.get("/v1/tasks/{task_id}/search-job", response_model=SearchTaskJob, dependencies=auth_required)
-    def get_latest_search_job(task_id: str, request: Request):
-        job = get_research_service(request).get_latest_search_task_job(task_id)
+    def get_latest_search_job(
+        task_id: str,
+        request: Request,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        job = get_research_service(request).get_latest_search_task_job(task_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
     @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob, dependencies=auth_required)
-    def get_search_job(job_id: str, request: Request):
-        job = get_research_service(request).get_search_task_job(job_id)
+    def get_search_job(
+        job_id: str,
+        request: Request,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        job = get_research_service(request).get_search_task_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
         return job
 
-    @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=auth_required)
+    @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=admin_guard)
     def list_search_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
@@ -415,7 +439,7 @@ def register_routes(app: FastAPI) -> None:
         background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
         return response
 
-    @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob], dependencies=auth_required)
+    @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob], dependencies=admin_guard)
     def list_finalize_jobs(status: str, request: Request):
         service = get_research_service(request)
         if status == "running":
@@ -425,8 +449,12 @@ def register_routes(app: FastAPI) -> None:
         raise HTTPException(status_code=422, detail="Unsupported finalize job status filter")
 
     @app.get("/v1/research/finalize-jobs/{job_id}", response_model=ResearchFinalizeJob, dependencies=auth_required)
-    def get_finalize_job(job_id: str, request: Request):
-        job = get_research_service(request).get_research_finalize_job(job_id)
+    def get_finalize_job(
+        job_id: str,
+        request: Request,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        job = get_research_service(request).get_research_finalize_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return job

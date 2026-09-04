@@ -6,7 +6,7 @@ import time
 from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
-from src.domain import ReplanRecommendation, SearchDepth, SearchTask
+from src.domain import ReplanRecommendation, ResearchStatus, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
     record_graph_analyze,
@@ -20,6 +20,11 @@ from src.graph.metrics import (
 from src.graph.state import FinalizeGraphState
 
 logger = logging.getLogger(__name__)
+
+
+class FinalizeCancelled(RuntimeError):
+    """Raised between graph steps after a user cancels the research."""
+
 
 try:
     from langgraph.graph import END, StateGraph
@@ -125,6 +130,10 @@ class FinalizeGraphRunner:
             pass
 
     def _run_timed_step(self, step_name: str, action, research_id: str):
+        research = self.service.task_store.get_research(research_id)
+        if research is not None and research.status == ResearchStatus.CANCELLED:
+            logger.info("langgraph_finalize_cancelled_before_step step=%s", step_name)
+            raise FinalizeCancelled(research_id)
         self._emit_trail(research_id, step_name)
         started_at = perf_counter()
         try:
@@ -175,19 +184,20 @@ class FinalizeGraphRunner:
                 negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
                 max_groups=5,
             )
-            recommendations = self.service.replan_agent.suggest_follow_up(
-                state["prompt"],
-                state["depth"],
-                state["tasks"],
-                source_summary=source_summary,
-            ) if self._supports_graph_branching(analyzer) else []
-            should_replan = (
-                bool(recommendations)
+            branch_possible = (
+                self._supports_graph_branching(analyzer)
                 and self._is_deep_loop(state)
                 and state["replan_attempts"] < settings.langgraph_replan_max_loops
                 and self._budget_ok(state)
                 and not state.get("branch_stalled")
             )
+            recommendations = self.service.replan_agent.suggest_follow_up(
+                state["prompt"],
+                state["depth"],
+                state["tasks"],
+                source_summary=source_summary,
+            ) if branch_possible else []
+            should_replan = branch_possible and bool(recommendations)
             next_state = {
                 **state,
                 "detected_conflicts": conflicts,

@@ -35,6 +35,12 @@ class InMemoryTaskStore:
     def ping(self) -> bool:
         return True
 
+    def _research_belongs_to(self, research_id: str | None, user_id: str | None) -> bool:
+        if user_id is None:
+            return True
+        research = self.researches.get(research_id or "")
+        return research is not None and research.user_id == user_id
+
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         entry = self.search_cache.get(cache_key)
         if entry is None:
@@ -67,8 +73,19 @@ class InMemoryTaskStore:
         self.researches[research_id] = record
         return record
 
-    def create_user(self, user_id: str, email: str, password_hash: str) -> UserRecord:
-        user = UserRecord(id=user_id, email=email, password_hash=password_hash)
+    def create_user(
+        self,
+        user_id: str,
+        email: str,
+        password_hash: str | None,
+        google_subject: str | None = None,
+    ) -> UserRecord:
+        user = UserRecord(
+            id=user_id,
+            email=email,
+            password_hash=password_hash,
+            google_subject=google_subject,
+        )
         self.users[user_id] = user
         return user
 
@@ -79,10 +96,24 @@ class InMemoryTaskStore:
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         return self.users.get(user_id)
 
-    def update_user_password(self, user_id: str, password_hash: str) -> None:
+    def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None:
+        return next(
+            (user for user in self.users.values() if user.google_subject == google_subject),
+            None,
+        )
+
+    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         user = self.users.get(user_id)
-        if user:
-            self.users[user_id] = user.model_copy(update={"password_hash": password_hash})
+        if user is None:
+            return None
+        updated = user.model_copy(
+            update={
+                "password_hash": password_hash,
+                "token_version": user.token_version + 1,
+            }
+        )
+        self.users[user_id] = updated
+        return updated
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
         user = self.users.get(user_id)
@@ -311,13 +342,23 @@ class InMemoryTaskStore:
         self.finalize_jobs[job_id] = job
         return job
 
-    def get_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
-        return self.finalize_jobs.get(job_id)
+    def get_research_finalize_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> ResearchFinalizeJob | None:
+        job = self.finalize_jobs.get(job_id)
+        if job is None or not self._research_belongs_to(job.research_id, user_id):
+            return None
+        return job
 
     def get_latest_research_finalize_job(
         self,
         research_id: str,
+        user_id: str | None = None,
     ) -> ResearchFinalizeJob | None:
+        if not self._research_belongs_to(research_id, user_id):
+            return None
         matching_jobs = [
             job
             for job in self.finalize_jobs.values()
@@ -454,10 +495,23 @@ class InMemoryTaskStore:
         self.search_jobs[job_id] = job
         return job
 
-    def get_search_task_job(self, job_id: str) -> SearchTaskJob | None:
-        return self.search_jobs.get(job_id)
+    def get_search_task_job(
+        self,
+        job_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
+        job = self.search_jobs.get(job_id)
+        if job is None or self.get_task(job.task_id, user_id=user_id) is None:
+            return None
+        return job
 
-    def get_latest_search_task_job(self, task_id: str) -> SearchTaskJob | None:
+    def get_latest_search_task_job(
+        self,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> SearchTaskJob | None:
+        if self.get_task(task_id, user_id=user_id) is None:
+            return None
         matching_jobs = [
             job
             for job in self.search_jobs.values()
@@ -669,18 +723,38 @@ class InMemoryTaskStore:
             graph_metrics=graph_metrics,
         )
 
-    def get_task(self, task_id: str) -> SearchTask | None:
-        return self.tasks.get(task_id)
+    def get_task(self, task_id: str, user_id: str | None = None) -> SearchTask | None:
+        task = self.tasks.get(task_id)
+        if task is None or not self._research_belongs_to(task.research_id, user_id):
+            return None
+        return task
 
-    def get_all_tasks(self, limit: int = 100, offset: int = 0) -> list[SearchTask]:
-        return list(self.tasks.values())[offset : offset + limit]
+    def get_all_tasks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[SearchTask]:
+        tasks = list(self.tasks.values())
+        if user_id is not None:
+            tasks = [
+                task
+                for task in tasks
+                if self._research_belongs_to(task.research_id, user_id)
+            ]
+        return tasks[offset : offset + limit]
 
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]:
         return [task for task in self.tasks.values() if task.research_id == research_id]
 
-    def update_task(self, task_id: str, update: TaskUpdate) -> SearchTask | None:
-        task = self.tasks.get(task_id)
-        if not task:
+    def update_task(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        user_id: str | None = None,
+    ) -> SearchTask | None:
+        task = self.get_task(task_id, user_id=user_id)
+        if task is None:
             return None
 
         if update.status is not None:

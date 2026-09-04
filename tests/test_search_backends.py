@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from src.agents.search import SearchAgent
@@ -38,7 +41,66 @@ def _fake_response(mocker, payload):
     return resp
 
 
-# ── Tavily backend ────────────────────────────────────────────────────────────
+class _FakeDDGS:
+    def __init__(self, search):
+        self._search = search
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return None
+
+    def text(self, query, max_results, backend):
+        return self._search(query, max_results, backend)
+
+
+# ── DuckDuckGo fallback scheduling ───────────────────────────────────────────
+
+
+def test_duckduckgo_uses_only_api_backend_when_it_succeeds(mocker):
+    called_backends = []
+
+    def search(query, max_results, backend):
+        called_backends.append(backend)
+        return [{"title": "Result", "href": "https://example.com", "body": "Summary"}]
+
+    mocker.patch("src.providers.search.DDGS", side_effect=lambda **kwargs: _FakeDDGS(search))
+
+    results = DuckDuckGoBackend().search("query", 5)
+
+    assert results[0]["url"] == "https://example.com"
+    assert called_backends == ["api"]
+
+
+def test_duckduckgo_does_not_wait_for_losing_fallback(mocker):
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+
+    def search(query, max_results, backend):
+        if backend == "api":
+            return []
+        if backend == "lite":
+            slow_started.set()
+            release_slow.wait(timeout=5)
+            return []
+        assert slow_started.wait(timeout=1)
+        return [{"title": "Result", "href": "https://example.com", "body": "Summary"}]
+
+    mocker.patch("src.providers.search.DDGS", side_effect=lambda **kwargs: _FakeDDGS(search))
+    started_at = time.perf_counter()
+    try:
+        results = DuckDuckGoBackend().search("query", 5)
+        elapsed = time.perf_counter() - started_at
+    finally:
+        release_slow.set()
+
+    assert results[0]["url"] == "https://example.com"
+    assert elapsed < 2
+
+
+# Tavily backend
+
 
 def test_tavily_maps_fields_and_passes_raw_content(mocker):
     backend = TavilyBackend("key-123", search_depth="advanced", include_raw_content=True)

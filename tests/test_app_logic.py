@@ -2601,7 +2601,7 @@ def test_auth_password_hash_and_verify():
 def test_auth_token_roundtrip_and_tamper():
     from src.auth.security import create_token, decode_token, verify_token
 
-    token = create_token("user-1", email="u1@x.com")
+    token = create_token("user-1", email="u1@x.com", token_version=3)
     assert verify_token(token) == "user-1"
     assert verify_token(token + "x") is None
     assert verify_token("garbage") is None
@@ -2612,6 +2612,7 @@ def test_auth_token_roundtrip_and_tamper():
     claims = decode_token(token)
     assert claims["sub"] == "user-1"
     assert claims["email"] == "u1@x.com"
+    assert claims["ver"] == 3
     assert claims["exp"] > claims["iat"]
     # A token whose signature is replaced must not verify.
     tampered = create_token("user-1").rsplit(".", 1)[0] + ".AAAA"
@@ -2733,15 +2734,25 @@ def test_start_research_blocks_while_one_is_active():
 
 def test_get_or_create_oauth_user_is_idempotent():
     service = ResearchService(task_store=InMemoryTaskStore())
-    u1, created1 = service.get_or_create_oauth_user("Person@Gmail.com")
+    u1, created1 = service.get_or_create_oauth_user("Person@Gmail.com", "google-123")
     assert u1.email == "person@gmail.com"
     assert created1 is True  # brand-new account
-    u2, created2 = service.get_or_create_oauth_user("person@gmail.com")
+    u2, created2 = service.get_or_create_oauth_user("person@gmail.com", "google-123")
     assert u2.id == u1.id and created2 is False  # same account, not a duplicate
 
     # After setting a password the user can also log in with email + password.
     service.set_user_password(u1.id, "newpass1")
     assert service.authenticate_user("person@gmail.com", "newpass1").id == u1.id
+
+
+def test_oauth_does_not_silently_merge_with_local_account():
+    service = ResearchService(task_store=InMemoryTaskStore())
+    service.register_user("person@gmail.com", "localpass1")
+
+    with pytest.raises(ServiceError) as exc_info:
+        service.get_or_create_oauth_user("Person@Gmail.com", "google-456")
+
+    assert exc_info.value.status_code == 409
 
 
 def test_search_completion_auto_enqueues_finalization():

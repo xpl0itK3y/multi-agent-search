@@ -62,7 +62,7 @@ def test_conflicts_are_inserted_before_extended_conclusion_heading():
         "topic": "cost",
         "reason": "different figures",
         "source_ids": ["S1", "S2"],
-        "sentences": ["Cost was 10 in 2024.", "Cost was 20 in 2024."],
+        "sentences": ["The total cost was 10 in 2024.", "The total cost was 20 in 2024."],
     }]
 
     result = agent._inject_conflicts_section(report, conflicts, "en")

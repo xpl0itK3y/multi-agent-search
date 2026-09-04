@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     smoke_analyzer_report: Optional[str] = None
     job_max_attempts: int = 3
     worker_heartbeat_ttl_seconds: int = 30
+    queue_maintenance_interval_seconds: float = 60.0
     search_job_timeout_seconds: int = 300
     finalize_job_timeout_seconds: int = 600
     search_job_retention_seconds: int = 86400

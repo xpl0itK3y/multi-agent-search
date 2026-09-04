@@ -17,6 +17,27 @@ import pytest
 
 
 @pytest.mark.postgres
+def test_sqlalchemy_task_store_persists_oauth_identity_and_session_version(
+    postgres_session_factory,
+):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    user_id = str(uuid.uuid4())
+    email = f"oauth-{user_id}@example.com"
+
+    created = store.create_user(user_id, email, None, google_subject=user_id)
+    assert created.password_hash is None
+    assert created.google_subject == user_id
+    assert created.token_version == 0
+    assert store.get_user_by_google_subject(user_id).id == user_id
+
+    updated = store.update_user_password(user_id, "password-hash")
+    assert updated is not None
+    assert updated.password_hash == "password-hash"
+    assert updated.token_version == 1
+    assert store.get_user_by_id(user_id).token_version == 1
+
+
+@pytest.mark.postgres
 def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
 
@@ -148,6 +169,43 @@ def test_sqlalchemy_task_store_persists_search_jobs(postgres_session_factory):
     assert updated is not None
     assert updated.status == SearchJobStatus.COMPLETED
     assert store.get_latest_search_task_job(task.id).id == job.id
+
+
+@pytest.mark.postgres
+def test_sqlalchemy_task_and_jobs_are_scoped_to_research_owner(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    research = store.add_research(
+        ResearchRequest(prompt="owned research topic", depth=SearchDepth.EASY),
+        task_ids=[],
+        user_id="owner-a",
+    )
+    task = store.add_task(
+        {
+            "id": str(uuid.uuid4()),
+            "research_id": research.id,
+            "description": "owned task",
+            "queries": ["query"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+    search_job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    finalize_job = store.add_research_finalize_job(research.id)
+
+    assert store.get_task(task.id, user_id="owner-a") is not None
+    assert [item.id for item in store.get_all_tasks(user_id="owner-a")] == [task.id]
+    assert store.get_search_task_job(search_job.id, user_id="owner-a") is not None
+    assert store.get_latest_search_task_job(task.id, user_id="owner-a") is not None
+    assert store.get_research_finalize_job(finalize_job.id, user_id="owner-a") is not None
+    assert store.get_latest_research_finalize_job(research.id, user_id="owner-a") is not None
+
+    assert store.get_task(task.id, user_id="owner-b") is None
+    assert store.get_all_tasks(user_id="owner-b") == []
+    assert store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED), user_id="owner-b") is None
+    assert store.get_search_task_job(search_job.id, user_id="owner-b") is None
+    assert store.get_latest_search_task_job(task.id, user_id="owner-b") is None
+    assert store.get_research_finalize_job(finalize_job.id, user_id="owner-b") is None
+    assert store.get_latest_research_finalize_job(research.id, user_id="owner-b") is None
+    assert store.get_task(task.id).status == TaskStatus.PENDING
 
 
 @pytest.mark.postgres

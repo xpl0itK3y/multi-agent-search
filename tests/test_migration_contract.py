@@ -16,6 +16,9 @@ pytestmark = pytest.mark.postgres
 def test_orm_models_match_migrated_schema():
     engine = create_engine_from_settings()
     with engine.connect() as conn:
-        ctx = MigrationContext.configure(conn, opts={"compare_type": True})
+        ctx = MigrationContext.configure(
+            conn,
+            opts={"compare_type": True, "compare_server_default": True},
+        )
         diff = compare_metadata(ctx, Base.metadata)
     assert diff == [], f"ORM models drifted from migrations: {diff}"

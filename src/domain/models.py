@@ -532,6 +532,7 @@ class RegisterRequest(BaseModel):
 
 class SetPasswordRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=200)
+    current_password: Optional[str] = Field(default=None, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -544,6 +545,7 @@ class AuthUser(BaseModel):
     email: str
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+    token_version: int = Field(default=0, exclude=True)
 
 
 class AuthSession(BaseModel):
@@ -560,7 +562,9 @@ class AuthSession(BaseModel):
 class UserRecord(BaseModel):
     id: str
     email: str
-    password_hash: str
+    password_hash: Optional[str] = None
+    google_subject: Optional[str] = None
+    token_version: int = 0
     name: Optional[str] = None
     avatar_url: Optional[str] = None
 

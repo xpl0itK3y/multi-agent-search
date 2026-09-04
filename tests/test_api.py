@@ -1195,6 +1195,65 @@ async def test_bearer_jwt_authenticates_without_cookie(client, mocker):
 
 
 @pytest.mark.anyio
+async def test_password_change_requires_current_password_and_revokes_old_token(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    reg = await client.post(
+        "/v1/auth/register",
+        json={"email": "rotate@x.com", "password": "secret12"},
+    )
+    old_token = reg.json()["access_token"]
+
+    missing = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert missing.status_code == 400
+
+    wrong = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12", "current_password": "not-the-password"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert wrong.status_code == 401
+
+    changed = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "replacement12", "current_password": "secret12"},
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert changed.status_code == 200
+    new_token = changed.json()["access_token"]
+    assert new_token != old_token
+
+    old_session = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {old_token}"},
+    )
+    assert old_session.status_code == 401
+
+    new_session = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {new_token}"},
+    )
+    assert new_session.status_code == 200
+    assert new_session.json()["email"] == "rotate@x.com"
+
+    assert (
+        await client.post(
+            "/v1/auth/login",
+            json={"email": "rotate@x.com", "password": "secret12"},
+        )
+    ).status_code == 401
+    assert (
+        await client.post(
+            "/v1/auth/login",
+            json={"email": "rotate@x.com", "password": "replacement12"},
+        )
+    ).status_code == 200
+
+
+@pytest.mark.anyio
 async def test_google_oauth_login_and_callback(client, mocker):
     mocker.patch("src.api.dependencies.settings.auth_disabled", False)
     mocker.patch("src.config.settings.google_client_id", "cid")
@@ -1274,6 +1333,14 @@ async def test_research_access_scoped_to_owner(client, mocker):
     )
     research_id = created.json()["research_id"]
     assert (await client.get(f"/v1/research/{research_id}")).status_code == 200
+    app_service = client._transport.app.state.research_service
+    task = app_service.task_store.get_tasks_by_research(research_id)[0]
+    search_job = app_service.task_store.get_latest_search_task_job(task.id)
+    finalize_job = app_service.task_store.add_research_finalize_job(research_id)
+    assert search_job is not None
+    assert (await client.get(f"/v1/tasks/{task.id}")).status_code == 200
+    assert (await client.get(f"/v1/search-jobs/{search_job.id}")).status_code == 200
+    assert (await client.get(f"/v1/research/finalize-jobs/{finalize_job.id}")).status_code == 200
 
     # Switch to user B.
     await client.post("/v1/auth/logout", headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""})
@@ -1284,3 +1351,22 @@ async def test_research_access_scoped_to_owner(client, mocker):
     assert (await client.get(f"/v1/research/{research_id}")).status_code == 404
     assert (await client.get(f"/v1/research/{research_id}/status")).status_code == 404
     assert (await client.get(f"/v1/research/{research_id}/report")).status_code == 404
+
+    # Parallel task/job routes must enforce the same owner boundary.
+    assert (await client.get(f"/v1/tasks/{task.id}")).status_code == 404
+    assert (await client.get(f"/v1/tasks/{task.id}/summary")).status_code == 404
+    assert (await client.get(f"/v1/tasks/{task.id}/search-job")).status_code == 404
+    assert (await client.get(f"/v1/search-jobs/{search_job.id}")).status_code == 404
+    assert (await client.get(f"/v1/research/finalize-jobs/{finalize_job.id}")).status_code == 404
+    csrf = client.cookies.get("csrf_token") or ""
+    task_update = await client.patch(
+        f"/v1/tasks/{task.id}",
+        json={"status": "failed"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert task_update.status_code == 404
+
+    # Global operational listings are admin-only, not cross-user feeds.
+    assert (await client.get("/v1/tasks")).status_code == 403
+    assert (await client.get("/v1/search-jobs?status=running")).status_code == 403
+    assert (await client.get("/v1/research/finalize-jobs?status=running")).status_code == 403

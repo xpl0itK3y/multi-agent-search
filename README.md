@@ -53,6 +53,7 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5433
 
 FINALIZE_WORKER_INTERVAL=2.0
+QUEUE_MAINTENANCE_INTERVAL_SECONDS=60
 ```
 
 See [.env.example](./.env.example) for a full example.

@@ -1,3 +1,3 @@
-from .research_graph import FinalizeGraphRunner
+from .research_graph import FinalizeCancelled, FinalizeGraphRunner
 
-__all__ = ["FinalizeGraphRunner"]
+__all__ = ["FinalizeCancelled", "FinalizeGraphRunner"]
