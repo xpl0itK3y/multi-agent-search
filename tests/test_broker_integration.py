@@ -4,7 +4,7 @@ enqueue, requeue — every place a job_id must be pushed to Redis.
 """
 from unittest.mock import MagicMock
 
-from src.api.schemas import ResearchRequest, SearchDepth, TaskStatus
+from src.api.schemas import ReplanRecommendation, ResearchRequest, SearchDepth, TaskStatus
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 
@@ -75,6 +75,46 @@ def test_enqueue_finalization_does_not_push_when_no_broker():
     _, job = service.enqueue_research_finalization(research.id)
 
     assert job is not None  # джоб создан, но push не вызывался
+
+
+# ---------------------------------------------------------------------------
+# execute_replan_search_pass
+# ---------------------------------------------------------------------------
+
+
+def test_replan_search_runs_inline_even_when_broker_is_configured(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.HARD),
+        task_ids=[],
+    )
+    service, broker = _service_with_broker(task_store)
+    inline_search = mocker.patch.object(service, "run_search_task")
+    recommendations = [
+        ReplanRecommendation(
+            reason="primary evidence is missing",
+            suggested_queries=["official source"],
+        ),
+        ReplanRecommendation(
+            reason="the date needs verification",
+            suggested_queries=["dated primary source"],
+        ),
+    ]
+
+    created = service.execute_replan_search_pass(
+        research.id,
+        SearchDepth.HARD,
+        recommendations,
+    )
+
+    assert len(created) == 2
+    assert inline_search.call_count == 2
+    assert [call.args[1] for call in inline_search.call_args_list] == [
+        SearchDepth.HARD,
+        SearchDepth.HARD,
+    ]
+    assert task_store.search_jobs == {}
+    broker.push_search_job.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 import json
 import logging
-import time
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1191,30 +1190,11 @@ class ResearchService(
 
         self.task_store.set_research_task_ids(research_id, existing_task_ids)
 
-        if self.broker:
-            # Push to queue — let the parallel workers handle them concurrently
-            for task in created_tasks:
-                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
-                self.broker.push_search_job(job.id)
-                logger.info("replan_task_enqueued task_id=%s job_id=%s", task.id, job.id)
-
-            # Poll until all replan tasks finish (timeout: same as search job timeout)
-            deadline = time.monotonic() + settings.search_job_timeout_seconds
-            poll_interval = 2.0
-            while time.monotonic() < deadline:
-                pending = [
-                    t for t in created_tasks
-                    if (self.task_store.get_task(t.id) or t).status
-                    not in (TaskStatus.COMPLETED, TaskStatus.FAILED)
-                ]
-                if not pending:
-                    break
-                logger.debug("replan_waiting pending_count=%d", len(pending))
-                time.sleep(poll_interval)
-        else:
-            # No broker — fallback to sequential execution in current thread
-            for task in created_tasks:
-                self.run_search_task(task.id, depth)
+        # A finalize worker must not enqueue follow-up work and then block waiting for the
+        # same shared worker pool to consume it. Running the bounded replan wave inline
+        # guarantees progress even when every worker is currently finalizing a HARD run.
+        for task in created_tasks:
+            self.run_search_task(task.id, depth)
 
         return [
             refreshed
