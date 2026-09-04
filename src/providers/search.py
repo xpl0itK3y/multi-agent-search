@@ -53,16 +53,12 @@ class DuckDuckGoBackend(SearchBackend):
     name = "duckduckgo"
 
     def search(self, query: str, max_results: int) -> List[Dict[str, str]]:
-        """Run all DuckDuckGo backends concurrently; return the first successful result.
-
-        Worst-case latency drops from ~60 s (three sequential 20 s timeouts) to ~20 s
-        (a single timeout shared across all backends running in parallel).
+        """Prefer DuckDuckGo's API backend, then race the HTML fallbacks on failure.
 
         Note: SuppressStderrFD is intentionally omitted from the per-backend worker because
         it manipulates OS-level file descriptors via os.dup2 and is not thread-safe.
         The curl_cffi Python logger is already silenced at module level.
         """
-        backends = ["api", "html", "lite"]
 
         def _try_backend(backend: str) -> List[Dict[str, str]]:
             with DDGS(timeout=20) as ddgs:
@@ -78,8 +74,23 @@ class DuckDuckGoBackend(SearchBackend):
                     ]
             return []
 
-        with ThreadPoolExecutor(max_workers=len(backends)) as executor:
-            futures = {executor.submit(_try_backend, b): b for b in backends}
+        try:
+            results = _try_backend("api")
+            if results:
+                logger.info(
+                    "ddg_search_success backend=%s results=%d query_prefix=%r",
+                    "api",
+                    len(results),
+                    query[:50],
+                )
+                return results
+        except Exception as exc:
+            logger.warning("ddg_backend_failed backend=%s error=%s", "api", exc)
+
+        fallback_backends = ["html", "lite"]
+        executor = ThreadPoolExecutor(max_workers=len(fallback_backends))
+        futures = {executor.submit(_try_backend, backend): backend for backend in fallback_backends}
+        try:
             for future in as_completed(futures):
                 backend = futures[future]
                 try:
@@ -94,6 +105,8 @@ class DuckDuckGoBackend(SearchBackend):
                         return results
                 except Exception as exc:
                     logger.warning("ddg_backend_failed backend=%s error=%s", backend, exc)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         logger.error("ddg_all_backends_failed query=%r", query[:80])
         return []
