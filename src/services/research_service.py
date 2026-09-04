@@ -184,9 +184,10 @@ class ResearchService(
             )
         return agent
 
-    def optimize_prompt(self, prompt: str) -> str:
+    def optimize_prompt(self, prompt: str, user_id: str | None = None) -> str:
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
-        return optimizer.run(prompt)
+        with bind_observability_context(user_id=user_id or "local"):
+            return optimizer.run(prompt)
 
     def list_tasks(
         self,
@@ -211,20 +212,18 @@ class ResearchService(
         self,
         prompt: str,
         depth: SearchDepth,
+        user_id: str | None = None,
     ) -> DecomposeResponse:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
-        tasks_raw = orchestrator.run_decompose(prompt, depth)
+        with bind_observability_context(user_id=user_id or "local"):
+            tasks_raw = orchestrator.run_decompose(prompt, depth)
 
-        registered_tasks = []
-        for task_dict in tasks_raw:
-            task = self.task_store.add_task(task_dict)
-            registered_tasks.append(task)
-            if task.status == TaskStatus.PENDING and task.queries:
-                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
-                if self.broker:
-                    self.broker.push_search_job(job.id)
-
-        return DecomposeResponse(tasks=registered_tasks, depth=depth)
+        # This endpoint is a preview. Persisting these tasks or enqueueing jobs would
+        # create orphaned work because no ResearchRecord owns the returned plan.
+        return DecomposeResponse(
+            tasks=[SearchTask.model_validate(task) for task in tasks_raw],
+            depth=depth,
+        )
 
     # Researches actively consuming search/LLM resources (vs. terminal or waiting on user).
     _RUNNING_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
@@ -369,9 +368,13 @@ class ResearchService(
     def decompose_and_enqueue(self, research_id: str, request: ResearchRequest) -> None:
         """Background: run LLM decompose, create tasks, push to worker queue."""
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
-        with bind_observability_context(research_id=research_id):
+        research_context = self.task_store.get_research(research_id)
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=(research_context.user_id if research_context else None) or "local",
+        ):
             try:
-                research = self.task_store.get_research(research_id)
+                research = research_context
                 # Admission control: a queued research waits for promote_queued_researches.
                 if research is not None and research.status == ResearchStatus.QUEUED:
                     logger.info("decompose_deferred_queued research_id=%s", research_id)
@@ -1002,14 +1005,18 @@ class ResearchService(
         ]
         history = list((research.graph_state or {}).get("messages") or [])
         model = (research.graph_state or {}).get("model")
-        return chat.answer(
-            question,
-            research.final_report or "",
-            sources,
-            history,
-            model=model,
-            streaming_callback=streaming_callback,
-        )
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=research.user_id or "local",
+        ):
+            return chat.answer(
+                question,
+                research.final_report or "",
+                sources,
+                history,
+                model=model,
+                streaming_callback=streaming_callback,
+            )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
         """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
@@ -1514,8 +1521,12 @@ class ResearchService(
         finalize_job_id: str | None = None,
         lease_epoch: int | None = None,
     ) -> ResearchRecord:
-        with bind_observability_context(research_id=research_id):
-            research = self.task_store.get_research(research_id)
+        research_context = self.task_store.get_research(research_id)
+        with bind_observability_context(
+            research_id=research_id,
+            user_id=(research_context.user_id if research_context else None) or "local",
+        ):
+            research = research_context
             if not research:
                 raise NotFoundError("Research not found")
             if research.status == ResearchStatus.CANCELLED:

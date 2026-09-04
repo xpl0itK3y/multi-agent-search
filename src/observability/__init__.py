@@ -5,7 +5,14 @@ from .langsmith import (
     maybe_wrap_openai_client,
 )
 from .logging import configure_logging
-from .metrics import metric_route_template, observe_api_request, observe_worker_job, render_metrics, set_queue_metrics
+from .metrics import (
+    metric_route_template,
+    observe_api_request,
+    observe_llm_cost,
+    observe_worker_job,
+    render_metrics,
+    set_queue_metrics,
+)
 
 __all__ = [
     "bind_observability_context",
@@ -13,6 +20,7 @@ __all__ = [
     "configure_logging",
     "metric_route_template",
     "observe_api_request",
+    "observe_llm_cost",
     "observe_worker_job",
     "render_metrics",
     "set_queue_metrics",

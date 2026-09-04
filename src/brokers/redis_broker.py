@@ -8,6 +8,17 @@ logger = logging.getLogger(__name__)
 SEARCH_JOBS_QUEUE = "mas:search_jobs"
 FINALIZE_JOBS_QUEUE = "mas:finalize_jobs"
 
+_LLM_RATE_LIMIT_LUA = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+if count <= tonumber(ARGV[2]) then
+  return 1
+end
+return 0
+"""
+
 
 class RedisBroker:
     """
@@ -117,6 +128,28 @@ class RedisBroker:
         except Exception as exc:
             logger.warning("redis_lock_failed name=%s error=%s", name, exc)
             return True
+
+    def allow_llm_request(
+        self,
+        user_id: str,
+        limit: int,
+        window_seconds: int = 60,
+    ) -> bool | None:
+        """Shared fixed-window request limit. None asks the caller to use its fallback."""
+        try:
+            key = f"mas:llm:rate:{user_id}"
+            return bool(
+                self._client.eval(
+                    _LLM_RATE_LIMIT_LUA,
+                    1,
+                    key,
+                    max(1, window_seconds),
+                    max(1, limit),
+                )
+            )
+        except Exception as exc:
+            logger.warning("redis_llm_rate_limit_failed user_id=%s error=%s", user_id, exc)
+            return None
 
     def close(self) -> None:
         try:

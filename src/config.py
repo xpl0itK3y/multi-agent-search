@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     llm_acquire_timeout_seconds: int = 120  # max wait for a slot before proceeding anyway
     llm_retry_max_attempts: int = 3
     llm_retry_base_delay: float = 1.0
+    # Per-user requests to API routes that directly trigger LLM work. Redis makes
+    # this shared across API replicas; 0 disables the request throttle.
+    llm_route_rate_limit_per_minute: int = 30
     # Report quality: a final editorial LLM pass (answer-first structure, tighter prose, dedupe)
     # on MEDIUM/HARD reports. One extra call — disable to trade quality for latency/cost.
     report_editor_enabled: bool = True

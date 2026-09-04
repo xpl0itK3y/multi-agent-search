@@ -3,6 +3,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
@@ -1472,7 +1473,10 @@ class AnalyzerAgent(BaseAgent):
                 section_done_callback(idx, draft)
 
         with ThreadPoolExecutor(max_workers=min(n, max(1, settings.analyzer_section_concurrency))) as executor:
-            futures = [executor.submit(_run_section, i, chunk) for i, chunk in enumerate(chunks)]
+            futures = [
+                executor.submit(copy_context().run, _run_section, i, chunk)
+                for i, chunk in enumerate(chunks)
+            ]
             for future in as_completed(futures):
                 # Bound the wait (the section's LLM call has its own 120s client timeout);
                 # surfaces exceptions, so a stuck section fails the pass instead of hanging.

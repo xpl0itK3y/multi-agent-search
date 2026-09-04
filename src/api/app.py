@@ -19,6 +19,7 @@ from src.api.dependencies import (
     verify_research_access,
 )
 from src.auth.login_rate_limit import enforce_auth_rate_limit
+from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
@@ -336,16 +337,25 @@ def register_routes(app: FastAPI) -> None:
     def list_models():
         return list_model_catalog()
 
-    @app.post("/v1/optimize", response_model=OptimizeResponse, dependencies=auth_required)
-    def optimize_prompt(request: Request, payload: OptimizeRequest):
-        optimized = get_research_service(request).optimize_prompt(payload.prompt)
+    @app.post("/v1/optimize", response_model=OptimizeResponse)
+    def optimize_prompt(
+        request: Request,
+        payload: OptimizeRequest,
+        user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
+        optimized = get_research_service(request).optimize_prompt(payload.prompt, user_id=user.id)
         return OptimizeResponse(optimized_prompt=optimized)
 
-    @app.post("/v1/decompose", response_model=DecomposeResponse, dependencies=auth_required)
-    def decompose_prompt(request: Request, payload: DecomposeRequest):
+    @app.post("/v1/decompose", response_model=DecomposeResponse)
+    def decompose_prompt(
+        request: Request,
+        payload: DecomposeRequest,
+        user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return get_research_service(request).decompose_prompt(
             payload.prompt,
             payload.depth,
+            user_id=user.id,
         )
 
     @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=admin_guard)
@@ -431,6 +441,7 @@ def register_routes(app: FastAPI) -> None:
         request: Request,
         payload: ResearchRequest,
         background_tasks: BackgroundTasks,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
         owner: str | None = Depends(scope_user_id),
     ):
         service = get_research_service(request)
@@ -623,7 +634,12 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).list_research_messages(research_id)
 
     @app.post("/v1/research/{research_id}/messages", response_model=ChatMessage, dependencies=research_guard)
-    def ask_research(research_id: str, payload: ChatAsk, request: Request):
+    def ask_research(
+        research_id: str,
+        payload: ChatAsk,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         # sync def -> runs in a threadpool so the blocking LLM call doesn't stall the event loop
         service = get_research_service(request)
         answer = service.generate_research_answer(research_id, payload.question)
@@ -632,7 +648,12 @@ def register_routes(app: FastAPI) -> None:
         return ChatMessage(role="assistant", content=answer)
 
     @app.post("/v1/research/{research_id}/messages/stream", dependencies=research_guard)
-    def ask_research_stream(research_id: str, payload: ChatAsk, request: Request):
+    def ask_research_stream(
+        research_id: str,
+        payload: ChatAsk,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         """Stream a grounded follow-up answer token-by-token via SSE, then persist the turn."""
         service = get_research_service(request)
         question = payload.question

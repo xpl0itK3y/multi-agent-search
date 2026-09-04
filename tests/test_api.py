@@ -732,7 +732,23 @@ async def test_optimize_invalid_payload(client):
 
 
 @pytest.mark.anyio
-async def test_decompose_endpoint_creates_search_job(client):
+async def test_llm_routes_are_rate_limited_per_user(client, monkeypatch):
+    from src.auth import llm_rate_limit
+    from src.auth.login_rate_limit import SlidingWindowLimiter
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "llm_route_rate_limit_per_minute", 1)
+    monkeypatch.setattr(llm_rate_limit, "_llm_route_limiter", SlidingWindowLimiter())
+
+    first = await client.post("/v1/optimize", json={"prompt": "first"})
+    second = await client.post("/v1/decompose", json={"prompt": "second", "depth": "easy"})
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_decompose_endpoint_is_preview_without_search_job(client):
     response = await client.post("/v1/decompose", json={"prompt": "test query", "depth": "easy"})
 
     assert response.status_code == 200
@@ -741,9 +757,7 @@ async def test_decompose_endpoint_creates_search_job(client):
     assert tasks[0]["id"] == "task-1"
 
     search_job_response = await client.get("/v1/tasks/task-1/search-job")
-    assert search_job_response.status_code == 200
-    assert search_job_response.json()["task_id"] == "task-1"
-    assert search_job_response.json()["status"] == SearchJobStatus.PENDING
+    assert search_job_response.status_code == 404
 
 
 @pytest.mark.anyio

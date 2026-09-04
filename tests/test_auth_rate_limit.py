@@ -1,8 +1,14 @@
 """AUD-027: per-IP brute-force throttle on auth endpoints."""
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
+from fastapi import FastAPI
 from starlette.requests import Request
 
+from src.api.schemas import AuthUser
+from src.auth import llm_rate_limit
+from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.login_rate_limit import SlidingWindowLimiter, enforce_auth_rate_limit
 from src.config import settings
 
@@ -31,4 +37,43 @@ def test_enforce_raises_429_over_limit(monkeypatch):
         enforce_auth_rate_limit(_req(ip))
     with pytest.raises(HTTPException) as exc:
         enforce_auth_rate_limit(_req(ip))
+    assert exc.value.status_code == 429
+
+
+def _app_req() -> Request:
+    app = FastAPI()
+    app.state.research_service = SimpleNamespace(broker=None)
+    return Request({"type": "http", "headers": [], "client": ("203.0.113.8", 1111), "app": app})
+
+
+def test_llm_route_limit_is_per_user_and_returns_429(monkeypatch):
+    monkeypatch.setattr(settings, "llm_route_rate_limit_per_minute", 1, raising=False)
+    monkeypatch.setattr(llm_rate_limit, "_llm_route_limiter", SlidingWindowLimiter())
+    current_user = AuthUser(id="limited-user", email="limited@example.com")
+    monkeypatch.setattr(llm_rate_limit, "get_current_user", lambda request: current_user)
+
+    assert enforce_llm_rate_limit(_app_req()) == current_user
+    with pytest.raises(HTTPException) as exc:
+        enforce_llm_rate_limit(_app_req())
+    assert exc.value.status_code == 429
+
+    other_user = AuthUser(id="other-user", email="other@example.com")
+    monkeypatch.setattr(llm_rate_limit, "get_current_user", lambda request: other_user)
+    assert enforce_llm_rate_limit(_app_req()) == other_user
+
+
+def test_llm_route_limit_uses_distributed_broker(monkeypatch):
+    broker = SimpleNamespace(allow_llm_request=lambda user_id, limit: False)
+    app = FastAPI()
+    app.state.research_service = SimpleNamespace(broker=broker)
+    request = Request({"type": "http", "headers": [], "client": None, "app": app})
+    monkeypatch.setattr(settings, "llm_route_rate_limit_per_minute", 10, raising=False)
+    monkeypatch.setattr(
+        llm_rate_limit,
+        "get_current_user",
+        lambda request: AuthUser(id="redis-user", email="redis@example.com"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        enforce_llm_rate_limit(request)
     assert exc.value.status_code == 429

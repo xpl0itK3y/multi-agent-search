@@ -1477,7 +1477,7 @@ def test_decompose_does_not_schedule_failed_tasks(mocker):
     assert task_store.get_pending_search_task_jobs() == []
 
 
-def test_decompose_persists_search_job_for_pending_task(mocker):
+def test_decompose_preview_does_not_persist_or_enqueue_pending_task(mocker):
     orchestrator = mocker.Mock()
     orchestrator.run_decompose.return_value = [
         {
@@ -1493,9 +1493,8 @@ def test_decompose_persists_search_job_for_pending_task(mocker):
     response = service.decompose_prompt("test", SearchDepth.HARD)
 
     assert response.tasks[0].status == TaskStatus.PENDING
-    job = task_store.get_latest_search_task_job("task-1")
-    assert job is not None
-    assert job.depth == SearchDepth.HARD
+    assert task_store.get_task("task-1") is None
+    assert task_store.get_latest_search_task_job("task-1") is None
 
 
 def test_start_research_persists_task_ids_in_task_store(mocker):
