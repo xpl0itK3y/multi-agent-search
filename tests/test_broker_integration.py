@@ -101,6 +101,20 @@ def test_requeue_finalize_job_pushes_to_broker():
     broker.push_finalize_job.assert_called_once_with(requeued.id)
 
 
+def test_finalize_retry_pushes_to_broker(mocker):
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(ResearchRequest(prompt="topic", depth=SearchDepth.EASY), task_ids=[])
+    job = task_store.add_research_finalize_job(research.id, max_attempts=2)
+    service, broker = _service_with_broker(task_store)
+    mocker.patch.object(service, "complete_research_finalization", side_effect=RuntimeError("temporary failure"))
+
+    processed = service.process_finalize_job(job.id)
+
+    assert processed is not None
+    assert processed.status.value == "pending"
+    broker.push_finalize_job.assert_called_once_with(job.id)
+
+
 # ---------------------------------------------------------------------------
 # requeue_search_task_job
 # ---------------------------------------------------------------------------
@@ -124,6 +138,22 @@ def test_requeue_search_job_pushes_to_broker():
     requeued = service.requeue_search_task_job(job.id)
 
     broker.push_search_job.assert_called_once_with(requeued.id)
+
+
+def test_search_retry_after_exception_pushes_to_broker(mocker):
+    task_store = InMemoryTaskStore()
+    task_store.add_task(
+        {"id": "task-1", "description": "task", "queries": ["q"], "status": TaskStatus.PENDING}
+    )
+    job = task_store.add_search_task_job("task-1", SearchDepth.EASY.value, max_attempts=2)
+    service, broker = _service_with_broker(task_store)
+    mocker.patch.object(service, "run_search_task", side_effect=RuntimeError("temporary failure"))
+
+    processed = service.process_search_task_job(job.id)
+
+    assert processed is not None
+    assert processed.status.value == "pending"
+    broker.push_search_job.assert_called_once_with(job.id)
 
 
 # ---------------------------------------------------------------------------
