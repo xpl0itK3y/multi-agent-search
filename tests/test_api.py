@@ -12,6 +12,7 @@ from src.api.schemas import (
     TaskUpdate,
 )
 from src.graph.metrics import record_graph_step, get_graph_metrics_snapshot, get_graph_step_events_snapshot, reset_graph_metrics
+from src.observability.metrics import metric_route_template
 from src.observability.context import bind_observability_context
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
@@ -129,6 +130,14 @@ async def test_metrics_endpoint(client):
 
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
+
+
+def test_metric_route_template_never_uses_a_raw_path():
+    class Route:
+        path = "/v1/public/{share_token}"
+
+    assert metric_route_template(Route()) == "/v1/public/{share_token}"
+    assert metric_route_template(None) == "unmatched"
 
 
 @pytest.mark.anyio

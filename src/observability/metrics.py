@@ -61,6 +61,17 @@ def observe_api_request(method: str, path: str, status_code: int, elapsed_second
     ).observe(max(elapsed_seconds, 0.0))
 
 
+def metric_route_template(route: object | None) -> str:
+    """Return a bounded, non-sensitive label for an HTTP route.
+
+    Starlette stores the matched route on the request scope after dispatch.  Never
+    fall back to the raw request path here: public share URLs include their token
+    in the path, and raw paths also create unbounded Prometheus label cardinality.
+    """
+    template = getattr(route, "path", None)
+    return template if isinstance(template, str) and template.startswith("/") else "unmatched"
+
+
 def observe_worker_job(worker_name: str, job_type: str, status: str, count: int = 1) -> None:
     if WORKER_JOBS_TOTAL is None or count <= 0:
         return

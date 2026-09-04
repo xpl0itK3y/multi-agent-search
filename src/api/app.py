@@ -79,7 +79,7 @@ from src.api.schemas import (
 )
 from src.bootstrap import lifespan
 from src.config import settings
-from src.observability import bind_observability_context, observe_api_request, render_metrics
+from src.observability import bind_observability_context, metric_route_template, observe_api_request, render_metrics
 
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -144,7 +144,7 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         observe_api_request(
             request.method,
-            str(request.url.path),
+            metric_route_template(request.scope.get("route")),
             response.status_code,
             time.perf_counter() - started_at,
         )

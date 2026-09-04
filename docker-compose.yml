@@ -50,7 +50,8 @@ services:
     # and SSE wakes via Redis pub/sub shared by all workers.
     command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2}"
     ports:
-      - "8000:8000"
+      # Keep direct API access local; the web proxy and Prometheus use the Docker network.
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 15s
