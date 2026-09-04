@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from src.api.app import create_app
+from src.domain.errors import ConflictError
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchRequest,
@@ -130,6 +131,17 @@ async def test_metrics_endpoint(client):
 
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
+
+
+@pytest.mark.anyio
+async def test_start_research_preserves_service_error_status(client, mocker):
+    service = client._transport.app.state.research_service
+    mocker.patch.object(service, "start_research", side_effect=ConflictError("Research already running"))
+
+    response = await client.post("/v1/research", json={"prompt": "A valid research prompt"})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Research already running"}
 
 
 def test_metric_route_template_never_uses_a_raw_path():

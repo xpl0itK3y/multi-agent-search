@@ -327,25 +327,15 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/optimize", response_model=OptimizeResponse, dependencies=auth_required)
     def optimize_prompt(request: Request, payload: OptimizeRequest):
-        try:
-            optimized = get_research_service(request).optimize_prompt(payload.prompt)
-            return OptimizeResponse(optimized_prompt=optimized)
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            raise HTTPException(status_code=500, detail=str(e))
+        optimized = get_research_service(request).optimize_prompt(payload.prompt)
+        return OptimizeResponse(optimized_prompt=optimized)
 
     @app.post("/v1/decompose", response_model=DecomposeResponse, dependencies=auth_required)
     def decompose_prompt(request: Request, payload: DecomposeRequest):
-        try:
-            return get_research_service(request).decompose_prompt(
-                payload.prompt,
-                payload.depth,
-            )
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            raise HTTPException(status_code=500, detail=str(e))
+        return get_research_service(request).decompose_prompt(
+            payload.prompt,
+            payload.depth,
+        )
 
     @app.get("/v1/tasks", response_model=List[SearchTask], dependencies=auth_required)
     def list_tasks(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
@@ -419,16 +409,11 @@ def register_routes(app: FastAPI) -> None:
         background_tasks: BackgroundTasks,
         owner: str | None = Depends(scope_user_id),
     ):
-        try:
-            service = get_research_service(request)
-            response, research_id = service.start_research(payload, user_id=owner)
-            # LLM decompose runs after response is sent — user gets research_id instantly
-            background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
-            return response
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise e
-            raise HTTPException(status_code=500, detail=str(e))
+        service = get_research_service(request)
+        response, research_id = service.start_research(payload, user_id=owner)
+        # LLM decompose runs after response is sent — user gets research_id instantly
+        background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
+        return response
 
     @app.get("/v1/research/finalize-jobs", response_model=List[ResearchFinalizeJob], dependencies=auth_required)
     def list_finalize_jobs(status: str, request: Request):
