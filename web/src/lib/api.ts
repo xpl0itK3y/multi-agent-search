@@ -49,19 +49,26 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...((init?.headers as Record<string, string>) ?? {}),
-  };
+export function authHeaders(method = "GET"): Record<string, string> {
+  const headers: Record<string, string> = {};
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
   // Double-submit CSRF token for cookie-authenticated mutations (e.g. after Google OAuth,
   // where there is no Bearer token). Safe methods don't need it.
-  const method = (init?.method ?? "GET").toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+  if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
     const csrf = readCookie("csrf_token");
     if (csrf) headers["X-CSRF-Token"] = csrf;
   }
+  return headers;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? "GET";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+    ...authHeaders(method),
+  };
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     ...init,

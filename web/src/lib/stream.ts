@@ -1,6 +1,8 @@
 // SSE client for the live research stream (F1).
 // In dev the Vite proxy serves /v1 from the same origin, so EventSource works directly.
 
+import { authHeaders } from "./api";
+
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 export interface TraceSource {
@@ -65,7 +67,10 @@ export async function streamChatAnswer(
   try {
     res = await fetch(`${BASE}/v1/research/${id}/messages/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders("POST"),
+      },
       credentials: "include",
       body: JSON.stringify({ question }),
     });
