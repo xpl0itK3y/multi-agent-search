@@ -63,6 +63,7 @@ export interface ResearchStatusSummary {
 
 export interface SourcePreview {
   url: string;
+  source_id?: string | null;
   title?: string | null;
   domain?: string | null;
   source_quality?: string | null;

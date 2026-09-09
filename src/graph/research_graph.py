@@ -49,7 +49,7 @@ class FinalizeGraphRunner:
         depth,
         finalize_job_id: str | None = None,
         lease_epoch: int | None = None,
-    ) -> str:
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         state = self._build_initial_state(
             research_id,
             prompt,
@@ -100,7 +100,13 @@ class FinalizeGraphRunner:
             saved_report = graph_state.get("report") or ""
             if saved_report:
                 logger.info("langgraph_finalize_already_complete skip_rerun research_id=%s", research_id)
-                return {**state, "report": saved_report, "resume_from_step": "complete"}
+                return {
+                    **state,
+                    "effective_prompt": graph_state.get("effective_prompt") or prompt,
+                    "canonical_sources": graph_state.get("canonical_sources") or [],
+                    "report": saved_report,
+                    "resume_from_step": "complete",
+                }
             return state
 
         resumed_state = {
@@ -117,6 +123,7 @@ class FinalizeGraphRunner:
             "detected_conflicts": graph_state.get("detected_conflicts") or [],
             "source_summary": graph_state.get("source_summary") or {},
             "evidence_summary": graph_state.get("evidence_summary") or {},
+            "canonical_sources": graph_state.get("canonical_sources") or [],
             "report": graph_state.get("report") or "",
             "resume_from_step": step,
         }
@@ -147,6 +154,7 @@ class FinalizeGraphRunner:
             "detected_conflicts": state.get("detected_conflicts", []),
             "source_summary": state.get("source_summary", {}),
             "evidence_summary": state.get("evidence_summary", {}),
+            "canonical_sources": state.get("canonical_sources", []),
             "report": state.get("report", ""),
         }
         event = {"step": step, "detail": detail}
@@ -353,14 +361,27 @@ class FinalizeGraphRunner:
                     "reasoning_callback": _reasoning_callback,
                 }
             )
-            report = self.service.analyzer.run_analysis(
+            analysis_result = self.service.analyzer.run_analysis(
                 state["effective_prompt"],
                 state["tasks"],
                 **call_kwargs,
             )
+            if (
+                isinstance(analysis_result, tuple)
+                and len(analysis_result) == 2
+                and isinstance(analysis_result[1], list)
+            ):
+                report, aggregated_data = analysis_result
+                canonical_sources = self.service._canonical_source_table(aggregated_data)
+            else:
+                report = analysis_result
+                aggregated_data = state.get("aggregated_data")
+                canonical_sources = state.get("canonical_sources", [])
             next_state = {
                 **state,
                 "report": report,
+                "aggregated_data": aggregated_data,
+                "canonical_sources": canonical_sources,
                 "analyze_attempts": state["analyze_attempts"] + 1,
             }
             self._checkpoint(
@@ -512,8 +533,29 @@ class FinalizeGraphRunner:
             state = self._analyze(state)
         return state
 
-    def _complete_run(self, state: FinalizeGraphState, *, used_langgraph: bool) -> str:
-        """Log completion metrics, write a final checkpoint, and return the report."""
+    def _result_from_state(
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
+        aggregated_data = state.get("aggregated_data")
+        if aggregated_data is None:
+            research = self.service.task_store.get_research(state["research_id"])
+            if research is not None:
+                aggregated_data = self.service._aggregated_sources(research, state["tasks"])
+        return (
+            state.get("report", ""),
+            aggregated_data,
+            state.get("effective_prompt") or state["prompt"],
+            state["tasks"],
+        )
+
+    def _complete_run(
+        self,
+        state: FinalizeGraphState,
+        *,
+        used_langgraph: bool,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
+        """Log completion metrics, checkpoint, and return the final synthesis inputs."""
         logger.info(
             "langgraph_finalize_runner_completed replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s used_langgraph=%s",
             state.get("replan_attempts", 0),
@@ -527,21 +569,28 @@ class FinalizeGraphRunner:
             f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
         )
         record_graph_completed_run()
-        return state["report"]
+        return self._result_from_state(state)
 
     # ── execution paths ───────────────────────────────────────────────────────
 
-    def _run_fallback(self, state: FinalizeGraphState) -> str:
+    def _run_fallback(
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         resume_from_step = state.get("resume_from_step")
         if resume_from_step == "complete":
             logger.info("langgraph_finalize_resume_complete_noop")
-            return state.get("report", "")
+            return self._result_from_state(state)
         if resume_from_step:
             return self._resume_fallback(state, resume_from_step)
         state = self._run_pipeline(state)
         return self._complete_run(state, used_langgraph=False)
 
-    def _resume_fallback(self, state: FinalizeGraphState, resume_from_step: str) -> str:
+    def _resume_fallback(
+        self,
+        state: FinalizeGraphState,
+        resume_from_step: str,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         """Continue execution from a previously checkpointed step."""
         if resume_from_step == "collect_context":
             if state.get("should_replan"):
@@ -589,7 +638,10 @@ class FinalizeGraphRunner:
         )
         return self._complete_run(state, used_langgraph=False)
 
-    def _run_langgraph(self, state: FinalizeGraphState) -> str:  # pragma: no cover - optional dependency
+    def _run_langgraph(  # pragma: no cover - optional dependency
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         workflow = StateGraph(FinalizeGraphState)
         workflow.add_node("collect_context", self._collect_context)
         workflow.add_node("replan", self._apply_replan)

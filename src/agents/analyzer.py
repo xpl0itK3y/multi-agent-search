@@ -1510,7 +1510,7 @@ class AnalyzerAgent(BaseAgent):
         model: str | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
         aggregated_data, source_summary = self._prepare_aggregated_data(prompt, tasks, depth=depth)
@@ -1711,8 +1711,9 @@ class AnalyzerAgent(BaseAgent):
             total_ms,
             use_parallel,
         )
-        return final_report
+        return final_report, aggregated_data
 
     def run(self, input_data: str) -> str:
         """Satisfy BaseAgent abstract interface; delegates to run_analysis with no tasks."""
-        return self.run_analysis(prompt=input_data, tasks=[], depth=None)
+        report, _ = self.run_analysis(prompt=input_data, tasks=[], depth=None)
+        return report

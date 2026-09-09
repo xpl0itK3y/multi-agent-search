@@ -1021,15 +1021,21 @@ class ResearchService(
             )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
-        """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
+        """Canonical report source list for the artifact panel — no LLM."""
         research = self.task_store.get_research(research_id)
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
         return [
             SearchSourcePreview(
                 url=item.get("url", ""),
+                source_id=item.get("source_id", ""),
                 title=item.get("title"),
                 domain=item.get("domain"),
                 source_quality=item.get("source_quality"),
@@ -1054,19 +1060,9 @@ class ResearchService(
             analyzer = self.analyzer
             if isinstance(analyzer, AnalyzerAgent):
                 tasks = self.task_store.get_tasks_by_research(research_id)
-                pool = self._build_research_source_pool(tasks)
-                conflict_pool = [
-                    {
-                        "source_id": f"S{index}",
-                        "content": item.get("content", ""),
-                        "url": item.get("url"),
-                        "domain": item.get("domain"),
-                        "title": item.get("title"),
-                        "source_quality": item.get("source_quality"),
-                    }
-                    for index, item in enumerate(pool, start=1)
-                    if item.get("content")
-                ]
+                aggregated = self._aggregated_sources(research, tasks) or []
+                profile = analyzer._resolve_depth_profile(research.depth)
+                conflict_pool = aggregated[: profile["conflict_source_limit"]]
                 raw = analyzer._detect_conflicts(conflict_pool) if conflict_pool else []
             else:
                 raw = []
@@ -1082,10 +1078,16 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
         evidence_pool = [
-            {"source_id": f"S{index}", "content": item.get("content", "")}
-            for index, item in enumerate(pool, start=1)
+            {"source_id": item.get("source_id", ""), "content": item.get("content", "")}
+            for item in pool
+            if item.get("source_id")
             if item.get("content")
         ]
         evidence_groups, _ = self.evidence_mapper.build_evidence_groups(
@@ -1548,7 +1550,7 @@ class ResearchService(
 
             if settings.use_langgraph_finalize_graph:
                 try:
-                    report = self.finalize_graph_runner.run(
+                    graph_result = self.finalize_graph_runner.run(
                         research_id,
                         research.prompt,
                         tasks,
@@ -1556,6 +1558,13 @@ class ResearchService(
                         finalize_job_id=finalize_job_id,
                         lease_epoch=lease_epoch,
                     )
+                    if isinstance(graph_result, tuple) and len(graph_result) == 4:
+                        report, aggregated, effective_prompt, final_tasks = graph_result
+                    else:  # compatibility with custom/test graph runners
+                        report = graph_result
+                        aggregated = None
+                        effective_prompt = research.prompt
+                        final_tasks = tasks
                 except FinalizeCancelled:
                     latest = self.task_store.get_research(research_id)
                     if latest is None:
@@ -1563,12 +1572,44 @@ class ResearchService(
                     logger.info("finalize_stopped_cancelled research_id=%s", research_id)
                     return latest
             else:
-                report = analyzer.run_analysis(
+                analysis_result = analyzer.run_analysis(
                     research.prompt,
                     tasks,
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
+                if isinstance(analysis_result, tuple) and len(analysis_result) == 2:
+                    report, aggregated = analysis_result
+                else:  # compatibility with minimal analyzers
+                    report = analysis_result
+                    aggregated = None
+                effective_prompt = research.prompt
+                final_tasks = tasks
+
+            tasks = final_tasks
+            source_state: dict[str, Any] = {
+                "effective_prompt": effective_prompt,
+                "task_ids": [task.id for task in tasks],
+            }
+            if aggregated is not None:
+                source_state["canonical_sources"] = self._canonical_source_table(aggregated)
+                detect_conflicts = getattr(analyzer, "_detect_conflicts", None)
+                resolve_profile = getattr(analyzer, "_resolve_depth_profile", None)
+                if callable(detect_conflicts) and callable(resolve_profile):
+                    try:
+                        profile = resolve_profile(research.depth)
+                        conflict_pool = aggregated[: profile["conflict_source_limit"]]
+                        source_state["detected_conflicts"] = detect_conflicts(conflict_pool)
+                    except Exception as exc:  # custom analyzers must not break persistence
+                        logger.warning(
+                            "canonical_source_conflicts_failed research_id=%s error=%s",
+                            research_id,
+                            exc,
+                        )
+            self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
+            self.task_store.merge_research_graph_state(research_id, source_state)
+            research = self.task_store.get_research(research_id) or research
+
             self._emit_finalize_progress(
                 research_id, "redteam", finalize_job_id, lease_epoch
             )
@@ -1576,9 +1617,10 @@ class ResearchService(
             self._emit_finalize_progress(
                 research_id, "audit", finalize_job_id, lease_epoch
             )
-            # Reconstruct the analyzer's source numbering ONCE and share it across the trust
-            # steps — each used to recompute it independently (AUD-013).
-            aggregated = self._aggregated_sources(research, tasks)
+            # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
+            # fall back to the persisted canonical table or deterministic reconstruction.
+            if aggregated is None:
+                aggregated = self._aggregated_sources(research, tasks)
             self._audit_citations(report, research, tasks, aggregated=aggregated)
             self._analyze_source_independence(research, tasks, aggregated=aggregated)
             self._assess_source_reputation(research, tasks, aggregated=aggregated)

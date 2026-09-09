@@ -76,6 +76,7 @@ class SearchTask(BaseModel):
 
 class SearchSourcePreview(BaseModel):
     url: str
+    source_id: str = ""
     title: Optional[str] = None
     domain: Optional[str] = None
     source_quality: Optional[str] = None

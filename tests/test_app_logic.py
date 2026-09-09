@@ -84,7 +84,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, aggregated_data = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -106,6 +106,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
     payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
+    assert aggregated_data == parsed["gathered_data"]
     assert parsed["gathered_data"][0]["source_id"] == "S1"
     assert parsed["gathered_data"][0]["domain"] == "example.com"
     assert parsed["gathered_data"][0]["source_quality"] == "low"
@@ -128,7 +129,7 @@ def test_analyzer_agent_repairs_structured_reports_with_uncited_claims():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -155,7 +156,7 @@ def test_analyzer_agent_repairs_weakly_supported_citations():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -190,7 +191,7 @@ def test_analyzer_agent_uses_configured_repair_model_for_llm_repair(mocker):
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -257,7 +258,7 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -426,7 +427,7 @@ def test_analyzer_agent_uses_local_repair_for_small_citation_issues():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -832,7 +833,7 @@ def test_analyzer_agent_post_processes_sources_heading():
     llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -853,7 +854,7 @@ def test_analyzer_agent_adds_sources_heading_when_missing():
     llm = RecordingLLM(response="Introduction\n\nConclusion")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -881,7 +882,7 @@ def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -911,7 +912,7 @@ def test_analyzer_agent_lists_additional_relevant_sources_beyond_cited_ones():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -942,7 +943,7 @@ def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Сравни FastAPI и Flask для небольших API",
         [
             SearchTask(
@@ -966,7 +967,7 @@ def test_analyzer_agent_detects_conflicts_from_overlapping_claims():
     llm = RecordingLLM(response="## Introduction\nComparison body. [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Compare two systems in English",
         [
             SearchTask(
@@ -1292,7 +1293,7 @@ def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
     llm = RecordingLLM(response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Compare Django and FastAPI in English",
         [
             SearchTask(
@@ -1356,7 +1357,7 @@ def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
     llm = RecordingLLM(response="Plain body without headings or inline citations.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Compare systems in English",
         [
             SearchTask(
@@ -1385,7 +1386,7 @@ def test_analyzer_agent_localizes_post_processed_sections_for_russian_reports():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Сравни Linux и macOS для работы",
         [
             SearchTask(
@@ -1408,7 +1409,7 @@ def test_analyzer_agent_localizes_report_notes_for_russian_reports():
     llm = RecordingLLM(response="Обычный текст без заголовков и без ссылок.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Сравни Linux и macOS для работы",
         [
             SearchTask(
@@ -1436,7 +1437,7 @@ def test_analyzer_agent_does_not_add_report_notes_for_well_formed_report():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _ = agent.run_analysis(
         "Compare systems in English",
         [
             SearchTask(

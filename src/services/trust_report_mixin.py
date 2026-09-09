@@ -34,15 +34,57 @@ class TrustReportMixin:
 
     # ── citation audit (deterministic claim↔source grounding) ───────────────────
 
+    @staticmethod
+    def _canonical_source_table(aggregated: list[dict]) -> list[dict]:
+        """Compact, persistent identity table for the exact sources used by synthesis."""
+        metadata_fields = (
+            "source_id",
+            "url",
+            "title",
+            "domain",
+            "source_quality",
+            "source_type",
+            "confidence",
+            "caution_flags",
+            "extraction_status",
+        )
+        return [
+            {key: source.get(key) for key in metadata_fields if source.get(key) is not None}
+            for source in aggregated
+            if source.get("source_id") and source.get("url")
+        ]
+
+    def _stored_canonical_sources(self, research, tasks: list) -> list[dict] | None:
+        state = research.graph_state or {}
+        if "canonical_sources" not in state:
+            return None
+        canonical = state.get("canonical_sources")
+        if not isinstance(canonical, list):
+            return None
+
+        pool_by_url = {
+            source.get("url"): source
+            for source in self._build_research_source_pool(tasks)
+            if source.get("url")
+        }
+        return [
+            {**pool_by_url.get(source.get("url"), {}), **source}
+            for source in canonical
+            if isinstance(source, dict) and source.get("source_id") and source.get("url")
+        ]
+
     def _aggregated_sources(self, research, tasks: list) -> list | None:
-        """Reconstruct the analyzer's exact [Sn] source numbering once, to share across the
-        finalize trust steps (each would otherwise recompute it — AUD-013). None for a minimal
-        analyzer; defensive so a prep failure can't break finalization."""
+        """Return the persisted canonical [Sn] pool, falling back for legacy runs."""
+        stored = self._stored_canonical_sources(research, tasks)
+        if stored is not None:
+            return stored
+
         prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
         if not callable(prepare):
             return None
         try:
-            aggregated, _ = prepare(research.prompt, tasks, research.depth)
+            effective_prompt = (research.graph_state or {}).get("effective_prompt") or research.prompt
+            aggregated, _ = prepare(effective_prompt, tasks, research.depth)
             return aggregated
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("aggregate_sources_failed research_id=%s error=%s", research.id, exc)
@@ -56,12 +98,11 @@ class TrustReportMixin:
         """
         if not (report or "").strip():
             return
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return  # minimal analyzer — no [Sn] numbering to reconstruct
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return  # minimal analyzer — no [Sn] numbering to reconstruct
             sources_by_id = {
                 source["source_id"]: {
                     "content": source.get("content"),
@@ -93,12 +134,11 @@ class TrustReportMixin:
         Reuses the analyzer's exact source numbering so cluster source_ids line up with
         the report's [Sn]. Deterministic and defensive — never breaks finalization.
         """
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             sources_by_id = {
                 source["source_id"]: {
                     "content": source.get("content"),
@@ -130,12 +170,11 @@ class TrustReportMixin:
         Reuses the analyzer's [Sn] numbering so flags line up with the report. Deterministic
         and defensive — never breaks finalization.
         """
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             sources_by_id = {
                 s["source_id"]: {"url": s.get("url"), "domain": s.get("domain")}
                 for s in aggregated
@@ -186,12 +225,11 @@ class TrustReportMixin:
         """
         if not settings.retraction_check_enabled:
             return
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             sources_by_id = {
                 s["source_id"]: {"url": s.get("url"), "content": s.get("content")}
                 for s in aggregated
@@ -244,12 +282,11 @@ class TrustReportMixin:
         non-query-language sources. Deterministic distribution + one gated LLM call. Never raises."""
         if not settings.cross_language_enabled:
             return
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             state = research.graph_state or {}
             query_lang = state.get("query_language") or detect_language(research.prompt)
             by_lang: dict[str, int] = {}
@@ -313,12 +350,11 @@ class TrustReportMixin:
             return
         if not self._looks_contestable(research.prompt):
             return
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             sources_by_id = {
                 s["source_id"]: {"content": s.get("content"), "title": s.get("title")}
                 for s in aggregated[:14]
@@ -353,12 +389,11 @@ class TrustReportMixin:
         """
         if not (report or "").strip():
             return
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if not callable(prepare):
-            return
         try:
             if aggregated is None:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+                aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is None:
+                return
             sources_by_id = {
                 source["source_id"]: {"content": source.get("content")}
                 for source in aggregated
@@ -432,10 +467,9 @@ class TrustReportMixin:
 
     def _audit_sources(self, research, tasks: list) -> list[AuditSource]:
         """Sources numbered by the same [Sn] scheme the report used, when reconstructable."""
-        prepare = getattr(self.analyzer, "_prepare_aggregated_data", None)
-        if callable(prepare):
-            try:
-                aggregated, _ = prepare(research.prompt, tasks, research.depth)
+        try:
+            aggregated = self._aggregated_sources(research, tasks)
+            if aggregated is not None:
                 return [
                     AuditSource(
                         source_id=s.get("source_id", ""),
@@ -448,8 +482,8 @@ class TrustReportMixin:
                     for s in aggregated
                     if s.get("source_id")
                 ]
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("audit_trail_sources_failed research_id=%s error=%s", research.id, exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("audit_trail_sources_failed research_id=%s error=%s", research.id, exc)
         # Fallback: the deduped preview list (no [Sn] numbering).
         return [
             AuditSource(url=s.url or "", domain=s.domain or "", title=s.title or "", source_quality=s.source_quality or "")
