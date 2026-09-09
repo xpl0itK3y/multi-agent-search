@@ -433,7 +433,7 @@ class SearchAgent:
                     snippet = candidate.get("snippet")
                     try:
                         # Bound the wait so one stuck extraction can't pin the worker; the
-                        # fetch itself is already timeout-capped in safe_fetch_html.
+                        # fetch itself is already timeout-capped in safe_fetch_document.
                         content = future.result(timeout=settings.search_extraction_timeout_seconds + 5)
                     except Exception as exc:
                         logger.error("Error extracting content from %s: %s", url, exc)

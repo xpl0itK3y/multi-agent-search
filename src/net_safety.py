@@ -76,19 +76,27 @@ def is_safe_public_url(url: str) -> tuple[bool, str]:
 _FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MultiAgentSearch/1.0; +https://example.com/bot)"
 
 
-def safe_fetch_html(
+def _normalized_content_type(value: str | None) -> str:
+    content_type = (value or "").split(";", 1)[0].strip().lower()
+    if content_type == "application/x-pdf":
+        return "application/pdf"
+    return content_type or "application/octet-stream"
+
+
+def safe_fetch_document(
     url: str,
     *,
     timeout: float = 15.0,
     max_redirects: int = 1,
     max_bytes: int = 5_000_000,
-) -> str | None:
-    """Fetch a page's HTML while keeping every hop inside public address space.
+) -> tuple[bytes, str] | None:
+    """Fetch a document while keeping every hop inside public address space.
 
     Redirects are followed manually and each hop is re-validated with is_safe_public_url,
     so a page cannot 30x-redirect the server into an internal/metadata target (which a
-    plain ``follow_redirects=True`` would). Returns the decoded body, or None if any hop is
-    unsafe, the fetch fails, a non-2xx is returned, or the body exceeds ``max_bytes``.
+    plain ``follow_redirects=True`` would). Returns raw bytes and a normalized media type,
+    or None if any hop is unsafe, the fetch fails, a non-2xx is returned, or the body
+    exceeds ``max_bytes``.
 
     Residual: a host could DNS-rebind between this validation and httpx's own connect
     resolution. Close that fully at the infra layer (egress allowlist / proxy).
@@ -114,16 +122,39 @@ def safe_fetch_html(
                         return None
                     current = urljoin(current, location)
                     continue
-                if response.status_code >= 400:
+                if not 200 <= response.status_code < 300:
                     return None
                 if len(response.content) > max_bytes:
                     logger.warning("safe_fetch_too_large url=%s bytes=%s", current, len(response.content))
                     return None
-                return response.text
+                return (
+                    bytes(response.content),
+                    _normalized_content_type(response.headers.get("content-type")),
+                )
     except Exception as exc:
         logger.info("safe_fetch_failed url=%s error=%s", url, exc)
         return None
     return None  # exceeded max_redirects
+
+
+def safe_fetch_html(
+    url: str,
+    *,
+    timeout: float = 15.0,
+    max_redirects: int = 1,
+    max_bytes: int = 5_000_000,
+) -> str | None:
+    """Backward-compatible decoded-text wrapper around :func:`safe_fetch_document`."""
+    fetched = safe_fetch_document(
+        url,
+        timeout=timeout,
+        max_redirects=max_redirects,
+        max_bytes=max_bytes,
+    )
+    if fetched is None:
+        return None
+    body, _ = fetched
+    return body.decode("utf-8", errors="replace")
 
 
 def resolve_validated_ip(url: str) -> tuple[str | None, str]:

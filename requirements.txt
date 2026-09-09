@@ -17,5 +17,6 @@ redis[hiredis]
 pytest
 pytest-mock
 httpx
+pypdf
 python-docx
 reportlab

@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 import time
+from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from configparser import ConfigParser
 from dataclasses import asdict, dataclass
@@ -353,6 +354,10 @@ class ExtractionDomainRegistry:
 _EXTRACTION_DOMAINS = ExtractionDomainRegistry()
 
 class ContentExtractor:
+    PDF_CONTENT_TYPES = frozenset({"application/pdf"})
+    PDF_MAX_PAGES = 100
+    PDF_MAX_TEXT_CHARS = 1_000_000
+
     @staticmethod
     def should_skip_url(url: str) -> str | None:
         return _EXTRACTION_DOMAINS.should_skip(url)
@@ -367,6 +372,37 @@ class ContentExtractor:
         return config
 
     @staticmethod
+    def _extract_pdf_text(document: bytes) -> str | None:
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(document), strict=False)
+        if reader.is_encrypted:
+            try:
+                if not reader.decrypt(""):
+                    return None
+            except Exception:
+                return None
+
+        parts: list[str] = []
+        total_chars = 0
+        for index, page in enumerate(reader.pages):
+            if index >= ContentExtractor.PDF_MAX_PAGES:
+                break
+            try:
+                page_text = (page.extract_text() or "").strip()
+            except Exception as exc:
+                logger.info("pdf_page_extraction_failed page=%s error=%s", index + 1, exc)
+                continue
+            if not page_text:
+                continue
+            remaining = ContentExtractor.PDF_MAX_TEXT_CHARS - total_chars
+            if remaining <= 0:
+                break
+            parts.append(page_text[:remaining])
+            total_chars += len(parts[-1])
+        return "\n\n".join(parts) or None
+
+    @staticmethod
     def extract_content(url: str) -> Optional[str]:
         """
         Download and extract clean text from a URL.
@@ -376,12 +412,7 @@ class ContentExtractor:
             logger.info("content_extraction_skipped url=%s reason=%s", url, skip_reason)
             return None
 
-        from src.net_safety import is_safe_public_url, safe_fetch_html
-
-        ok, reason = is_safe_public_url(url)
-        if not ok:
-            logger.warning("content_extraction_blocked_ssrf url=%s reason=%s", url, reason)
-            return None
+        from src.net_safety import safe_fetch_document
 
         start = time.perf_counter()
         download_ms = 0.0
@@ -393,23 +424,31 @@ class ContentExtractor:
         config = ContentExtractor._build_trafilatura_config()
         try:
             download_start = time.perf_counter()
-            # SSRF-guarded fetch: validates every redirect hop (replaces trafilatura.fetch_url,
-            # which would follow redirects without re-checking the target). See net_safety.
-            downloaded = safe_fetch_html(
+            # SSRF-guarded fetch validates every redirect hop and preserves bytes/MIME so
+            # binary documents never pass through HTML decoding.
+            fetched = safe_fetch_document(
                 url,
                 timeout=settings.search_extraction_timeout_seconds,
                 max_redirects=settings.search_extraction_max_redirects,
             )
             download_ms = (time.perf_counter() - download_start) * 1000
-            downloaded_size = len(downloaded or "")
-            if downloaded:
+            if fetched is not None:
+                downloaded, content_type = fetched
+                downloaded_size = len(downloaded)
                 extract_start = time.perf_counter()
-                result = trafilatura.extract(
-                    downloaded,
-                    include_comments=False,
-                    include_tables=True,
-                    config=config,
+                is_pdf = (
+                    content_type in ContentExtractor.PDF_CONTENT_TYPES
+                    or downloaded.lstrip().startswith(b"%PDF-")
                 )
+                if is_pdf:
+                    result = ContentExtractor._extract_pdf_text(downloaded)
+                else:
+                    result = trafilatura.extract(
+                        downloaded,
+                        include_comments=False,
+                        include_tables=True,
+                        config=config,
+                    )
                 extract_ms = (time.perf_counter() - extract_start) * 1000
                 post_process_start = time.perf_counter()
                 cleaned = rust_accel.clean_extracted_content(result)
