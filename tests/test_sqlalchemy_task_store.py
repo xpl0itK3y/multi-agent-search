@@ -165,6 +165,28 @@ def test_research_history_uses_lookup_indexes_and_preserves_summary_fields(
 
 
 @pytest.mark.postgres
+def test_job_queue_indexes_exist(postgres_session_factory):
+    with postgres_session_factory() as session:
+        rows = session.execute(
+            text(
+                "SELECT tablename, indexname FROM pg_indexes "
+                "WHERE schemaname = current_schema() "
+                "AND tablename IN ('search_task_jobs', 'research_finalize_jobs')"
+            )
+        ).all()
+    indexes = {(row.tablename, row.indexname) for row in rows}
+
+    assert {
+        ("search_task_jobs", "ix_search_task_jobs_pending"),
+        ("search_task_jobs", "ix_search_task_jobs_status_updated"),
+        ("search_task_jobs", "ix_search_task_jobs_status_created"),
+        ("research_finalize_jobs", "ix_research_finalize_jobs_pending"),
+        ("research_finalize_jobs", "ix_research_finalize_jobs_status_updated"),
+        ("research_finalize_jobs", "ix_research_finalize_jobs_status_created"),
+    } <= indexes
+
+
+@pytest.mark.postgres
 def test_sqlalchemy_task_store_persists_finalize_jobs(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
 

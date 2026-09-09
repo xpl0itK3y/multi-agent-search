@@ -139,6 +139,13 @@ class ResearchFinalizeJobORM(Base):
     __tablename__ = "research_finalize_jobs"
     __table_args__ = (
         Index("ix_research_finalize_jobs_status", "status"),
+        Index(
+            "ix_research_finalize_jobs_pending",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_research_finalize_jobs_status_updated", "status", "updated_at"),
+        Index("ix_research_finalize_jobs_status_created", "status", "created_at"),
         # DB-level backstop for AUD-005: at most one RUNNING finalize job per research.
         Index(
             "uq_running_finalize_job_per_research",
@@ -175,7 +182,16 @@ class ResearchFinalizeJobORM(Base):
 
 class SearchTaskJobORM(Base):
     __tablename__ = "search_task_jobs"
-    __table_args__ = (Index("ix_search_task_jobs_status", "status"),)
+    __table_args__ = (
+        Index("ix_search_task_jobs_status", "status"),
+        Index(
+            "ix_search_task_jobs_pending",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_search_task_jobs_status_updated", "status", "updated_at"),
+        Index("ix_search_task_jobs_status_created", "status", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     task_id: Mapped[str] = mapped_column(
