@@ -875,13 +875,21 @@ class ResearchService(
         messages = (research.graph_state or {}).get("messages") or []
         return [ChatMessage.model_validate(message) for message in messages]
 
-    def append_research_message(self, research_id: str, role: str, content: str) -> None:
+    def append_research_message(
+        self,
+        research_id: str,
+        role: str,
+        content: str,
+        sources: list[SearchSourcePreview] | None = None,
+    ) -> None:
         research = self.task_store.get_research(research_id)
         if not research:
             return
         state = dict(research.graph_state or {})
         messages = list(state.get("messages") or [])
-        messages.append({"role": role, "content": content})
+        messages.append(
+            ChatMessage(role=role, content=content, sources=sources or []).model_dump()
+        )
         state["messages"] = messages[-40:]  # cap conversation history
         self.task_store.update_research_graph_state(research_id, state)
 
@@ -977,7 +985,7 @@ class ResearchService(
         question: str,
         streaming_callback=None,
         status_callback=None,
-    ) -> str:
+    ) -> ChatMessage:
         """Grounded follow-up answer. Escalates to a mini web search when the existing
         source pool does not cover the question, then answers over the enriched pool."""
         research = self.task_store.get_research(research_id)
@@ -986,24 +994,54 @@ class ResearchService(
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
+            self.task_store.merge_research_graph_state(
+                research_id,
+                {"canonical_sources": self._canonical_source_table(pool)},
+            )
         if self._question_needs_search(question, pool):
             if status_callback:
                 status_callback("searching")
-            self._mini_search_for_chat(research_id, question, research.depth)
+            new_sources = self._mini_search_for_chat(research_id, question, research.depth)
             tasks = self.task_store.get_tasks_by_research(research_id)
-            pool = self._build_research_source_pool(tasks)
+            seen_urls = {source.get("url") for source in pool if source.get("url")}
+            source_numbers = [
+                int(source_id[1:])
+                for source in pool
+                if (source_id := str(source.get("source_id") or "")).startswith("S")
+                and source_id[1:].isdigit()
+            ]
+            next_source_number = max(source_numbers, default=0) + 1
+            for source in new_sources:
+                url = source.get("url")
+                if not url or url in seen_urls:
+                    continue
+                pool.append({"source_id": f"S{next_source_number}", **source})
+                seen_urls.add(url)
+                next_source_number += 1
+            self.task_store.merge_research_graph_state(
+                research_id,
+                {"canonical_sources": self._canonical_source_table(pool)},
+            )
         # Retrieve the most relevant sources for this question (not just the first 12).
         pool = self._rank_sources_for_question(question, pool, 12)
         sources = [
             {
-                "source_id": f"S{index}",
+                "source_id": item.get("source_id"),
                 "title": item.get("title"),
                 "domain": item.get("domain"),
                 "url": item.get("url"),
+                "source_quality": item.get("source_quality"),
+                "extraction_status": item.get("extraction_status"),
                 "content": (item.get("content") or "")[:800],
             }
-            for index, item in enumerate(pool, start=1)
+            for item in pool
+            if item.get("source_id")
         ]
         history = list((research.graph_state or {}).get("messages") or [])
         model = (research.graph_state or {}).get("model")
@@ -1011,7 +1049,7 @@ class ResearchService(
             research_id=research_id,
             user_id=research.user_id or "local",
         ):
-            return chat.answer(
+            answer = chat.answer(
                 question,
                 research.final_report or "",
                 sources,
@@ -1019,6 +1057,23 @@ class ResearchService(
                 model=model,
                 streaming_callback=streaming_callback,
             )
+        return ChatMessage(
+            role="assistant",
+            content=answer,
+            sources=[
+                SearchSourcePreview(
+                    source_id=source["source_id"],
+                    url=source.get("url") or "",
+                    title=source.get("title"),
+                    domain=source.get("domain"),
+                    source_quality=source.get("source_quality"),
+                    extraction_status=source.get("extraction_status"),
+                    snippet=((source.get("content") or "")[:280] or None),
+                )
+                for source in sources
+                if source.get("url")
+            ],
+        )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
         """Canonical report source list for the artifact panel — no LLM."""

@@ -4,10 +4,11 @@ import { useI18n } from "vue-i18n";
 import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
-import type { CitationGround, SourceIndependence } from "@/lib/types";
+import type { CitationGround, SourceIndependence, SourcePreview } from "@/lib/types";
 
 const props = defineProps<{
   source: string;
+  sources?: SourcePreview[];
   grounding?: CitationGround[];
   // Inline verification inputs (all optional — the report renders fine without them):
   independence?: SourceIndependence | null; // origin clusters → independent-source count
@@ -47,10 +48,14 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
 
-// Map Sn -> url, parsed from the report's own "Sources" section so inline
-// citations become clickable links to the actual source (correct numbering).
-function sourceUrlMap(source: string): Map<string, string> {
+// Map Sn -> url from the explicit API map, with the report's Sources section as
+// a backward-compatible fallback for older stored reports.
+function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Map<string, string> {
   const map = new Map<string, string>();
+  for (const source of explicitSources) {
+    const idMatch = (source.source_id || "").match(/^S(\d+)$/);
+    if (idMatch && source.url) map.set(idMatch[1], source.url);
+  }
   for (const line of source.split("\n")) {
     const idMatch = line.match(/\[S(\d+)\\?\]/);
     if (!idMatch) continue;
@@ -144,7 +149,7 @@ const html = computed(() => {
   // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
   // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
   const source = (props.source || "").replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
-  const urls = sourceUrlMap(source);
+  const urls = sourceUrlMap(source, props.sources);
   const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
 
   // 1. Wrap each cited sentence with control-char sentinels BEFORE markdown runs, so

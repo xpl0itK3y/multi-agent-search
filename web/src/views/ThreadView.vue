@@ -13,7 +13,15 @@ import type { ChatMessage, Depth } from "@/lib/types";
 // A conversation thread: a sequence of deep researches and quick grounded
 // follow-up questions, with one composer (mode toggle) at the bottom.
 type ResearchItem = { kind: "research"; id: string; prompt: string };
-type ChatItem = { kind: "chat"; question: string; answer: string; researchId: string; busy: boolean; searching: boolean };
+type ChatItem = {
+  kind: "chat";
+  question: string;
+  answer: string;
+  sources: ChatMessage["sources"];
+  researchId: string;
+  busy: boolean;
+  searching: boolean;
+};
 type ThreadItem = ResearchItem | ChatItem;
 
 const props = defineProps<{ threadId: string }>();
@@ -63,19 +71,19 @@ async function scrollToBottom() {
 
 // Pair a flat [user, assistant, user, assistant, …] message log into Q&A turns,
 // tolerating an unanswered trailing question or a missing question.
-function pairMessages(msgs: ChatMessage[]): { question: string; answer: string }[] {
-  const pairs: { question: string; answer: string }[] = [];
+function pairMessages(msgs: ChatMessage[]): { question: string; answer: string; sources: ChatMessage["sources"] }[] {
+  const pairs: { question: string; answer: string; sources: ChatMessage["sources"] }[] = [];
   let pendingQ: string | null = null;
   for (const m of msgs) {
     if (m.role === "user") {
-      if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "" });
+      if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "", sources: [] });
       pendingQ = m.content;
     } else {
-      pairs.push({ question: pendingQ ?? "", answer: m.content });
+      pairs.push({ question: pendingQ ?? "", answer: m.content, sources: m.sources || [] });
       pendingQ = null;
     }
   }
-  if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "" });
+  if (pendingQ !== null) pairs.push({ question: pendingQ, answer: "", sources: [] });
   return pairs;
 }
 
@@ -89,7 +97,7 @@ async function loadThread() {
     list.forEach((r, idx) => {
       built.push({ kind: "research", id: r.id, prompt: r.prompt });
       for (const p of pairMessages(messages[idx])) {
-        built.push({ kind: "chat", question: p.question, answer: p.answer, researchId: r.id, busy: false, searching: false });
+        built.push({ kind: "chat", question: p.question, answer: p.answer, sources: p.sources, researchId: r.id, busy: false, searching: false });
       }
     });
     items.value = built;
@@ -134,7 +142,7 @@ async function onAsk(question: string) {
   }
   errorMsg.value = null;
   const idx = items.value.push({
-    kind: "chat", question, answer: "", researchId, busy: true, searching: false,
+    kind: "chat", question, answer: "", sources: [], researchId, busy: true, searching: false,
   }) - 1;
   const chat = () => items.value[idx] as ChatItem; // mutate through the reactive proxy
   composerPrompt.value = "";
@@ -142,7 +150,7 @@ async function onAsk(question: string) {
   await streamChatAnswer(researchId, question, {
     onSearching: () => { chat().searching = true; },
     onDelta: (a) => { const c = chat(); c.searching = false; c.answer = a; scrollToBottom(); },
-    onDone: (a) => { const c = chat(); c.searching = false; c.answer = a; c.busy = false; scrollToBottom(); },
+    onDone: (a, sources) => { const c = chat(); c.searching = false; c.answer = a; c.sources = sources; c.busy = false; scrollToBottom(); },
     onError: (m) => { chat().busy = false; errorMsg.value = m; },
   });
 }
@@ -177,7 +185,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
                 {{ it.question }}
               </div>
             </div>
-            <MarkdownView v-if="it.answer" :source="it.answer" />
+            <MarkdownView v-if="it.answer" :source="it.answer" :sources="it.sources || []" />
             <div v-if="it.busy && !it.answer" class="flex items-center gap-2 text-sm text-muted">
               <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
               {{ it.searching ? $t("chat.searching") : $t("common.thinking") }}

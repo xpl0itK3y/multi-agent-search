@@ -2504,14 +2504,21 @@ def test_research_chat_grounded_answer_and_persistence():
 
     answer = service.generate_research_answer(research.id, "What color?")
     service.append_research_message(research.id, "user", "What color?")
-    service.append_research_message(research.id, "assistant", answer)
+    service.append_research_message(
+        research.id,
+        "assistant",
+        answer.content,
+        answer.sources,
+    )
 
-    assert answer == "Widgets are blue [S1]."
+    assert answer.content == "Widgets are blue [S1]."
+    assert answer.sources[0].source_id == "S1"
     assert captured["sources"][0]["source_id"] == "S1"
     assert "Widgets are blue and fast." in captured["sources"][0]["content"]
     messages = service.list_research_messages(research.id)
     assert [m.role for m in messages] == ["user", "assistant"]
     assert messages[1].content == "Widgets are blue [S1]."
+    assert messages[1].sources[0].url == "http://a.com"
 
 
 def test_research_clarify_first_stores_questions():

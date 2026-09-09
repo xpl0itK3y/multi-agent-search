@@ -669,6 +669,7 @@ class ResearchPlanUpdate(BaseModel):
 class ChatMessage(BaseModel):
     role: str  # "user" | "assistant"
     content: str
+    sources: List[SearchSourcePreview] = Field(default_factory=list)
 
 
 class ChatAsk(BaseModel):

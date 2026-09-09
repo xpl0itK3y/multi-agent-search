@@ -20,7 +20,10 @@ describe("streamChatAnswer", () => {
     setAuthToken("test-access-token");
 
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response('event: done\ndata: {"answer":"ok"}\n\n', { status: 200 }),
+      new Response(
+        'event: done\ndata: {"answer":"ok","sources":[{"source_id":"S4","url":"https://example.com"}]}\n\n',
+        { status: 200 },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -39,6 +42,8 @@ describe("streamChatAnswer", () => {
         "X-CSRF-Token": "csrf value",
       },
     });
-    expect(onDone).toHaveBeenCalledWith("ok");
+    expect(onDone).toHaveBeenCalledWith("ok", [
+      { source_id: "S4", url: "https://example.com" },
+    ]);
   });
 });

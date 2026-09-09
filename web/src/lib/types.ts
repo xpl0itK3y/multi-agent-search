@@ -74,6 +74,7 @@ export interface SourcePreview {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  sources?: SourcePreview[];
 }
 
 export interface Clarification {
