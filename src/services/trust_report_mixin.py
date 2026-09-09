@@ -450,7 +450,7 @@ class TrustReportMixin:
         return AuditTrail(
             research_id=research.id,
             prompt=research.prompt,
-            model=state.get("model", ""),
+            model=state.get("model") or "",
             depth=getattr(research.depth, "value", str(research.depth)),
             status=getattr(research.status, "value", str(research.status)),
             created_at=research.created_at.isoformat() if research.created_at else "",
