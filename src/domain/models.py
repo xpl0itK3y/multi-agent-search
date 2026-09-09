@@ -573,6 +573,7 @@ class UserRecord(BaseModel):
 class ResearchRecord(BaseModel):
     id: str
     prompt: str
+    language: str = "unknown"
     user_id: Optional[str] = None
     depth: SearchDepth
     status: ResearchStatus = ResearchStatus.PROCESSING
@@ -580,6 +581,8 @@ class ResearchRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     final_report: Optional[str] = None
+    partial_report: Optional[str] = None
+    partial_reasoning: Optional[str] = None
     graph_state: Dict[str, Any] = Field(default_factory=dict)
     graph_trail: List[Dict[str, Any]] = Field(default_factory=list)
 

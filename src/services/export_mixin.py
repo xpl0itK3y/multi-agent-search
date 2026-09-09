@@ -1,6 +1,6 @@
 """Report export concern of ResearchService (PDF / DOCX / HTML / JSON / scorecard), extracted
 as a mixin (AUD-030). Composed into ResearchService; the export builders call the
-self.get_research_* trust getters and self._detect_report_language, which remain on
+self.get_research_* trust getters and self._research_language, which remain on
 ResearchService, via normal composition.
 """
 import json
@@ -50,7 +50,7 @@ class ExportMixin:
         if normalized == "html":
             from src.ui.report_export import generate_html
 
-            language = self._detect_report_language(research.prompt, report)
+            language = self._research_language(research)
             labels = self._HTML_EXPORT_LABELS.get(language, self._HTML_EXPORT_LABELS["en"])
             data = generate_html(
                 report, research.prompt, depth, created_at,
@@ -141,4 +141,3 @@ class ExportMixin:
         except Exception:  # pragma: no cover - defensive
             pass
         return sc
-

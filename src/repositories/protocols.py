@@ -20,7 +20,11 @@ from src.domain import (
 
 class TaskStore(Protocol):
     def add_research(
-        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None = None,
+        language: str = "unknown",
     ) -> ResearchRecord: ...
 
     def add_research_if_under_limit(
@@ -32,6 +36,7 @@ class TaskStore(Protocol):
         per_user_limit: int,
         global_limit: int,
         stale_before: datetime,
+        language: str = "unknown",
     ) -> ResearchRecord | None: ...
 
     def get_research(self, research_id: str) -> ResearchRecord | None: ...

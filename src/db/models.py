@@ -40,10 +40,13 @@ class ResearchORM(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="unknown")
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    partial_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    partial_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     graph_state: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     graph_trail: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     task_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)

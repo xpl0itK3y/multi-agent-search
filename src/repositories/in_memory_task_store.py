@@ -62,12 +62,17 @@ class InMemoryTaskStore:
         return len(stale)
 
     def add_research(
-        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None = None,
+        language: str = "unknown",
     ) -> ResearchRecord:
         research_id = str(uuid.uuid4())
         record = ResearchRecord(
             id=research_id,
             prompt=request.prompt,
+            language=language,
             user_id=user_id,
             depth=request.depth,
             task_ids=task_ids,
@@ -111,6 +116,7 @@ class InMemoryTaskStore:
         per_user_limit: int,
         global_limit: int,
         stale_before: datetime,
+        language: str = "unknown",
     ) -> ResearchRecord | None:
         """Atomically reserve user capacity and either a running slot or a queue place."""
         with self._admission_lock:
@@ -126,6 +132,7 @@ class InMemoryTaskStore:
             record = ResearchRecord(
                 id=str(uuid.uuid4()),
                 prompt=request.prompt,
+                language=language,
                 user_id=user_id,
                 depth=request.depth,
                 status=ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING,
@@ -307,8 +314,10 @@ class InMemoryTaskStore:
         research = self.researches.get(research_id)
         if research:
             research.status = status
-            if report:
+            if report is not None:
                 research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
             research.updated_at = datetime.now(timezone.utc)
             self._emit_change(research_id)
         return research
@@ -394,18 +403,14 @@ class InMemoryTaskStore:
         research = self.researches.get(research_id)
         if research is None:
             return
-        state = dict(research.graph_state or {})
-        state["partial_report"] = partial
-        research.graph_state = state
+        research.partial_report = partial
         self._emit_change(research_id)
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
         if research is None:
             return
-        state = dict(research.graph_state or {})
-        state["partial_reasoning"] = partial
-        research.graph_state = state
+        research.partial_reasoning = partial
         self._emit_change(research_id)
 
     def append_research_graph_event(

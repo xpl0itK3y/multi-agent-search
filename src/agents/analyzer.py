@@ -7,11 +7,11 @@ from contextvars import copy_context
 from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
+from src.agents.cross_language import detect_language
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
 from src.agents.language_utils import (
     COMBINED_ANALYSIS_LEXICON,
-    LANGUAGE_HINTS,
     analysis_lexicon_for_sources,
     contains_negation,
 )
@@ -57,8 +57,6 @@ class AnalyzerAgent(BaseAgent):
     CONCLUSION_HEADING_PATTERN = re.compile(
         r"(?im)^##\s+(Conclusion|Заключение|Итог\w*|Вывод\w*|Bottom\s+Line|Conclusi[oó]n)\b"
     )
-    # Single source of truth lives in src/agents/language_utils.py (A-6).
-    LANGUAGE_HINTS = LANGUAGE_HINTS
     # Compatibility aliases for citation auditing and custom integrations. Conflict and
     # evidence analysis select the narrower source-language lexicon at call time.
     STOPWORDS = set(COMBINED_ANALYSIS_LEXICON.stopwords)
@@ -618,29 +616,6 @@ class AnalyzerAgent(BaseAgent):
         normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
         return normalized
 
-    def _detect_language(self, text: str) -> str:
-        normalized = self._normalize_text(text).lower()
-        if not normalized:
-            return "unknown"
-
-        cyrillic_count = sum(1 for char in normalized if "а" <= char <= "я" or char == "ё")
-        latin_count = sum(1 for char in normalized if "a" <= char <= "z")
-        if cyrillic_count >= 6 and cyrillic_count >= latin_count / 3:
-            return "ru"
-
-        tokens = re.findall(r"[a-záéíóúñü]+", normalized)
-        if not tokens:
-            return "unknown"
-
-        scores = {
-            language: sum(1 for token in tokens if token in hints)
-            for language, hints in self.LANGUAGE_HINTS.items()
-        }
-        best_language = max(scores, key=scores.get)
-        if scores[best_language] <= 0:
-            return "en" if latin_count else "unknown"
-        return best_language
-
     _LANGUAGE_NAMES = {"ru": "Russian", "es": "Spanish", "en": "English"}
 
     def _language_instruction(self, language: str) -> str:
@@ -678,7 +653,7 @@ class AnalyzerAgent(BaseAgent):
         """
         if language == "unknown" or not (report or "").strip():
             return report
-        detected = self._detect_language(report)
+        detected = detect_language(report)
         if detected in (language, "unknown"):
             return report
         name = self._LANGUAGE_NAMES.get(language, "the original prompt's language")
@@ -701,7 +676,7 @@ class AnalyzerAgent(BaseAgent):
         if (
             rewritten
             and self._editor_preserved_citations(report, rewritten)
-            and self._detect_language(rewritten) in (language, "unknown")
+            and detect_language(rewritten) in (language, "unknown")
         ):
             logger.info("analyzer_language_rewrite_applied before=%d after=%d", len(report), len(rewritten))
             return rewritten
@@ -1554,6 +1529,7 @@ class AnalyzerAgent(BaseAgent):
         model: str | None = None,
         streaming_callback: Optional[Callable[[str], None]] = None,
         reasoning_callback: Optional[Callable[[str], None]] = None,
+        language: str | None = None,
     ) -> tuple[str, list[dict], list[dict]]:
         started_at = time.perf_counter()
         prepare_started_at = time.perf_counter()
@@ -1571,7 +1547,11 @@ class AnalyzerAgent(BaseAgent):
         evidence_started_at = time.perf_counter()
         evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool, depth=depth)
         evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
-        prompt_language = self._detect_language(prompt)
+        prompt_language = (
+            language
+            if language and language != "unknown"
+            else detect_language(prompt)
+        )
         # Plan sub-questions drive the report outline so it answers exactly what was asked.
         plan_questions = list(dict.fromkeys(
             (t.description or "").strip() for t in tasks if getattr(t, "description", "").strip()
@@ -1634,7 +1614,7 @@ class AnalyzerAgent(BaseAgent):
             )
             # Skip language retry for HARD (avoids an extra multi-minute LLM call).
             if not is_hard and prompt_language != "unknown":
-                report_language = self._detect_language(result)
+                report_language = detect_language(result)
                 if report_language not in {prompt_language, "unknown"}:
                     logger.warning(
                         "AnalyzerAgent detected language mismatch. prompt=%s report=%s. Retrying once.",

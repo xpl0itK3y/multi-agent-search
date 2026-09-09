@@ -24,6 +24,49 @@ def test_detect_language_by_script_and_words():
     assert detect_language("") == "unknown"
 
 
+def test_start_research_persists_query_language_once():
+    from src.api.schemas import ResearchRequest, SearchDepth
+    from src.repositories.in_memory_task_store import InMemoryTaskStore
+    from src.services.research_service import ResearchService
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    _response, research_id = service.start_research(
+        ResearchRequest(
+            prompt="这项研究表明对健康很重要",
+            depth=SearchDepth.EASY,
+        )
+    )
+
+    research = store.get_research(research_id)
+    assert research is not None
+    assert research.language == "zh"
+    assert service._research_language(research) == "zh"
+    graph_state = service.finalize_graph_runner._build_initial_state(
+        research.id,
+        research.prompt,
+        [],
+        research.depth,
+    )
+    assert graph_state["language"] == "zh"
+
+
+def test_stored_query_language_is_not_inferred_from_report_content():
+    from src.api.schemas import ResearchRequest, SearchDepth
+    from src.repositories.in_memory_task_store import InMemoryTaskStore
+    from src.services.research_service import ResearchService
+
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="What changed?", depth=SearchDepth.EASY),
+        task_ids=[],
+        language="en",
+    )
+    research.final_report = "Русский заголовок источника"
+
+    assert ResearchService(task_store=store)._research_language(research) == "en"
+
+
 def test_plan_picks_languages_and_queries():
     payload = json.dumps({"languages": ["zh", "de", "en"], "queries": ["中文查询", "Deutsche Anfrage", "english"]})
     langs, queries = CrossLanguageAgent(_StubLLM(payload)).plan("Is X regulated?", "en", max_targets=2)
@@ -64,7 +107,14 @@ def test_injected_task_is_a_valid_search_task():
 
     store = InMemoryTaskStore()
     svc = ResearchService(task_store=store, cross_language_agent=_XL())
-    rec = store.add_research(ResearchRequest(prompt="How does Germany regulate Sunday shopping?", depth=SearchDepth.EASY), task_ids=[])
+    rec = store.add_research(
+        ResearchRequest(
+            prompt="How does Germany regulate Sunday shopping?",
+            depth=SearchDepth.EASY,
+        ),
+        task_ids=[],
+        language="en",
+    )
     tasks_raw: list = []
     svc._maybe_add_cross_language_task(rec.id, "How does Germany regulate Sunday shopping?", tasks_raw)
 

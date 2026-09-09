@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 # Common function-word fingerprints for the languages supported by the report writer.
@@ -83,21 +83,6 @@ ANALYSIS_LEXICONS: dict[str, AnalysisLexicon] = {
 }
 
 
-_WORD_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
-_SPANISH_MARKERS = frozenset("ñ¿¡")
-
-
-def _source_language(text: str) -> str:
-    lowered = (text or "").lower()
-    if any("а" <= char <= "я" or char == "ё" for char in lowered):
-        return "ru"
-    words = _WORD_PATTERN.findall(lowered)
-    spanish_score = sum(word in LANGUAGE_HINTS["es"] for word in words)
-    english_score = sum(word in LANGUAGE_HINTS["en"] for word in words)
-    has_spanish_marker = any(char in _SPANISH_MARKERS for char in lowered)
-    return "es" if has_spanish_marker or spanish_score >= 2 and spanish_score > english_score else "en"
-
-
 def merge_analysis_lexicons(languages: Iterable[str]) -> AnalysisLexicon:
     selected = [
         ANALYSIS_LEXICONS[language]
@@ -113,12 +98,23 @@ def merge_analysis_lexicons(languages: Iterable[str]) -> AnalysisLexicon:
     )
 
 
-def analysis_lexicon_for_sources(aggregated_data: list[dict]) -> AnalysisLexicon:
-    """Select lexicons from source contents; retain English for mixed technical prose."""
+def analysis_lexicon_for_sources(
+    aggregated_data: list[dict],
+    language_detector: Callable[[str], str] | None = None,
+) -> AnalysisLexicon:
+    """Select source lexicons using the canonical language detector.
+
+    The lazy import avoids a module cycle: ``cross_language`` owns detection while importing
+    the shared hint tables from this module.
+    """
+    if language_detector is None:
+        from src.agents.cross_language import detect_language
+
+        language_detector = detect_language
     languages = {"en"}
     for source in aggregated_data:
         text = f"{source.get('title') or ''} {source.get('content') or ''}"
-        languages.add(_source_language(text))
+        languages.add(language_detector(text))
     return merge_analysis_lexicons(languages)
 
 

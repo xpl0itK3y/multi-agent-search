@@ -2,7 +2,13 @@ from io import BytesIO
 
 from reportlab.pdfgen import canvas
 
-from src.providers.search import ContentExtractor, get_extraction_metrics_snapshot, reset_extraction_metrics
+from src.config import settings
+from src.providers.search import (
+    ContentExtractor,
+    ExtractionDomainRegistry,
+    get_extraction_metrics_snapshot,
+    reset_extraction_metrics,
+)
 
 
 def _text_pdf_bytes(text: str) -> bytes:
@@ -11,6 +17,39 @@ def _text_pdf_bytes(text: str) -> bytes:
     document.drawString(72, 720, text)
     document.save()
     return output.getvalue()
+
+
+def test_domain_timeout_obeys_failure_threshold_and_decays_after_cooldown(mocker):
+    registry = ExtractionDomainRegistry()
+    now = [100.0]
+    mocker.patch.object(settings, "search_domain_fail_threshold", 2)
+    mocker.patch.object(settings, "search_domain_cooldown_seconds", 10)
+    mocker.patch("src.providers.search.time.monotonic", side_effect=lambda: now[0])
+    url = "https://slow.example/article"
+
+    registry.record(url, outcome="failed", timed_out=True)
+    assert registry.should_skip(url) is None
+
+    registry.record(url, outcome="failed", timed_out=False)
+    assert registry.should_skip(url) == "domain-cooldown"
+
+    now[0] += 11
+    assert registry.should_skip(url) is None
+    registry.record(url, outcome="failed", timed_out=False)
+    assert registry.should_skip(url) is None
+    registry.record(url, outcome="failed", timed_out=False)
+    assert registry.should_skip(url) == "domain-cooldown"
+
+
+def test_domain_registry_reset_clears_active_cooldown(mocker):
+    registry = ExtractionDomainRegistry()
+    mocker.patch.object(settings, "search_domain_fail_threshold", 1)
+    registry.record("https://slow.example/article", outcome="failed", timed_out=True)
+    assert registry.should_skip("https://slow.example/article") == "domain-cooldown"
+
+    registry.reset()
+
+    assert registry.should_skip("https://slow.example/article") is None
 
 
 def test_content_extractor_logs_stage_metrics_on_success(mocker):
