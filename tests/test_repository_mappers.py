@@ -17,6 +17,8 @@ def test_research_orm_to_record_maps_core_fields():
         depth="easy",
         status="processing",
         task_ids=["task-1"],
+        partial_report="draft",
+        partial_reasoning="thinking",
         created_at=now,
         updated_at=now,
     )
@@ -26,6 +28,8 @@ def test_research_orm_to_record_maps_core_fields():
     assert record.id == "research-1"
     assert record.depth == "easy"
     assert record.task_ids == ["task-1"]
+    assert record.partial_report == "draft"
+    assert record.partial_reasoning == "thinking"
 
 
 def test_search_task_orm_to_schema_maps_results_and_logs():

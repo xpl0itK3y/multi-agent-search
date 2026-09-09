@@ -758,7 +758,6 @@ def register_routes(app: FastAPI) -> None:
                         yield sse("done", {"status": "failed"})
                         return
 
-                    graph_state = research.graph_state or {}
                     status = getattr(research.status, "value", str(research.status))
                     if status != last_status:
                         last_status = status
@@ -774,12 +773,12 @@ def register_routes(app: FastAPI) -> None:
                             })
                         last_trail_len = len(trail)
 
-                    reasoning = graph_state.get("partial_reasoning")
+                    reasoning = research.partial_reasoning
                     if reasoning and reasoning != last_reasoning:
                         last_reasoning = reasoning
                         yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
 
-                    report = research.final_report or graph_state.get("partial_report")
+                    report = research.final_report or research.partial_report
                     if report and report != last_report:
                         last_report = report
                         yield sse("report", {"report": report, "final": bool(research.final_report)})

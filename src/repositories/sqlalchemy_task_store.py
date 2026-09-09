@@ -424,6 +424,8 @@ class SQLAlchemyTaskStore:
             research.status = status.value
             if report is not None:
                 research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
@@ -548,24 +550,24 @@ class SQLAlchemyTaskStore:
 
     def save_partial_report(self, research_id: str, partial: str) -> None:
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            outcome = session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(partial_report=partial)
+            )
+            if outcome.rowcount == 0:
                 return
-            state = dict(research.graph_state or {})
-            state["partial_report"] = partial
-            research.graph_state = state
-            session.flush()
         self._emit_change(research_id)
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None:
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            outcome = session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(partial_reasoning=partial)
+            )
+            if outcome.rowcount == 0:
                 return
-            state = dict(research.graph_state or {})
-            state["partial_reasoning"] = partial
-            research.graph_state = state
-            session.flush()
         self._emit_change(research_id)
 
     def append_research_graph_event(
@@ -771,6 +773,8 @@ class SQLAlchemyTaskStore:
             if research.status != ResearchStatus.CANCELLED.value:
                 research.status = ResearchStatus.COMPLETED.value
                 research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
                 research.updated_at = datetime.now(timezone.utc)
             job.status = FinalizeJobStatus.COMPLETED.value
             job.error = None

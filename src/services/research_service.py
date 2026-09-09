@@ -675,7 +675,7 @@ class ResearchService(
         graph_execution_summary = self._build_graph_execution_summary(tasks)
 
         graph_state = research.graph_state or {}
-        partial_report = graph_state.get("partial_report") if not research.final_report else None
+        partial_report = research.partial_report if not research.final_report else None
 
         return ResearchSummary(
             id=research.id,
@@ -726,7 +726,7 @@ class ResearchService(
         avg_sources = round(collected / task_count, 1) if task_count else 0.0
         finalize_ready = task_count > 0 and pending == 0 and running == 0
         graph_state = research.graph_state or {}
-        partial_report = graph_state.get("partial_report") if not research.final_report else None
+        partial_report = research.partial_report if not research.final_report else None
 
         return ResearchStatusSummary(
             id=research.id,

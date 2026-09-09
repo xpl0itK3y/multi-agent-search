@@ -120,6 +120,8 @@ def research_orm_to_record(research: ResearchORM) -> ResearchRecord:
         created_at=research.created_at,
         updated_at=research.updated_at,
         final_report=research.final_report,
+        partial_report=research.partial_report,
+        partial_reasoning=research.partial_reasoning,
         graph_state=research.graph_state or {},
         graph_trail=research.graph_trail or [],
     )

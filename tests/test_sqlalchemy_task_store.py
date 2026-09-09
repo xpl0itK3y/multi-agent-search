@@ -104,6 +104,8 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
         research.id,
         {"step": "collect_context", "analyze_attempts": 0},
     )
+    store.save_partial_report(research.id, "draft report")
+    store.save_partial_reasoning(research.id, "draft reasoning")
     appended = store.append_research_graph_event(
         research.id,
         {"step": "collect_context", "detail": "Collected 5 sources"},
@@ -116,7 +118,20 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
     assert appended.graph_trail[0]["detail"] == "Collected 5 sources"
     assert fetched_research is not None
     assert fetched_research.graph_state["step"] == "collect_context"
+    assert "partial_report" not in fetched_research.graph_state
+    assert "partial_reasoning" not in fetched_research.graph_state
+    assert fetched_research.partial_report == "draft report"
+    assert fetched_research.partial_reasoning == "draft reasoning"
     assert fetched_research.graph_trail[0]["detail"] == "Collected 5 sources"
+
+    completed = store.update_research_status(
+        research.id,
+        ResearchStatus.COMPLETED,
+        "final report",
+    )
+    assert completed is not None
+    assert completed.partial_report is None
+    assert completed.partial_reasoning is None
 
 
 @pytest.mark.postgres

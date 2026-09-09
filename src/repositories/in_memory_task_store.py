@@ -314,8 +314,10 @@ class InMemoryTaskStore:
         research = self.researches.get(research_id)
         if research:
             research.status = status
-            if report:
+            if report is not None:
                 research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
             research.updated_at = datetime.now(timezone.utc)
             self._emit_change(research_id)
         return research
@@ -401,18 +403,14 @@ class InMemoryTaskStore:
         research = self.researches.get(research_id)
         if research is None:
             return
-        state = dict(research.graph_state or {})
-        state["partial_report"] = partial
-        research.graph_state = state
+        research.partial_report = partial
         self._emit_change(research_id)
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
         if research is None:
             return
-        state = dict(research.graph_state or {})
-        state["partial_reasoning"] = partial
-        research.graph_state = state
+        research.partial_reasoning = partial
         self._emit_change(research_id)
 
     def append_research_graph_event(
