@@ -24,6 +24,8 @@ jobs:
           cache-dependency-path: requirements.lock
       - name: Install dependencies
         run: python -m pip install -r requirements.lock
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
       - name: Run backend unit tests
         run: python -m pytest -q -m "not postgres"
 
