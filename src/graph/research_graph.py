@@ -6,6 +6,7 @@ import time
 from time import perf_counter
 
 from src.agents.analyzer import AnalyzerAgent
+from src.agents.cross_language import detect_language
 from src.domain import ReplanRecommendation, ResearchStatus, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
@@ -93,6 +94,12 @@ class FinalizeGraphRunner:
         graph_state = (research.graph_state if research else None) or {}
         # User-selected model (persisted at creation); carried through the graph runtime.
         state["model"] = graph_state.get("model")
+        stored_language = getattr(research, "language", None)
+        state["language"] = (
+            stored_language
+            if stored_language and stored_language != "unknown"
+            else detect_language(prompt)
+        )
         step = graph_state.get("step")
         if not step:
             return state
@@ -335,6 +342,7 @@ class FinalizeGraphRunner:
                     "model": state.get("model"),
                     "streaming_callback": _streaming_callback,
                     "reasoning_callback": _reasoning_callback,
+                    "language": state.get("language"),
                 }
             )
             analysis_result = self.service.analyzer.run_analysis(

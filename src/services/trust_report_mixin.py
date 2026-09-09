@@ -259,7 +259,12 @@ class TrustReportMixin:
         if not settings.cross_language_enabled or self.cross_language_agent is None:
             return
         try:
-            query_lang = detect_language(prompt)
+            research = self.task_store.get_research(research_id)
+            query_lang = (
+                self._research_language(research)
+                if research is not None
+                else detect_language(prompt)
+            )
             langs, queries = self.cross_language_agent.plan(prompt, query_lang, settings.cross_language_max_targets)
             if not queries:
                 return
@@ -271,7 +276,6 @@ class TrustReportMixin:
             })
             state = dict((self.task_store.get_research(research_id).graph_state) or {})
             state["cross_language_targets"] = langs
-            state.setdefault("query_language", query_lang)
             self.task_store.update_research_graph_state(research_id, state)
             logger.info("cross_language_task_added research_id=%s langs=%s", research_id, langs)
         except Exception as exc:  # pragma: no cover - defensive
@@ -288,7 +292,7 @@ class TrustReportMixin:
             if aggregated is None:
                 return
             state = research.graph_state or {}
-            query_lang = state.get("query_language") or detect_language(research.prompt)
+            query_lang = self._research_language(research)
             by_lang: dict[str, int] = {}
             foreign_snippets: dict[str, list[str]] = {}
             for s in aggregated:
@@ -360,7 +364,7 @@ class TrustReportMixin:
                 for s in aggregated[:14]
                 if s.get("source_id")
             }
-            language = self._detect_report_language(research.prompt, research.final_report or "")
+            language = self._research_language(research)
             balance = self.stance_agent.assess(
                 research.prompt, sources_by_id, language=language, model=settings.red_team_model
             )

@@ -1,14 +1,9 @@
 """Labeled language-detection eval (language-fix).
 
-Guards the detector that chooses the report language. analyzer._detect_language is CJK-blind
-(returns 'unknown' for zh/ja) — a known gap; cross_language.detect_language is script-based and
-handles CJK. See memory: language-detectors-eval-gated."""
+Guards the single detector used throughout planning, analysis, and report delivery."""
 import pytest
 
-from src.agents.analyzer import AnalyzerAgent
 from src.agents.cross_language import detect_language
-
-_AZ = AnalyzerAgent.__new__(AnalyzerAgent)
 
 # (text, expected) for the languages the report writer supports.
 LABELED = [
@@ -22,12 +17,7 @@ LABELED = [
 
 
 @pytest.mark.parametrize("text,expected", LABELED)
-def test_analyzer_detector_matches_label(text, expected):
-    assert _AZ._detect_language(text) == expected
-
-
-@pytest.mark.parametrize("text,expected", LABELED)
-def test_cross_language_detector_matches_label(text, expected):
+def test_language_detector_matches_label(text, expected):
     assert detect_language(text) == expected
 
 

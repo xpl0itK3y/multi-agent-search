@@ -573,6 +573,7 @@ class UserRecord(BaseModel):
 class ResearchRecord(BaseModel):
     id: str
     prompt: str
+    language: str = "unknown"
     user_id: Optional[str] = None
     depth: SearchDepth
     status: ResearchStatus = ResearchStatus.PROCESSING

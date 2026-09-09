@@ -2,8 +2,8 @@ import json
 import re
 import uuid
 from src.core.agent import BaseAgent
+from src.agents.cross_language import detect_language
 from src.domain import SearchDepth, TaskStatus
-from src.agents.language_utils import LANGUAGE_HINTS
 from src.observability import maybe_traceable
 from src.search_depth_profiles import get_depth_profile
 from src.source_quality_policy import combined_topics
@@ -99,9 +99,6 @@ class OrchestratorAgent(BaseAgent):
         "сравнен", "compare", "comparison", "performance", "выбор", "choose", "vs", "versus",
     )
 
-    # Single source of truth lives in src/agents/language_utils.py (A-6).
-    LANGUAGE_HINTS = LANGUAGE_HINTS
-
     SYSTEM_PROMPT = """
                         You are a Search Orchestrator. Your job is to decompose a complex user query into independent search tasks for automated bots.
 
@@ -148,29 +145,6 @@ class OrchestratorAgent(BaseAgent):
             return ""
         return re.sub(r"\s+", " ", value).strip()
 
-    def _detect_language(self, text: str) -> str:
-        normalized = self._normalize_text(text).lower()
-        if not normalized:
-            return "unknown"
-
-        cyrillic_count = sum(1 for char in normalized if "а" <= char <= "я" or char == "ё")
-        latin_count = sum(1 for char in normalized if "a" <= char <= "z")
-        if cyrillic_count >= 4 and cyrillic_count >= latin_count / 3:
-            return "ru"
-
-        tokens = re.findall(r"[a-záéíóúñü]+", normalized)
-        if not tokens:
-            return "unknown"
-
-        scores = {
-            language: sum(1 for token in tokens if token in hints)
-            for language, hints in self.LANGUAGE_HINTS.items()
-        }
-        best_language = max(scores, key=scores.get)
-        if scores[best_language] <= 0:
-            return "en" if latin_count else "unknown"
-        return best_language
-
     def _fallback_description(self, prompt: str, index: int, language: str) -> str:
         prompt_text = self._normalize_text(prompt)
         if language == "ru":
@@ -179,13 +153,19 @@ class OrchestratorAgent(BaseAgent):
             return f"Linea de busqueda {index}: {prompt_text}"
         return f"Search angle {index}: {prompt_text}"
 
-    def _normalize_description_language(self, description: str, prompt: str, index: int) -> str:
-        target_language = self._detect_language(prompt)
+    def _normalize_description_language(
+        self,
+        description: str,
+        prompt: str,
+        index: int,
+        target_language: str | None = None,
+    ) -> str:
+        target_language = target_language or detect_language(prompt)
         description_text = self._normalize_text(description)
         if not description_text:
             return self._fallback_description(prompt, index, target_language)
 
-        description_language = self._detect_language(description_text)
+        description_language = detect_language(description_text)
         if target_language in {"unknown", description_language} or description_language == "unknown":
             return description_text
         return self._fallback_description(prompt, index, target_language)
@@ -247,8 +227,18 @@ class OrchestratorAgent(BaseAgent):
         return normalized_queries[:3]
 
     @maybe_traceable(name="orchestrator_decompose", run_type="llm")
-    def run_decompose(self, prompt: str, depth: SearchDepth) -> list:
+    def run_decompose(
+        self,
+        prompt: str,
+        depth: SearchDepth,
+        language: str | None = None,
+    ) -> list:
         task_count = get_depth_profile(depth)["task_count"]
+        target_language = (
+            language
+            if language and language != "unknown"
+            else detect_language(prompt)
+        )
         
         custom_system_prompt = self.SYSTEM_PROMPT + f"\n    Generate EXACTLY {task_count} search tasks."
         
@@ -275,6 +265,7 @@ class OrchestratorAgent(BaseAgent):
                         item.get("description", ""),
                         prompt,
                         index,
+                        target_language,
                     ),
                     "queries": self._normalize_queries(
                         prompt,

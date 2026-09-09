@@ -62,12 +62,17 @@ class InMemoryTaskStore:
         return len(stale)
 
     def add_research(
-        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None = None,
+        language: str = "unknown",
     ) -> ResearchRecord:
         research_id = str(uuid.uuid4())
         record = ResearchRecord(
             id=research_id,
             prompt=request.prompt,
+            language=language,
             user_id=user_id,
             depth=request.depth,
             task_ids=task_ids,
@@ -111,6 +116,7 @@ class InMemoryTaskStore:
         per_user_limit: int,
         global_limit: int,
         stale_before: datetime,
+        language: str = "unknown",
     ) -> ResearchRecord | None:
         """Atomically reserve user capacity and either a running slot or a queue place."""
         with self._admission_lock:
@@ -126,6 +132,7 @@ class InMemoryTaskStore:
             record = ResearchRecord(
                 id=str(uuid.uuid4()),
                 prompt=request.prompt,
+                language=language,
                 user_id=user_id,
                 depth=request.depth,
                 status=ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING,

@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 import secrets
@@ -186,6 +187,31 @@ class ResearchService(
             )
         return agent
 
+    @staticmethod
+    def _accepts_keyword(callable_object, keyword: str) -> bool:
+        """Keep custom/test agents compatible while adding optional pipeline context."""
+        try:
+            parameters = inspect.signature(callable_object).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return any(
+            parameter.name == keyword
+            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+
+    def _run_decompose(
+        self,
+        orchestrator,
+        prompt: str,
+        depth: SearchDepth,
+        language: str,
+    ) -> list:
+        kwargs = {"language": language} if self._accepts_keyword(
+            orchestrator.run_decompose, "language"
+        ) else {}
+        return orchestrator.run_decompose(prompt, depth, **kwargs)
+
     def optimize_prompt(self, prompt: str, user_id: str | None = None) -> str:
         optimizer = self.require_agent(self.optimizer, "Prompt optimizer")
         with bind_observability_context(user_id=user_id or "local"):
@@ -218,7 +244,8 @@ class ResearchService(
     ) -> DecomposeResponse:
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
         with bind_observability_context(user_id=user_id or "local"):
-            tasks_raw = orchestrator.run_decompose(prompt, depth)
+            language = detect_language(prompt)
+            tasks_raw = self._run_decompose(orchestrator, prompt, depth, language)
 
         # This endpoint is a preview. Persisting these tasks or enqueueing jobs would
         # create orphaned work because no ResearchRecord owns the returned plan.
@@ -335,6 +362,7 @@ class ResearchService(
         # Persist decompose intent + webhook_url together so crash-recovery can retry (R-1).
         # Group researches into a conversation thread; a new id starts a new thread.
         thread_id = (request.thread_id or "").strip() or str(uuid.uuid4())
+        language = detect_language(request.prompt)
         graph_state: dict = {
             "decompose_pending": True,
             "decompose_payload": request.model_dump(mode="json"),
@@ -352,6 +380,7 @@ class ResearchService(
             per_user_limit=settings.max_concurrent_researches,
             global_limit=settings.max_global_active_researches,
             stale_before=self._admission_cutoff(),
+            language=language,
         )
         if research is None:
             raise ConflictError(
@@ -401,7 +430,12 @@ class ResearchService(
                         )
                         return
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
-                tasks_raw = orchestrator.run_decompose(effective_prompt, request.depth)
+                language = self._research_language(research) if research else detect_language(
+                    request.prompt
+                )
+                tasks_raw = self._run_decompose(
+                    orchestrator, effective_prompt, request.depth, language
+                )
                 self._maybe_add_cross_language_task(research_id, effective_prompt, tasks_raw)
                 # Cancellation can land while decompose was running — re-check before we
                 # create tasks and flood the queue with search jobs.
@@ -621,7 +655,7 @@ class ResearchService(
         )
         claim_verification_summary = self.claim_verifier.verify_and_downgrade(
             research.final_report or "",
-            self._detect_report_language(research.prompt, research.final_report),
+            self._research_language(research),
             [],
             [],
         )[1]
@@ -1141,7 +1175,7 @@ class ResearchService(
             max_groups=6,
         )
         report = research.final_report or ""
-        language = self._detect_report_language(research.prompt, research.final_report)
+        language = self._research_language(research)
         claim_summary = self.claim_verifier.verify_and_downgrade(report, language, [], [])[1]
         return self.report_critic.build(
             research_id,
@@ -1278,13 +1312,13 @@ class ResearchService(
             if refreshed is not None
         ]
 
-    def _detect_report_language(self, prompt: str, report: str | None) -> str:
-        text = (report or prompt).lower()
-        if any("а" <= char <= "я" or char == "ё" for char in text):
-            return "ru"
-        if any(token in text for token in (" el ", " la ", " para ", " según ")):
-            return "es"
-        return "en"
+    @staticmethod
+    def _research_language(research: ResearchRecord) -> str:
+        """Return the language stored at creation, with a fallback for legacy rows."""
+        language = getattr(research, "language", None)
+        if language and language != "unknown":
+            return language
+        return detect_language(research.prompt)
 
     def _build_graph_execution_summary(self, tasks: list[SearchTask]) -> dict:
         follow_up_tasks = [task for task in tasks if task.id.startswith("replan-")]
@@ -1355,7 +1389,7 @@ class ResearchService(
         if agent is None:
             return report
         try:
-            language = self._detect_report_language(research.prompt, report)
+            language = self._research_language(research)
             search_agent = SearchAgent(
                 task_store=self.task_store,
                 max_sources=4,
@@ -1418,7 +1452,7 @@ class ResearchService(
         if not self._looks_like_comparison(research.prompt):
             return
         try:
-            language = self._detect_report_language(research.prompt, report)
+            language = self._research_language(research)
             table = self.comparison_agent.build(
                 research.prompt, report, language=language, model=settings.red_team_model
             )
@@ -1468,7 +1502,7 @@ class ResearchService(
         ):
             return report
 
-        language = self._detect_report_language(research.prompt, report)
+        language = self._research_language(research)
         heading = "## Трасса выполнения графа" if language == "ru" else "## Graph Execution Trail"
         step_label = "Шаг" if language == "ru" else "Step"
         detail_label = "Детали" if language == "ru" else "Details"
@@ -1616,11 +1650,16 @@ class ResearchService(
                     logger.info("finalize_stopped_cancelled research_id=%s", research_id)
                     return latest
             else:
+                analysis_kwargs = {
+                    "depth": research.depth,
+                    "model": (research.graph_state or {}).get("model"),
+                }
+                if self._accepts_keyword(analyzer.run_analysis, "language"):
+                    analysis_kwargs["language"] = self._research_language(research)
                 analysis_result = analyzer.run_analysis(
                     research.prompt,
                     tasks,
-                    depth=research.depth,
-                    model=(research.graph_state or {}).get("model"),
+                    **analysis_kwargs,
                 )
                 if isinstance(analysis_result, tuple) and len(analysis_result) in {2, 3}:
                     report, aggregated = analysis_result[:2]

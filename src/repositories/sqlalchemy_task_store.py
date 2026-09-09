@@ -72,11 +72,16 @@ class SQLAlchemyTaskStore:
             return False
 
     def add_research(
-        self, request: ResearchRequest, task_ids: list[str], user_id: str | None = None
+        self,
+        request: ResearchRequest,
+        task_ids: list[str],
+        user_id: str | None = None,
+        language: str = "unknown",
     ) -> ResearchRecord:
         research = ResearchORM(
             id=str(uuid.uuid4()),
             prompt=request.prompt,
+            language=language,
             user_id=user_id,
             depth=request.depth.value,
             status=ResearchStatus.PROCESSING.value,
@@ -126,6 +131,7 @@ class SQLAlchemyTaskStore:
         per_user_limit: int,
         global_limit: int,
         stale_before: datetime,
+        language: str = "unknown",
     ) -> ResearchRecord | None:
         with self.session_scope() as session:
             self._lock_admission(session)
@@ -145,6 +151,7 @@ class SQLAlchemyTaskStore:
             research = ResearchORM(
                 id=str(uuid.uuid4()),
                 prompt=request.prompt,
+                language=language,
                 user_id=user_id,
                 depth=request.depth.value,
                 status=(ResearchStatus.QUEUED if queued else ResearchStatus.PROCESSING).value,

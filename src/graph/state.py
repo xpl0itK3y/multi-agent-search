@@ -9,6 +9,7 @@ class FinalizeGraphState(TypedDict, total=False):
     finalize_lease_epoch: int
     prompt: str
     effective_prompt: str
+    language: str
     depth: SearchDepth
     tasks: list[SearchTask]
     model: str | None

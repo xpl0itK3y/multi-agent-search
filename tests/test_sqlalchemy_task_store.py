@@ -46,6 +46,7 @@ def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_fact
     research = store.add_research(
         ResearchRequest(prompt="research topic", depth=SearchDepth.MEDIUM),
         task_ids=[],
+        language="en",
     )
     task_id = str(uuid.uuid4())
     task = store.add_task(
@@ -76,6 +77,7 @@ def test_sqlalchemy_task_store_persists_research_and_tasks(postgres_session_fact
     fetched_tasks = store.get_tasks_by_research(research.id)
 
     assert fetched_research is not None
+    assert fetched_research.language == "en"
     assert fetched_research.status == ResearchStatus.COMPLETED
     assert fetched_research.final_report == "final report"
     assert fetched_research.task_ids == [task_id]

@@ -40,6 +40,7 @@ class ResearchORM(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="unknown")
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
