@@ -216,9 +216,6 @@ class FinalizeGraphRunner:
             analyzer = self.service.analyzer
             _, evidence_summary = self.service.evidence_mapper.build_evidence_groups(
                 aggregated_sources,
-                stopwords=getattr(analyzer, "STOPWORDS", AnalyzerAgent.STOPWORDS),
-                generic_tokens=getattr(analyzer, "CONFLICT_GENERIC_TOKENS", AnalyzerAgent.CONFLICT_GENERIC_TOKENS),
-                negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
                 max_groups=5,
             )
             branch_possible = (

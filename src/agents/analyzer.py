@@ -9,7 +9,12 @@ from urllib.parse import urlparse
 from src.agents.claim_verifier import ClaimVerifierAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.evidence_mapper import EvidenceMapperAgent
-from src.agents.language_utils import LANGUAGE_HINTS
+from src.agents.language_utils import (
+    COMBINED_ANALYSIS_LEXICON,
+    LANGUAGE_HINTS,
+    analysis_lexicon_for_sources,
+    contains_negation,
+)
 from src.agents.source_critic import SourceCriticAgent
 from src.core.agent import BaseAgent
 from src.core import domain_policy
@@ -54,31 +59,11 @@ class AnalyzerAgent(BaseAgent):
     )
     # Single source of truth lives in src/agents/language_utils.py (A-6).
     LANGUAGE_HINTS = LANGUAGE_HINTS
-    STOPWORDS = {
-        "the", "and", "for", "with", "that", "this", "from", "into", "their", "there", "about",
-        "have", "has", "had", "were", "was", "will", "would", "could", "should", "than", "then",
-        "into", "over", "under", "using", "used", "uses", "also", "only", "more", "most", "less",
-        "very", "some", "many", "much", "when", "where", "while", "which", "what", "your", "they",
-        "them", "being", "been", "because", "through", "each", "same", "such", "make", "made",
-        "like", "just", "than", "small", "api", "apis", "framework", "frameworks",
-    }
-    CONFLICT_GENERIC_TOKENS = {
-        "django",
-        "fastapi",
-        "flask",
-        "python",
-        "backend",
-        "production",
-        "system",
-        "systems",
-        "platform",
-        "platforms",
-        "supports",
-        "support",
-        "comparison",
-        "compare",
-    }
-    NEGATION_TOKENS = {"no", "not", "never", "without", "lack", "lacks", "cannot", "can't", "doesn't", "don't"}
+    # Compatibility aliases for citation auditing and custom integrations. Conflict and
+    # evidence analysis select the narrower source-language lexicon at call time.
+    STOPWORDS = set(COMBINED_ANALYSIS_LEXICON.stopwords)
+    CONFLICT_GENERIC_TOKENS = set(COMBINED_ANALYSIS_LEXICON.generic_tokens)
+    NEGATION_TOKENS = set(COMBINED_ANALYSIS_LEXICON.negation_tokens)
     TRUSTED_DOMAIN_EXACT_MATCHES = domain_policy.TRUSTED_DOMAIN_EXACT_MATCHES
     TRUSTED_DOMAIN_SUFFIXES = domain_policy.TRUSTED_DOMAIN_SUFFIXES
     # Unified across stages via domain_policy (AUD-006) — see that module for the eval check.
@@ -545,9 +530,6 @@ class AnalyzerAgent(BaseAgent):
         max_groups = self._EVIDENCE_GROUP_LIMITS.get(depth or SearchDepth.MEDIUM, 8)
         return self.evidence_mapper.build_evidence_groups(
             aggregated_data=aggregated_data,
-            stopwords=self.STOPWORDS,
-            generic_tokens=self.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=self.NEGATION_TOKENS,
             max_groups=max_groups,
         )
 
@@ -951,7 +933,7 @@ class AnalyzerAgent(BaseAgent):
         lowered = self._normalize_text(line).lower()
         return {
             token
-            for token in re.findall(r"[a-zа-я0-9]+", lowered)
+            for token in re.findall(r"[^\W_]+", lowered, flags=re.UNICODE)
             if len(token) >= 4 and token not in self.STOPWORDS and token not in self.CONFLICT_GENERIC_TOKENS
         }
 
@@ -1125,8 +1107,10 @@ class AnalyzerAgent(BaseAgent):
 
                 lowered = normalized_sentence.lower()
                 tokens = [
-                    token for token in re.findall(r"[a-z0-9]+", lowered)
-                    if len(token) >= 4 and token not in self.STOPWORDS
+                    token for token in re.findall(r"[^\W_]+", lowered, flags=re.UNICODE)
+                    if len(token) >= 4
+                    and token not in self.STOPWORDS
+                    and token not in self.CONFLICT_GENERIC_TOKENS
                 ]
                 unique_tokens: list[str] = []
                 for token in tokens:
@@ -1141,7 +1125,7 @@ class AnalyzerAgent(BaseAgent):
                     for number in re.findall(r"\b\d+(?:\.\d+)?\b", lowered)
                     if not self._is_likely_year(number)
                 )
-                has_negation = any(token in lowered for token in self.NEGATION_TOKENS)
+                has_negation = contains_negation(lowered, self.NEGATION_TOKENS)
                 claims.append(
                     {
                         "source_id": source["source_id"],
@@ -1189,11 +1173,12 @@ class AnalyzerAgent(BaseAgent):
         return False
 
     def _detect_conflict_candidates(self, aggregated_data: list[dict]) -> list[dict]:
+        lexicon = analysis_lexicon_for_sources(aggregated_data)
         return rust_accel.detect_conflicts(
             aggregated_data=aggregated_data,
-            stopwords=self.STOPWORDS,
-            generic_tokens=self.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=self.NEGATION_TOKENS,
+            stopwords=set(lexicon.stopwords | lexicon.generic_tokens),
+            generic_tokens=set(lexicon.generic_tokens),
+            negation_tokens=set(lexicon.negation_tokens),
             max_conflicts=5,
         )
 
@@ -1257,7 +1242,7 @@ class AnalyzerAgent(BaseAgent):
             return False
         lowered = stripped.lower()
         has_number = bool(re.search(r"\b\d+\b", lowered))
-        has_negation = any(tok in lowered for tok in self.NEGATION_TOKENS)
+        has_negation = contains_negation(lowered, self.NEGATION_TOKENS)
         has_claim_verb = any(tok in lowered for tok in (
             # English
             "will", "would", "could", "replace", "eliminate", "reduce", "increase",

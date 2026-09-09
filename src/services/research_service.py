@@ -617,9 +617,6 @@ class ResearchService(
         _, source_critic_summary = self.source_critic.assess_sources(aggregated_sources)
         _, evidence_coverage_summary = self.evidence_mapper.build_evidence_groups(
             aggregated_sources,
-            stopwords=AnalyzerAgent.STOPWORDS,
-            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
             max_groups=5,
         )
         claim_verification_summary = self.claim_verifier.verify_and_downgrade(
@@ -1141,9 +1138,6 @@ class ResearchService(
         ]
         evidence_groups, _ = self.evidence_mapper.build_evidence_groups(
             evidence_pool,
-            stopwords=AnalyzerAgent.STOPWORDS,
-            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
             max_groups=6,
         )
         report = research.final_report or ""

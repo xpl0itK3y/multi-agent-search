@@ -212,7 +212,7 @@ fn unique_tokens(
     let mut unique = Vec::new();
     for token in token_re.find_iter(sentence) {
         let normalized = token.as_str().to_lowercase();
-        if normalized.len() < 4 || stopwords.contains(&normalized) {
+        if normalized.chars().count() < 4 || stopwords.contains(&normalized) {
             continue;
         }
         if !unique.contains(&normalized) {
@@ -222,18 +222,30 @@ fn unique_tokens(
     unique
 }
 
+fn contains_word(haystack: &str, needles: &HashSet<String>) -> bool {
+    needles.iter().any(|needle| {
+        haystack.match_indices(needle.as_str()).any(|(start, matched)| {
+            let before = haystack[..start].chars().next_back();
+            let after = haystack[start + matched.len()..].chars().next();
+            before.map_or(true, |ch| !ch.is_alphanumeric() && ch != '_')
+                && after.map_or(true, |ch| !ch.is_alphanumeric() && ch != '_')
+        })
+    })
+}
+
 fn extract_claims(
     aggregated_data: &[AggregatedSource],
     stopwords: &HashSet<String>,
     negation_tokens: &HashSet<String>,
 ) -> Vec<ClaimRecord> {
-    let token_re = Regex::new(r"[a-zA-Zа-яА-Я0-9]+").unwrap();
+    let token_re = Regex::new(r"[\p{L}\p{N}]+").unwrap();
     let number_re = Regex::new(r"\b\d+(?:\.\d+)?\b").unwrap();
 
     let mut claims = Vec::new();
     for source in aggregated_data {
         for sentence in split_sentences(&source.content) {
-            if sentence.len() < 50 || sentence.len() > 260 {
+            let sentence_len = sentence.chars().count();
+            if sentence_len < 50 || sentence_len > 260 {
                 continue;
             }
             let lowered = sentence.to_lowercase();
@@ -248,7 +260,7 @@ fn extract_claims(
                 .filter(|value| !is_likely_year(value))
                 .collect::<Vec<_>>();
 
-            let has_negation = negation_tokens.iter().any(|token| lowered.contains(token));
+            let has_negation = contains_word(&lowered, negation_tokens);
             claims.push(ClaimRecord {
                 source_id: source.source_id.clone(),
                 sentence,
@@ -907,12 +919,13 @@ fn extract_evidence_groups_impl(
     let generic_tokens_set = generic_tokens.into_iter().collect::<HashSet<_>>();
     let negation_tokens_set = negation_tokens.into_iter().collect::<HashSet<_>>();
 
-    let token_re = Regex::new(r"[a-zA-Zа-яА-Я0-9]+").unwrap();
+    let token_re = Regex::new(r"[\p{L}\p{N}]+").unwrap();
     let mut groups = HashMap::<Vec<String>, EvidenceGroup>::new();
 
     for source in aggregated_data {
         for sentence in split_sentences(&source.content) {
-            if sentence.len() < 50 || sentence.len() > 260 {
+            let sentence_len = sentence.chars().count();
+            if sentence_len < 50 || sentence_len > 260 {
                 continue;
             }
             let lowered = sentence.to_lowercase();
@@ -924,7 +937,7 @@ fn extract_evidence_groups_impl(
             if tokens.len() < 2 {
                 continue;
             }
-            let has_negation = negation_tokens_set.iter().any(|token| lowered.contains(token));
+            let has_negation = contains_word(&lowered, &negation_tokens_set);
             let group = groups.entry(tokens.clone()).or_insert(EvidenceGroup {
                 topic: tokens.join(", "),
                 source_ids: Vec::new(),
@@ -1205,6 +1218,16 @@ mod tests {
         assert!(contains_any("foobarbaz", &s(&["bar"])));
         assert!(!contains_any("foo", &s(&["xyz"])));
         assert!(!contains_any("anything", &s(&[])));
+    }
+
+    #[test]
+    fn contains_word_uses_unicode_token_boundaries() {
+        let english = s(&["not"]).into_iter().collect::<HashSet<_>>();
+        let russian = s(&["не"]).into_iter().collect::<HashSet<_>>();
+        assert!(contains_word("this is not supported", &english));
+        assert!(!contains_word("this is notable", &english));
+        assert!(contains_word("режим не поддерживается", &russian));
+        assert!(!contains_word("внешнее подключение", &russian));
     }
 
     #[test]

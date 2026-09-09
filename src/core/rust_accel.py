@@ -35,6 +35,13 @@ def _contains_any(haystack: str, needles: tuple[str, ...] | list[str]) -> bool:
     return any(token in haystack for token in needles)
 
 
+def _contains_word(haystack: str, needles: set[str]) -> bool:
+    return any(
+        re.search(rf"(?<!\w){re.escape(token)}(?!\w)", haystack, flags=re.UNICODE)
+        for token in needles
+    )
+
+
 @lru_cache(maxsize=1)
 def _topic_policy_payload() -> list[dict]:
     return [
@@ -422,7 +429,7 @@ def detect_conflicts(
             lowered = normalized_sentence.lower()
             tokens = [
                 token
-                for token in re.findall(r"[a-zа-я0-9]+", lowered)
+                for token in re.findall(r"[^\W_]+", lowered, flags=re.UNICODE)
                 if len(token) >= 4 and token not in stopwords
             ]
             unique_tokens: list[str] = []
@@ -442,7 +449,7 @@ def detect_conflicts(
                     "sentence": normalized_sentence,
                     "tokens": unique_tokens[:6],
                     "numbers": numbers,
-                    "has_negation": any(token in lowered for token in negation_tokens),
+                    "has_negation": _contains_word(lowered, negation_tokens),
                 }
             )
 
@@ -906,7 +913,7 @@ def extract_evidence_groups(
                 continue
             lowered = normalized_sentence.lower()
             tokens = []
-            for token in re.findall(r"[a-zа-я0-9]+", lowered):
+            for token in re.findall(r"[^\W_]+", lowered, flags=re.UNICODE):
                 if len(token) < 4 or token in stopwords or token in generic_tokens or token in tokens:
                     continue
                 tokens.append(token)
@@ -932,7 +939,7 @@ def extract_evidence_groups(
                         "sentence": normalized_sentence,
                     }
                 )
-            has_negation = any(token in lowered for token in negation_tokens)
+            has_negation = _contains_word(lowered, negation_tokens)
             if has_negation:
                 group["has_conflict_signal"] = True
 
