@@ -214,12 +214,6 @@ class FinalizeGraphRunner:
             aggregated_sources = self.service._build_research_source_pool(state["tasks"])
             _, source_summary = self.service.source_critic.assess_sources(aggregated_sources)
             analyzer = self.service.analyzer
-            detect_conflicts = getattr(analyzer, "_detect_conflicts", None) if self._supports_conflict_detection(analyzer) else None
-            max_sources = getattr(analyzer, "MAX_ANALYZER_SOURCES", 24)
-            if not isinstance(max_sources, int):
-                max_sources = 24
-            conflict_pool = self._build_conflict_pool(aggregated_sources[:max_sources])
-            conflicts = detect_conflicts(conflict_pool) if callable(detect_conflicts) else []
             _, evidence_summary = self.service.evidence_mapper.build_evidence_groups(
                 aggregated_sources,
                 stopwords=getattr(analyzer, "STOPWORDS", AnalyzerAgent.STOPWORDS),
@@ -243,7 +237,6 @@ class FinalizeGraphRunner:
             should_replan = branch_possible and bool(recommendations)
             next_state = {
                 **state,
-                "detected_conflicts": conflicts,
                 "source_summary": source_summary.model_dump(),
                 "evidence_summary": evidence_summary.model_dump(),
                 "replan_recommendations": [item.model_dump() for item in recommendations],
@@ -252,25 +245,11 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "collect_context",
-                f"Collected {len(aggregated_sources)} sources, detected {len(conflicts)} conflicts, replan_needed={should_replan}",
+                f"Collected {len(aggregated_sources)} sources, replan_needed={should_replan}",
             )
             return next_state
 
         return self._run_timed_step("collect_context", action, state["research_id"])
-
-    def _build_conflict_pool(self, aggregated_sources: list[dict]) -> list[dict]:
-        return [
-            {
-                "source_id": f"S{index}",
-                "content": item.get("content", ""),
-                "url": item.get("url"),
-                "domain": item.get("domain"),
-                "title": item.get("title"),
-                "source_quality": item.get("source_quality"),
-            }
-            for index, item in enumerate(aggregated_sources, start=1)
-            if item.get("content")
-        ]
 
     def _apply_replan(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -368,20 +347,27 @@ class FinalizeGraphRunner:
             )
             if (
                 isinstance(analysis_result, tuple)
-                and len(analysis_result) == 2
+                and len(analysis_result) in {2, 3}
                 and isinstance(analysis_result[1], list)
             ):
-                report, aggregated_data = analysis_result
+                report, aggregated_data = analysis_result[:2]
                 canonical_sources = self.service._canonical_source_table(aggregated_data)
+                detected_conflicts = (
+                    analysis_result[2]
+                    if len(analysis_result) == 3 and isinstance(analysis_result[2], list)
+                    else state.get("detected_conflicts", [])
+                )
             else:
                 report = analysis_result
                 aggregated_data = state.get("aggregated_data")
                 canonical_sources = state.get("canonical_sources", [])
+                detected_conflicts = state.get("detected_conflicts", [])
             next_state = {
                 **state,
                 "report": report,
                 "aggregated_data": aggregated_data,
                 "canonical_sources": canonical_sources,
+                "detected_conflicts": detected_conflicts,
                 "analyze_attempts": state["analyze_attempts"] + 1,
             }
             self._checkpoint(
@@ -488,9 +474,6 @@ class FinalizeGraphRunner:
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
-
-    def _supports_conflict_detection(self, analyzer) -> bool:
-        return isinstance(analyzer, AnalyzerAgent)
 
     def _report_needs_retry(self, report: str) -> bool:
         normalized = report.lower()

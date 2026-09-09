@@ -8,9 +8,6 @@ class CanonicalAnalyzer:
     llm = None
     enable_graph_branching = False
 
-    def __init__(self):
-        self.conflict_inputs: list[list[dict]] = []
-
     def run_analysis(self, prompt, tasks, **kwargs):
         return (
             "## Summary\nThe selected source supports this report [S1].",
@@ -25,14 +22,6 @@ class CanonicalAnalyzer:
                 }
             ],
         )
-
-    def _resolve_depth_profile(self, depth):
-        return {"conflict_source_limit": 10}
-
-    def _detect_conflicts(self, sources):
-        self.conflict_inputs.append(sources)
-        return []
-
 
 def test_finalize_persists_and_reuses_the_analyzers_canonical_source_pool(mocker):
     store = InMemoryTaskStore()
@@ -95,7 +84,6 @@ def test_finalize_persists_and_reuses_the_analyzers_canonical_source_pool(mocker
             "content": "The selected source supports this report with detailed evidence.",
         }
     ]
-    assert analyzer.conflict_inputs[-1][0]["url"] == "https://selected.example/report"
 
 
 def test_chat_preserves_canonical_ids_after_ranking_and_sends_the_full_report(mocker):

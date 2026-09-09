@@ -1103,8 +1103,8 @@ class ResearchService(
     def get_research_conflicts(self, research_id: str) -> list[ResearchConflict]:
         """Structured source conflicts for the artifact panel (no LLM).
 
-        Prefers the conflicts computed during finalization (graph_state); if absent,
-        recomputes from the source pool when a full AnalyzerAgent is available.
+        Returns only conflicts adjudicated and persisted during finalization. Legacy
+        runs without an adjudicated result return an empty list.
         """
         research = self.task_store.get_research(research_id)
         if not research:
@@ -1112,15 +1112,9 @@ class ResearchService(
 
         raw = (research.graph_state or {}).get("detected_conflicts")
         if raw is None:
-            analyzer = self.analyzer
-            if isinstance(analyzer, AnalyzerAgent):
-                tasks = self.task_store.get_tasks_by_research(research_id)
-                aggregated = self._aggregated_sources(research, tasks) or []
-                profile = analyzer._resolve_depth_profile(research.depth)
-                conflict_pool = aggregated[: profile["conflict_source_limit"]]
-                raw = analyzer._detect_conflicts(conflict_pool) if conflict_pool else []
-            else:
-                raw = []
+            # Legacy runs have no adjudicated result. Do not expose heuristic candidates
+            # as facts or trigger a surprise LLM call from this read-only endpoint.
+            raw = []
         return [ResearchConflict.model_validate(item) for item in (raw or [])]
 
     def get_research_verification(self, research_id: str) -> VerificationReport:
@@ -1603,6 +1597,7 @@ class ResearchService(
             if analyzer_llm is not None and hasattr(analyzer_llm, "reset_usage"):
                 analyzer_llm.reset_usage()
 
+            detected_conflicts = None
             if settings.use_langgraph_finalize_graph:
                 try:
                     graph_result = self.finalize_graph_runner.run(
@@ -1633,8 +1628,13 @@ class ResearchService(
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
-                if isinstance(analysis_result, tuple) and len(analysis_result) == 2:
-                    report, aggregated = analysis_result
+                if isinstance(analysis_result, tuple) and len(analysis_result) in {2, 3}:
+                    report, aggregated = analysis_result[:2]
+                    detected_conflicts = (
+                        analysis_result[2]
+                        if len(analysis_result) == 3 and isinstance(analysis_result[2], list)
+                        else None
+                    )
                 else:  # compatibility with minimal analyzers
                     report = analysis_result
                     aggregated = None
@@ -1648,19 +1648,8 @@ class ResearchService(
             }
             if aggregated is not None:
                 source_state["canonical_sources"] = self._canonical_source_table(aggregated)
-                detect_conflicts = getattr(analyzer, "_detect_conflicts", None)
-                resolve_profile = getattr(analyzer, "_resolve_depth_profile", None)
-                if callable(detect_conflicts) and callable(resolve_profile):
-                    try:
-                        profile = resolve_profile(research.depth)
-                        conflict_pool = aggregated[: profile["conflict_source_limit"]]
-                        source_state["detected_conflicts"] = detect_conflicts(conflict_pool)
-                    except Exception as exc:  # custom analyzers must not break persistence
-                        logger.warning(
-                            "canonical_source_conflicts_failed research_id=%s error=%s",
-                            research_id,
-                            exc,
-                        )
+            if not settings.use_langgraph_finalize_graph and detected_conflicts is not None:
+                source_state["detected_conflicts"] = detected_conflicts
             self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
             self.task_store.merge_research_graph_state(research_id, source_state)
             research = self.task_store.get_research(research_id) or research
