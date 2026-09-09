@@ -8,9 +8,7 @@ The one missing FK index (AUD-010): get_tasks_by_research filters search_tasks b
 research_id on every status poll / summary / sources call and on cascade delete, so
 without this index those are sequential scans of a growing table.
 
-On a large live table, create it by hand with CREATE INDEX CONCURRENTLY (outside the
-alembic transaction) to avoid holding a write lock; this migration uses a plain index
-build, which is fine for small/medium tables.
+The concurrent build keeps writes available while the migration runs on a live table.
 """
 from alembic import op
 
@@ -20,9 +18,17 @@ branch_labels = None
 depends_on = None
 
 
+_INDEX = "ix_search_tasks_research_id"
+
+
 def upgrade() -> None:
-    op.create_index("ix_search_tasks_research_id", "search_tasks", ["research_id"])
+    with op.get_context().autocommit_block():
+        op.execute(
+            f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {_INDEX} "
+            "ON search_tasks (research_id)"
+        )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_search_tasks_research_id", table_name="search_tasks")
+    with op.get_context().autocommit_block():
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")

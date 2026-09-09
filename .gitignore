@@ -6,3 +6,4 @@ agent.md
 .DS_Store
 web/node_modules
 web/dist
+backups/

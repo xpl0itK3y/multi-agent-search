@@ -276,6 +276,44 @@ Run full queue maintenance manually:
 curl -X POST "http://localhost:8000/health/queues/maintenance"
 ```
 
+## PostgreSQL Backup and Restore
+
+Create a compressed custom-format backup through the running `db` service:
+
+```bash
+./scripts/backup_postgres.sh
+# Optional explicit destination:
+./scripts/backup_postgres.sh /srv/mas-backups/postgres-$(date -u +%F).dump
+```
+
+The script writes through a temporary file, validates the archive with
+`pg_restore --list`, refuses to overwrite an existing backup, and creates a
+`.sha256` checksum when `sha256sum` is available. Keep backups outside the
+repository and copy them to storage independent from the Docker host.
+
+Schedule at least one daily backup and retain a policy appropriate to the
+deployment; a practical baseline is 7 daily, 4 weekly, and 6 monthly copies.
+For example, after a successful daily backup, files older than the chosen
+window can be removed by the host's backup job. Alert on both backup failure and
+absence of a recent archive.
+
+Restore is destructive and deliberately requires the application, workers, and
+PgBouncer to be stopped plus an explicit `--confirm` argument:
+
+```bash
+docker compose stop api worker worker_2 worker_3 pgbouncer
+./scripts/restore_postgres.sh /srv/mas-backups/postgres-2026-09-09.dump --confirm
+docker compose run --rm migrate
+docker compose up -d pgbouncer api worker worker_2 worker_3
+curl http://localhost:8000/health
+```
+
+Run a restore drill at least quarterly on an isolated host or maintenance
+window: restore the newest archive, apply migrations, verify `/health`, open a
+known completed report, and confirm its tasks and sources are present. Record
+the archive name, checksum result, recovery duration, and verifier. Never use
+`docker compose down -v` as part of a drill against the production project.
+
 ## Tests
 
 Fast tests:

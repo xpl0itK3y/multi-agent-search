@@ -2,6 +2,7 @@
 // In dev the Vite proxy serves /v1 from the same origin, so EventSource works directly.
 
 import { authHeaders } from "./api";
+import type { SourcePreview } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
@@ -52,7 +53,7 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
 export interface ChatStreamHandlers {
   onDelta?: (answer: string) => void;
   onSearching?: () => void;
-  onDone?: (answer: string) => void;
+  onDone?: (answer: string, sources: SourcePreview[]) => void;
   onError?: (message: string) => void;
 }
 
@@ -110,7 +111,7 @@ export async function streamChatAnswer(
       if (event === "delta") h.onDelta?.(parsed.answer ?? "");
       else if (event === "searching") h.onSearching?.();
       else if (event === "done") {
-        h.onDone?.(parsed.answer ?? "");
+        h.onDone?.(parsed.answer ?? "", parsed.sources ?? []);
         return;
       } else if (event === "stream_error") {
         h.onError?.(parsed.detail ?? "stream error");

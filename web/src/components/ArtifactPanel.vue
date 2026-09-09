@@ -699,6 +699,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
         <MarkdownView
           v-if="report"
           :source="report"
+          :sources="sources || []"
           :grounding="citations?.grounding"
           :independence="independence"
           :weak-claims="weakClaims"

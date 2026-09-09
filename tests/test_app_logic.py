@@ -52,6 +52,36 @@ class RecordingLLM(LLMProvider):
         return self.response
 
 
+class AdjudicatingLLM(RecordingLLM):
+    def __init__(self, response: str = "ok", *, confirmed: bool = True):
+        super().__init__(response)
+        self.confirmed = confirmed
+
+    def generate(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
+        if "conflict adjudicator" not in system_prompt.lower():
+            return super().generate(system_prompt, user_prompt, **kwargs)
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        claim_pairs = json.loads(user_prompt)["claim_pairs"]
+        return json.dumps(
+            {
+                "decisions": [
+                    {
+                        "index": pair["index"],
+                        "conflict": self.confirmed,
+                        "reason": "same entity, metric, scope, and period",
+                    }
+                    for pair in claim_pairs
+                ]
+            }
+        )
+
+
 class SequentialLLM(LLMProvider):
     def __init__(self, responses: list[str]):
         self.responses = list(responses)
@@ -84,7 +114,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, aggregated_data, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -106,6 +136,7 @@ def test_analyzer_agent_uses_llm_provider_contract():
     assert llm.calls[0]["kwargs"]["temperature"] == 0.3
     payload = _json_payload_str(llm.calls[0]["user_prompt"])
     parsed = json.loads(payload)
+    assert aggregated_data == parsed["gathered_data"]
     assert parsed["gathered_data"][0]["source_id"] == "S1"
     assert parsed["gathered_data"][0]["domain"] == "example.com"
     assert parsed["gathered_data"][0]["source_quality"] == "low"
@@ -128,7 +159,7 @@ def test_analyzer_agent_repairs_structured_reports_with_uncited_claims():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -155,7 +186,7 @@ def test_analyzer_agent_repairs_weakly_supported_citations():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -190,7 +221,7 @@ def test_analyzer_agent_uses_configured_repair_model_for_llm_repair(mocker):
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -257,7 +288,7 @@ def test_analyzer_agent_filters_failed_and_duplicate_sources():
     llm = RecordingLLM(response="report")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -426,7 +457,7 @@ def test_analyzer_agent_uses_local_repair_for_small_citation_issues():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -832,7 +863,7 @@ def test_analyzer_agent_post_processes_sources_heading():
     llm = RecordingLLM(response="Introduction\n\nSources:\n- [S1] https://example.com")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -853,7 +884,7 @@ def test_analyzer_agent_adds_sources_heading_when_missing():
     llm = RecordingLLM(response="Introduction\n\nConclusion")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -881,7 +912,7 @@ def test_analyzer_agent_rebuilds_sources_from_valid_inline_citations():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -911,7 +942,7 @@ def test_analyzer_agent_lists_additional_relevant_sources_beyond_cited_ones():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "original prompt",
         [
             SearchTask(
@@ -942,7 +973,7 @@ def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Сравни FastAPI и Flask для небольших API",
         [
             SearchTask(
@@ -963,10 +994,10 @@ def test_analyzer_agent_retries_once_when_report_language_mismatches_prompt():
 
 
 def test_analyzer_agent_detects_conflicts_from_overlapping_claims():
-    llm = RecordingLLM(response="## Introduction\nComparison body. [S1] [S2]\n\n## Conclusion\nDone.")
+    llm = AdjudicatingLLM(response="## Introduction\nComparison body. [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, conflicts = agent.run_analysis(
         "Compare two systems in English",
         [
             SearchTask(
@@ -993,10 +1024,40 @@ def test_analyzer_agent_detects_conflicts_from_overlapping_claims():
     assert "## Conflicts And Uncertainties" in result
     assert "[S1]" in result
     assert "[S2]" in result
+    assert conflicts[0]["reason"] == "same entity, metric, scope, and period"
+    adjudication_calls = [
+        call for call in llm.calls if "conflict adjudicator" in call["system_prompt"].lower()
+    ]
+    assert len(adjudication_calls) == 1
+    assert adjudication_calls[0]["kwargs"] == {
+        "model": settings.red_team_model,
+        "temperature": 0.0,
+    }
+
+
+def test_analyzer_agent_adjudicates_at_most_five_candidates_in_one_call(mocker):
+    llm = AdjudicatingLLM()
+    agent = AnalyzerAgent(llm)
+    candidates = [
+        {
+            "topic": f"metric {index}",
+            "source_ids": [f"S{index + 1}", f"S{index + 2}"],
+            "sentences": [f"Left claim {index}", f"Right claim {index}"],
+            "reason": "heuristic candidate",
+        }
+        for index in range(6)
+    ]
+    mocker.patch.object(agent, "_detect_conflict_candidates", return_value=candidates)
+
+    conflicts = agent._detect_conflicts([])
+
+    assert len(conflicts) == 5
+    assert len(llm.calls) == 1
+    assert len(json.loads(llm.calls[0]["user_prompt"])["claim_pairs"]) == 5
 
 
 def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
-    llm = RecordingLLM(response="report")
+    llm = AdjudicatingLLM(response="report")
     agent = AnalyzerAgent(llm)
 
     agent.run_analysis(
@@ -1023,7 +1084,8 @@ def test_analyzer_agent_passes_detected_conflicts_into_prompt_payload():
         ],
     )
 
-    payload = _json_payload_str(llm.calls[0]["user_prompt"])
+    report_call = next(call for call in llm.calls if call["system_prompt"] == agent.SYSTEM_PROMPT)
+    payload = _json_payload_str(report_call["user_prompt"])
     parsed = json.loads(payload)
     assert parsed["detected_conflicts"]
     assert parsed["detected_conflicts"][0]["source_ids"] == ["S1", "S2"]
@@ -1250,7 +1312,7 @@ def test_finalize_graph_runner_executes_tie_break_search_for_conflicts(mocker):
             "search_metrics": {"selected_source_count": 1},
         }
     )
-    analyzer = AnalyzerAgent(RecordingLLM(response="## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources"))
+    analyzer = AnalyzerAgent(AdjudicatingLLM(response="## Introduction\nDraft [S1].\n\n## Conclusion\nDone [S2].\n\n## Sources"))
     service = ResearchService(task_store=task_store, analyzer=analyzer)
 
     def fake_run_search_task(task_id, depth):
@@ -1285,6 +1347,7 @@ def test_finalize_graph_runner_executes_tie_break_search_for_conflicts(mocker):
 
     assert finalized.status == ResearchStatus.COMPLETED
     assert spy.call_count >= 1
+    assert service.get_research_conflicts(research.id)
     assert any("resolve conflicting evidence" in (task.logs or [""])[0].lower() for task in all_tasks if task.id.startswith("replan-"))
 
 
@@ -1292,7 +1355,7 @@ def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
     llm = RecordingLLM(response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Compare Django and FastAPI in English",
         [
             SearchTask(
@@ -1317,6 +1380,59 @@ def test_analyzer_agent_ignores_year_only_or_generic_overlap_as_conflict():
     )
 
     assert "## Conflicts And Uncertainties" not in result
+
+
+def test_analyzer_agent_rejects_numeric_candidate_from_different_periods():
+    llm = AdjudicatingLLM(
+        response="## Introduction\nSummary [S1] [S2]\n\n## Conclusion\nDone.",
+        confirmed=False,
+    )
+    agent = AnalyzerAgent(llm)
+
+    result, _, conflicts = agent.run_analysis(
+        "Compare company revenue growth in English",
+        [
+            SearchTask(
+                id="task-1",
+                description="desc",
+                queries=["query"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {
+                        "url": "https://example.com/2024",
+                        "title": "Fiscal 2024",
+                        "content": "Company revenue growth rate reached 12 percent for fiscal 2024 according to audited results.",
+                    },
+                    {
+                        "url": "https://example.com/2025",
+                        "title": "Fiscal 2025",
+                        "content": "Company revenue growth rate reached 18 percent for fiscal 2025 according to audited results.",
+                    },
+                ],
+            )
+        ],
+    )
+
+    assert conflicts == []
+    assert "## Conflicts And Uncertainties" not in result
+    adjudication_calls = [
+        call for call in llm.calls if "conflict adjudicator" in call["system_prompt"].lower()
+    ]
+    assert len(adjudication_calls) == 1
+    assert len(json.loads(adjudication_calls[0]["user_prompt"])["claim_pairs"]) == 1
+
+
+def test_legacy_research_without_adjudication_returns_no_conflicts():
+    task_store = InMemoryTaskStore()
+    research = task_store.add_research(
+        ResearchRequest(prompt="Compare systems in English", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    llm = AdjudicatingLLM()
+    service = ResearchService(task_store=task_store, analyzer=AnalyzerAgent(llm))
+
+    assert service.get_research_conflicts(research.id) == []
+    assert llm.calls == []
 
 
 def test_analyzer_agent_requires_more_than_generic_overlap_for_numeric_conflict():
@@ -1356,7 +1472,7 @@ def test_analyzer_agent_adds_report_notes_for_missing_structure_and_citations():
     llm = RecordingLLM(response="Plain body without headings or inline citations.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Compare systems in English",
         [
             SearchTask(
@@ -1385,7 +1501,7 @@ def test_analyzer_agent_localizes_post_processed_sections_for_russian_reports():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Сравни Linux и macOS для работы",
         [
             SearchTask(
@@ -1408,7 +1524,7 @@ def test_analyzer_agent_localizes_report_notes_for_russian_reports():
     llm = RecordingLLM(response="Обычный текст без заголовков и без ссылок.")
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Сравни Linux и macOS для работы",
         [
             SearchTask(
@@ -1436,7 +1552,7 @@ def test_analyzer_agent_does_not_add_report_notes_for_well_formed_report():
     )
     agent = AnalyzerAgent(llm)
 
-    result = agent.run_analysis(
+    result, _, _ = agent.run_analysis(
         "Compare systems in English",
         [
             SearchTask(
@@ -2503,14 +2619,21 @@ def test_research_chat_grounded_answer_and_persistence():
 
     answer = service.generate_research_answer(research.id, "What color?")
     service.append_research_message(research.id, "user", "What color?")
-    service.append_research_message(research.id, "assistant", answer)
+    service.append_research_message(
+        research.id,
+        "assistant",
+        answer.content,
+        answer.sources,
+    )
 
-    assert answer == "Widgets are blue [S1]."
+    assert answer.content == "Widgets are blue [S1]."
+    assert answer.sources[0].source_id == "S1"
     assert captured["sources"][0]["source_id"] == "S1"
     assert "Widgets are blue and fast." in captured["sources"][0]["content"]
     messages = service.list_research_messages(research.id)
     assert [m.role for m in messages] == ["user", "assistant"]
     assert messages[1].content == "Widgets are blue [S1]."
+    assert messages[1].sources[0].url == "http://a.com"
 
 
 def test_research_clarify_first_stores_questions():

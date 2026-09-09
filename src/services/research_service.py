@@ -148,6 +148,7 @@ class ResearchService(
         stance_agent=None,
         cross_language_agent=None,
         broker: RedisBroker | None = None,
+        llm_available: bool = True,
     ):
         self.task_store = task_store
         self.optimizer = optimizer
@@ -172,6 +173,7 @@ class ResearchService(
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.broker = broker
+        self.llm_available = llm_available
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
     # ── auth ──────────────────────────────────────────────────────────────────
@@ -615,9 +617,6 @@ class ResearchService(
         _, source_critic_summary = self.source_critic.assess_sources(aggregated_sources)
         _, evidence_coverage_summary = self.evidence_mapper.build_evidence_groups(
             aggregated_sources,
-            stopwords=AnalyzerAgent.STOPWORDS,
-            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
             max_groups=5,
         )
         claim_verification_summary = self.claim_verifier.verify_and_downgrade(
@@ -873,13 +872,21 @@ class ResearchService(
         messages = (research.graph_state or {}).get("messages") or []
         return [ChatMessage.model_validate(message) for message in messages]
 
-    def append_research_message(self, research_id: str, role: str, content: str) -> None:
+    def append_research_message(
+        self,
+        research_id: str,
+        role: str,
+        content: str,
+        sources: list[SearchSourcePreview] | None = None,
+    ) -> None:
         research = self.task_store.get_research(research_id)
         if not research:
             return
         state = dict(research.graph_state or {})
         messages = list(state.get("messages") or [])
-        messages.append({"role": role, "content": content})
+        messages.append(
+            ChatMessage(role=role, content=content, sources=sources or []).model_dump()
+        )
         state["messages"] = messages[-40:]  # cap conversation history
         self.task_store.update_research_graph_state(research_id, state)
 
@@ -975,7 +982,7 @@ class ResearchService(
         question: str,
         streaming_callback=None,
         status_callback=None,
-    ) -> str:
+    ) -> ChatMessage:
         """Grounded follow-up answer. Escalates to a mini web search when the existing
         source pool does not cover the question, then answers over the enriched pool."""
         research = self.task_store.get_research(research_id)
@@ -984,24 +991,54 @@ class ResearchService(
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
+            self.task_store.merge_research_graph_state(
+                research_id,
+                {"canonical_sources": self._canonical_source_table(pool)},
+            )
         if self._question_needs_search(question, pool):
             if status_callback:
                 status_callback("searching")
-            self._mini_search_for_chat(research_id, question, research.depth)
+            new_sources = self._mini_search_for_chat(research_id, question, research.depth)
             tasks = self.task_store.get_tasks_by_research(research_id)
-            pool = self._build_research_source_pool(tasks)
+            seen_urls = {source.get("url") for source in pool if source.get("url")}
+            source_numbers = [
+                int(source_id[1:])
+                for source in pool
+                if (source_id := str(source.get("source_id") or "")).startswith("S")
+                and source_id[1:].isdigit()
+            ]
+            next_source_number = max(source_numbers, default=0) + 1
+            for source in new_sources:
+                url = source.get("url")
+                if not url or url in seen_urls:
+                    continue
+                pool.append({"source_id": f"S{next_source_number}", **source})
+                seen_urls.add(url)
+                next_source_number += 1
+            self.task_store.merge_research_graph_state(
+                research_id,
+                {"canonical_sources": self._canonical_source_table(pool)},
+            )
         # Retrieve the most relevant sources for this question (not just the first 12).
         pool = self._rank_sources_for_question(question, pool, 12)
         sources = [
             {
-                "source_id": f"S{index}",
+                "source_id": item.get("source_id"),
                 "title": item.get("title"),
                 "domain": item.get("domain"),
                 "url": item.get("url"),
+                "source_quality": item.get("source_quality"),
+                "extraction_status": item.get("extraction_status"),
                 "content": (item.get("content") or "")[:800],
             }
-            for index, item in enumerate(pool, start=1)
+            for item in pool
+            if item.get("source_id")
         ]
         history = list((research.graph_state or {}).get("messages") or [])
         model = (research.graph_state or {}).get("model")
@@ -1009,7 +1046,7 @@ class ResearchService(
             research_id=research_id,
             user_id=research.user_id or "local",
         ):
-            return chat.answer(
+            answer = chat.answer(
                 question,
                 research.final_report or "",
                 sources,
@@ -1017,17 +1054,40 @@ class ResearchService(
                 model=model,
                 streaming_callback=streaming_callback,
             )
+        return ChatMessage(
+            role="assistant",
+            content=answer,
+            sources=[
+                SearchSourcePreview(
+                    source_id=source["source_id"],
+                    url=source.get("url") or "",
+                    title=source.get("title"),
+                    domain=source.get("domain"),
+                    source_quality=source.get("source_quality"),
+                    extraction_status=source.get("extraction_status"),
+                    snippet=((source.get("content") or "")[:280] or None),
+                )
+                for source in sources
+                if source.get("url")
+            ],
+        )
 
     def get_research_sources(self, research_id: str) -> list[SearchSourcePreview]:
-        """Cheap aggregated source list (deduped by URL) for the artifact panel — no LLM."""
+        """Canonical report source list for the artifact panel — no LLM."""
         research = self.task_store.get_research(research_id)
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
         return [
             SearchSourcePreview(
                 url=item.get("url", ""),
+                source_id=item.get("source_id", ""),
                 title=item.get("title"),
                 domain=item.get("domain"),
                 source_quality=item.get("source_quality"),
@@ -1040,8 +1100,8 @@ class ResearchService(
     def get_research_conflicts(self, research_id: str) -> list[ResearchConflict]:
         """Structured source conflicts for the artifact panel (no LLM).
 
-        Prefers the conflicts computed during finalization (graph_state); if absent,
-        recomputes from the source pool when a full AnalyzerAgent is available.
+        Returns only conflicts adjudicated and persisted during finalization. Legacy
+        runs without an adjudicated result return an empty list.
         """
         research = self.task_store.get_research(research_id)
         if not research:
@@ -1049,25 +1109,9 @@ class ResearchService(
 
         raw = (research.graph_state or {}).get("detected_conflicts")
         if raw is None:
-            analyzer = self.analyzer
-            if isinstance(analyzer, AnalyzerAgent):
-                tasks = self.task_store.get_tasks_by_research(research_id)
-                pool = self._build_research_source_pool(tasks)
-                conflict_pool = [
-                    {
-                        "source_id": f"S{index}",
-                        "content": item.get("content", ""),
-                        "url": item.get("url"),
-                        "domain": item.get("domain"),
-                        "title": item.get("title"),
-                        "source_quality": item.get("source_quality"),
-                    }
-                    for index, item in enumerate(pool, start=1)
-                    if item.get("content")
-                ]
-                raw = analyzer._detect_conflicts(conflict_pool) if conflict_pool else []
-            else:
-                raw = []
+            # Legacy runs have no adjudicated result. Do not expose heuristic candidates
+            # as facts or trigger a surprise LLM call from this read-only endpoint.
+            raw = []
         return [ResearchConflict.model_validate(item) for item in (raw or [])]
 
     def get_research_verification(self, research_id: str) -> VerificationReport:
@@ -1080,17 +1124,20 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._build_research_source_pool(tasks)
+        pool = self._aggregated_sources(research, tasks)
+        if pool is None:
+            pool = [
+                {"source_id": f"S{index}", **item}
+                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
+            ]
         evidence_pool = [
-            {"source_id": f"S{index}", "content": item.get("content", "")}
-            for index, item in enumerate(pool, start=1)
+            {"source_id": item.get("source_id", ""), "content": item.get("content", "")}
+            for item in pool
+            if item.get("source_id")
             if item.get("content")
         ]
         evidence_groups, _ = self.evidence_mapper.build_evidence_groups(
             evidence_pool,
-            stopwords=AnalyzerAgent.STOPWORDS,
-            generic_tokens=AnalyzerAgent.CONFLICT_GENERIC_TOKENS,
-            negation_tokens=AnalyzerAgent.NEGATION_TOKENS,
             max_groups=6,
         )
         report = research.final_report or ""
@@ -1544,9 +1591,10 @@ class ResearchService(
             if analyzer_llm is not None and hasattr(analyzer_llm, "reset_usage"):
                 analyzer_llm.reset_usage()
 
+            detected_conflicts = None
             if settings.use_langgraph_finalize_graph:
                 try:
-                    report = self.finalize_graph_runner.run(
+                    graph_result = self.finalize_graph_runner.run(
                         research_id,
                         research.prompt,
                         tasks,
@@ -1554,6 +1602,13 @@ class ResearchService(
                         finalize_job_id=finalize_job_id,
                         lease_epoch=lease_epoch,
                     )
+                    if isinstance(graph_result, tuple) and len(graph_result) == 4:
+                        report, aggregated, effective_prompt, final_tasks = graph_result
+                    else:  # compatibility with custom/test graph runners
+                        report = graph_result
+                        aggregated = None
+                        effective_prompt = research.prompt
+                        final_tasks = tasks
                 except FinalizeCancelled:
                     latest = self.task_store.get_research(research_id)
                     if latest is None:
@@ -1561,12 +1616,38 @@ class ResearchService(
                     logger.info("finalize_stopped_cancelled research_id=%s", research_id)
                     return latest
             else:
-                report = analyzer.run_analysis(
+                analysis_result = analyzer.run_analysis(
                     research.prompt,
                     tasks,
                     depth=research.depth,
                     model=(research.graph_state or {}).get("model"),
                 )
+                if isinstance(analysis_result, tuple) and len(analysis_result) in {2, 3}:
+                    report, aggregated = analysis_result[:2]
+                    detected_conflicts = (
+                        analysis_result[2]
+                        if len(analysis_result) == 3 and isinstance(analysis_result[2], list)
+                        else None
+                    )
+                else:  # compatibility with minimal analyzers
+                    report = analysis_result
+                    aggregated = None
+                effective_prompt = research.prompt
+                final_tasks = tasks
+
+            tasks = final_tasks
+            source_state: dict[str, Any] = {
+                "effective_prompt": effective_prompt,
+                "task_ids": [task.id for task in tasks],
+            }
+            if aggregated is not None:
+                source_state["canonical_sources"] = self._canonical_source_table(aggregated)
+            if not settings.use_langgraph_finalize_graph and detected_conflicts is not None:
+                source_state["detected_conflicts"] = detected_conflicts
+            self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
+            self.task_store.merge_research_graph_state(research_id, source_state)
+            research = self.task_store.get_research(research_id) or research
+
             self._emit_finalize_progress(
                 research_id, "redteam", finalize_job_id, lease_epoch
             )
@@ -1574,9 +1655,10 @@ class ResearchService(
             self._emit_finalize_progress(
                 research_id, "audit", finalize_job_id, lease_epoch
             )
-            # Reconstruct the analyzer's source numbering ONCE and share it across the trust
-            # steps — each used to recompute it independently (AUD-013).
-            aggregated = self._aggregated_sources(research, tasks)
+            # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
+            # fall back to the persisted canonical table or deterministic reconstruction.
+            if aggregated is None:
+                aggregated = self._aggregated_sources(research, tasks)
             self._audit_citations(report, research, tasks, aggregated=aggregated)
             self._analyze_source_independence(research, tasks, aggregated=aggregated)
             self._assess_source_reputation(research, tasks, aggregated=aggregated)
@@ -1915,14 +1997,19 @@ class ResearchService(
         # Probe dependencies first so /health is a real readiness signal (AUD-036).
         db_ok = self.task_store.ping()
         redis_status = "disabled" if self.broker is None else ("ok" if self.broker.ping() else "down")
-        dependencies = {"database": "ok" if db_ok else "down", "redis": redis_status}
+        llm_status = "ok" if self.llm_available else "down"
+        dependencies = {
+            "database": "ok" if db_ok else "down",
+            "redis": redis_status,
+            "llm": llm_status,
+        }
         if not db_ok:
             return {"status": "degraded", "dependencies": dependencies}
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         step_events = self._filter_graph_step_events()
         queue_metrics = self.get_queue_metrics()
         return {
-            "status": "ok" if redis_status != "down" else "degraded",
+            "status": "ok" if redis_status != "down" and llm_status == "ok" else "degraded",
             "dependencies": dependencies,
             "extraction_metrics": get_extraction_metrics_snapshot(),
             "graph_metrics": graph_metrics.model_dump(),

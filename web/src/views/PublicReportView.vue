@@ -90,7 +90,11 @@ const stanceText = computed(() => {
         </span>
       </div>
 
-      <MarkdownView :source="report.final_report" :grounding="report.citations.grounding" />
+      <MarkdownView
+        :source="report.final_report"
+        :sources="report.sources"
+        :grounding="report.citations.grounding"
+      />
 
       <footer class="mt-10 border-t border-bd pt-4 text-xs text-muted">
         {{ $t("share.footer") }} · <a href="/" class="text-accent hover:underline">{{ $t("sidebar.brand") }}</a>

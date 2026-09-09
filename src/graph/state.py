@@ -13,6 +13,8 @@ class FinalizeGraphState(TypedDict, total=False):
     tasks: list[SearchTask]
     model: str | None
     report: str
+    aggregated_data: list[dict[str, Any]]
+    canonical_sources: list[dict[str, Any]]
     replan_recommendations: list[dict[str, Any]]
     tie_break_recommendations: list[dict[str, Any]]
     detected_conflicts: list[dict[str, Any]]

@@ -41,7 +41,7 @@ class ChatAgent:
         ) or "(none)"
         return (
             "REPORT (for context):\n"
-            f"{(report or '(no report)')[:4000]}\n\n"
+            f"{report or '(no report)'}\n\n"
             "SOURCES (cite these by source_id as [Sn]):\n"
             f"{json.dumps(sources, ensure_ascii=False)}\n\n"
             "CONVERSATION SO FAR:\n"

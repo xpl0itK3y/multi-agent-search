@@ -2,7 +2,7 @@
 import pytest
 
 import src.net_safety as net_safety
-from src.net_safety import safe_fetch_html
+from src.net_safety import safe_fetch_document, safe_fetch_html
 from src.providers.search import ContentExtractor
 
 
@@ -24,11 +24,11 @@ def test_extract_content_blocks_ssrf_targets(url):
 class _Resp:
     _REDIRECTS = {301, 302, 303, 307, 308}
 
-    def __init__(self, status_code=200, headers=None, text=""):
+    def __init__(self, status_code=200, headers=None, text="", content=None):
         self.status_code = status_code
         self.headers = headers or {}
         self.text = text
-        self.content = text.encode()
+        self.content = text.encode() if content is None else content
 
     @property
     def is_redirect(self):
@@ -70,6 +70,31 @@ def _patch(monkeypatch, script):
 def test_safe_fetch_returns_body_on_200(monkeypatch):
     _patch(monkeypatch, {"https://example.com/": _Resp(200, {}, "<html>hi</html>")})
     assert safe_fetch_html("https://example.com/", max_redirects=1) == "<html>hi</html>"
+
+
+def test_safe_fetch_document_returns_bytes_and_normalized_content_type(monkeypatch):
+    pdf = b"%PDF-1.7\nexample"
+    _patch(
+        monkeypatch,
+        {
+            "https://example.com/report": _Resp(
+                200,
+                {"content-type": "Application/X-PDF; charset=binary"},
+                content=pdf,
+            )
+        },
+    )
+
+    assert safe_fetch_document("https://example.com/report") == (pdf, "application/pdf")
+
+
+def test_safe_fetch_document_rejects_oversized_body(monkeypatch):
+    _patch(
+        monkeypatch,
+        {"https://example.com/large": _Resp(200, content=b"12345")},
+    )
+
+    assert safe_fetch_document("https://example.com/large", max_bytes=4) is None
 
 
 def test_safe_fetch_follows_safe_redirect(monkeypatch):

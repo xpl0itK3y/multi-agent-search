@@ -644,8 +644,13 @@ def register_routes(app: FastAPI) -> None:
         service = get_research_service(request)
         answer = service.generate_research_answer(research_id, payload.question)
         service.append_research_message(research_id, "user", payload.question)
-        service.append_research_message(research_id, "assistant", answer)
-        return ChatMessage(role="assistant", content=answer)
+        service.append_research_message(
+            research_id,
+            "assistant",
+            answer.content,
+            answer.sources,
+        )
+        return answer
 
     @app.post("/v1/research/{research_id}/messages/stream", dependencies=research_guard)
     def ask_research_stream(
@@ -694,8 +699,19 @@ def register_routes(app: FastAPI) -> None:
                     yield sse("searching", {"status": value})
                 elif kind == "final":
                     service.append_research_message(research_id, "user", question)
-                    service.append_research_message(research_id, "assistant", value)
-                    yield sse("done", {"answer": value})
+                    service.append_research_message(
+                        research_id,
+                        "assistant",
+                        value.content,
+                        value.sources,
+                    )
+                    yield sse(
+                        "done",
+                        {
+                            "answer": value.content,
+                            "sources": [source.model_dump() for source in value.sources],
+                        },
+                    )
                     return
                 else:
                     yield sse("stream_error", {"detail": value})

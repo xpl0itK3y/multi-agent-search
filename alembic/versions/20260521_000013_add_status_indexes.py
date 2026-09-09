@@ -24,19 +24,25 @@ branch_labels = None
 depends_on = None
 
 
+_INDEXES = (
+    ("ix_researches_status", "researches", "status"),
+    ("ix_search_tasks_status", "search_tasks", "status"),
+    ("ix_search_task_jobs_status", "search_task_jobs", "status"),
+    ("ix_research_finalize_jobs_status", "research_finalize_jobs", "status"),
+    ("ix_worker_heartbeats_status", "worker_heartbeats", "status"),
+)
+
+
 def upgrade() -> None:
-    # CONCURRENTLY cannot run inside Alembic's implicit transaction; use standard CREATE INDEX.
-    # On live production tables prefer running these manually with CONCURRENTLY to avoid locking.
-    op.execute("CREATE INDEX IF NOT EXISTS ix_researches_status ON researches (status)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_search_tasks_status ON search_tasks (status)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_search_task_jobs_status ON search_task_jobs (status)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_research_finalize_jobs_status ON research_finalize_jobs (status)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_worker_heartbeats_status ON worker_heartbeats (status)")
+    with op.get_context().autocommit_block():
+        for name, table, column in _INDEXES:
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} "
+                f"ON {table} ({column})"
+            )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_researches_status")
-    op.execute("DROP INDEX IF EXISTS ix_search_tasks_status")
-    op.execute("DROP INDEX IF EXISTS ix_search_task_jobs_status")
-    op.execute("DROP INDEX IF EXISTS ix_research_finalize_jobs_status")
-    op.execute("DROP INDEX IF EXISTS ix_worker_heartbeats_status")
+    with op.get_context().autocommit_block():
+        for name, _, _ in reversed(_INDEXES):
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")

@@ -49,7 +49,7 @@ class FinalizeGraphRunner:
         depth,
         finalize_job_id: str | None = None,
         lease_epoch: int | None = None,
-    ) -> str:
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         state = self._build_initial_state(
             research_id,
             prompt,
@@ -100,7 +100,13 @@ class FinalizeGraphRunner:
             saved_report = graph_state.get("report") or ""
             if saved_report:
                 logger.info("langgraph_finalize_already_complete skip_rerun research_id=%s", research_id)
-                return {**state, "report": saved_report, "resume_from_step": "complete"}
+                return {
+                    **state,
+                    "effective_prompt": graph_state.get("effective_prompt") or prompt,
+                    "canonical_sources": graph_state.get("canonical_sources") or [],
+                    "report": saved_report,
+                    "resume_from_step": "complete",
+                }
             return state
 
         resumed_state = {
@@ -117,6 +123,7 @@ class FinalizeGraphRunner:
             "detected_conflicts": graph_state.get("detected_conflicts") or [],
             "source_summary": graph_state.get("source_summary") or {},
             "evidence_summary": graph_state.get("evidence_summary") or {},
+            "canonical_sources": graph_state.get("canonical_sources") or [],
             "report": graph_state.get("report") or "",
             "resume_from_step": step,
         }
@@ -147,6 +154,7 @@ class FinalizeGraphRunner:
             "detected_conflicts": state.get("detected_conflicts", []),
             "source_summary": state.get("source_summary", {}),
             "evidence_summary": state.get("evidence_summary", {}),
+            "canonical_sources": state.get("canonical_sources", []),
             "report": state.get("report", ""),
         }
         event = {"step": step, "detail": detail}
@@ -206,17 +214,8 @@ class FinalizeGraphRunner:
             aggregated_sources = self.service._build_research_source_pool(state["tasks"])
             _, source_summary = self.service.source_critic.assess_sources(aggregated_sources)
             analyzer = self.service.analyzer
-            detect_conflicts = getattr(analyzer, "_detect_conflicts", None) if self._supports_conflict_detection(analyzer) else None
-            max_sources = getattr(analyzer, "MAX_ANALYZER_SOURCES", 24)
-            if not isinstance(max_sources, int):
-                max_sources = 24
-            conflict_pool = self._build_conflict_pool(aggregated_sources[:max_sources])
-            conflicts = detect_conflicts(conflict_pool) if callable(detect_conflicts) else []
             _, evidence_summary = self.service.evidence_mapper.build_evidence_groups(
                 aggregated_sources,
-                stopwords=getattr(analyzer, "STOPWORDS", AnalyzerAgent.STOPWORDS),
-                generic_tokens=getattr(analyzer, "CONFLICT_GENERIC_TOKENS", AnalyzerAgent.CONFLICT_GENERIC_TOKENS),
-                negation_tokens=getattr(analyzer, "NEGATION_TOKENS", AnalyzerAgent.NEGATION_TOKENS),
                 max_groups=5,
             )
             branch_possible = (
@@ -235,7 +234,6 @@ class FinalizeGraphRunner:
             should_replan = branch_possible and bool(recommendations)
             next_state = {
                 **state,
-                "detected_conflicts": conflicts,
                 "source_summary": source_summary.model_dump(),
                 "evidence_summary": evidence_summary.model_dump(),
                 "replan_recommendations": [item.model_dump() for item in recommendations],
@@ -244,25 +242,11 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "collect_context",
-                f"Collected {len(aggregated_sources)} sources, detected {len(conflicts)} conflicts, replan_needed={should_replan}",
+                f"Collected {len(aggregated_sources)} sources, replan_needed={should_replan}",
             )
             return next_state
 
         return self._run_timed_step("collect_context", action, state["research_id"])
-
-    def _build_conflict_pool(self, aggregated_sources: list[dict]) -> list[dict]:
-        return [
-            {
-                "source_id": f"S{index}",
-                "content": item.get("content", ""),
-                "url": item.get("url"),
-                "domain": item.get("domain"),
-                "title": item.get("title"),
-                "source_quality": item.get("source_quality"),
-            }
-            for index, item in enumerate(aggregated_sources, start=1)
-            if item.get("content")
-        ]
 
     def _apply_replan(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -353,14 +337,34 @@ class FinalizeGraphRunner:
                     "reasoning_callback": _reasoning_callback,
                 }
             )
-            report = self.service.analyzer.run_analysis(
+            analysis_result = self.service.analyzer.run_analysis(
                 state["effective_prompt"],
                 state["tasks"],
                 **call_kwargs,
             )
+            if (
+                isinstance(analysis_result, tuple)
+                and len(analysis_result) in {2, 3}
+                and isinstance(analysis_result[1], list)
+            ):
+                report, aggregated_data = analysis_result[:2]
+                canonical_sources = self.service._canonical_source_table(aggregated_data)
+                detected_conflicts = (
+                    analysis_result[2]
+                    if len(analysis_result) == 3 and isinstance(analysis_result[2], list)
+                    else state.get("detected_conflicts", [])
+                )
+            else:
+                report = analysis_result
+                aggregated_data = state.get("aggregated_data")
+                canonical_sources = state.get("canonical_sources", [])
+                detected_conflicts = state.get("detected_conflicts", [])
             next_state = {
                 **state,
                 "report": report,
+                "aggregated_data": aggregated_data,
+                "canonical_sources": canonical_sources,
+                "detected_conflicts": detected_conflicts,
                 "analyze_attempts": state["analyze_attempts"] + 1,
             }
             self._checkpoint(
@@ -468,9 +472,6 @@ class FinalizeGraphRunner:
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
 
-    def _supports_conflict_detection(self, analyzer) -> bool:
-        return isinstance(analyzer, AnalyzerAgent)
-
     def _report_needs_retry(self, report: str) -> bool:
         normalized = report.lower()
         return (
@@ -512,8 +513,29 @@ class FinalizeGraphRunner:
             state = self._analyze(state)
         return state
 
-    def _complete_run(self, state: FinalizeGraphState, *, used_langgraph: bool) -> str:
-        """Log completion metrics, write a final checkpoint, and return the report."""
+    def _result_from_state(
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
+        aggregated_data = state.get("aggregated_data")
+        if aggregated_data is None:
+            research = self.service.task_store.get_research(state["research_id"])
+            if research is not None:
+                aggregated_data = self.service._aggregated_sources(research, state["tasks"])
+        return (
+            state.get("report", ""),
+            aggregated_data,
+            state.get("effective_prompt") or state["prompt"],
+            state["tasks"],
+        )
+
+    def _complete_run(
+        self,
+        state: FinalizeGraphState,
+        *,
+        used_langgraph: bool,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
+        """Log completion metrics, checkpoint, and return the final synthesis inputs."""
         logger.info(
             "langgraph_finalize_runner_completed replan_attempts=%s tie_break_attempts=%s analyze_attempts=%s used_langgraph=%s",
             state.get("replan_attempts", 0),
@@ -527,21 +549,28 @@ class FinalizeGraphRunner:
             f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
         )
         record_graph_completed_run()
-        return state["report"]
+        return self._result_from_state(state)
 
     # ── execution paths ───────────────────────────────────────────────────────
 
-    def _run_fallback(self, state: FinalizeGraphState) -> str:
+    def _run_fallback(
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         resume_from_step = state.get("resume_from_step")
         if resume_from_step == "complete":
             logger.info("langgraph_finalize_resume_complete_noop")
-            return state.get("report", "")
+            return self._result_from_state(state)
         if resume_from_step:
             return self._resume_fallback(state, resume_from_step)
         state = self._run_pipeline(state)
         return self._complete_run(state, used_langgraph=False)
 
-    def _resume_fallback(self, state: FinalizeGraphState, resume_from_step: str) -> str:
+    def _resume_fallback(
+        self,
+        state: FinalizeGraphState,
+        resume_from_step: str,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         """Continue execution from a previously checkpointed step."""
         if resume_from_step == "collect_context":
             if state.get("should_replan"):
@@ -589,7 +618,10 @@ class FinalizeGraphRunner:
         )
         return self._complete_run(state, used_langgraph=False)
 
-    def _run_langgraph(self, state: FinalizeGraphState) -> str:  # pragma: no cover - optional dependency
+    def _run_langgraph(  # pragma: no cover - optional dependency
+        self,
+        state: FinalizeGraphState,
+    ) -> tuple[str, list[dict] | None, str, list[SearchTask]]:
         workflow = StateGraph(FinalizeGraphState)
         workflow.add_node("collect_context", self._collect_context)
         workflow.add_node("replan", self._apply_replan)

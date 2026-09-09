@@ -129,9 +129,10 @@ async function sendChat() {
       messages.value[assistantIndex].content = answer;
       scrollThreadToBottom();
     },
-    onDone: (answer) => {
+    onDone: (answer, sources) => {
       chatSearching.value = false;
       messages.value[assistantIndex].content = answer;
+      messages.value[assistantIndex].sources = sources;
       chatBusy.value = false;
       scrollThreadToBottom();
     },
@@ -266,7 +267,7 @@ onBeforeUnmount(() => close?.());
             <div v-if="m.role === 'user'" class="ml-6 rounded-lg bg-surface px-3 py-2 text-sm text-ink">
               {{ m.content }}
             </div>
-            <MarkdownView v-else-if="m.content" :source="m.content" />
+            <MarkdownView v-else-if="m.content" :source="m.content" :sources="m.sources || []" />
           </template>
           <div v-if="awaitingAnswer" class="flex items-center gap-2 text-sm text-muted">
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />

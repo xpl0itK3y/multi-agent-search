@@ -76,6 +76,7 @@ class SearchTask(BaseModel):
 
 class SearchSourcePreview(BaseModel):
     url: str
+    source_id: str = ""
     title: Optional[str] = None
     domain: Optional[str] = None
     source_quality: Optional[str] = None
@@ -668,6 +669,7 @@ class ResearchPlanUpdate(BaseModel):
 class ChatMessage(BaseModel):
     role: str  # "user" | "assistant"
     content: str
+    sources: List[SearchSourcePreview] = Field(default_factory=list)
 
 
 class ChatAsk(BaseModel):

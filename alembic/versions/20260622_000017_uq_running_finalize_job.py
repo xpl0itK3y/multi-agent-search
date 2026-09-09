@@ -19,7 +19,6 @@ If upgrade fails with a unique violation, legacy duplicates exist; collapse them
      SELECT id, row_number() OVER (PARTITION BY research_id ORDER BY updated_at DESC) rn
        FROM research_finalize_jobs WHERE status='running') t WHERE rn > 1);
 """
-import sqlalchemy as sa
 from alembic import op
 
 revision = "20260622_000017"
@@ -31,14 +30,13 @@ _INDEX = "uq_running_finalize_job_per_research"
 
 
 def upgrade() -> None:
-    op.create_index(
-        _INDEX,
-        "research_finalize_jobs",
-        ["research_id"],
-        unique=True,
-        postgresql_where=sa.text("status = 'running'"),
-    )
+    with op.get_context().autocommit_block():
+        op.execute(
+            f"CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {_INDEX} "
+            "ON research_finalize_jobs (research_id) WHERE status = 'running'"
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(_INDEX, table_name="research_finalize_jobs")
+    with op.get_context().autocommit_block():
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {_INDEX}")

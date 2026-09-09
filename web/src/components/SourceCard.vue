@@ -21,7 +21,7 @@ function quality(q?: string | null) {
     class="block rounded-lg border border-bd bg-surface/50 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-accentSoft/40 hover:bg-surface"
   >
     <div class="flex items-center gap-2">
-      <span class="shrink-0 text-xs text-muted">[S{{ index }}]</span>
+      <span class="shrink-0 text-xs text-muted">[{{ source.source_id || `S${index}` }}]</span>
       <span class="truncate text-sm text-ink">{{ source.title || source.domain || source.url }}</span>
       <span
         class="ml-auto shrink-0 rounded-full px-2 py-0.5 text-[11px]"
