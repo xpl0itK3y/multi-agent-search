@@ -83,6 +83,7 @@ def create_research_service() -> ResearchService:
     evidence_mapper = EvidenceMapperAgent()
     claim_verifier = ClaimVerifierAgent()
     report_critic = ReportCriticAgent()
+    llm_available = False
 
     if settings.smoke_analyzer_report:
         agent_analyzer = StaticAnalyzerAgent(settings.smoke_analyzer_report)
@@ -106,6 +107,7 @@ def create_research_service() -> ResearchService:
                 claim_verifier=claim_verifier,
                 report_critic=report_critic,
             )
+        llm_available = True
     except Exception as exc:
         print(f"Warning: Failed to initialize agents: {exc}")
 
@@ -132,6 +134,7 @@ def create_research_service() -> ResearchService:
         stance_agent=stance_agent,
         cross_language_agent=cross_language_agent,
         broker=broker,
+        llm_available=llm_available,
     )
 
 

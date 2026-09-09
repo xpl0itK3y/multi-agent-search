@@ -148,6 +148,7 @@ class ResearchService(
         stance_agent=None,
         cross_language_agent=None,
         broker: RedisBroker | None = None,
+        llm_available: bool = True,
     ):
         self.task_store = task_store
         self.optimizer = optimizer
@@ -172,6 +173,7 @@ class ResearchService(
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.broker = broker
+        self.llm_available = llm_available
         self.finalize_graph_runner = FinalizeGraphRunner(self)
 
     # ── auth ──────────────────────────────────────────────────────────────────
@@ -1915,14 +1917,19 @@ class ResearchService(
         # Probe dependencies first so /health is a real readiness signal (AUD-036).
         db_ok = self.task_store.ping()
         redis_status = "disabled" if self.broker is None else ("ok" if self.broker.ping() else "down")
-        dependencies = {"database": "ok" if db_ok else "down", "redis": redis_status}
+        llm_status = "ok" if self.llm_available else "down"
+        dependencies = {
+            "database": "ok" if db_ok else "down",
+            "redis": redis_status,
+            "llm": llm_status,
+        }
         if not db_ok:
             return {"status": "degraded", "dependencies": dependencies}
         graph_metrics = GraphMetrics.model_validate(get_graph_metrics_snapshot())
         step_events = self._filter_graph_step_events()
         queue_metrics = self.get_queue_metrics()
         return {
-            "status": "ok" if redis_status != "down" else "degraded",
+            "status": "ok" if redis_status != "down" and llm_status == "ok" else "degraded",
             "dependencies": dependencies,
             "extraction_metrics": get_extraction_metrics_snapshot(),
             "graph_metrics": graph_metrics.model_dump(),

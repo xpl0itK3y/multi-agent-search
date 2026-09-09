@@ -8,6 +8,7 @@ def test_health_ok_when_db_up_no_broker():
     assert h["status"] == "ok"
     assert h["dependencies"]["database"] == "ok"
     assert h["dependencies"]["redis"] == "disabled"
+    assert h["dependencies"]["llm"] == "ok"
 
 
 def test_health_degraded_when_db_down(monkeypatch):
@@ -26,3 +27,12 @@ def test_health_degraded_when_redis_down(monkeypatch):
     h = ResearchService(task_store=InMemoryTaskStore(), broker=_Broker()).get_health_status()
     assert h["status"] == "degraded"
     assert h["dependencies"]["redis"] == "down"
+
+
+def test_health_degraded_when_llm_is_unavailable():
+    h = ResearchService(
+        task_store=InMemoryTaskStore(),
+        llm_available=False,
+    ).get_health_status()
+    assert h["status"] == "degraded"
+    assert h["dependencies"]["llm"] == "down"
