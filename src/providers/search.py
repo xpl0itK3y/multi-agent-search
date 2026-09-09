@@ -300,6 +300,25 @@ class ExtractionDomainRegistry:
         self._lock = threading.Lock()
         self._domains: dict[str, ExtractionDomainSnapshot] = {}
 
+    @staticmethod
+    def _reset_snapshot(snapshot: ExtractionDomainSnapshot) -> None:
+        snapshot.consecutive_failures = 0
+        snapshot.timeout_count = 0
+        snapshot.cooldown_until = 0.0
+
+    @classmethod
+    def _decay_expired_cooldown(
+        cls,
+        snapshot: ExtractionDomainSnapshot,
+        now: float,
+    ) -> None:
+        if snapshot.cooldown_until and snapshot.cooldown_until <= now:
+            cls._reset_snapshot(snapshot)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._domains.clear()
+
     def should_skip(self, url: str) -> str | None:
         parsed = urlparse(url)
         domain = parsed.netloc.lower().removeprefix("www.")
@@ -323,7 +342,11 @@ class ExtractionDomainRegistry:
 
         with self._lock:
             snapshot = self._domains.get(domain)
-            if snapshot and snapshot.cooldown_until > time.monotonic():
+            if snapshot is None:
+                return None
+            now = time.monotonic()
+            self._decay_expired_cooldown(snapshot, now)
+            if snapshot.cooldown_until > now:
                 return "domain-cooldown"
         return None
 
@@ -335,23 +358,25 @@ class ExtractionDomainRegistry:
 
         with self._lock:
             snapshot = self._domains.setdefault(domain, ExtractionDomainSnapshot())
+            now = time.monotonic()
+            self._decay_expired_cooldown(snapshot, now)
             if outcome == "success":
-                snapshot.consecutive_failures = 0
-                snapshot.timeout_count = 0
-                snapshot.cooldown_until = 0.0
+                self._reset_snapshot(snapshot)
                 return
 
             snapshot.consecutive_failures += 1
             if timed_out:
                 snapshot.timeout_count += 1
-            if (
-                snapshot.timeout_count >= 1
-                or snapshot.consecutive_failures >= settings.search_domain_fail_threshold
-            ):
-                snapshot.cooldown_until = time.monotonic() + settings.search_domain_cooldown_seconds
+            if snapshot.consecutive_failures >= settings.search_domain_fail_threshold:
+                snapshot.cooldown_until = now + settings.search_domain_cooldown_seconds
 
 
 _EXTRACTION_DOMAINS = ExtractionDomainRegistry()
+
+
+def reset_extraction_domains() -> None:
+    _EXTRACTION_DOMAINS.reset()
+
 
 class ContentExtractor:
     PDF_CONTENT_TYPES = frozenset({"application/pdf"})
