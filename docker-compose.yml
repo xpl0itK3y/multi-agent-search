@@ -82,6 +82,8 @@ services:
       POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker
+      # Prometheus scrape port; reachable only inside the Docker network.
+      WORKER_METRICS_PORT: "9101"
 
   worker_2:
     <<: *worker-base
@@ -90,6 +92,7 @@ services:
       POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker-2
+      WORKER_METRICS_PORT: "9102"
 
   worker_3:
     <<: *worker-base
@@ -98,6 +101,7 @@ services:
       POSTGRES_HOST: pgbouncer
       POSTGRES_PORT: 5432
       WORKER_NAME: job-worker-3
+      WORKER_METRICS_PORT: "9103"
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
@@ -184,6 +188,7 @@ services:
         condition: service_started
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "9090:9090"
     restart: unless-stopped
