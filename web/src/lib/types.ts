@@ -5,6 +5,7 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatar_url?: string | null;
+  is_admin?: boolean;
 }
 
 export interface AuthSession {
@@ -348,4 +349,98 @@ export interface ResearchGraph {
   status: string;
   graph_state: Record<string, unknown>;
   graph_trail: GraphTrailEntry[];
+}
+
+export interface AdminAuditLogItem {
+  id: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id?: string | null;
+  details: Record<string, any>;
+  ip_address?: string | null;
+  created_at: string;
+}
+
+export interface AdminWorkerFleetItem {
+  worker_name: string;
+  status: string;
+  processed_jobs: number;
+  last_error?: string | null;
+  last_seen_at: string;
+  is_alive: boolean;
+  extraction_metrics: Record<string, any>;
+  graph_metrics: Record<string, any>;
+  maintenance_summary: Record<string, any>;
+}
+
+export interface AdminOverviewResponse {
+  system_health: Record<string, any>;
+  active_researches_count: number;
+  pending_tasks_count: number;
+  failed_tasks_count: number;
+  workers: AdminWorkerFleetItem[];
+  is_dev_mode: boolean;
+}
+
+export interface AdminTokenModelBreakdown {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+}
+
+export interface AdminTokenDepthBreakdown {
+  depth: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  researches_count: number;
+}
+
+export interface AdminTokenResearchUsageItem {
+  research_id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminTokenAnalyticsResponse {
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  by_model: AdminTokenModelBreakdown[];
+  by_depth: AdminTokenDepthBreakdown[];
+  researches: AdminTokenResearchUsageItem[];
+  total_researches: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminDryRunResult {
+  action: string;
+  dry_run: boolean;
+  affected_count: number;
+  sample_affected_ids: string[];
+  summary: string;
+}
+
+export interface AgentMetadataItem {
+  id: string;
+  name: string;
+  stage: "planning" | "search" | "synthesis" | "delivery";
+  role: string;
+  trigger: string;
+  llm_model?: string | null;
+  inputs: string[];
+  outputs: string[];
+  source_file: string;
+  line_number: number;
+  description: string;
+  dependencies: string[];
 }

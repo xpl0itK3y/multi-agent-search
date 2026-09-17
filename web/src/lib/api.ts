@@ -1,4 +1,9 @@
 import type {
+  AdminAuditLogItem,
+  AdminDryRunResult,
+  AdminOverviewResponse,
+  AdminTokenAnalyticsResponse,
+  AgentMetadataItem,
   AuthSession,
   AuthUser,
   ChatMessage,
@@ -235,4 +240,53 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
+};
+
+export const adminApi = {
+  getOverview: () => request<AdminOverviewResponse>("/v1/admin/overview"),
+
+  getTokens: (page: number = 1, pageSize: number = 20) =>
+    request<AdminTokenAnalyticsResponse>(`/v1/admin/tokens?page=${page}&page_size=${pageSize}`),
+
+  exportTokensCsvUrl: () => `${BASE}/v1/admin/tokens/export`,
+
+  getAgents: () => request<AgentMetadataItem[]>("/v1/admin/agents"),
+
+  getAuditLogs: (limit: number = 50, offset: number = 0, action?: string) => {
+    let url = `/v1/admin/audit?limit=${limit}&offset=${offset}`;
+    if (action) url += `&action=${encodeURIComponent(action)}`;
+    return request<AdminAuditLogItem[]>(url);
+  },
+
+  previewOperation: (action: string, params: Record<string, any> = {}) =>
+    request<AdminDryRunResult>("/v1/admin/operations/preview", {
+      method: "POST",
+      body: JSON.stringify({ action, params }),
+    }),
+
+  executeOperation: (action: string, params: Record<string, any> = {}) =>
+    request<AdminDryRunResult>("/v1/admin/operations/execute", {
+      method: "POST",
+      body: JSON.stringify({ action, params }),
+    }),
+
+  connectStream: (
+    onOverview: (data: AdminOverviewResponse) => void,
+    onError?: (err: any) => void
+  ) => {
+    const url = `${BASE}/v1/admin/stream`;
+    const es = new EventSource(url, { withCredentials: true });
+    es.addEventListener("overview", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        onOverview(data);
+      } catch (err) {
+        if (onError) onError(err);
+      }
+    });
+    es.onerror = (e) => {
+      if (onError) onError(e);
+    };
+    return () => es.close();
+  },
 };

@@ -26,6 +26,12 @@ const router = createRouter({
       props: true,
       meta: { public: true },
     },
+    {
+      path: "/admin",
+      name: "admin",
+      component: () => import("@/views/AdminView.vue"),
+      meta: { requiresAdmin: true },
+    },
   ],
 });
 
@@ -36,6 +42,7 @@ router.beforeEach((to) => {
   const auth = useAuthStore();
   if (to.name !== "login" && !auth.user) return { name: "login" };
   if (to.name === "login" && auth.user) return { name: "home" };
+  if (to.meta.requiresAdmin && !auth.user?.is_admin) return { name: "home" };
   return true;
 });
 

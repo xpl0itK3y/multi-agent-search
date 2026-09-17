@@ -146,6 +146,15 @@ const vFocus = {
   >
     <button class="rail-btn" :title="$t('sidebar.expand')" @click="ui.toggleSidebar()">⌗</button>
     <button class="rail-btn" :title="$t('sidebar.newResearch')" @click="router.push('/')">+</button>
+    <button
+      v-if="auth.user?.is_admin"
+      class="rail-btn"
+      :class="route.path.startsWith('/admin') ? 'text-accent bg-surface' : ''"
+      :title="$t('admin.title')"
+      @click="router.push('/admin')"
+    >
+      🛡️
+    </button>
     <img
       v-if="avatarUrl"
       :src="avatarUrl"
@@ -288,6 +297,18 @@ const vFocus = {
           </template>
         </div>
       </div>
+    </div>
+
+    <!-- Admin panel button (visible if user has is_admin) -->
+    <div v-if="auth.user?.is_admin" class="border-t border-bd px-3 py-2">
+      <router-link
+        to="/admin"
+        class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+        :class="route.path.startsWith('/admin') ? 'bg-accent/15 text-accent font-semibold' : 'text-muted hover:bg-surface hover:text-ink'"
+      >
+        <span class="text-base">🛡️</span>
+        <span>{{ $t("admin.title") }}</span>
+      </router-link>
     </div>
 
     <!-- User card -->
