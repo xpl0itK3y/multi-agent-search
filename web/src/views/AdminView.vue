@@ -6,6 +6,7 @@ import type { AdminOverviewResponse } from "@/lib/types";
 import OverviewTab from "@/components/admin/OverviewTab.vue";
 import AnalyticsTab from "@/components/admin/AnalyticsTab.vue";
 import AgentsGraphTab from "@/components/admin/AgentsGraphTab.vue";
+import OperationsTab from "@/components/admin/OperationsTab.vue";
 
 const { t } = useI18n();
 
@@ -106,9 +107,7 @@ onMounted(() => {
 
         <AgentsGraphTab v-else-if="activeTab === 'agents'" />
 
-        <div v-else-if="activeTab === 'operations'" class="rounded-xl border border-bd bg-surface/50 p-6">
-          <h2 class="text-base font-semibold">{{ t("admin.tabs.operations") }}</h2>
-        </div>
+        <OperationsTab v-else-if="activeTab === 'operations'" />
       </div>
     </div>
   </div>

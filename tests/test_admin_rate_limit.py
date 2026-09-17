@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from src.api.schemas import AuthUser
-from src.auth.admin_rate_limit import enforce_admin_rate_limit
+from src.auth.admin_rate_limit import enforce_admin_rate_limit, reset_admin_rate_limiter
 from src.config import settings
 
 
@@ -23,6 +23,7 @@ def _request_with_user(user: AuthUser | None) -> Request:
 
 
 def test_admin_rate_limit_allows_under_limit(monkeypatch):
+    reset_admin_rate_limiter()
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
     monkeypatch.setattr(settings, "admin_rate_limit_per_minute", 2, raising=False)
 

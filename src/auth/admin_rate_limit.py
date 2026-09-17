@@ -30,3 +30,9 @@ def enforce_admin_rate_limit(request: Request) -> AuthUser:
             detail="Too many admin operations, please slow down",
         )
     return admin_user
+
+
+def reset_admin_rate_limiter() -> None:
+    """Reset limiter state (used in tests)."""
+    _admin_mutation_limiter.reset()
+
