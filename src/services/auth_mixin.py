@@ -109,10 +109,15 @@ class AuthMixin:
 
     @staticmethod
     def _to_auth_user(user) -> AuthUser:
+        from src.config import settings
+
+        allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        is_admin = bool(user.email and user.email.lower() in allowed)
         return AuthUser(
             id=user.id,
             email=user.email,
             name=user.name,
             avatar_url=user.avatar_url,
+            is_admin=is_admin,
             token_version=user.token_version,
         )

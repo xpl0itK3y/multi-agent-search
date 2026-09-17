@@ -6,7 +6,7 @@ from src.config import settings
 from src.services import ResearchService
 
 # Identity used when auth is disabled (single-tenant / dev mode).
-LOCAL_USER = AuthUser(id="local", email="local@local")
+LOCAL_USER = AuthUser(id="local", email="local@local", is_admin=True)
 
 
 def get_research_service(request: Request) -> ResearchService:
@@ -39,6 +39,9 @@ def get_current_user(request: Request) -> AuthUser:
         token_version = -1
     if user is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+    if user.email.lower() in allowed:
+        user.is_admin = True
     return user
 
 
@@ -50,14 +53,36 @@ def scope_user_id(request: Request) -> str | None:
 
 
 def require_admin(request: Request) -> AuthUser:
-    """Admin guard for job/queue maintenance routes. No-op identity when auth is disabled
-    (trusted single-tenant mode); otherwise requires login and an allow-listed admin email."""
-    user = get_current_user(request)
-    if settings.auth_disabled:
-        return user
+    """Admin guard for job/queue maintenance and admin routes.
+    
+    If auth is disabled:
+      - If ADMIN_EMAILS is configured, the request must supply an authorized admin identity.
+      - If ADMIN_EMAILS is empty, allow local/dev user.
+    If auth is enabled:
+      - Requires authenticated user whose email is in ADMIN_EMAILS.
+    """
     allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-    if user.email.lower() not in allowed:
+    if settings.auth_disabled and not allowed:
+        return LOCAL_USER
+
+    if settings.auth_disabled and allowed:
+        token = _extract_token(request)
+        if not token:
+            raise HTTPException(status_code=401, detail="Admin authentication required")
+        claims = decode_token(token)
+        user_id = claims.get("sub") if claims else None
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid admin token")
+        user = get_research_service(request).get_auth_user(user_id)
+        if not user or user.email.lower() not in allowed:
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+        user.is_admin = True
+        return user
+
+    user = get_current_user(request)
+    if not user or user.email.lower() not in allowed:
         raise HTTPException(status_code=403, detail="Admin privileges required")
+    user.is_admin = True
     return user
 
 

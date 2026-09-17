@@ -546,6 +546,7 @@ class AuthUser(BaseModel):
     email: str
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+    is_admin: bool = False
     token_version: int = Field(default=0, exclude=True)
 
 
@@ -1009,6 +1010,100 @@ class QueueMaintenanceResponse(BaseModel):
     deleted_count: int = 0
     compacted_count: int = 0
     total_count: int = 0
+
+
+class AdminAuditLogItem(BaseModel):
+    id: str
+    actor_email: str
+    action: str
+    target_type: str
+    target_id: Optional[str] = None
+    details: dict = Field(default_factory=dict)
+    ip_address: Optional[str] = None
+    created_at: datetime
+
+
+class AdminWorkerFleetItem(BaseModel):
+    worker_name: str
+    status: str
+    processed_jobs: int
+    last_error: Optional[str] = None
+    last_seen_at: datetime
+    is_alive: bool
+    extraction_metrics: dict = Field(default_factory=dict)
+    graph_metrics: dict = Field(default_factory=dict)
+    maintenance_summary: dict = Field(default_factory=dict)
+
+
+class AdminOverviewResponse(BaseModel):
+    system_health: dict = Field(default_factory=dict)
+    active_researches_count: int = 0
+    pending_tasks_count: int = 0
+    failed_tasks_count: int = 0
+    workers: List[AdminWorkerFleetItem] = Field(default_factory=list)
+    is_dev_mode: bool = False
+
+
+class AdminTokenModelBreakdown(BaseModel):
+    model: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    calls_count: int = 0
+
+
+class AdminTokenDepthBreakdown(BaseModel):
+    depth: str
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    researches_count: int = 0
+
+
+class AdminTokenResearchUsageItem(BaseModel):
+    research_id: str
+    prompt: str
+    depth: str
+    status: str
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    created_at: datetime
+
+
+class AdminTokenAnalyticsResponse(BaseModel):
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    by_model: List[AdminTokenModelBreakdown] = Field(default_factory=list)
+    by_depth: List[AdminTokenDepthBreakdown] = Field(default_factory=list)
+    researches: List[AdminTokenResearchUsageItem] = Field(default_factory=list)
+    total_researches: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class AdminDryRunResult(BaseModel):
+    action: str
+    dry_run: bool = True
+    affected_count: int = 0
+    sample_affected_ids: List[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class AgentMetadataItem(BaseModel):
+    id: str
+    name: str
+    stage: str
+    role: str
+    trigger: str
+    llm_model: Optional[str] = None
+    inputs: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
+    source_file: str
+    line_number: int
+    description: str
+    dependencies: List[str] = Field(default_factory=list)
 
 
 SearchTaskSummary.model_rebuild()

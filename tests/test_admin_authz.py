@@ -24,7 +24,36 @@ def _request(headers: dict, user: AuthUser | None) -> Request:
 
 def test_require_admin_noop_when_auth_disabled(monkeypatch):
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     assert require_admin(_request({}, None)) is LOCAL_USER
+
+
+def test_require_admin_rejects_anonymous_when_auth_disabled_but_admin_emails_set(monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        require_admin(_request({}, None))
+    assert exc.value.status_code == 401
+
+
+def test_require_admin_rejects_non_admin_when_auth_disabled_but_admin_emails_set(monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
+    user = AuthUser(id="u1", email="user@example.com")
+    token = create_token("u1", email="user@example.com")
+    with pytest.raises(HTTPException) as exc:
+        require_admin(_request({"Authorization": f"Bearer {token}"}, user))
+    assert exc.value.status_code == 403
+
+
+def test_require_admin_allows_admin_when_auth_disabled_but_admin_emails_set(monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
+    user = AuthUser(id="a1", email="admin@example.com")
+    token = create_token("a1", email="admin@example.com")
+    assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
 
 
 def test_require_admin_rejects_anonymous(monkeypatch):
