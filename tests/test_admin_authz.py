@@ -82,3 +82,32 @@ def test_require_admin_allows_admin(monkeypatch):
     user = AuthUser(id="a1", email="admin@example.com")
     token = create_token("a1", email="admin@example.com")
     assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
+
+
+def test_admin_initial_password_and_oauth_login(monkeypatch):
+    from src.services import ResearchService
+    from src.repositories.in_memory_task_store import InMemoryTaskStore
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+
+    monkeypatch.setattr(settings, "admin_emails", "latundenis55@gmail.com", raising=False)
+
+    # 1. User created via OAuth without password
+    user, created = service.get_or_create_oauth_user("latundenis55@gmail.com", google_subject="sub123")
+    assert created is True
+    assert user.is_admin is True
+
+    # 2. Subsequent OAuth login recognizes is_admin
+    user_again, created_again = service.get_or_create_oauth_user("latundenis55@gmail.com", google_subject="sub123")
+    assert created_again is False
+    assert user_again.is_admin is True
+
+    # 3. Setting initial password for admin on first password login succeeds and grants admin
+    auth_user = service.authenticate_user("latundenis55@gmail.com", "supersecret123")
+    assert auth_user.is_admin is True
+
+    # 4. Subsequent login with same password succeeds
+    auth_user_again = service.authenticate_user("latundenis55@gmail.com", "supersecret123")
+    assert auth_user_again.is_admin is True
+
