@@ -309,6 +309,19 @@ const ru = {
     google: "Войти через Google",
     or: "или",
   },
+  errors: {
+    api: {
+      unauthorized: "Неверный email или пароль, либо сессия истекла — войдите заново",
+      forbidden: "Недостаточно прав для этого действия",
+      notFound: "Не найдено",
+      conflict: "Конфликт данных — возможно, это уже существует",
+      validation: "Проверьте правильность введённых данных",
+      rateLimited: "Слишком много запросов — попробуйте позже",
+      server: "Внутренняя ошибка сервера. Мы уже разбираемся",
+      network: "Нет связи с сервером — проверьте подключение",
+      unexpected: "Что-то пошло не так. Попробуйте ещё раз",
+    },
+  },
 };
 
 const en: typeof ru = {
@@ -613,6 +626,19 @@ const en: typeof ru = {
     google: "Sign in with Google",
     or: "or",
   },
+  errors: {
+    api: {
+      unauthorized: "Wrong email or password, or the session has expired — please sign in again",
+      forbidden: "You don't have permission to do this",
+      notFound: "Not found",
+      conflict: "Data conflict — it may already exist",
+      validation: "Please check the data you entered",
+      rateLimited: "Too many requests — please try later",
+      server: "Internal server error. We're on it",
+      network: "Can't reach the server — check your connection",
+      unexpected: "Something went wrong. Please try again",
+    },
+  },
 };
 
 const es: typeof ru = {
@@ -916,6 +942,19 @@ const es: typeof ru = {
     logout: "Salir",
     google: "Iniciar sesión con Google",
     or: "o",
+  },
+  errors: {
+    api: {
+      unauthorized: "Email o contraseña incorrectos, o la sesión ha expirado — inicia sesión de nuevo",
+      forbidden: "No tienes permiso para hacer esto",
+      notFound: "No encontrado",
+      conflict: "Conflicto de datos — puede que ya exista",
+      validation: "Revisa los datos introducidos",
+      rateLimited: "Demasiadas peticiones — inténtalo más tarde",
+      server: "Error interno del servidor. Estamos en ello",
+      network: "No se puede conectar con el servidor — revisa tu conexión",
+      unexpected: "Algo salió mal. Inténtalo de nuevo",
+    },
   },
 };
 

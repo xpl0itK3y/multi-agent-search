@@ -35,4 +35,17 @@ describe("i18n", () => {
       expect({ loc, missing, extra }).toEqual({ loc, missing: [], extra: [] });
     }
   });
+
+  it("resolves every ru key to a non-empty string in every locale", () => {
+    const keys = flatKeys(g.getLocaleMessage("ru") as Record<string, unknown>);
+    expect(keys.length).toBeGreaterThan(0);
+    for (const { value } of LOCALES) {
+      g.locale.value = value;
+      for (const key of keys) {
+        const text = g.t(key);
+        expect(`${value}:${key}`, `${value} ${text}`).not.toBe("");
+        expect(typeof text).toBe("string");
+      }
+    }
+  });
 });
