@@ -16,13 +16,14 @@ const selectedAgent = ref<AgentMetadataItem | null>(null);
 const hoveredAgentId = ref<string | null>(null);
 const hoveredEdgeId = ref<string | null>(null);
 const drawerOpen = ref(false);
-const showToolsPanel = ref(true);
 
 // ── Pan & Zoom Canvas State (n8n Style) ───────────────────────────────────────
 const zoom = ref(0.65);
 const panX = ref(40);
 const panY = ref(60);
 const isPanning = ref(false);
+const isZooming = ref(false);
+let zoomTimeout: any = null;
 const startPan = ref({ x: 0, y: 0 });
 const canvasViewportRef = ref<HTMLElement | null>(null);
 
@@ -32,8 +33,7 @@ function onMouseDown(e: MouseEvent) {
   if (
     target.closest(".interactive-node") ||
     target.closest("button") ||
-    target.closest("input") ||
-    target.closest(".tools-drawer")
+    target.closest("input")
   ) {
     return;
   }
@@ -43,8 +43,35 @@ function onMouseDown(e: MouseEvent) {
 
 function onWheel(e: WheelEvent) {
   e.preventDefault();
-  const delta = e.deltaY < 0 ? 0.08 : -0.08;
-  zoom.value = Math.max(0.3, Math.min(1.5, Math.round((zoom.value + delta) * 100) / 100));
+  if (!canvasViewportRef.value) return;
+
+  const rect = canvasViewportRef.value.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+
+  // World coordinates under cursor before zoom
+  const worldX = (mouseX - panX.value) / zoom.value;
+  const worldY = (mouseY - panY.value) / zoom.value;
+
+  // Soft, smooth sensitivity: damp large trackpad & wheel impulses
+  const sensitivity = 0.0009;
+  const factor = Math.exp(-e.deltaY * sensitivity);
+  // Cap single-event scaling to max ±4% change so it never jumps abruptly
+  const clampedFactor = Math.max(0.96, Math.min(1.04, factor));
+
+  const newZoom = Math.max(0.3, Math.min(1.5, zoom.value * clampedFactor));
+
+  // Anchor zoom around cursor position
+  panX.value = mouseX - worldX * newZoom;
+  panY.value = mouseY - worldY * newZoom;
+  zoom.value = Math.round(newZoom * 1000) / 1000;
+
+  // Temporarily disable CSS transition during active scrolling so there is no rubberbanding
+  isZooming.value = true;
+  if (zoomTimeout) clearTimeout(zoomTimeout);
+  zoomTimeout = setTimeout(() => {
+    isZooming.value = false;
+  }, 100);
 }
 
 function resetView() {
@@ -54,36 +81,14 @@ function resetView() {
 }
 
 function zoomIn() {
-  zoom.value = Math.min(1.5, Math.round((zoom.value + 0.1) * 10) / 10);
+  const newZoom = Math.min(1.5, Math.round((zoom.value + 0.05) * 100) / 100);
+  zoom.value = newZoom;
 }
 
 function zoomOut() {
-  zoom.value = Math.max(0.3, Math.round((zoom.value - 0.1) * 10) / 10);
+  const newZoom = Math.max(0.3, Math.round((zoom.value - 0.05) * 100) / 100);
+  zoom.value = newZoom;
 }
-
-// ── Tools & Infrastructure Catalog (Screenshot 1 Style) ───────────────────────
-interface EngineTool {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  icon: string;
-}
-
-const ENGINE_TOOLS: EngineTool[] = [
-  { id: "tavily", name: "tavily_search_api", category: "Search", description: "Parallel multi-query web engine", icon: "🌐" },
-  { id: "searxng", name: "searxng_metasearch", category: "Search", description: "Aggregated open search cluster", icon: "🔎" },
-  { id: "duckduckgo", name: "duckduckgo_fallback", category: "Search", description: "Instant fallback search provider", icon: "🦆" },
-  { id: "trafilatura", name: "trafilatura_extractor", category: "Extract", description: "Fast DOM text & article scraper", icon: "📄" },
-  { id: "rust_pdf", name: "rust_pypdf_reader", category: "Extract", description: "High-throughput binary PDF parser", icon: "⚡" },
-  { id: "crossref", name: "crossref_retraction_db", category: "Integrity", description: "Scientific retraction registry check", icon: "🎓" },
-  { id: "deepseek_reasoner", name: "deepseek_reasoner", category: "Model", description: "Chain-of-thought synthesis model", icon: "🧠" },
-  { id: "deepseek_chat", name: "deepseek_chat", category: "Model", description: "High-speed conversational LLM", icon: "💬" },
-  { id: "langgraph", name: "langgraph_state_machine", category: "Loop", description: "Conditional replan & verify graph", icon: "🔁" },
-  { id: "redis_queue", name: "redis_stream_broker", category: "Fleet", description: "Low-latency worker job queue", icon: "⚡" },
-];
-
-const selectedTool = ref<EngineTool | null>(null);
 
 // ── Fixed n8n Grid Coordinates for all Agents (Screenshot 2 Style) ────────────
 interface VisualNode {
@@ -897,6 +902,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (simTimer) clearTimeout(simTimer);
+  if (zoomTimeout) clearTimeout(zoomTimeout);
   window.removeEventListener("mousemove", onGlobalMouseMove);
   window.removeEventListener("mouseup", onGlobalMouseUp);
 });
@@ -1008,18 +1014,8 @@ function isNodeDimmed(nodeId: string): boolean {
         </div>
       </div>
 
-      <!-- Right Action Group: Simulation Controls, Tools Panel Toggle, Zoom -->
+      <!-- Right Action Group: Simulation Controls, Zoom & Layout -->
       <div class="flex items-center gap-2">
-        <!-- Tools Drawer Toggle (Screenshot 1 Style) -->
-        <button
-          class="flex items-center gap-1.5 rounded-xl border border-bd px-3 py-1.5 text-xs font-semibold transition"
-          :class="showToolsPanel ? 'bg-accent/15 text-accent border-accent/40' : 'bg-surface text-muted hover:text-ink'"
-          @click="showToolsPanel = !showToolsPanel"
-        >
-          <span>🛠️</span>
-          <span>Инструменты ({{ ENGINE_TOOLS.length }})</span>
-        </button>
-
         <!-- Simulation Run / Pause Toggle -->
         <div class="flex items-center gap-1 rounded-xl border border-bd bg-surface/70 p-1">
           <button
@@ -1102,7 +1098,8 @@ function isNodeDimmed(nodeId: string): boolean {
     >
       <!-- Scalable & Pannable Canvas World -->
       <div
-        class="absolute origin-top-left transition-transform duration-75 ease-out"
+        class="absolute origin-top-left"
+        :class="isZooming || isPanning || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
         :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '4600px', height: '900px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
@@ -1337,53 +1334,6 @@ function isNodeDimmed(nodeId: string): boolean {
               <span class="text-accent text-[7px]">◆</span>
               <span>{{ node.llmModel }}</span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Docked Tools / Instruments Panel (Screenshot 1 Style) -->
-      <div
-        v-if="showToolsPanel"
-        class="absolute right-4 top-4 z-20 w-72 rounded-2xl border border-bd/80 bg-[#151922]/95 p-3.5 shadow-2xl backdrop-blur transition-all duration-200"
-      >
-        <div class="flex items-center justify-between border-b border-bd/60 pb-2.5">
-          <div class="flex items-center gap-2">
-            <span class="text-sm">🛠️</span>
-            <h4 class="text-xs font-bold uppercase tracking-wider text-ink">
-              Инструменты ({{ ENGINE_TOOLS.length }})
-            </h4>
-          </div>
-          <button
-            class="text-xs text-muted hover:text-ink"
-            title="Свернуть панель"
-            @click="showToolsPanel = false"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div class="mt-2.5 max-h-72 overflow-y-auto space-y-1.5 pr-1 text-xs">
-          <div
-            v-for="tool in ENGINE_TOOLS"
-            :key="tool.id"
-            class="flex items-center justify-between rounded-xl border border-bd/40 bg-surface/40 p-2 transition hover:border-accent/40 hover:bg-surface/80 cursor-pointer"
-            :class="selectedTool?.id === tool.id ? 'border-accent bg-surface/90' : ''"
-            @click="selectedTool = selectedTool?.id === tool.id ? null : tool"
-          >
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="text-base">{{ tool.icon }}</span>
-              <div class="min-w-0">
-                <div class="truncate font-mono text-[11px] font-semibold text-ink">
-                  {{ tool.name }}
-                </div>
-                <div class="truncate text-[10px] text-muted">
-                  {{ tool.description }}
-                </div>
-              </div>
-            </div>
-            <span class="rounded bg-bg/80 px-1.5 py-0.5 font-mono text-[9px] text-muted uppercase">
-              {{ tool.category }}
-            </span>
           </div>
         </div>
       </div>
