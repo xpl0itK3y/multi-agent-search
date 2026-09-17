@@ -31,7 +31,13 @@ from src.services.export_mixin import ExportMixin
 from src.services.job_queue_mixin import JobQueueMixin
 from src.services.trust_report_mixin import TrustReportMixin
 from src.services.share_mixin import ShareMixin
+from src.agents.catalog import AGENTS_CATALOG
 from src.domain import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminOverviewResponse,
+    AdminTokenAnalyticsResponse,
+    AgentMetadataItem,
     AuthUser,
     JobCleanupResponse,
     MaintenanceSummary,
@@ -1737,6 +1743,18 @@ class ResearchService(
                 # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
                 self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
                 self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
+                try:
+                    self.task_store.record_llm_usage(
+                        research_id=research_id,
+                        user_id=research.user_id if research else None,
+                        model=getattr(analyzer_llm, "model", "deepseek-chat"),
+                        prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                        completion_tokens=int(usage.get("completion_tokens", 0)),
+                        total_tokens=int(usage.get("total_tokens", 0)),
+                        estimated_cost_usd=float(usage.get("estimated_cost_usd", 0.0)),
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to record llm_usage_log for %s: %s", research_id, exc)
 
             if finalize_job_id is not None and lease_epoch is not None:
                 completed_job = self.task_store.complete_research_finalize_job(
@@ -2259,3 +2277,52 @@ class ResearchService(
                 if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                     logger.error("search_job_dead_letter")
                 return failed_job
+
+    # ── Admin Panel Methods ───────────────────────────────────────────────────
+    def get_admin_overview(self) -> AdminOverviewResponse:
+        return self.task_store.get_admin_overview()
+
+    def get_admin_token_analytics(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> AdminTokenAnalyticsResponse:
+        return self.task_store.get_admin_token_analytics(page=page, page_size=page_size)
+
+    def get_admin_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+        actor_email: str | None = None,
+    ) -> list[AdminAuditLogItem]:
+        return self.task_store.get_admin_audit_logs(
+            limit=limit,
+            offset=offset,
+            action=action,
+            actor_email=actor_email,
+        )
+
+    def preview_maintenance_action(
+        self,
+        action: str,
+        params: dict | None = None,
+    ) -> AdminDryRunResult:
+        return self.task_store.preview_maintenance_action(action, params)
+
+    def execute_maintenance_action(
+        self,
+        action: str,
+        actor_email: str,
+        params: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AdminDryRunResult:
+        return self.task_store.execute_maintenance_action(
+            action=action,
+            actor_email=actor_email,
+            params=params,
+            ip_address=ip_address,
+        )
+
+    def get_agents_catalog(self) -> list[AgentMetadataItem]:
+        return AGENTS_CATALOG

@@ -2,6 +2,11 @@ from datetime import datetime
 from typing import Protocol
 
 from src.domain import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminOverviewResponse,
+    AdminTokenAnalyticsResponse,
+    AgentMetadataItem,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
@@ -286,3 +291,55 @@ class TaskStore(Protocol):
     def put_cached_search(self, cache_key: str, payload: list[dict]) -> None: ...
 
     def cleanup_search_cache(self, older_than: datetime) -> int: ...
+
+    # ── admin & token tracking ────────────────────────────────────────────────
+    def record_llm_usage(
+        self,
+        research_id: str | None,
+        user_id: str | None,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+    ) -> str: ...
+
+    def record_admin_audit(
+        self,
+        actor_email: str,
+        action: str,
+        target_type: str,
+        target_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+    ) -> str: ...
+
+    def get_admin_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+        actor_email: str | None = None,
+    ) -> list[AdminAuditLogItem]: ...
+
+    def get_admin_token_analytics(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> AdminTokenAnalyticsResponse: ...
+
+    def get_admin_overview(self) -> AdminOverviewResponse: ...
+
+    def preview_maintenance_action(
+        self,
+        action: str,
+        params: dict | None = None,
+    ) -> AdminDryRunResult: ...
+
+    def execute_maintenance_action(
+        self,
+        action: str,
+        actor_email: str,
+        params: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AdminDryRunResult: ...

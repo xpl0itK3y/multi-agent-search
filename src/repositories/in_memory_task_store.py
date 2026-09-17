@@ -4,6 +4,14 @@ import uuid
 
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
 from src.domain import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminOverviewResponse,
+    AdminTokenAnalyticsResponse,
+    AdminTokenDepthBreakdown,
+    AdminTokenModelBreakdown,
+    AdminTokenResearchUsageItem,
+    AdminWorkerFleetItem,
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
@@ -32,6 +40,8 @@ class InMemoryTaskStore:
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
+        self.llm_usage_logs: list[dict] = []
+        self.admin_audit_logs: list[AdminAuditLogItem] = []
         self._admission_lock = threading.RLock()
 
     def ping(self) -> bool:
@@ -926,3 +936,246 @@ class InMemoryTaskStore:
 
         task.updated_at = datetime.now(timezone.utc)
         return task
+
+    # ── admin & token tracking ────────────────────────────────────────────────
+    def record_llm_usage(
+        self,
+        research_id: str | None,
+        user_id: str | None,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+    ) -> str:
+        usage_id = str(uuid.uuid4())
+        self.llm_usage_logs.append({
+            "id": usage_id,
+            "research_id": research_id,
+            "user_id": user_id,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "created_at": datetime.now(timezone.utc),
+        })
+        return usage_id
+
+    def record_admin_audit(
+        self,
+        actor_email: str,
+        action: str,
+        target_type: str,
+        target_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+    ) -> str:
+        audit_id = str(uuid.uuid4())
+        item = AdminAuditLogItem(
+            id=audit_id,
+            actor_email=actor_email,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            details=details or {},
+            ip_address=ip_address,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.admin_audit_logs.append(item)
+        return audit_id
+
+    def get_admin_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+        actor_email: str | None = None,
+    ) -> list[AdminAuditLogItem]:
+        logs = self.admin_audit_logs
+        if action:
+            logs = [l for l in logs if l.action == action]
+        if actor_email:
+            logs = [l for l in logs if l.actor_email == actor_email]
+        sorted_logs = sorted(logs, key=lambda x: x.created_at, reverse=True)
+        return sorted_logs[offset : offset + limit]
+
+    def get_admin_token_analytics(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> AdminTokenAnalyticsResponse:
+        total_prompt = sum(u["prompt_tokens"] for u in self.llm_usage_logs)
+        total_comp = sum(u["completion_tokens"] for u in self.llm_usage_logs)
+        total_tok = sum(u["total_tokens"] for u in self.llm_usage_logs)
+        total_cost = sum(u["estimated_cost_usd"] for u in self.llm_usage_logs)
+
+        models_map: dict[str, dict] = {}
+        for u in self.llm_usage_logs:
+            m = u["model"]
+            if m not in models_map:
+                models_map[m] = {"prompt": 0, "comp": 0, "tok": 0, "cost": 0.0, "count": 0}
+            models_map[m]["prompt"] += u["prompt_tokens"]
+            models_map[m]["comp"] += u["completion_tokens"]
+            models_map[m]["tok"] += u["total_tokens"]
+            models_map[m]["cost"] += u["estimated_cost_usd"]
+            models_map[m]["count"] += 1
+
+        by_model = [
+            AdminTokenModelBreakdown(
+                model=m,
+                prompt_tokens=d["prompt"],
+                completion_tokens=d["comp"],
+                total_tokens=d["tok"],
+                estimated_cost_usd=round(d["cost"], 4),
+                calls_count=d["count"],
+            )
+            for m, d in models_map.items()
+        ]
+
+        all_researches = sorted(self.researches.values(), key=lambda r: r.created_at, reverse=True)
+        total_researches = len(all_researches)
+        offset = max(0, (page - 1) * page_size)
+        paged_researches = all_researches[offset : offset + page_size]
+
+        research_items: list[AdminTokenResearchUsageItem] = []
+        for r in paged_researches:
+            r_logs = [u for u in self.llm_usage_logs if u["research_id"] == r.id]
+            if r_logs:
+                tok = sum(u["total_tokens"] for u in r_logs)
+                cost = sum(u["estimated_cost_usd"] for u in r_logs)
+            else:
+                legacy = (r.graph_state or {}).get("llm_token_usage") or {}
+                tok = legacy.get("total_tokens", 0)
+                cost = legacy.get("estimated_cost_usd", 0.0)
+            research_items.append(
+                AdminTokenResearchUsageItem(
+                    research_id=r.id,
+                    prompt=r.prompt,
+                    depth=r.depth,
+                    status=r.status,
+                    total_tokens=tok,
+                    estimated_cost_usd=round(cost, 4),
+                    created_at=r.created_at,
+                )
+            )
+
+        return AdminTokenAnalyticsResponse(
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_comp,
+            total_tokens=total_tok,
+            total_cost_usd=round(total_cost, 4),
+            by_model=by_model,
+            by_depth=[],
+            researches=research_items,
+            total_researches=total_researches,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_admin_overview(self) -> AdminOverviewResponse:
+        from src.config import settings
+
+        active_count = sum(1 for r in self.researches.values() if r.status == ResearchStatus.PROCESSING)
+        pending_count = sum(1 for j in self.search_jobs.values() if j.status == SearchJobStatus.PENDING)
+        failed_count = sum(1 for j in self.search_jobs.values() if j.status in (SearchJobStatus.DEAD_LETTER, "failed"))
+
+        now = datetime.now(timezone.utc)
+        worker_items: list[AdminWorkerFleetItem] = []
+        for hb in self.worker_heartbeats.values():
+            is_alive = (now - hb.last_seen_at).total_seconds() < 60.0
+            worker_items.append(
+                AdminWorkerFleetItem(
+                    worker_name=hb.worker_name,
+                    status=hb.status,
+                    processed_jobs=hb.processed_jobs,
+                    last_error=hb.last_error,
+                    last_seen_at=hb.last_seen_at,
+                    is_alive=is_alive,
+                    extraction_metrics=hb.extraction_metrics or {},
+                    graph_metrics=hb.graph_metrics or {},
+                    maintenance_summary=hb.maintenance_summary or {},
+                )
+            )
+
+        return AdminOverviewResponse(
+            system_health={"overall": "healthy"},
+            active_researches_count=active_count,
+            pending_tasks_count=pending_count,
+            failed_tasks_count=failed_count,
+            workers=worker_items,
+            is_dev_mode=settings.auth_disabled,
+        )
+
+    def preview_maintenance_action(
+        self,
+        action: str,
+        params: dict | None = None,
+    ) -> AdminDryRunResult:
+        params = params or {}
+        now = datetime.now(timezone.utc)
+        if action == "recover_stale_finalize_jobs":
+            stale_seconds = int(params.get("stale_seconds", 300))
+            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
+            stale = [j for j in self.finalize_jobs.values() if j.status == FinalizeJobStatus.RUNNING and j.updated_at < stale_dt]
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=len(stale),
+                sample_affected_ids=[j.id for j in stale[:10]],
+                summary=f"Would recover {len(stale)} stale finalize jobs",
+            )
+        elif action == "recover_stale_search_jobs":
+            stale_seconds = int(params.get("stale_seconds", 300))
+            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
+            stale = [j for j in self.search_jobs.values() if j.status == SearchJobStatus.RUNNING and j.updated_at < stale_dt]
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=len(stale),
+                sample_affected_ids=[j.id for j in stale[:10]],
+                summary=f"Would recover {len(stale)} stale search jobs",
+            )
+        elif action == "cleanup_old_jobs":
+            days = int(params.get("days", 7))
+            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+            old_f = [j for j in self.finalize_jobs.values() if j.status in (FinalizeJobStatus.COMPLETED, FinalizeJobStatus.DEAD_LETTER) and j.updated_at < cutoff]
+            old_s = [j for j in self.search_jobs.values() if j.status in (SearchJobStatus.COMPLETED, SearchJobStatus.DEAD_LETTER) and j.updated_at < cutoff]
+            tot = len(old_f) + len(old_s)
+            sample = [j.id for j in (old_f + old_s)[:10]]
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=tot,
+                sample_affected_ids=sample,
+                summary=f"Would delete {tot} old jobs",
+            )
+        elif action in ("requeue_finalize_job", "requeue_search_job"):
+            tid = params.get("target_id")
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=1 if tid else 0,
+                sample_affected_ids=[tid] if tid else [],
+                summary=f"Would requeue job {tid}",
+            )
+        return AdminDryRunResult(action=action, dry_run=True, affected_count=0, sample_affected_ids=[], summary="Unknown action")
+
+    def execute_maintenance_action(
+        self,
+        action: str,
+        actor_email: str,
+        params: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AdminDryRunResult:
+        res = self.preview_maintenance_action(action, params)
+        res.dry_run = False
+        self.record_admin_audit(
+            actor_email=actor_email,
+            action=action,
+            target_type="maintenance",
+            target_id=(params or {}).get("target_id"),
+            details={"params": params, "affected_count": res.affected_count},
+            ip_address=ip_address,
+        )
+        return res

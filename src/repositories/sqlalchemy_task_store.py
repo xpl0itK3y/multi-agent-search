@@ -7,6 +7,14 @@ from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminOverviewResponse,
+    AdminTokenAnalyticsResponse,
+    AdminTokenDepthBreakdown,
+    AdminTokenModelBreakdown,
+    AdminTokenResearchUsageItem,
+    AdminWorkerFleetItem,
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
@@ -24,6 +32,8 @@ from src.domain import (
     UserRecord,
 )
 from src.db.models import (
+    AdminAuditLogORM,
+    LLMUsageLogORM,
     ResearchFinalizeJobORM,
     ResearchORM,
     SearchCacheORM,
@@ -1323,3 +1333,449 @@ class SQLAlchemyTaskStore:
             # mutated here, so a refresh + second selectinload query (AUD-021) is redundant.
             # update_task runs once per extraction log line, so that doubled every log write.
             return search_task_orm_to_schema(task)
+
+    # ── admin & token tracking ────────────────────────────────────────────────
+    def record_llm_usage(
+        self,
+        research_id: str | None,
+        user_id: str | None,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+    ) -> str:
+        with self.session_scope() as session:
+            usage_id = str(uuid.uuid4())
+            record = LLMUsageLogORM(
+                id=usage_id,
+                research_id=research_id,
+                user_id=user_id,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(record)
+            return usage_id
+
+    def record_admin_audit(
+        self,
+        actor_email: str,
+        action: str,
+        target_type: str,
+        target_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+    ) -> str:
+        with self.session_scope() as session:
+            audit_id = str(uuid.uuid4())
+            record = AdminAuditLogORM(
+                id=audit_id,
+                actor_email=actor_email,
+                action=action,
+                target_type=target_type,
+                target_id=target_id,
+                details=details or {},
+                ip_address=ip_address,
+                created_at=datetime.now(timezone.utc),
+            )
+            session.add(record)
+            return audit_id
+
+    def get_admin_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+        actor_email: str | None = None,
+    ) -> list[AdminAuditLogItem]:
+        with self.session_scope() as session:
+            stmt = select(AdminAuditLogORM)
+            if action:
+                stmt = stmt.where(AdminAuditLogORM.action == action)
+            if actor_email:
+                stmt = stmt.where(AdminAuditLogORM.actor_email == actor_email)
+            stmt = stmt.order_by(AdminAuditLogORM.created_at.desc()).limit(limit).offset(offset)
+            records = session.execute(stmt).scalars().all()
+            return [
+                AdminAuditLogItem(
+                    id=r.id,
+                    actor_email=r.actor_email,
+                    action=r.action,
+                    target_type=r.target_type,
+                    target_id=r.target_id,
+                    details=r.details or {},
+                    ip_address=r.ip_address,
+                    created_at=r.created_at,
+                )
+                for r in records
+            ]
+
+    def get_admin_token_analytics(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> AdminTokenAnalyticsResponse:
+        with self.session_scope() as session:
+            # 1. Totals
+            tot_stmt = select(
+                func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+            )
+            tot_row = session.execute(tot_stmt).one()
+            total_prompt = int(tot_row[0])
+            total_comp = int(tot_row[1])
+            total_tok = int(tot_row[2])
+            total_cost = round(float(tot_row[3]), 4)
+
+            # 2. By Model
+            model_stmt = (
+                select(
+                    LLMUsageLogORM.model,
+                    func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                    func.count(LLMUsageLogORM.id),
+                )
+                .group_by(LLMUsageLogORM.model)
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+            )
+            by_model = [
+                AdminTokenModelBreakdown(
+                    model=row[0],
+                    prompt_tokens=int(row[1]),
+                    completion_tokens=int(row[2]),
+                    total_tokens=int(row[3]),
+                    estimated_cost_usd=round(float(row[4]), 4),
+                    calls_count=int(row[5]),
+                )
+                for row in session.execute(model_stmt).all()
+            ]
+
+            # 3. By Depth
+            depth_stmt = (
+                select(
+                    ResearchORM.depth,
+                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                    func.count(func.distinct(ResearchORM.id)),
+                )
+                .join(ResearchORM, LLMUsageLogORM.research_id == ResearchORM.id)
+                .group_by(ResearchORM.depth)
+            )
+            by_depth = [
+                AdminTokenDepthBreakdown(
+                    depth=row[0],
+                    total_tokens=int(row[1]),
+                    estimated_cost_usd=round(float(row[2]), 4),
+                    researches_count=int(row[3]),
+                )
+                for row in session.execute(depth_stmt).all()
+            ]
+
+            # 4. Researches list with pagination
+            total_researches_stmt = select(func.count()).select_from(ResearchORM)
+            total_researches = session.execute(total_researches_stmt).scalar_one()
+
+            offset = max(0, (page - 1) * page_size)
+            researches_stmt = (
+                select(
+                    ResearchORM.id,
+                    ResearchORM.prompt,
+                    ResearchORM.depth,
+                    ResearchORM.status,
+                    ResearchORM.created_at,
+                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                    ResearchORM.graph_state,
+                )
+                .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
+                .group_by(ResearchORM.id)
+                .order_by(ResearchORM.created_at.desc())
+                .limit(page_size)
+                .offset(offset)
+            )
+            research_items: list[AdminTokenResearchUsageItem] = []
+            for row in session.execute(researches_stmt).all():
+                r_id, r_prompt, r_depth, r_status, r_created, r_tokens, r_cost, r_state = row
+                tokens = int(r_tokens)
+                cost = float(r_cost)
+                if tokens == 0 and isinstance(r_state, dict):
+                    legacy = r_state.get("llm_token_usage") or {}
+                    if legacy:
+                        tokens = int(legacy.get("total_tokens", 0) or 0)
+                        cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
+                research_items.append(
+                    AdminTokenResearchUsageItem(
+                        research_id=r_id,
+                        prompt=r_prompt,
+                        depth=r_depth,
+                        status=r_status,
+                        total_tokens=tokens,
+                        estimated_cost_usd=round(cost, 4),
+                        created_at=r_created,
+                    )
+                )
+
+            return AdminTokenAnalyticsResponse(
+                total_prompt_tokens=total_prompt,
+                total_completion_tokens=total_comp,
+                total_tokens=total_tok,
+                total_cost_usd=total_cost,
+                by_model=by_model,
+                by_depth=by_depth,
+                researches=research_items,
+                total_researches=total_researches,
+                page=page,
+                page_size=page_size,
+            )
+
+    def get_admin_overview(self) -> AdminOverviewResponse:
+        from src.config import settings
+
+        with self.session_scope() as session:
+            # Active researches
+            active_cnt_stmt = (
+                select(func.count())
+                .select_from(ResearchORM)
+                .where(ResearchORM.status == ResearchStatus.PROCESSING.value)
+            )
+            active_researches = session.execute(active_cnt_stmt).scalar_one()
+
+            # Pending & failed tasks
+            pending_tasks_stmt = (
+                select(func.count())
+                .select_from(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status == SearchJobStatus.PENDING.value)
+            )
+            pending_tasks = session.execute(pending_tasks_stmt).scalar_one()
+
+            failed_tasks_stmt = (
+                select(func.count())
+                .select_from(SearchTaskJobORM)
+                .where(SearchTaskJobORM.status.in_([SearchJobStatus.DEAD_LETTER.value, "failed"]))
+            )
+            failed_tasks = session.execute(failed_tasks_stmt).scalar_one()
+
+            # Workers
+            heartbeats = session.execute(select(WorkerHeartbeatORM)).scalars().all()
+            now = datetime.now(timezone.utc)
+            worker_items: list[AdminWorkerFleetItem] = []
+            for hb in heartbeats:
+                age_seconds = (now - hb.last_seen_at).total_seconds()
+                is_alive = age_seconds < 60.0
+                worker_items.append(
+                    AdminWorkerFleetItem(
+                        worker_name=hb.worker_name,
+                        status=hb.status,
+                        processed_jobs=hb.processed_jobs,
+                        last_error=hb.last_error,
+                        last_seen_at=hb.last_seen_at,
+                        is_alive=is_alive,
+                        extraction_metrics=hb.extraction_metrics or {},
+                        graph_metrics=hb.graph_metrics or {},
+                        maintenance_summary=hb.maintenance_summary or {},
+                    )
+                )
+
+            system_health = {
+                "postgres": "ok",
+                "overall": "healthy" if failed_tasks == 0 else "degraded",
+            }
+
+            return AdminOverviewResponse(
+                system_health=system_health,
+                active_researches_count=active_researches,
+                pending_tasks_count=pending_tasks,
+                failed_tasks_count=failed_tasks,
+                workers=worker_items,
+                is_dev_mode=settings.auth_disabled,
+            )
+
+    def preview_maintenance_action(
+        self,
+        action: str,
+        params: dict | None = None,
+    ) -> AdminDryRunResult:
+        params = params or {}
+        with self.session_scope() as session:
+            now = datetime.now(timezone.utc)
+            if action == "recover_stale_finalize_jobs":
+                stale_seconds = int(params.get("stale_seconds", 300))
+                stale_before = now.timestamp() - stale_seconds
+                stale_dt = datetime.fromtimestamp(stale_before, tz=timezone.utc)
+                stmt = (
+                    select(ResearchFinalizeJobORM.id)
+                    .where(ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value)
+                    .where(ResearchFinalizeJobORM.updated_at < stale_dt)
+                )
+                ids = list(session.execute(stmt).scalars().all())
+                return AdminDryRunResult(
+                    action=action,
+                    dry_run=True,
+                    affected_count=len(ids),
+                    sample_affected_ids=ids[:10],
+                    summary=f"Would recover {len(ids)} stale finalize jobs running before {stale_dt.isoformat()}",
+                )
+
+            elif action == "recover_stale_search_jobs":
+                stale_seconds = int(params.get("stale_seconds", 300))
+                stale_before = now.timestamp() - stale_seconds
+                stale_dt = datetime.fromtimestamp(stale_before, tz=timezone.utc)
+                stmt = (
+                    select(SearchTaskJobORM.id)
+                    .where(SearchTaskJobORM.status == SearchJobStatus.RUNNING.value)
+                    .where(SearchTaskJobORM.updated_at < stale_dt)
+                )
+                ids = list(session.execute(stmt).scalars().all())
+                return AdminDryRunResult(
+                    action=action,
+                    dry_run=True,
+                    affected_count=len(ids),
+                    sample_affected_ids=ids[:10],
+                    summary=f"Would recover {len(ids)} stale search jobs running before {stale_dt.isoformat()}",
+                )
+
+            elif action == "cleanup_old_jobs":
+                days = int(params.get("days", 7))
+                cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+                stmt1 = select(ResearchFinalizeJobORM.id).where(
+                    ResearchFinalizeJobORM.status.in_([FinalizeJobStatus.COMPLETED.value, FinalizeJobStatus.DEAD_LETTER.value]),
+                    ResearchFinalizeJobORM.updated_at < cutoff,
+                )
+                stmt2 = select(SearchTaskJobORM.id).where(
+                    SearchTaskJobORM.status.in_([SearchJobStatus.COMPLETED.value, SearchJobStatus.DEAD_LETTER.value]),
+                    SearchTaskJobORM.updated_at < cutoff,
+                )
+                f_ids = list(session.execute(stmt1).scalars().all())
+                s_ids = list(session.execute(stmt2).scalars().all())
+                all_ids = f_ids + s_ids
+                return AdminDryRunResult(
+                    action=action,
+                    dry_run=True,
+                    affected_count=len(all_ids),
+                    sample_affected_ids=all_ids[:10],
+                    summary=f"Would delete {len(f_ids)} finalize and {len(s_ids)} search jobs older than {days} days",
+                )
+
+            elif action == "cleanup_search_cache":
+                days = int(params.get("days", 3))
+                cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+                stmt = select(func.count()).select_from(SearchCacheORM).where(SearchCacheORM.created_at < cutoff)
+                count = session.execute(stmt).scalar_one()
+                return AdminDryRunResult(
+                    action=action,
+                    dry_run=True,
+                    affected_count=count,
+                    sample_affected_ids=[],
+                    summary=f"Would delete {count} cached search entries older than {days} days",
+                )
+
+            elif action in ("requeue_finalize_job", "requeue_search_job"):
+                target_id = params.get("target_id")
+                return AdminDryRunResult(
+                    action=action,
+                    dry_run=True,
+                    affected_count=1 if target_id else 0,
+                    sample_affected_ids=[target_id] if target_id else [],
+                    summary=f"Would requeue job {target_id}",
+                )
+
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=0,
+                sample_affected_ids=[],
+                summary=f"Unknown maintenance action: {action}",
+            )
+
+    def execute_maintenance_action(
+        self,
+        action: str,
+        actor_email: str,
+        params: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AdminDryRunResult:
+        params = params or {}
+        now = datetime.now(timezone.utc)
+        affected_count = 0
+        sample_ids: list[str] = []
+        summary = ""
+
+        if action == "recover_stale_finalize_jobs":
+            stale_seconds = int(params.get("stale_seconds", 300))
+            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
+            recovered = self.recover_stale_research_finalize_jobs(stale_dt)
+            affected_count = len(recovered)
+            sample_ids = [j.id for j in recovered[:10]]
+            summary = f"Recovered {affected_count} stale finalize jobs"
+
+        elif action == "recover_stale_search_jobs":
+            stale_seconds = int(params.get("stale_seconds", 300))
+            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
+            recovered = self.recover_stale_search_task_jobs(stale_dt)
+            affected_count = len(recovered)
+            sample_ids = [j.id for j in recovered[:10]]
+            summary = f"Recovered {affected_count} stale search jobs"
+
+        elif action == "cleanup_old_jobs":
+            days = int(params.get("days", 7))
+            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+            f_ids = self.cleanup_old_research_finalize_jobs(cutoff)
+            s_ids = self.cleanup_old_search_task_jobs(cutoff)
+            all_ids = f_ids + s_ids
+            affected_count = len(all_ids)
+            sample_ids = all_ids[:10]
+            summary = f"Deleted {len(f_ids)} finalize and {len(s_ids)} search jobs"
+
+        elif action == "cleanup_search_cache":
+            days = int(params.get("days", 3))
+            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+            affected_count = self.cleanup_search_cache(cutoff)
+            summary = f"Cleaned up {affected_count} search cache entries"
+
+        elif action == "requeue_finalize_job":
+            target_id = params.get("target_id")
+            if target_id:
+                requeued = self.requeue_research_finalize_job(target_id)
+                if requeued:
+                    affected_count = 1
+                    sample_ids = [target_id]
+                    summary = f"Requeued finalize job {target_id}"
+                else:
+                    summary = f"Finalize job {target_id} not found"
+
+        elif action == "requeue_search_job":
+            target_id = params.get("target_id")
+            if target_id:
+                requeued = self.requeue_search_task_job(target_id)
+                if requeued:
+                    affected_count = 1
+                    sample_ids = [target_id]
+                    summary = f"Requeued search job {target_id}"
+                else:
+                    summary = f"Search job {target_id} not found"
+
+        # Record audit log
+        self.record_admin_audit(
+            actor_email=actor_email,
+            action=action,
+            target_type="maintenance",
+            target_id=params.get("target_id"),
+            details={"params": params, "affected_count": affected_count, "summary": summary},
+            ip_address=ip_address,
+        )
+
+        return AdminDryRunResult(
+            action=action,
+            dry_run=False,
+            affected_count=affected_count,
+            sample_affected_ids=sample_ids,
+            summary=summary,
+        )
