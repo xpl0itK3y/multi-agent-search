@@ -1104,6 +1104,17 @@ class AgentMetadataItem(BaseModel):
     line_number: int
     description: str
     dependencies: List[str] = Field(default_factory=list)
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    context_window: Optional[str] = None
+    response_format: Optional[str] = None
+    tools: List[str] = Field(default_factory=list)
+    timeout_seconds: Optional[int] = None
+    retry_policy: Optional[str] = None
+    cache_ttl: Optional[str] = None
+    example_input: Optional[Dict[str, Any]] = None
+    example_output: Optional[Dict[str, Any]] = None
 
 
 SearchTaskSummary.model_rebuild()

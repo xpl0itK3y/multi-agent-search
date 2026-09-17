@@ -443,4 +443,15 @@ export interface AgentMetadataItem {
   line_number: number;
   description: string;
   dependencies: string[];
+  system_prompt?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  context_window?: string | null;
+  response_format?: string | null;
+  tools?: string[];
+  timeout_seconds?: number | null;
+  retry_policy?: string | null;
+  cache_ttl?: string | null;
+  example_input?: Record<string, any> | null;
+  example_output?: Record<string, any> | null;
 }
