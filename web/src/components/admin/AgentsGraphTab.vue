@@ -896,10 +896,30 @@ async function fetchAgents() {
   }
 }
 
+// ── Fullscreen Viewport Mode ──────────────────────────────────────────────────
+const isFullscreen = ref(false);
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value;
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    if (drawerOpen.value) {
+      drawerOpen.value = false;
+      return;
+    }
+    if (isFullscreen.value) {
+      isFullscreen.value = false;
+    }
+  }
+}
+
 onMounted(() => {
   fetchAgents();
   window.addEventListener("mousemove", onGlobalMouseMove);
   window.addEventListener("mouseup", onGlobalMouseUp);
+  window.addEventListener("keydown", onKeyDown);
 });
 
 onBeforeUnmount(() => {
@@ -907,6 +927,7 @@ onBeforeUnmount(() => {
   if (zoomTimeout) clearTimeout(zoomTimeout);
   window.removeEventListener("mousemove", onGlobalMouseMove);
   window.removeEventListener("mouseup", onGlobalMouseUp);
+  window.removeEventListener("keydown", onKeyDown);
 });
 
 function openInspector(nodeId: string) {
@@ -961,7 +982,14 @@ function isNodeDimmed(nodeId: string): boolean {
 </script>
 
 <template>
-  <div class="relative flex h-full flex-col space-y-3">
+  <div
+    class="flex flex-col space-y-3"
+    :class="[
+      isFullscreen
+        ? 'fixed inset-0 z-50 bg-[#0b0e14] p-4 h-screen w-screen overflow-hidden'
+        : 'relative h-full'
+    ]"
+  >
     <!-- Top Control Bar: Search, Pan/Zoom Controls, Simulation Trigger, Tools Toggle -->
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd pb-3">
       <!-- Search Filter -->
@@ -1066,6 +1094,23 @@ function isNodeDimmed(nodeId: string): boolean {
           <span>↺</span>
           <span class="hidden sm:inline">{{ t("admin.agents.resetLayout") }}</span>
         </button>
+
+        <!-- Fullscreen / Expand Toggle Button -->
+        <button
+          class="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition shadow-sm"
+          :class="[
+            isFullscreen
+              ? 'border-accent bg-accent/20 text-accent hover:bg-accent/30 ring-1 ring-accent/40'
+              : 'border-bd bg-surface/70 text-muted hover:text-ink hover:border-accent/40'
+          ]"
+          :title="isFullscreen ? `${t('admin.agents.exitFullscreen')} (Esc)` : t('admin.agents.fullscreen')"
+          @click="toggleFullscreen"
+        >
+          <span class="text-sm leading-none">{{ isFullscreen ? '🗗' : '⛶' }}</span>
+          <span class="hidden sm:inline">
+            {{ isFullscreen ? t("admin.agents.exitFullscreen") : t("admin.agents.fullscreen") }}
+          </span>
+        </button>
       </div>
     </div>
 
@@ -1083,11 +1128,24 @@ function isNodeDimmed(nodeId: string): boolean {
     <div
       v-else
       ref="canvasViewportRef"
-      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd/80 bg-[#0d111a] shadow-inner min-h-[640px] cursor-grab active:cursor-grabbing"
+      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd/80 bg-[#0d111a] shadow-inner cursor-grab active:cursor-grabbing"
+      :class="isFullscreen ? 'min-h-[calc(100vh-140px)]' : 'min-h-[640px]'"
       style="background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1.2px, transparent 1.2px); background-size: 20px 20px;"
       @mousedown="onMouseDown"
       @wheel="onWheel"
     >
+      <!-- Quick Floating Fullscreen Button on Canvas -->
+      <div class="absolute right-4 top-4 z-20 flex items-center gap-2">
+        <button
+          class="flex items-center gap-1.5 rounded-xl border border-bd/80 bg-[#151922]/90 px-3 py-1.5 text-xs font-medium text-muted shadow-lg backdrop-blur hover:text-ink hover:border-accent/40 transition"
+          :class="{ 'border-accent text-accent bg-accent/20 ring-1 ring-accent/30': isFullscreen }"
+          :title="isFullscreen ? `${t('admin.agents.exitFullscreen')} (Esc)` : t('admin.agents.fullscreen')"
+          @click.stop="toggleFullscreen"
+        >
+          <span class="text-sm leading-none">{{ isFullscreen ? '🗗' : '⛶' }}</span>
+          <span>{{ isFullscreen ? t("admin.agents.exitFullscreen") : t("admin.agents.fullscreen") }}</span>
+        </button>
+      </div>
       <!-- Scalable & Pannable Canvas World -->
       <div
         class="absolute origin-top-left"

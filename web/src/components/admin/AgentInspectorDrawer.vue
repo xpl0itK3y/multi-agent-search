@@ -82,13 +82,13 @@ function copyJson(data: any, targetRef: "input" | "output") {
     <!-- Backdrop Overlay -->
     <div
       v-if="open"
-      class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity"
+      class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity"
       @click="emit('close')"
     />
 
     <!-- Slide-over Drawer (Wider & Richer: max-w-2xl) -->
     <div
-      class="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col border-l border-bd bg-[#10141d] shadow-2xl transition-transform duration-300 ease-in-out"
+      class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-2xl flex-col border-l border-bd bg-[#10141d] shadow-2xl transition-transform duration-300 ease-in-out"
       :class="open ? 'translate-x-0' : 'translate-x-full'"
     >
       <div v-if="agent" class="flex h-full flex-col">
