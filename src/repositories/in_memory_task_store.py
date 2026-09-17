@@ -267,6 +267,23 @@ class InMemoryTaskStore:
             del self.tasks[tid]
         return True
 
+    _TERMINAL_RESEARCH_STATUSES = (
+        ResearchStatus.COMPLETED,
+        ResearchStatus.FAILED,
+        ResearchStatus.CANCELLED,
+    )
+
+    def cleanup_old_researches(self, older_than: datetime) -> list[str]:
+        deleted_ids = [
+            research.id
+            for research in self.researches.values()
+            if research.status in self._TERMINAL_RESEARCH_STATUSES
+            and (research.updated_at or research.created_at) < older_than
+        ]
+        for research_id in deleted_ids:
+            self.delete_research(research_id)
+        return deleted_ids
+
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         records = self.researches.values()
         if user_id is not None:

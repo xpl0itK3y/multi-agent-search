@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     finalize_job_timeout_seconds: int = 600
     search_job_retention_seconds: int = 86400
     finalize_job_retention_seconds: int = 86400
+    # Terminal researches older than this are cascade-deleted by maintenance.
+    # 0 (default) keeps researches forever — existing deployments are unchanged.
+    research_retention_seconds: int = 0
     search_extraction_concurrency: int = 4
     search_extraction_timeout_seconds: int = 12
     search_extraction_max_redirects: int = 1

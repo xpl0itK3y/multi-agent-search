@@ -1,6 +1,6 @@
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
@@ -358,6 +358,27 @@ class SQLAlchemyTaskStore:
             session.delete(research)
             return True
 
+    # Retention (OPS-RETENTION): terminal researches past the window are removed
+    # with their tasks/results via the existing ON DELETE CASCADEs.
+    _TERMINAL_RESEARCH_STATUSES = (
+        ResearchStatus.COMPLETED,
+        ResearchStatus.FAILED,
+        ResearchStatus.CANCELLED,
+    )
+
+    def cleanup_old_researches(self, older_than: datetime) -> list[str]:
+        terminal = [status.value for status in self._TERMINAL_RESEARCH_STATUSES]
+        with self.session_scope() as session:
+            research_ids = session.execute(
+                select(ResearchORM.id).where(
+                    ResearchORM.status.in_(terminal),
+                    ResearchORM.updated_at < older_than,
+                )
+            ).scalars().all()
+            if research_ids:
+                session.execute(delete(ResearchORM).where(ResearchORM.id.in_(research_ids)))
+            return list(research_ids)
+
     @staticmethod
     def _research_history_select():
         return select(
@@ -610,16 +631,34 @@ class SQLAlchemyTaskStore:
         return result
 
     def compact_research_graph_trails(self) -> list[str]:
+        # Bounded working set (OPS-RETENTION): only recently-active researches still grow a
+        # trail, so older rows are skipped; fetching id+graph_trail in batches avoids
+        # loading full rows (report blobs, graph_state) into worker memory each pass.
+        from src.config import settings as _settings
+
+        horizon = datetime.now(timezone.utc) - timedelta(
+            seconds=_settings.graph_trail_retention_seconds
+        )
+        compacted_ids: list[str] = []
         with self.session_scope() as session:
-            researches = session.execute(select(ResearchORM)).scalars().all()
-            compacted_ids: list[str] = []
-            for research in researches:
-                compacted_trail = compact_graph_trail(research.graph_trail or [], [])
-                if compacted_trail != (research.graph_trail or []):
-                    research.graph_trail = compacted_trail
-                    research.updated_at = datetime.now(timezone.utc)
-                    compacted_ids.append(research.id)
-            return compacted_ids
+            statement = (
+                select(ResearchORM.id, ResearchORM.graph_trail)
+                .where(ResearchORM.updated_at >= horizon)
+                .execution_options(yield_per=200)
+            )
+            for research_id, graph_trail in session.execute(statement):
+                compacted_trail = compact_graph_trail(graph_trail or [], [])
+                if compacted_trail != (graph_trail or []):
+                    session.execute(
+                        update(ResearchORM)
+                        .where(ResearchORM.id == research_id)
+                        .values(
+                            graph_trail=compacted_trail,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    compacted_ids.append(research_id)
+        return compacted_ids
 
     def add_research_finalize_job(
         self,
