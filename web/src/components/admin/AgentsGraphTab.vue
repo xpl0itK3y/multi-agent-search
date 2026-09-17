@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
-import AgentNodeCard from "./AgentNodeCard.vue";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
 
 const { t } = useI18n();
@@ -13,40 +12,523 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 
 const searchQuery = ref("");
-const selectedStage = ref<string>("all");
 const selectedAgent = ref<AgentMetadataItem | null>(null);
 const hoveredAgentId = ref<string | null>(null);
 const hoveredEdgeId = ref<string | null>(null);
 const drawerOpen = ref(false);
-const zoom = ref(1.0);
+const showToolsPanel = ref(true);
 
+// ── Pan & Zoom Canvas State (n8n Style) ───────────────────────────────────────
+const zoom = ref(0.65);
+const panX = ref(40);
+const panY = ref(60);
+const isPanning = ref(false);
+const startPan = ref({ x: 0, y: 0 });
 const canvasViewportRef = ref<HTMLElement | null>(null);
-const zoomContainerRef = ref<HTMLElement | null>(null);
 
-// ── Wire Data Payloads ────────────────────────────────────────────────────────
-const EDGE_PAYLOADS: Record<string, string> = {
-  "clarifier->optimizer": "clarified_intent",
-  "optimizer->orchestrator": "optimized_prompt",
-  "orchestrator->cross_language": "target_queries",
-  "orchestrator->search": "primary_queries",
-  "cross_language->search": "translated_queries",
-  "search->source_critic": "scraped_pages",
-  "source_critic->source_reputation": "filtered_sources",
-  "source_reputation->source_independence": "trusted_domains",
-  "source_independence->evidence_mapper": "canonical_clusters",
-  "evidence_mapper->replan": "evidence_blocks",
-  "replan->analyzer": "verified_evidence",
-  "analyzer->numeric_check": "draft_report",
-  "numeric_check->claim_verifier": "numeric_metrics",
-  "claim_verifier->citation_audit": "verified_claims",
-  "claim_verifier->red_team": "core_theses",
-  "citation_audit->retraction": "cited_dois",
-  "red_team->stance": "counter_arguments",
-  "retraction->report_critic": "clean_sources",
-  "stance->report_critic": "consensus_matrix",
-  "report_critic->confidence": "polished_draft",
-  "confidence->chat": "final_report",
+function onMouseDown(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (target.closest(".interactive-node") || target.closest("button") || target.closest("input")) {
+    return;
+  }
+  isPanning.value = true;
+  startPan.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
+}
+
+function onMouseMove(e: MouseEvent) {
+  if (!isPanning.value) return;
+  panX.value = e.clientX - startPan.value.x;
+  panY.value = e.clientY - startPan.value.y;
+}
+
+function onMouseUp() {
+  isPanning.value = false;
+}
+
+function onWheel(e: WheelEvent) {
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 0.08 : -0.08;
+  zoom.value = Math.max(0.3, Math.min(1.5, Math.round((zoom.value + delta) * 100) / 100));
+}
+
+function resetView() {
+  zoom.value = 0.65;
+  panX.value = 40;
+  panY.value = 60;
+}
+
+function zoomIn() {
+  zoom.value = Math.min(1.5, Math.round((zoom.value + 0.1) * 10) / 10);
+}
+
+function zoomOut() {
+  zoom.value = Math.max(0.3, Math.round((zoom.value - 0.1) * 10) / 10);
+}
+
+// ── Tools & Infrastructure Catalog (Screenshot 1 Style) ───────────────────────
+interface EngineTool {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  icon: string;
+}
+
+const ENGINE_TOOLS: EngineTool[] = [
+  { id: "tavily", name: "tavily_search_api", category: "Search", description: "Parallel multi-query web engine", icon: "🌐" },
+  { id: "searxng", name: "searxng_metasearch", category: "Search", description: "Aggregated open search cluster", icon: "🔎" },
+  { id: "duckduckgo", name: "duckduckgo_fallback", category: "Search", description: "Instant fallback search provider", icon: "🦆" },
+  { id: "trafilatura", name: "trafilatura_extractor", category: "Extract", description: "Fast DOM text & article scraper", icon: "📄" },
+  { id: "rust_pdf", name: "rust_pypdf_reader", category: "Extract", description: "High-throughput binary PDF parser", icon: "⚡" },
+  { id: "crossref", name: "crossref_retraction_db", category: "Integrity", description: "Scientific retraction registry check", icon: "🎓" },
+  { id: "deepseek_reasoner", name: "deepseek_reasoner", category: "Model", description: "Chain-of-thought synthesis model", icon: "🧠" },
+  { id: "deepseek_chat", name: "deepseek_chat", category: "Model", description: "High-speed conversational LLM", icon: "💬" },
+  { id: "langgraph", name: "langgraph_state_machine", category: "Loop", description: "Conditional replan & verify graph", icon: "🔁" },
+  { id: "redis_queue", name: "redis_stream_broker", category: "Fleet", description: "Low-latency worker job queue", icon: "⚡" },
+];
+
+const selectedTool = ref<EngineTool | null>(null);
+
+// ── Fixed n8n Grid Coordinates for all Agents (Screenshot 2 Style) ────────────
+interface VisualNode {
+  id: string;
+  name: string;
+  subtitle: string;
+  stage: "planning" | "search" | "synthesis" | "delivery" | "trigger";
+  icon: string;
+  iconBg: string;
+  iconColor: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  hasInput: boolean;
+  hasOutput: boolean;
+  llmModel?: string;
+  isTrigger?: boolean;
+}
+
+const NODE_WIDTH = 220;
+const NODE_HEIGHT = 76;
+
+const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
+  trigger_start: {
+    name: "User Research Query",
+    subtitle: "Entry trigger / HTTP POST",
+    stage: "trigger",
+    icon: "⚡",
+    iconBg: "bg-orange-500/15 border-orange-500/30",
+    iconColor: "text-orange-400",
+    x: 60,
+    y: 320,
+    width: 200,
+    height: NODE_HEIGHT,
+    hasInput: false,
+    hasOutput: true,
+    isTrigger: true,
+  },
+  clarifier: {
+    name: "ClarifierAgent",
+    subtitle: "Query Ambiguity Resolver",
+    stage: "planning",
+    icon: "💬",
+    iconBg: "bg-blue-500/15 border-blue-500/30",
+    iconColor: "text-blue-400",
+    x: 320,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  optimizer: {
+    name: "PromptOptimizerAgent",
+    subtitle: "Perspective Expansion",
+    stage: "planning",
+    icon: "✨",
+    iconBg: "bg-blue-500/15 border-blue-500/30",
+    iconColor: "text-blue-400",
+    x: 600,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  orchestrator: {
+    name: "OrchestratorAgent",
+    subtitle: "Task Decomposition & DAG",
+    stage: "planning",
+    icon: "🧭",
+    iconBg: "bg-blue-500/15 border-blue-500/30",
+    iconColor: "text-blue-400",
+    x: 880,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  cross_language: {
+    name: "CrossLanguageAgent",
+    subtitle: "Multilingual Expansion",
+    stage: "planning",
+    icon: "🌐",
+    iconBg: "bg-blue-500/15 border-blue-500/30",
+    iconColor: "text-blue-400",
+    x: 880,
+    y: 490,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  search: {
+    name: "SearchAgent",
+    subtitle: "Web Crawler & Extractor",
+    stage: "search",
+    icon: "🔎",
+    iconBg: "bg-emerald-500/15 border-emerald-500/30",
+    iconColor: "text-emerald-400",
+    x: 1180,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  source_critic: {
+    name: "SourceCriticAgent",
+    subtitle: "SEO Spam Gatekeeper",
+    stage: "search",
+    icon: "🛡️",
+    iconBg: "bg-emerald-500/15 border-emerald-500/30",
+    iconColor: "text-emerald-400",
+    x: 1460,
+    y: 220,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  source_reputation: {
+    name: "SourceReputationAgent",
+    subtitle: "Domain Authority Scorer",
+    stage: "search",
+    icon: "⭐",
+    iconBg: "bg-emerald-500/15 border-emerald-500/30",
+    iconColor: "text-emerald-400",
+    x: 1460,
+    y: 420,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  source_independence: {
+    name: "SourceIndependenceAgent",
+    subtitle: "Syndication & Clustering",
+    stage: "search",
+    icon: "🔗",
+    iconBg: "bg-emerald-500/15 border-emerald-500/30",
+    iconColor: "text-emerald-400",
+    x: 1740,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  evidence_mapper: {
+    name: "EvidenceMapperAgent",
+    subtitle: "Evidence Attribution",
+    stage: "search",
+    icon: "📑",
+    iconBg: "bg-emerald-500/15 border-emerald-500/30",
+    iconColor: "text-emerald-400",
+    x: 2020,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  replan: {
+    name: "ReplanAgent",
+    subtitle: "Gap Analysis & Loop",
+    stage: "synthesis",
+    icon: "🔁",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 2300,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  analyzer: {
+    name: "AnalyzerAgent",
+    subtitle: "Deep Multi-Perspective",
+    stage: "synthesis",
+    icon: "🧠",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 2580,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-reasoner",
+  },
+  numeric_check: {
+    name: "NumericCheckAgent",
+    subtitle: "Quantitative Cross-Check",
+    stage: "synthesis",
+    icon: "🔢",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 2580,
+    y: 490,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  claim_verifier: {
+    name: "ClaimVerifierAgent",
+    subtitle: "Hallucination Elimination",
+    stage: "synthesis",
+    icon: "✓",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 2860,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  citation_audit: {
+    name: "CitationAuditAgent",
+    subtitle: "Inline Citation Integrity",
+    stage: "synthesis",
+    icon: "📌",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3140,
+    y: 220,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  retraction: {
+    name: "RetractionAgent",
+    subtitle: "Retraction Watchdog",
+    stage: "synthesis",
+    icon: "⚠️",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3420,
+    y: 220,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  red_team: {
+    name: "RedTeamAgent",
+    subtitle: "Adversarial Stress Test",
+    stage: "synthesis",
+    icon: "🎯",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3140,
+    y: 420,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  stance: {
+    name: "StanceAgent",
+    subtitle: "Consensus Taxonomy",
+    stage: "synthesis",
+    icon: "⚖️",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3420,
+    y: 420,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  report_critic: {
+    name: "ReportCriticAgent",
+    subtitle: "Editorial Polish & Tone",
+    stage: "synthesis",
+    icon: "📝",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3700,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+    llmModel: "deepseek-chat",
+  },
+  confidence: {
+    name: "ConfidenceAgent",
+    subtitle: "Calibrated Trust Score",
+    stage: "synthesis",
+    icon: "📊",
+    iconBg: "bg-purple-500/15 border-purple-500/30",
+    iconColor: "text-purple-400",
+    x: 3980,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: true,
+  },
+  chat: {
+    name: "ChatAgent",
+    subtitle: "Interactive Evidence Q&A",
+    stage: "delivery",
+    icon: "💬",
+    iconBg: "bg-amber-500/15 border-amber-500/30",
+    iconColor: "text-amber-400",
+    x: 4260,
+    y: 320,
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    hasInput: true,
+    hasOutput: false,
+    llmModel: "deepseek-chat",
+  },
 };
+
+const visualNodes = computed<VisualNode[]>(() => {
+  return Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => ({
+    id,
+    ...conf,
+  }));
+});
+
+// ── Graph Edges (n8n Smooth Cubic Curves) ─────────────────────────────────────
+const EDGE_CONNECTIONS: Array<{ from: string; to: string; payload: string }> = [
+  { from: "trigger_start", to: "clarifier", payload: "user_query" },
+  { from: "clarifier", to: "optimizer", payload: "clarified_intent" },
+  { from: "optimizer", to: "orchestrator", payload: "optimized_prompt" },
+  { from: "orchestrator", to: "cross_language", payload: "subtasks" },
+  { from: "orchestrator", to: "search", payload: "primary_queries" },
+  { from: "cross_language", to: "search", payload: "translated_queries" },
+  { from: "search", to: "source_critic", payload: "scraped_pages" },
+  { from: "source_critic", to: "source_reputation", payload: "filtered_domains" },
+  { from: "source_reputation", to: "source_independence", payload: "trusted_domains" },
+  { from: "source_independence", to: "evidence_mapper", payload: "canonical_sources" },
+  { from: "evidence_mapper", to: "replan", payload: "evidence_blocks" },
+  { from: "replan", to: "analyzer", payload: "verified_evidence" },
+  { from: "analyzer", to: "numeric_check", payload: "draft_report" },
+  { from: "numeric_check", to: "claim_verifier", payload: "numeric_metrics" },
+  { from: "claim_verifier", to: "citation_audit", payload: "verified_claims" },
+  { from: "claim_verifier", to: "red_team", payload: "core_theses" },
+  { from: "citation_audit", to: "retraction", payload: "cited_dois" },
+  { from: "red_team", to: "stance", payload: "counter_arguments" },
+  { from: "retraction", to: "report_critic", payload: "clean_sources" },
+  { from: "stance", to: "report_critic", payload: "consensus_matrix" },
+  { from: "report_critic", to: "confidence", payload: "polished_draft" },
+  { from: "confidence", to: "chat", payload: "final_report" },
+];
+
+interface RenderedEdge {
+  id: string;
+  from: string;
+  to: string;
+  d: string;
+  midX: number;
+  midY: number;
+  payload: string;
+  labelWidth: number;
+  isHighlighted: boolean;
+  isActive: boolean;
+}
+
+const renderedEdges = computed<RenderedEdge[]>(() => {
+  const nodeMap = new Map<string, VisualNode>();
+  for (const n of visualNodes.value) {
+    nodeMap.set(n.id, n);
+  }
+
+  return EDGE_CONNECTIONS.map((conn) => {
+    const src = nodeMap.get(conn.from);
+    const tgt = nodeMap.get(conn.to);
+    if (!src || !tgt) {
+      return {
+        id: `${conn.from}->${conn.to}`,
+        from: conn.from,
+        to: conn.to,
+        d: "",
+        midX: 0,
+        midY: 0,
+        payload: conn.payload,
+        labelWidth: 60,
+        isHighlighted: false,
+        isActive: false,
+      };
+    }
+
+    // Output port: right edge center
+    const x1 = src.x + src.width;
+    const y1 = src.y + src.height / 2;
+
+    // Input port: left edge center
+    const x2 = tgt.x;
+    const y2 = tgt.y + tgt.height / 2;
+
+    const dx = Math.max(50, Math.abs(x2 - x1) * 0.5);
+    const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+
+    const edgeKey = `${conn.from}->${conn.to}`;
+    const isWireHovered = hoveredEdgeId.value === edgeKey;
+    const isNodeHovered = hoveredAgentId.value === conn.from || hoveredAgentId.value === conn.to;
+    const isNodeSelected = selectedAgent.value?.id === conn.from || selectedAgent.value?.id === conn.to;
+
+    const isHighlighted = isWireHovered || isNodeHovered || isNodeSelected;
+    const isActive =
+      (isSimulating.value || currentStepIndex.value > 0) &&
+      currentStep.value.activeEdges.includes(edgeKey);
+
+    const labelWidth = Math.max(70, conn.payload.length * 6.5 + 16);
+
+    return {
+      id: edgeKey,
+      from: conn.from,
+      to: conn.to,
+      d,
+      midX,
+      midY,
+      payload: conn.payload,
+      labelWidth,
+      isHighlighted,
+      isActive,
+    };
+  });
+});
 
 // ── Simulation Walkthrough Steps ("Как они работают") ────────────────────────
 interface SimulationStep {
@@ -64,13 +546,13 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 1,
     stageName: "Planning",
-    stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
-    agentIds: ["clarifier"],
-    activeEdges: [],
-    title: "1. ClarifierAgent: Оценка однозначности запроса",
+    stageColor: "text-orange-400 border-orange-500/30 bg-orange-500/10",
+    agentIds: ["trigger_start", "clarifier"],
+    activeEdges: ["trigger_start->clarifier"],
+    title: "1. Trigger ➔ ClarifierAgent: Оценка однозначности запроса",
     description:
-      "Анализирует входящий запрос пользователя. Если запрос слишком короткий, двусмысленный или не содержит ключевых критериев, агент генерирует точечные уточняющие вопросы до запуска тяжёлых поисковых циклов.",
-    payloadInfo: "Вход: prompt, user_context ➔ Выход: clarification_needed, suggested_followups",
+      "Пользователь отправляет запрос на исследование. ClarifierAgent оценивает входящий текст на неполноту или двусмысленность и при необходимости запрашивает уточнения.",
+    payloadInfo: "user_query ➔ clarification_needed, suggested_followups",
   },
   {
     stepNumber: 2,
@@ -80,8 +562,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["clarifier->optimizer"],
     title: "2. PromptOptimizerAgent: Обогащение контекстом и гипотезами",
     description:
-      "Преобразует пользовательскую мысль в глубокий исследовательский бриф: добавляет академические термины, отраслевые контексты, противоположные точки зрения и формулирует проверяемые гипотезы.",
-    payloadInfo: "Передано: clarified_intent ➔ Выход: optimized_prompt, angles, hypotheses",
+      "Преобразует пользовательский запрос в развёрнутый аналитический бриф: добавляет академические термины, отраслевые контексты и формулирует проверяемые гипотезы.",
+    payloadInfo: "clarified_intent ➔ optimized_prompt, angles, hypotheses",
   },
   {
     stepNumber: 3,
@@ -91,8 +573,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["optimizer->orchestrator", "orchestrator->cross_language"],
     title: "3. Orchestrator & CrossLanguage: Декомпозиция и языковая экспансия",
     description:
-      "Orchestrator декомпозирует тему на граф параллельных подзадач. CrossLanguageAgent переводит поисковые запросы на нативные языки (русский, немецкий, китайский) для выхода за пределы англоязычного информационного пузыря.",
-    payloadInfo: "Передано: optimized_prompt ➔ Выход: subtasks, translated_queries",
+      "Orchestrator декомпозирует тему на граф подзадач, а CrossLanguageAgent генерирует поисковые запросы на нативных языках (русский, китайский, немецкий) для доступа к региональным источникам.",
+    payloadInfo: "optimized_prompt ➔ subtasks, translated_queries",
   },
   {
     stepNumber: 4,
@@ -100,10 +582,10 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
     agentIds: ["search"],
     activeEdges: ["orchestrator->search", "cross_language->search"],
-    title: "4. SearchAgent: Параллельный поиск и нативная экстракция",
+    title: "4. SearchAgent: Параллельный веб-поиск и Rust-экстракция",
     description:
-      "Воркеры распределяют запросы по поисковым провайдерам (Tavily, SearXNG, DuckDuckGo), а потоковый Rust/Trafilatura экстрактор мгновенно скачивает HTML и PDF-документы с контролем безопасности сети.",
-    payloadInfo: "Передано: primary_queries + translated_queries ➔ Выход: scraped_pages, raw_snippets",
+      "Воркеры распределяют запросы по Tavily, SearXNG и DuckDuckGo, а высокоскоростной Rust/Trafilatura экстрактор потоково скачивает веб-страницы и PDF-документы.",
+    payloadInfo: "primary_queries + translated_queries ➔ scraped_pages, raw_snippets",
   },
   {
     stepNumber: 5,
@@ -117,8 +599,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     ],
     title: "5. Фильтрация источников, оценка репутации и дедупликация",
     description:
-      "SourceCritic отсекает SEO-фермы и дорвеи. SourceReputation взвешивает авторитетность доменов (.edu, .gov, рецензируемые журналы). SourceIndependence удаляет синдицированные новости (AP/Reuters), исключая ложный консенсус.",
-    payloadInfo: "Передано: scraped_pages ➔ Выход: trusted_domains, canonical_clusters",
+      "SourceCritic отсекает спам-фермы и дорвеи. SourceReputation взвешивает домены (.edu, .gov, peer-reviewed). SourceIndependence удаляет синдицированные копии новостей (AP/Reuters).",
+    payloadInfo: "scraped_pages ➔ trusted_domains, canonical_sources",
   },
   {
     stepNumber: 6,
@@ -128,8 +610,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["source_independence->evidence_mapper"],
     title: "6. EvidenceMapperAgent: Привязка доказательств к гипотезам",
     description:
-      "Нарезает тексты на смысловые фрагменты и сопоставляет каждый абзац с конкретной подзадачей и целевой гипотезой, создавая матрицу фактологического покрытия темы.",
-    payloadInfo: "Передано: canonical_clusters ➔ Выход: attributed_evidence_blocks, coverage_matrix",
+      "Нарезает тексты на смысловые фрагменты и сопоставляет каждый абзац с конкретной подзадачей и целевой гипотезой, формируя фактологическую матрицу исследования.",
+    payloadInfo: "canonical_sources ➔ evidence_blocks, coverage_matrix",
   },
   {
     stepNumber: 7,
@@ -139,8 +621,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["evidence_mapper->replan"],
     title: "7. ReplanAgent: Поиск пробелов (LangGraph Gap Analysis)",
     description:
-      "Анализирует матрицу фактов. Если обнаружены пробелы в аргументации или неполнота данных, динамически перенаправляет воркеры на дополнительный целевой цикл сбора.",
-    payloadInfo: "Передано: evidence_blocks ➔ Выход: gap_detected, verified_evidence",
+      "Анализирует матрицу фактов. Если обнаружены белые пятна или нехватка доказательств, динамически возвращает воркеры на дополнительный целевой цикл сбора.",
+    payloadInfo: "evidence_blocks ➔ gap_detected, verified_evidence",
   },
   {
     stepNumber: 8,
@@ -150,8 +632,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["replan->analyzer"],
     title: "8. AnalyzerAgent (DeepSeek-Reasoner): Глубокий синтез аргументов",
     description:
-      "Флагманская reasoning-модель DeepSeek выполняет многоуровневый логический синтез, генерируя черновик детального аналитического отчёта со сквозной цепочкой рассуждений (Chain of Thought).",
-    payloadInfo: "Передано: verified_evidence ➔ Выход: draft_report, reasoning_steps, key_findings",
+      "Флагманская reasoning-модель DeepSeek выполняет глубокий логический синтез, генерируя черновик детального отчёта со сквозной цепочкой рассуждений (Chain-of-Thought).",
+    payloadInfo: "verified_evidence ➔ draft_report, reasoning_steps, key_findings",
   },
   {
     stepNumber: 9,
@@ -161,8 +643,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier"],
     title: "9. NumericCheck & ClaimVerifier: Сверка чисел и фактов",
     description:
-      "NumericCheck сопоставляет все проценты, даты и финансовые суммы с исходными таблицами. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации LLM.",
-    payloadInfo: "Передано: draft_report ➔ Выход: verified_numbers, verified_claims",
+      "NumericCheck сверяет проценты, даты и финансовые суммы с исходными таблицами. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации LLM.",
+    payloadInfo: "draft_report ➔ verified_numbers, verified_claims",
   },
   {
     stepNumber: 10,
@@ -177,12 +659,12 @@ const SIMULATION_STEPS: SimulationStep[] = [
     ],
     title: "10. RedTeam, Stance & Integrity: Стресс-тестирование и аудит ссылок",
     description:
-      "RedTeam выступает в роли «адвоката дьявола» и атакует выводы контр-примерами. Stance формирует матрицу консенсуса и мнений меньшинств. CitationAudit и Retraction сверяют DOI со списком отозванных научных статей.",
-    payloadInfo: "Передано: verified_claims ➔ Выход: counter_arguments, consensus_matrix, clean_sources",
+      "RedTeam атакует гипотезы выводами «адвоката дьявола». Stance формирует баланс мнений меньшинств. CitationAudit и Retraction сверяют DOI со списком отозванных научных статей.",
+    payloadInfo: "verified_claims ➔ counter_arguments, consensus_matrix, clean_sources",
   },
   {
     stepNumber: 11,
-    stageName: "Synthesis & Verification",
+    stageName: "Synthesis & Polish",
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
     agentIds: ["report_critic", "confidence"],
     activeEdges: [
@@ -192,8 +674,8 @@ const SIMULATION_STEPS: SimulationStep[] = [
     ],
     title: "11. ReportCritic & Confidence: Финальная полировка и скоринг",
     description:
-      "ReportCritic шлифует текст по принципу перевёрнутой пирамиды, удаляя повторы. ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и формирует бейдж доверия.",
-    payloadInfo: "Передано: consensus_matrix + clean_sources ➔ Выход: polished_draft, trust_indicators",
+      "ReportCritic шлифует текст по принципу перевёрнутой пирамиды, удаляя повторы. ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и бейдж прозрачности.",
+    payloadInfo: "consensus_matrix + clean_sources ➔ polished_draft, trust_indicators",
   },
   {
     stepNumber: 12,
@@ -201,10 +683,10 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-amber-400 border-amber-500/30 bg-amber-500/10",
     agentIds: ["chat"],
     activeEdges: ["confidence->chat"],
-    title: "12. ChatAgent: Интерактивный диалог по доказательной базе",
+    title: "12. ChatAgent: Интерактивный эксперт по доказательной базе",
     description:
-      "Отчёт доставлен пользователю. ChatAgent готов отвечать на любые последующие вопросы и углубляться в детали, строго опираясь на собранную базу цитат и проверенных фактов.",
-    payloadInfo: "Передано: final_report + trust_badge ➔ Выход: grounded_interactive_answers",
+      "Отчёт доставлен. ChatAgent готов отвечать на любые последующие вопросы пользователя, строго опираясь на собранную базу цитат и проверенных фактов.",
+    payloadInfo: "final_report + trust_badge ➔ grounded_interactive_answers",
   },
 ];
 
@@ -266,14 +748,12 @@ function runSimLoop() {
   }, interval);
 }
 
-// ── Node status for simulation ────────────────────────────────────────────────
 function getAgentSimStatus(agentId: string): "idle" | "active" | "completed" {
   if (!isSimulating.value && currentStepIndex.value === 0) return "idle";
   const step = currentStep.value;
   if (step.agentIds.includes(agentId)) {
     return "active";
   }
-  // Check if agent participated in an earlier step
   for (let i = 0; i < currentStepIndex.value; i++) {
     if (SIMULATION_STEPS[i].agentIds.includes(agentId)) {
       return "completed";
@@ -282,14 +762,12 @@ function getAgentSimStatus(agentId: string): "idle" | "active" | "completed" {
   return "idle";
 }
 
-// ── Graph Data & Filtering ────────────────────────────────────────────────────
+// ── Interactivity ─────────────────────────────────────────────────────────────
 async function fetchAgents() {
   try {
     loading.value = true;
     error.value = null;
     agents.value = await adminApi.getAgents();
-    await nextTick();
-    updateEdgeCoordinates();
   } catch (err: any) {
     error.value = err.message || "Failed to load agent catalog";
   } finally {
@@ -299,296 +777,79 @@ async function fetchAgents() {
 
 onMounted(() => {
   fetchAgents();
-  window.addEventListener("resize", handleResize);
-  setupResizeObserver();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", handleResize);
-  if (resizeObserver) resizeObserver.disconnect();
   if (simTimer) clearTimeout(simTimer);
 });
 
-let resizeObserver: ResizeObserver | null = null;
-function setupResizeObserver() {
-  if (typeof ResizeObserver !== "undefined" && zoomContainerRef.value) {
-    resizeObserver = new ResizeObserver(() => {
-      updateEdgeCoordinates();
-    });
-    resizeObserver.observe(zoomContainerRef.value);
+function openInspector(nodeId: string) {
+  if (nodeId === "trigger_start") return;
+  const target = agents.value.find((a) => a.id === nodeId);
+  if (target) {
+    selectedAgent.value = target;
+    drawerOpen.value = true;
   }
-}
-
-function handleResize() {
-  updateEdgeCoordinates();
-}
-
-const filteredAgents = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
-  return agents.value.filter((agent) => {
-    const matchesStage =
-      selectedStage.value === "all" || agent.stage === selectedStage.value;
-    if (!matchesStage) return false;
-    if (!q) return true;
-    return (
-      agent.name.toLowerCase().includes(q) ||
-      agent.role.toLowerCase().includes(q) ||
-      agent.description.toLowerCase().includes(q) ||
-      agent.trigger.toLowerCase().includes(q) ||
-      agent.inputs.some((i) => i.toLowerCase().includes(q)) ||
-      agent.outputs.some((o) => o.toLowerCase().includes(q))
-    );
-  });
-});
-
-// 5 Balanced Columns layout
-const columns = computed(() => {
-  const all = filteredAgents.value;
-  return [
-    {
-      id: "planning",
-      title: t("admin.agents.stagePlanning"),
-      badgeClass: "bg-blue-500/15 text-blue-400",
-      stageFilter: "planning",
-      agents: all.filter((a) => a.stage === "planning"),
-    },
-    {
-      id: "search",
-      title: t("admin.agents.stageSearch"),
-      badgeClass: "bg-emerald-500/15 text-emerald-400",
-      stageFilter: "search",
-      agents: all.filter((a) => a.stage === "search"),
-    },
-    {
-      id: "synthesis_core",
-      title: t("admin.agents.stageSynthesis"),
-      badgeClass: "bg-purple-500/15 text-purple-400",
-      stageFilter: "synthesis",
-      agents: all.filter(
-        (a) =>
-          a.stage === "synthesis" &&
-          ["replan", "analyzer", "numeric_check", "claim_verifier"].includes(a.id)
-      ),
-    },
-    {
-      id: "synthesis_verify",
-      title: t("admin.agents.stageVerification"),
-      badgeClass: "bg-purple-500/15 text-purple-400",
-      stageFilter: "synthesis",
-      agents: all.filter(
-        (a) =>
-          a.stage === "synthesis" &&
-          ["citation_audit", "retraction", "red_team", "stance", "report_critic", "confidence"].includes(a.id)
-      ),
-    },
-    {
-      id: "delivery",
-      title: t("admin.agents.stageDelivery"),
-      badgeClass: "bg-amber-500/15 text-amber-400",
-      stageFilter: "delivery",
-      agents: all.filter((a) => a.stage === "delivery"),
-    },
-  ];
-});
-
-// ── SVG Edge Coordinate Calculation ──────────────────────────────────────────
-interface ComputedEdge {
-  id: string;
-  sourceId: string;
-  targetId: string;
-  d: string;
-  midX: number;
-  midY: number;
-  payload: string;
-  labelWidth: number;
-  isHighlighted: boolean;
-  isActive: boolean;
-  color: string;
-  width: number;
-  markerId: string;
-  activeColor: string;
-}
-
-const computedEdges = ref<ComputedEdge[]>([]);
-
-function updateEdgeCoordinates() {
-  if (!zoomContainerRef.value) return;
-
-  const containerRect = zoomContainerRef.value.getBoundingClientRect();
-  const currentZoom = zoom.value || 1.0;
-
-  // Query all ports
-  const inPorts = zoomContainerRef.value.querySelectorAll<HTMLElement>('[data-port="in"]');
-  const outPorts = zoomContainerRef.value.querySelectorAll<HTMLElement>('[data-port="out"]');
-
-  const inPortMap = new Map<string, { x: number; y: number }>();
-  const outPortMap = new Map<string, { x: number; y: number }>();
-
-  inPorts.forEach((el) => {
-    const aid = el.getAttribute("data-agent-id");
-    if (aid) {
-      const r = el.getBoundingClientRect();
-      inPortMap.set(aid, {
-        x: (r.left + r.width / 2 - containerRect.left) / currentZoom,
-        y: (r.top + r.height / 2 - containerRect.top) / currentZoom,
-      });
-    }
-  });
-
-  outPorts.forEach((el) => {
-    const aid = el.getAttribute("data-agent-id");
-    if (aid) {
-      const r = el.getBoundingClientRect();
-      outPortMap.set(aid, {
-        x: (r.left + r.width / 2 - containerRect.left) / currentZoom,
-        y: (r.top + r.height / 2 - containerRect.top) / currentZoom,
-      });
-    }
-  });
-
-  const edges: ComputedEdge[] = [];
-
-  for (const agent of filteredAgents.value) {
-    for (const depId of agent.dependencies) {
-      const p1 = outPortMap.get(depId);
-      const p2 = inPortMap.get(agent.id);
-
-      if (p1 && p2) {
-        const edgeKey = `${depId}->${agent.id}`;
-        const dx = Math.max(60, Math.abs(p2.x - p1.x) * 0.5);
-        const d = `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
-        const midX = (p1.x + p2.x) / 2;
-        const midY = (p1.y + p2.y) / 2;
-
-        const payload = EDGE_PAYLOADS[edgeKey] || "data_payload";
-        const labelWidth = Math.max(68, payload.length * 6.5 + 14);
-
-        const isWireHovered = hoveredEdgeId.value === edgeKey;
-        const isAgentHovered =
-          hoveredAgentId.value === depId || hoveredAgentId.value === agent.id;
-        const isAgentSelected =
-          selectedAgent.value?.id === depId || selectedAgent.value?.id === agent.id;
-
-        const isHighlighted = isWireHovered || isAgentHovered || isAgentSelected;
-        const isActive =
-          (isSimulating.value || currentStepIndex.value > 0) &&
-          currentStep.value.activeEdges.includes(edgeKey);
-
-        let color = "rgba(148, 163, 184, 0.25)";
-        let markerId = "arrow-default";
-        let width = 1.8;
-        const activeColor = "#38bdf8";
-
-        if (isActive) {
-          color = "#38bdf8";
-          markerId = "arrow-active";
-          width = 3.2;
-        } else if (isHighlighted) {
-          color = "#818cf8";
-          markerId = "arrow-highlight";
-          width = 2.6;
-        }
-
-        edges.push({
-          id: edgeKey,
-          sourceId: depId,
-          targetId: agent.id,
-          d,
-          midX,
-          midY,
-          payload,
-          labelWidth,
-          isHighlighted,
-          isActive,
-          color,
-          width,
-          markerId,
-          activeColor,
-        });
-      }
-    }
-  }
-
-  computedEdges.value = edges;
-}
-
-watch(
-  [agents, zoom, filteredAgents, selectedStage, currentStepIndex, isSimulating, hoveredAgentId, hoveredEdgeId, selectedAgent],
-  () => {
-    nextTick(() => {
-      updateEdgeCoordinates();
-    });
-  }
-);
-
-// ── Interactivity ─────────────────────────────────────────────────────────────
-function openInspector(agent: AgentMetadataItem) {
-  selectedAgent.value = agent;
-  drawerOpen.value = true;
 }
 
 function selectAgentById(id: string) {
   const target = agents.value.find((a) => a.id === id);
   if (target) {
-    openInspector(target);
+    selectedAgent.value = target;
+    drawerOpen.value = true;
   }
 }
 
-function onCardHover(agentId: string | null) {
-  hoveredAgentId.value = agentId;
+function onNodeHover(nodeId: string | null) {
+  hoveredAgentId.value = nodeId;
 }
 
 function onEdgeHover(edgeKey: string | null) {
   hoveredEdgeId.value = edgeKey;
 }
 
-function isHighlighted(agent: AgentMetadataItem): boolean {
+function isNodeHighlighted(nodeId: string): boolean {
   if (hoveredEdgeId.value) {
     const [from, to] = hoveredEdgeId.value.split("->");
-    if (agent.id === from || agent.id === to) return true;
+    if (nodeId === from || nodeId === to) return true;
   }
   if (hoveredAgentId.value) {
-    if (agent.id === hoveredAgentId.value) return true;
+    if (nodeId === hoveredAgentId.value) return true;
     const target = agents.value.find((a) => a.id === hoveredAgentId.value);
-    if (target?.dependencies.includes(agent.id) || agent.dependencies.includes(hoveredAgentId.value)) {
+    if (target?.dependencies.includes(nodeId) || (agents.value.find(a => a.id === nodeId)?.dependencies.includes(hoveredAgentId.value))) {
       return true;
     }
   }
-  if (!selectedAgent.value) return false;
-  return (
-    agent.id === selectedAgent.value.id ||
-    selectedAgent.value.dependencies.includes(agent.id) ||
-    agent.dependencies.includes(selectedAgent.value.id)
-  );
-}
-
-function isDimmed(agent: AgentMetadataItem): boolean {
-  if (searchQuery.value.trim() && !filteredAgents.value.some((a) => a.id === agent.id)) {
-    return true;
-  }
-  if (hoveredAgentId.value || hoveredEdgeId.value || selectedAgent.value) {
-    return !isHighlighted(agent);
+  if (selectedAgent.value) {
+    if (nodeId === selectedAgent.value.id) return true;
+    if (selectedAgent.value.dependencies.includes(nodeId)) return true;
+    const current = agents.value.find(a => a.id === nodeId);
+    if (current?.dependencies.includes(selectedAgent.value.id)) return true;
   }
   return false;
 }
 
-function zoomIn() {
-  zoom.value = Math.min(1.4, Math.round((zoom.value + 0.1) * 10) / 10);
-}
-function zoomOut() {
-  zoom.value = Math.max(0.6, Math.round((zoom.value - 0.1) * 10) / 10);
-}
-function resetZoom() {
-  zoom.value = 1.0;
+function isNodeDimmed(nodeId: string): boolean {
+  if (searchQuery.value.trim()) {
+    const q = searchQuery.value.trim().toLowerCase();
+    const node = VISUAL_NODES_CONFIG[nodeId];
+    if (!node || (!node.name.toLowerCase().includes(q) && !node.subtitle.toLowerCase().includes(q))) {
+      return true;
+    }
+  }
+  if (hoveredAgentId.value || hoveredEdgeId.value || selectedAgent.value) {
+    return !isNodeHighlighted(nodeId);
+  }
+  return false;
 }
 </script>
 
 <template>
-  <div class="relative flex h-full flex-col space-y-4">
-    <!-- Top Control Bar: Search, Filters, Zoom, Simulation Trigger -->
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd pb-4">
+  <div class="relative flex h-full flex-col space-y-3">
+    <!-- Top Control Bar: Search, Pan/Zoom Controls, Simulation Trigger, Tools Toggle -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd pb-3">
       <!-- Search Filter -->
-      <div class="relative w-72">
+      <div class="relative w-64">
         <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs">🔍</span>
         <input
           v-model="searchQuery"
@@ -605,47 +866,42 @@ function resetZoom() {
         </button>
       </div>
 
-      <!-- Stage Column Filters -->
-      <div class="flex flex-wrap items-center gap-1.5">
-        <button
-          class="rounded-lg px-2.5 py-1 text-xs font-medium transition"
-          :class="selectedStage === 'all' ? 'bg-accent text-white font-semibold' : 'bg-surface text-muted hover:text-ink'"
-          @click="selectedStage = 'all'"
-        >
-          All ({{ agents.length }})
-        </button>
-        <button
-          class="rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition"
-          :class="selectedStage === 'planning' ? 'bg-accent text-white font-semibold' : 'bg-surface text-muted hover:text-ink'"
-          @click="selectedStage = 'planning'"
-        >
-          Planning (4)
-        </button>
-        <button
-          class="rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition"
-          :class="selectedStage === 'search' ? 'bg-accent text-white font-semibold' : 'bg-surface text-muted hover:text-ink'"
-          @click="selectedStage = 'search'"
-        >
-          Search (5)
-        </button>
-        <button
-          class="rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition"
-          :class="selectedStage === 'synthesis' ? 'bg-accent text-white font-semibold' : 'bg-surface text-muted hover:text-ink'"
-          @click="selectedStage = 'synthesis'"
-        >
-          Synthesis (10)
-        </button>
-        <button
-          class="rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition"
-          :class="selectedStage === 'delivery' ? 'bg-accent text-white font-semibold' : 'bg-surface text-muted hover:text-ink'"
-          @click="selectedStage = 'delivery'"
-        >
-          Delivery (1)
-        </button>
+      <!-- Quick Stage Legend Indicators -->
+      <div class="hidden lg:flex items-center gap-2 text-[11px] font-mono">
+        <div class="flex items-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-orange-400">
+          <span>⚡</span>
+          <span>Trigger</span>
+        </div>
+        <div class="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-400">
+          <span>🟣</span>
+          <span>Planning</span>
+        </div>
+        <div class="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400">
+          <span>🟢</span>
+          <span>Search & Extraction</span>
+        </div>
+        <div class="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-purple-400">
+          <span>🟠</span>
+          <span>Synthesis & Reasoning</span>
+        </div>
+        <div class="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">
+          <span>🔵</span>
+          <span>Delivery</span>
+        </div>
       </div>
 
-      <!-- Right Action Group: Simulation Controls & Zoom -->
+      <!-- Right Action Group: Simulation Controls, Tools Panel Toggle, Zoom -->
       <div class="flex items-center gap-2">
+        <!-- Tools Drawer Toggle (Screenshot 1 Style) -->
+        <button
+          class="flex items-center gap-1.5 rounded-xl border border-bd px-3 py-1.5 text-xs font-semibold transition"
+          :class="showToolsPanel ? 'bg-accent/15 text-accent border-accent/40' : 'bg-surface text-muted hover:text-ink'"
+          @click="showToolsPanel = !showToolsPanel"
+        >
+          <span>🛠️</span>
+          <span>Инструменты ({{ ENGINE_TOOLS.length }})</span>
+        </button>
+
         <!-- Simulation Run / Pause Toggle -->
         <div class="flex items-center gap-1 rounded-xl border border-bd bg-surface/70 p-1">
           <button
@@ -674,7 +930,6 @@ function resetZoom() {
             ↺
           </button>
 
-          <!-- Sim speed toggle -->
           <button
             class="rounded px-2 py-1 font-mono text-[10px] font-semibold text-muted hover:text-ink"
             @click="simSpeed = simSpeed === 1 ? 2 : 1"
@@ -683,15 +938,15 @@ function resetZoom() {
           </button>
         </div>
 
-        <!-- Zoom Controls -->
+        <!-- Zoom & Pan Controls -->
         <div class="flex items-center gap-1 rounded-lg border border-bd bg-surface/60 p-1 text-xs text-muted">
-          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Zoom In" @click="zoomIn">
+          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Увеличить" @click="zoomIn">
             +
           </button>
-          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" @click="resetZoom">
+          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" title="Сбросить масштаб" @click="resetView">
             {{ Math.round(zoom * 100) }}%
           </button>
-          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Zoom Out" @click="zoomOut">
+          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Уменьшить" @click="zoomOut">
             −
           </button>
         </div>
@@ -708,53 +963,42 @@ function resetZoom() {
       {{ t("common.loading") }}
     </div>
 
-    <!-- n8n Canvas Viewport -->
+    <!-- Main Workflow Canvas Viewport (n8n Style) -->
     <div
       v-else
       ref="canvasViewportRef"
-      class="relative flex-1 overflow-auto rounded-2xl border border-bd/80 bg-canvas p-6 shadow-inner min-h-[640px]"
-      style="background-image: radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px); background-size: 22px 22px;"
+      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd/80 bg-[#0d111a] shadow-inner min-h-[640px] cursor-grab active:cursor-grabbing"
+      style="background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1.2px, transparent 1.2px); background-size: 20px 20px;"
+      @mousedown="onMouseDown"
+      @mousemove="onMouseMove"
+      @mouseup="onMouseUp"
+      @mouseleave="onMouseUp"
+      @wheel="onWheel"
     >
-      <!-- Scaled Content Wrapper -->
+      <!-- Scalable & Pannable Canvas World -->
       <div
-        ref="zoomContainerRef"
-        class="relative inline-flex min-w-full p-6 transition-transform duration-150 origin-top-left"
-        :style="{ transform: `scale(${zoom})` }"
+        class="absolute origin-top-left transition-transform duration-75 ease-out"
+        :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '4600px', height: '900px' }"
       >
-        <!-- SVG Connections Layer (Exact Coordinates between ports) -->
-        <svg
-          class="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible"
-        >
+        <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
+        <svg class="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible">
           <defs>
             <!-- Default subtle arrowhead -->
             <marker
-              id="arrow-default"
+              id="n8n-arrow-default"
               viewBox="0 0 10 10"
-              refX="7"
+              refX="8"
               refY="5"
               markerWidth="6"
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(148, 163, 184, 0.4)" />
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(148, 163, 184, 0.45)" />
             </marker>
 
             <!-- Highlighted wire arrowhead -->
             <marker
-              id="arrow-highlight"
-              viewBox="0 0 10 10"
-              refX="7"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#818cf8" />
-            </marker>
-
-            <!-- Active simulation wire arrowhead -->
-            <marker
-              id="arrow-active"
+              id="n8n-arrow-highlight"
               viewBox="0 0 10 10"
               refX="8"
               refY="5"
@@ -762,11 +1006,24 @@ function resetZoom() {
               markerHeight="7"
               orient="auto-start-reverse"
             >
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#818cf8" />
+            </marker>
+
+            <!-- Active simulation wire arrowhead -->
+            <marker
+              id="n8n-arrow-active"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto-start-reverse"
+            >
               <path d="M 0 1 L 9 5 L 0 9 z" fill="#38bdf8" />
             </marker>
 
             <!-- Glow filter for traveling particles -->
-            <filter id="wire-glow" x="-50%" y="-50%" width="200%" height="200%">
+            <filter id="n8n-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />
               <feMerge>
                 <feMergeNode in="coloredBlur" />
@@ -775,28 +1032,34 @@ function resetZoom() {
             </filter>
           </defs>
 
-          <!-- SVG Connecting Curves -->
-          <g v-for="edge in computedEdges" :key="edge.id">
-            <!-- Curve wire line -->
+          <!-- Render All Connecting Wires -->
+          <g v-for="edge in renderedEdges" :key="edge.id">
+            <!-- Smooth Bezier Line -->
             <path
               :d="edge.d"
-              :stroke="edge.color"
-              :stroke-width="edge.width"
+              :stroke="
+                edge.isActive
+                  ? '#38bdf8'
+                  : edge.isHighlighted
+                  ? '#818cf8'
+                  : 'rgba(148, 163, 184, 0.3)'
+              "
+              :stroke-width="edge.isActive ? 3.2 : edge.isHighlighted ? 2.6 : 2"
               fill="none"
               :stroke-dasharray="edge.isActive ? '7,7' : 'none'"
-              :class="{ 'animate-wire-flow': edge.isActive }"
-              :marker-end="`url(#${edge.markerId})`"
-              class="transition-all duration-300 pointer-events-auto cursor-pointer"
+              :class="{ 'animate-n8n-wire': edge.isActive }"
+              :marker-end="`url(#${edge.isActive ? 'n8n-arrow-active' : edge.isHighlighted ? 'n8n-arrow-highlight' : 'n8n-arrow-default'})`"
+              class="transition-all duration-200 pointer-events-auto cursor-pointer"
               @mouseenter="onEdgeHover(edge.id)"
               @mouseleave="onEdgeHover(null)"
             />
 
-            <!-- Traveling Data Particle on active simulation wires -->
+            <!-- Animated Traveling Particle along active simulation wires -->
             <circle
               v-if="edge.isActive"
               r="4.5"
               fill="#38bdf8"
-              filter="url(#wire-glow)"
+              filter="url(#n8n-glow)"
             >
               <animateMotion
                 :path="edge.d"
@@ -805,9 +1068,9 @@ function resetZoom() {
               />
             </circle>
 
-            <!-- Data payload badge on curve midpoint -->
+            <!-- Data Payload Badge in Middle of Wire -->
             <g
-              v-if="edge.isHighlighted || edge.isActive || zoom >= 0.9"
+              v-if="edge.isHighlighted || edge.isActive || zoom >= 0.85"
               :transform="`translate(${edge.midX}, ${edge.midY})`"
               class="pointer-events-auto cursor-pointer transition-transform hover:scale-110"
               @mouseenter="onEdgeHover(edge.id)"
@@ -825,7 +1088,7 @@ function resetZoom() {
                     ? 'fill-slate-900 stroke-sky-400'
                     : edge.isHighlighted
                     ? 'fill-slate-900 stroke-indigo-400'
-                    : 'fill-surface/95 stroke-bd/80',
+                    : 'fill-[#151922] stroke-bd/80',
                 ]"
               />
               <text
@@ -847,38 +1110,145 @@ function resetZoom() {
           </g>
         </svg>
 
-        <!-- Columns of Agent Cards -->
-        <div class="relative z-10 flex gap-20">
+        <!-- Render All Visual Nodes (n8n Node Cards) -->
+        <div
+          v-for="node in visualNodes"
+          :key="node.id"
+          class="interactive-node absolute group select-none transition-transform duration-150"
+          :style="{
+            transform: `translate(${node.x}px, ${node.y}px)`,
+            width: `${node.width}px`,
+            height: `${node.height}px`,
+          }"
+          @click="openInspector(node.id)"
+          @mouseenter="onNodeHover(node.id)"
+          @mouseleave="onNodeHover(null)"
+        >
+          <!-- Node Card Container -->
           <div
-            v-for="col in columns"
-            :key="col.id"
-            class="flex flex-col space-y-4"
-            :class="{ hidden: selectedStage !== 'all' && selectedStage !== col.stageFilter }"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur transition-all duration-200"
+            :class="[
+              isNodeDimmed(node.id) ? 'opacity-30' : 'opacity-100',
+              selectedAgent?.id === node.id
+                ? 'border-accent bg-[#1c2233] ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
+                : isNodeHighlighted(node.id)
+                ? 'border-indigo-400/80 bg-[#191f2e] ring-2 ring-indigo-400/40 scale-[1.01]'
+                : getAgentSimStatus(node.id) === 'active'
+                ? 'border-sky-400 bg-[#192338] ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 scale-[1.03]'
+                : getAgentSimStatus(node.id) === 'completed'
+                ? 'border-emerald-500/60 bg-[#161d26]'
+                : 'border-[#2a3449] bg-[#161a24] hover:border-slate-500 hover:bg-[#1a202d]',
+            ]"
           >
-            <!-- Column Header -->
-            <div class="flex items-center justify-between border-b border-bd/60 pb-2 px-1">
-              <h3 class="text-xs font-bold uppercase tracking-wider text-muted">
-                {{ col.title }}
-              </h3>
-              <span class="rounded-full px-2 py-0.5 text-[10px] font-bold" :class="col.badgeClass">
-                {{ col.agents.length }}
+            <!-- Left Input Port (Handle) -->
+            <div
+              v-if="node.hasInput"
+              class="absolute -left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-[#151922] bg-slate-400 shadow transition group-hover:scale-125 group-hover:bg-accent"
+              :class="[
+                getAgentSimStatus(node.id) === 'active' ? 'bg-sky-400 ring-2 ring-sky-400/60 scale-125' : '',
+                isNodeHighlighted(node.id) ? 'bg-indigo-400' : '',
+              ]"
+              title="Input Connection"
+            />
+
+            <!-- Right Output Port (Handle) -->
+            <div
+              v-if="node.hasOutput"
+              class="absolute -right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-[#151922] bg-slate-400 shadow transition group-hover:scale-125 group-hover:bg-accent"
+              :class="[
+                getAgentSimStatus(node.id) === 'active' ? 'bg-sky-400 ring-2 ring-sky-400/60 scale-125' : '',
+                isNodeHighlighted(node.id) ? 'bg-indigo-400' : '',
+              ]"
+              title="Output Connection"
+            />
+
+            <!-- Node Icon Box (Matching Screenshot 2) -->
+            <div
+              class="grid h-11 w-11 shrink-0 place-items-center rounded-xl border text-xl font-bold shadow-inner"
+              :class="[node.iconBg, node.iconColor]"
+            >
+              {{ node.icon }}
+            </div>
+
+            <!-- Node Label Details -->
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-1">
+                <span class="truncate font-bold text-xs text-ink group-hover:text-accent transition-colors">
+                  {{ node.name }}
+                </span>
+              </div>
+              <p class="truncate text-[10px] text-muted mt-0.5 font-sans">
+                {{ node.subtitle }}
+              </p>
+            </div>
+
+            <!-- Active / Done Simulation Status Badges -->
+            <div v-if="getAgentSimStatus(node.id) === 'active'" class="absolute -top-2 right-2">
+              <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-sky-400 animate-pulse shadow">
+                ● Active
+              </span>
+            </div>
+            <div v-else-if="getAgentSimStatus(node.id) === 'completed'" class="absolute -top-2 right-2">
+              <span class="flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-400 shadow">
+                ✓ Done
               </span>
             </div>
 
-            <!-- Stack of Cards -->
-            <div class="flex flex-col space-y-4">
-              <AgentNodeCard
-                v-for="agent in col.agents"
-                :key="agent.id"
-                :agent="agent"
-                :selected="selectedAgent?.id === agent.id"
-                :highlighted="isHighlighted(agent)"
-                :dimmed="isDimmed(agent)"
-                :sim-status="getAgentSimStatus(agent.id)"
-                @select="openInspector"
-                @hover="onCardHover"
-              />
+            <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
+            <div
+              v-if="node.llmModel"
+              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd/90 bg-[#10141d] px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-md"
+            >
+              <span class="text-accent text-[7px]">◆</span>
+              <span>{{ node.llmModel }}</span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Docked Tools / Instruments Panel (Screenshot 1 Style) -->
+      <div
+        v-if="showToolsPanel"
+        class="absolute right-4 top-4 z-20 w-72 rounded-2xl border border-bd/80 bg-[#151922]/95 p-3.5 shadow-2xl backdrop-blur transition-all duration-200"
+      >
+        <div class="flex items-center justify-between border-b border-bd/60 pb-2.5">
+          <div class="flex items-center gap-2">
+            <span class="text-sm">🛠️</span>
+            <h4 class="text-xs font-bold uppercase tracking-wider text-ink">
+              Инструменты ({{ ENGINE_TOOLS.length }})
+            </h4>
+          </div>
+          <button
+            class="text-xs text-muted hover:text-ink"
+            title="Свернуть панель"
+            @click="showToolsPanel = false"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div class="mt-2.5 max-h-72 overflow-y-auto space-y-1.5 pr-1 text-xs">
+          <div
+            v-for="tool in ENGINE_TOOLS"
+            :key="tool.id"
+            class="flex items-center justify-between rounded-xl border border-bd/40 bg-surface/40 p-2 transition hover:border-accent/40 hover:bg-surface/80 cursor-pointer"
+            :class="selectedTool?.id === tool.id ? 'border-accent bg-surface/90' : ''"
+            @click="selectedTool = selectedTool?.id === tool.id ? null : tool"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-base">{{ tool.icon }}</span>
+              <div class="min-w-0">
+                <div class="truncate font-mono text-[11px] font-semibold text-ink">
+                  {{ tool.name }}
+                </div>
+                <div class="truncate text-[10px] text-muted">
+                  {{ tool.description }}
+                </div>
+              </div>
+            </div>
+            <span class="rounded bg-bg/80 px-1.5 py-0.5 font-mono text-[9px] text-muted uppercase">
+              {{ tool.category }}
+            </span>
           </div>
         </div>
       </div>
@@ -887,7 +1257,7 @@ function resetZoom() {
     <!-- Floating Simulation Walkthrough Banner ("Как они работают") -->
     <div
       v-if="isSimulating || currentStepIndex > 0"
-      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
+      class="rounded-2xl border border-accent/40 bg-[#151922]/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
     >
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd/60 pb-3">
         <div class="flex items-center gap-2">
@@ -971,11 +1341,7 @@ function resetZoom() {
 </template>
 
 <style scoped>
-.bg-canvas {
-  background-color: rgb(var(--c-bg));
-}
-
-@keyframes wireFlow {
+@keyframes n8nWireFlow {
   from {
     stroke-dashoffset: 28;
   }
@@ -984,7 +1350,7 @@ function resetZoom() {
   }
 }
 
-.animate-wire-flow {
-  animation: wireFlow 1.2s linear infinite;
+.animate-n8n-wire {
+  animation: n8nWireFlow 1.2s linear infinite;
 }
 </style>
