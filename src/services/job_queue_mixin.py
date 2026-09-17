@@ -9,7 +9,18 @@ from datetime import datetime, timedelta, timezone
 from src.domain.errors import ConflictError, NotFoundError
 
 from src.config import settings
-from src.domain import *  # noqa: F401,F403
+from src.domain import (
+    FinalizeJobStatus,
+    JobCleanupResponse,
+    JobRecoveryResponse,
+    QueueMaintenanceResponse,
+    ResearchFinalizeJob,
+    ResearchStatus,
+    SearchJobStatus,
+    SearchTaskJob,
+    TaskStatus,
+    TaskUpdate,
+)
 
 logger = logging.getLogger(__name__)
 

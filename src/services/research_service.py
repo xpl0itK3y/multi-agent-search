@@ -1,7 +1,5 @@
 import inspect
-import json
 import logging
-import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,7 +17,7 @@ from src.agents.citation_audit import CitationAuditAgent
 from src.agents.source_independence import SourceIndependenceAgent
 from src.agents.source_reputation import SourceReputationAgent
 from src.agents.retraction import RetractionAgent
-from src.agents.cross_language import CrossLanguageAgent, detect_language
+from src.agents.cross_language import detect_language
 from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.search import SearchAgent
@@ -32,19 +30,13 @@ from src.services.job_queue_mixin import JobQueueMixin
 from src.services.trust_report_mixin import TrustReportMixin
 from src.services.share_mixin import ShareMixin
 from src.domain import (
-    AuthUser,
-    JobCleanupResponse,
     MaintenanceSummary,
     OperationalHealth,
     DecomposeResponse,
     FinalizeJobStatus,
     GraphAlert,
-    GraphAlertHistoryEntry,
-    GraphAlertTrend,
     GraphMetrics,
-    JobRecoveryResponse,
     QueueMetrics,
-    QueueMaintenanceResponse,
     ResearchHistoryItem,
     ResearchRecord,
     ResearchGraphResponse,
@@ -55,21 +47,7 @@ from src.domain import (
     Clarification,
     ResearchConflict,
     ResearchPlan,
-    CitationAudit,
-    SourceIndependence,
-    SourceReputation,
-    SourceIntegrity,
-    CrossLanguageReport,
-    LanguageCount,
-    StanceBalance,
-    NumericCheck,
     ConfidenceReport,
-    AuditTrail,
-    ShareInfo,
-    PublicReport,
-    AuditQuery,
-    AuditSource,
-    AuditStep,
     ComparisonTable,
     RedTeamReport,
     ResearchPlanItem,
@@ -675,7 +653,6 @@ class ResearchService(
         )
         graph_execution_summary = self._build_graph_execution_summary(tasks)
 
-        graph_state = research.graph_state or {}
         partial_report = research.partial_report if not research.final_report else None
 
         return ResearchSummary(
