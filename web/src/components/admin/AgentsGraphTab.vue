@@ -18,7 +18,7 @@ const hoveredEdgeId = ref<string | null>(null);
 const drawerOpen = ref(false);
 
 // ── Pan & Zoom Canvas State (n8n Style) ───────────────────────────────────────
-const zoom = ref(0.65);
+const zoom = ref(0.55);
 const panX = ref(40);
 const panY = ref(60);
 const isPanning = ref(false);
@@ -62,20 +62,19 @@ function onWheel(e: WheelEvent) {
   const newZoom = Math.max(0.3, Math.min(1.5, zoom.value * clampedFactor));
 
   // Anchor zoom around cursor position
-  panX.value = mouseX - worldX * newZoom;
-  panY.value = mouseY - worldY * newZoom;
+  panX.value = Math.round(mouseX - worldX * newZoom);
+  panY.value = Math.round(mouseY - worldY * newZoom);
   zoom.value = Math.round(newZoom * 1000) / 1000;
 
-  // Temporarily disable CSS transition during active scrolling so there is no rubberbanding
   isZooming.value = true;
   if (zoomTimeout) clearTimeout(zoomTimeout);
   zoomTimeout = setTimeout(() => {
     isZooming.value = false;
-  }, 100);
+  }, 120);
 }
 
 function resetView() {
-  zoom.value = 0.65;
+  zoom.value = 0.55;
   panX.value = 40;
   panY.value = 60;
 }
@@ -109,7 +108,7 @@ interface VisualNode {
   isTrigger?: boolean;
 }
 
-const NODE_WIDTH = 220;
+const NODE_WIDTH = 250;
 const NODE_HEIGHT = 76;
 
 const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
@@ -121,8 +120,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     iconBg: "bg-orange-500/15 border-orange-500/30",
     iconColor: "text-orange-400",
     x: 60,
-    y: 320,
-    width: 200,
+    y: 300,
+    width: 230,
     height: NODE_HEIGHT,
     hasInput: false,
     hasOutput: true,
@@ -135,8 +134,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "💬",
     iconBg: "bg-blue-500/15 border-blue-500/30",
     iconColor: "text-blue-400",
-    x: 320,
-    y: 320,
+    x: 420,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -150,8 +149,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "✨",
     iconBg: "bg-blue-500/15 border-blue-500/30",
     iconColor: "text-blue-400",
-    x: 600,
-    y: 320,
+    x: 790,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -165,8 +164,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🧭",
     iconBg: "bg-blue-500/15 border-blue-500/30",
     iconColor: "text-blue-400",
-    x: 880,
-    y: 320,
+    x: 1160,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -180,8 +179,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🌐",
     iconBg: "bg-blue-500/15 border-blue-500/30",
     iconColor: "text-blue-400",
-    x: 880,
-    y: 490,
+    x: 1490,
+    y: 450,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -195,8 +194,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🔎",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
     iconColor: "text-emerald-400",
-    x: 1180,
-    y: 320,
+    x: 1850,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -209,8 +208,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🛡️",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
     iconColor: "text-emerald-400",
-    x: 1460,
-    y: 220,
+    x: 2220,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -223,8 +222,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "⭐",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
     iconColor: "text-emerald-400",
-    x: 1460,
-    y: 420,
+    x: 2590,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -237,8 +236,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🔗",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
     iconColor: "text-emerald-400",
-    x: 1740,
-    y: 320,
+    x: 2960,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -251,8 +250,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "📑",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
     iconColor: "text-emerald-400",
-    x: 2020,
-    y: 320,
+    x: 3330,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -265,8 +264,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🔁",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 2300,
-    y: 320,
+    x: 3700,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -280,8 +279,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🧠",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 2580,
-    y: 320,
+    x: 4070,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -295,8 +294,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🔢",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 2580,
-    y: 490,
+    x: 4440,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -309,8 +308,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "✓",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 2860,
-    y: 320,
+    x: 4810,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -324,8 +323,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "📌",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3140,
-    y: 220,
+    x: 5180,
+    y: 160,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -338,8 +337,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "⚠️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3420,
-    y: 220,
+    x: 5550,
+    y: 160,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -352,8 +351,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "🎯",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3140,
-    y: 420,
+    x: 5180,
+    y: 440,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -367,8 +366,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "⚖️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3420,
-    y: 420,
+    x: 5550,
+    y: 440,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -382,8 +381,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "📝",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3700,
-    y: 320,
+    x: 5920,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -397,8 +396,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "📊",
     iconBg: "bg-purple-500/15 border-purple-500/30",
     iconColor: "text-purple-400",
-    x: 3980,
-    y: 320,
+    x: 6290,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -411,8 +410,8 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     icon: "💬",
     iconBg: "bg-amber-500/15 border-amber-500/30",
     iconColor: "text-amber-400",
-    x: 4260,
-    y: 320,
+    x: 6660,
+    y: 300,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
     hasInput: true,
@@ -422,7 +421,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
 };
 
 // ── Node Positions & Drag-and-Drop (Movable Nodes) ───────────────────────────
-const LOCAL_STORAGE_POSITIONS_KEY = "multi-agent-search:admin-nodes-pos";
+const LOCAL_STORAGE_POSITIONS_KEY = "multi-agent-search:admin-nodes-pos-v3";
 
 const defaultNodePositions: Record<string, { x: number; y: number }> = Object.fromEntries(
   Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => [id, { x: conf.x, y: conf.y }])
@@ -430,6 +429,10 @@ const defaultNodePositions: Record<string, { x: number; y: number }> = Object.fr
 
 function loadSavedPositions(): Record<string, { x: number; y: number }> {
   try {
+    // Clear legacy keys with cramped coordinates
+    localStorage.removeItem("multi-agent-search:admin-nodes-pos");
+    localStorage.removeItem("multi-agent-search:admin-nodes-pos-v2");
+
     const raw = localStorage.getItem(LOCAL_STORAGE_POSITIONS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
@@ -457,6 +460,8 @@ function resetNodePositions() {
   nodePositions.value = { ...defaultNodePositions };
   try {
     localStorage.removeItem(LOCAL_STORAGE_POSITIONS_KEY);
+    localStorage.removeItem("multi-agent-search:admin-nodes-pos");
+    localStorage.removeItem("multi-agent-search:admin-nodes-pos-v2");
   } catch {
     // Ignore
   }
@@ -511,8 +516,8 @@ function onGlobalMouseMove(e: MouseEvent) {
       nodePositions.value = {
         ...nodePositions.value,
         [draggingNodeId.value]: {
-          x: Math.max(10, Math.min(4800, newX)),
-          y: Math.max(10, Math.min(950, newY)),
+          x: Math.max(10, Math.min(7200, newX)),
+          y: Math.max(10, Math.min(850, newY)),
         },
       };
     }
@@ -1087,7 +1092,7 @@ function isNodeDimmed(nodeId: string): boolean {
       <div
         class="absolute origin-top-left"
         :class="isZooming || isPanning || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
-        :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '4600px', height: '900px' }"
+        :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '7400px', height: '850px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
         <svg class="pointer-events-none absolute inset-0 z-0 h-full w-full overflow-visible">
