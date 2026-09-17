@@ -624,10 +624,7 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
 
     const edgeKey = `${conn.from}->${conn.to}`;
     const isWireHovered = hoveredEdgeId.value === edgeKey;
-    const isNodeHovered = hoveredAgentId.value === conn.from || hoveredAgentId.value === conn.to;
-    const isNodeSelected = selectedAgent.value?.id === conn.from || selectedAgent.value?.id === conn.to;
-
-    const isHighlighted = isWireHovered || isNodeHovered || isNodeSelected;
+    const isHighlighted = isWireHovered;
     const isActive =
       (isSimulating.value || currentStepIndex.value > 0) &&
       currentStep.value.activeEdges.includes(edgeKey);
@@ -937,18 +934,11 @@ function isNodeHighlighted(nodeId: string): boolean {
     const [from, to] = hoveredEdgeId.value.split("->");
     if (nodeId === from || nodeId === to) return true;
   }
-  if (hoveredAgentId.value) {
-    if (nodeId === hoveredAgentId.value) return true;
-    const target = agents.value.find((a) => a.id === hoveredAgentId.value);
-    if (target?.dependencies.includes(nodeId) || (agents.value.find(a => a.id === nodeId)?.dependencies.includes(hoveredAgentId.value))) {
-      return true;
-    }
+  if (hoveredAgentId.value && nodeId === hoveredAgentId.value) {
+    return true;
   }
-  if (selectedAgent.value) {
-    if (nodeId === selectedAgent.value.id) return true;
-    if (selectedAgent.value.dependencies.includes(nodeId)) return true;
-    const current = agents.value.find(a => a.id === nodeId);
-    if (current?.dependencies.includes(selectedAgent.value.id)) return true;
+  if (selectedAgent.value && nodeId === selectedAgent.value.id) {
+    return true;
   }
   return false;
 }
@@ -960,9 +950,6 @@ function isNodeDimmed(nodeId: string): boolean {
     if (!node || (!node.name.toLowerCase().includes(q) && !node.subtitle.toLowerCase().includes(q))) {
       return true;
     }
-  }
-  if (hoveredAgentId.value || hoveredEdgeId.value || selectedAgent.value) {
-    return !isNodeHighlighted(nodeId);
   }
   return false;
 }
@@ -1169,9 +1156,12 @@ function isNodeDimmed(nodeId: string): boolean {
               :stroke-width="edge.isActive ? 3.2 : edge.isHighlighted ? 2.6 : 2"
               fill="none"
               :stroke-dasharray="edge.isActive ? '7,7' : 'none'"
-              :class="{ 'animate-n8n-wire': edge.isActive }"
+              :class="[
+                draggingNodeId !== null ? 'transition-none' : 'transition-[stroke,stroke-width] duration-150',
+                { 'animate-n8n-wire': edge.isActive }
+              ]"
               :marker-end="`url(#${edge.isActive ? 'n8n-arrow-active' : edge.isHighlighted ? 'n8n-arrow-highlight' : 'n8n-arrow-default'})`"
-              class="transition-all duration-200 pointer-events-auto cursor-pointer"
+              class="pointer-events-auto cursor-pointer"
               @mouseenter="onEdgeHover(edge.id)"
               @mouseleave="onEdgeHover(null)"
             />
@@ -1194,40 +1184,42 @@ function isNodeDimmed(nodeId: string): boolean {
             <g
               v-if="edge.isHighlighted || edge.isActive || zoom >= 0.85"
               :transform="`translate(${edge.midX}, ${edge.midY})`"
-              class="pointer-events-auto cursor-pointer transition-transform hover:scale-110"
+              class="pointer-events-auto cursor-pointer"
               @mouseenter="onEdgeHover(edge.id)"
               @mouseleave="onEdgeHover(null)"
             >
-              <rect
-                :x="-edge.labelWidth / 2"
-                y="-10"
-                :width="edge.labelWidth"
-                height="20"
-                rx="6"
-                class="stroke-[1.5]"
-                :class="[
-                  edge.isActive
-                    ? 'fill-slate-900 stroke-sky-400'
-                    : edge.isHighlighted
-                    ? 'fill-slate-900 stroke-indigo-400'
-                    : 'fill-[#151922] stroke-bd/80',
-                ]"
-              />
-              <text
-                x="0"
-                y="3.5"
-                text-anchor="middle"
-                class="font-mono text-[9px] font-semibold select-none"
-                :class="[
-                  edge.isActive
-                    ? 'fill-sky-400'
-                    : edge.isHighlighted
-                    ? 'fill-indigo-300'
-                    : 'fill-muted',
-                ]"
-              >
-                {{ edge.payload }}
-              </text>
+              <g :class="draggingNodeId !== null ? 'transition-none' : 'transition-transform duration-100 hover:scale-110'">
+                <rect
+                  :x="-edge.labelWidth / 2"
+                  y="-10"
+                  :width="edge.labelWidth"
+                  height="20"
+                  rx="6"
+                  class="stroke-[1.5]"
+                  :class="[
+                    edge.isActive
+                      ? 'fill-slate-900 stroke-sky-400'
+                      : edge.isHighlighted
+                      ? 'fill-slate-900 stroke-indigo-400'
+                      : 'fill-[#151922] stroke-bd/80',
+                  ]"
+                />
+                <text
+                  x="0"
+                  y="3.5"
+                  text-anchor="middle"
+                  class="font-mono text-[9px] font-semibold select-none"
+                  :class="[
+                    edge.isActive
+                      ? 'fill-sky-400'
+                      : edge.isHighlighted
+                      ? 'fill-indigo-300'
+                      : 'fill-muted',
+                  ]"
+                >
+                  {{ edge.payload }}
+                </text>
+              </g>
             </g>
           </g>
         </svg>
@@ -1236,11 +1228,11 @@ function isNodeDimmed(nodeId: string): boolean {
         <div
           v-for="node in visualNodes"
           :key="node.id"
-          class="interactive-node absolute group select-none"
+          class="interactive-node absolute group select-none transition-none"
           :class="[
             draggingNodeId === node.id
-              ? 'transition-none z-30 cursor-grabbing'
-              : 'transition-transform duration-100 cursor-grab',
+              ? 'z-30 cursor-grabbing'
+              : 'cursor-grab',
           ]"
           :style="{
             transform: `translate(${node.x}px, ${node.y}px)`,
@@ -1254,11 +1246,12 @@ function isNodeDimmed(nodeId: string): boolean {
         >
           <!-- Node Card Container -->
           <div
-            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur transition-all duration-200"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur"
             :class="[
               draggingNodeId === node.id
-                ? 'border-accent bg-[#1c2233] ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
-                : isNodeDimmed(node.id)
+                ? 'transition-none border-accent bg-[#1c2233] ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
+                : 'transition-colors duration-150',
+              isNodeDimmed(node.id)
                 ? 'opacity-30'
                 : 'opacity-100',
               selectedAgent?.id === node.id
