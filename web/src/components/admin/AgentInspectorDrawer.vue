@@ -243,7 +243,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
             <!-- Detailed Description -->
             <div>
               <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
-                {{ t('admin.agents.role') }} & Назначение
+                {{ t('admin.agents.roleAndPurpose') }}
               </h4>
               <p class="mt-1.5 leading-relaxed text-ink/90 text-[13px]">
                 {{ agent.description }}
@@ -267,27 +267,27 @@ function copyJson(data: any, targetRef: "input" | "output") {
             <!-- Execution Guarantees & SLA Grid -->
             <div>
               <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
-                Параметры надёжности и SLA
+                {{ t('admin.agents.slaAndReliability') }}
               </h4>
               <div class="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.timeoutSla') }}</div>
                   <div class="mt-1 text-xs font-semibold text-ink">
-                    ⏱️ {{ agent.timeout_seconds ? `${agent.timeout_seconds} секунд` : 'Стандартный (30с)' }}
+                    ⏱️ {{ agent.timeout_seconds ? `${agent.timeout_seconds} ${t('admin.agents.seconds')}` : t('admin.agents.defaultSla') }}
                   </div>
                 </div>
 
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.retryPolicy') }}</div>
                   <div class="mt-1 text-xs font-semibold text-ink">
-                    🔁 {{ agent.retry_policy || '3 попытки с экспоненциальным backoff' }}
+                    🔁 {{ agent.retry_policy || t('admin.agents.defaultRetry') }}
                   </div>
                 </div>
 
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.cacheTtl') }}</div>
                   <div class="mt-1 text-xs font-semibold text-ink">
-                    💾 {{ agent.cache_ttl || 'Сессионный кэш (без сохранения)' }}
+                    💾 {{ agent.cache_ttl || t('admin.agents.sessionCache') }}
                   </div>
                 </div>
 
@@ -305,10 +305,10 @@ function copyJson(data: any, targetRef: "input" | "output") {
               <!-- Inputs / Dependencies -->
               <div>
                 <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
-                  {{ t("admin.agents.dependencies") }} (Входы)
+                  {{ t("admin.agents.dependencies") }}
                 </h4>
                 <div v-if="upstreamAgents.length === 0" class="mt-2 rounded-xl border border-bd/60 bg-surface/30 p-2.5 text-muted italic text-[11px]">
-                  ⚡ Входная нода графа (Root Dispatcher)
+                  {{ t("admin.agents.rootDispatcher") }}
                 </div>
                 <div v-else class="mt-2 space-y-1.5">
                   <button
@@ -326,10 +326,10 @@ function copyJson(data: any, targetRef: "input" | "output") {
               <!-- Outputs / Downstream Consumers -->
               <div>
                 <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
-                  {{ t("admin.agents.downstream") }} (Выходы)
+                  {{ t("admin.agents.downstream") }}
                 </h4>
                 <div v-if="downstreamAgents.length === 0" class="mt-2 rounded-xl border border-bd/60 bg-surface/30 p-2.5 text-muted italic text-[11px]">
-                  🏁 Финальная нода доставки (Terminal Output)
+                  {{ t("admin.agents.terminalOutput") }}
                 </div>
                 <div v-else class="mt-2 space-y-1.5">
                   <button
@@ -351,10 +351,10 @@ function copyJson(data: any, targetRef: "input" | "output") {
             <div class="flex items-center justify-between">
               <div>
                 <h4 class="text-xs font-bold text-ink">
-                  {{ agent.llm_model ? 'Системный промпт агента' : 'Алгоритм и правила работы' }}
+                  {{ agent.llm_model ? t('admin.agents.systemPromptTitle') : t('admin.agents.rulesTitle') }}
                 </h4>
                 <p class="text-[11px] text-muted">
-                  {{ agent.llm_model ? 'Инструкции для нейросети, определяющие поведение и ограничения' : 'Детерминированная логика обработки и правила фильтрации' }}
+                  {{ agent.llm_model ? t('admin.agents.systemPromptDesc') : t('admin.agents.rulesDesc') }}
                 </p>
               </div>
 
@@ -383,7 +383,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
               </div>
 
               <div class="max-h-[460px] overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-slate-200 whitespace-pre-wrap select-text">
-                {{ agent.system_prompt || 'Детерминированный исполнитель без внешнего LLM-промпта. Логика реализована нативным кодом.' }}
+                {{ agent.system_prompt || t('admin.agents.deterministicNoLlm') }}
               </div>
             </div>
           </div>
@@ -394,24 +394,24 @@ function copyJson(data: any, targetRef: "input" | "output") {
             <div class="rounded-2xl border border-bd bg-surface/40 p-4">
               <h4 class="text-xs font-bold text-ink flex items-center gap-2">
                 <span>🧠</span>
-                <span>Архитектура вычислений</span>
+                <span>{{ t('admin.agents.computeArch') }}</span>
               </h4>
 
               <div class="mt-3 grid grid-cols-2 gap-3 font-mono text-xs">
                 <div>
-                  <span class="block text-[10px] text-muted uppercase">Модель / Движок</span>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.modelEngine') }}</span>
                   <span class="font-bold text-accent">
                     {{ agent.llm_model || 'Native Rust Component' }}
                   </span>
                 </div>
                 <div>
-                  <span class="block text-[10px] text-muted uppercase">Провайдер</span>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.provider') }}</span>
                   <span class="font-bold text-ink">
                     {{ agent.llm_model?.includes('deepseek') ? 'DeepSeek AI' : 'In-House Async Worker' }}
                   </span>
                 </div>
                 <div>
-                  <span class="block text-[10px] text-muted uppercase">Температура генерации</span>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.temperatureTitle') }}</span>
                   <div class="flex items-center gap-2 mt-0.5">
                     <div class="h-2 w-24 rounded-full bg-surface border border-bd overflow-hidden">
                       <div
@@ -423,7 +423,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   </div>
                 </div>
                 <div>
-                  <span class="block text-[10px] text-muted uppercase">Контекстное окно</span>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.contextWindow') }}</span>
                   <span class="font-bold text-ink">{{ agent.context_window || '128k' }}</span>
                 </div>
               </div>
@@ -439,7 +439,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
               </div>
 
               <div v-if="!agent.tools || agent.tools.length === 0" class="rounded-xl border border-bd/60 bg-surface/30 p-3 text-muted italic">
-                Внешние тулы не подключены (автономная обработка).
+                {{ t('admin.agents.noTools') }}
               </div>
               <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div
@@ -499,7 +499,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   class="text-[10px] font-mono text-accent hover:underline"
                   @click="copyJson(agent.example_input, 'input')"
                 >
-                  {{ copiedInput ? t('admin.agents.copied') : 'Скопировать JSON' }}
+                  {{ copiedInput ? t('admin.agents.copied') : t('admin.agents.copyInput') }}
                 </button>
               </div>
               <pre class="rounded-xl border border-bd/80 bg-[#0b0e14] p-3 font-mono text-[10.5px] leading-normal text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
@@ -515,7 +515,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   class="text-[10px] font-mono text-accent hover:underline"
                   @click="copyJson(agent.example_output, 'output')"
                 >
-                  {{ copiedOutput ? t('admin.agents.copied') : 'Скопировать JSON' }}
+                  {{ copiedOutput ? t('admin.agents.copied') : t('admin.agents.copyOutput') }}
                 </button>
               </div>
               <pre class="rounded-xl border border-bd/80 bg-[#0b0e14] p-3 font-mono text-[10.5px] leading-normal text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
@@ -527,7 +527,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
             <div class="rounded-2xl border border-bd bg-surface/40 p-4">
               <h4 class="text-xs font-bold text-ink flex items-center gap-2">
                 <span>📁</span>
-                <span>Расположение файла в репозитории</span>
+                <span>{{ t('admin.agents.sourceLocation') }}</span>
               </h4>
 
               <div class="mt-3 flex items-center justify-between rounded-xl border border-bd/80 bg-[#0d111a] p-2.5 font-mono text-[11px]">

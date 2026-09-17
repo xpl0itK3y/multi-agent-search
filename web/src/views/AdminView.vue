@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi, api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
+import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
 import OverviewTab from "@/components/admin/OverviewTab.vue";
 import AnalyticsTab from "@/components/admin/AnalyticsTab.vue";
@@ -11,6 +12,7 @@ import OperationsTab from "@/components/admin/OperationsTab.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
+const ui = useUiStore();
 
 type Tab = "overview" | "analytics" | "agents" | "operations";
 const activeTab = ref<Tab>("overview");
@@ -45,12 +47,12 @@ async function handleAdminLogin() {
   try {
     await auth.login(adminEmail.value.trim(), adminPassword.value);
     if (!auth.user?.is_admin) {
-      loginError.value = `Пользователь ${auth.user?.email} успешно авторизован, но не имеет прав администратора.`;
+      loginError.value = t("admin.authNotAdminError", { email: auth.user?.email || adminEmail.value });
     } else {
       await loadOverview();
     }
   } catch (err: any) {
-    loginError.value = err.message || "Ошибка авторизации администратора";
+    loginError.value = err.message || t("admin.authDefaultError");
   } finally {
     loginLoading.value = false;
   }
@@ -68,7 +70,7 @@ async function loadOverview() {
     error.value = null;
     overview.value = await adminApi.getOverview();
   } catch (err: any) {
-    error.value = err.message || "Failed to load admin overview";
+    error.value = err.message || t("admin.loadOverviewError");
   } finally {
     loading.value = false;
   }
@@ -90,16 +92,31 @@ onMounted(() => {
       class="flex flex-1 items-center justify-center py-8"
     >
       <div class="w-full max-w-md rounded-2xl border border-bd bg-surface/80 p-8 shadow-2xl backdrop-blur">
+        <!-- Language Switcher in Login Card -->
+        <div class="mb-4 flex justify-end">
+          <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono">
+            <button
+              v-for="loc in (['ru', 'en', 'es'] as const)"
+              :key="loc"
+              class="rounded-lg px-2.5 py-1 text-[10.5px] font-bold uppercase transition"
+              :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+              @click="ui.setLocale(loc)"
+            >
+              {{ loc }}
+            </button>
+          </div>
+        </div>
+
         <!-- Shield Icon & Title -->
         <div class="mb-6 flex flex-col items-center text-center">
           <div class="grid h-16 w-16 place-items-center rounded-2xl bg-accent/15 text-3xl text-accent mb-3 shadow-inner">
             🛡️
           </div>
           <h2 class="text-xl font-bold tracking-tight text-ink">
-            Авторизация администратора
+            {{ t("admin.authAdminTitle") }}
           </h2>
           <p class="mt-1 text-xs text-muted max-w-xs leading-relaxed">
-            Доступ к панели управления ограничен администратором системы (<span class="font-mono font-semibold text-accent">latundenis55@gmail.com</span>).
+            {{ t("admin.authAdminDesc", { email: "latundenis55@gmail.com" }) }}
           </p>
         </div>
 
@@ -110,16 +127,16 @@ onMounted(() => {
         >
           <div class="flex items-center gap-2 font-semibold">
             <span>⚠️</span>
-            <span>Текущий аккаунт не является администратором</span>
+            <span>{{ t("admin.authNotAdminWarning") }}</span>
           </div>
           <p class="text-[11px] text-amber-300/80">
-            Вы вошли как <strong class="font-mono">{{ auth.user.email }}</strong>. Для доступа к панели переключитесь на аккаунт администратора.
+            {{ t("admin.authNotAdminDesc", { email: auth.user.email }) }}
           </p>
           <button
             class="mt-1 w-full rounded-lg border border-amber-500/40 bg-amber-500/20 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/30"
             @click="handleLogout"
           >
-            Сменить аккаунт / Выйти
+            {{ t("admin.authSwitchAccount") }}
           </button>
         </div>
 
@@ -136,12 +153,12 @@ onMounted(() => {
               <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
               <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
             </svg>
-            <span>Войти через Google (Администратор)</span>
+            <span>{{ t("admin.authGoogleLogin") }}</span>
           </button>
 
           <div class="flex items-center gap-3 text-xs text-muted">
             <span class="h-px flex-1 bg-bd/60" />
-            <span class="text-[10px] uppercase font-bold tracking-wider">или по паролю</span>
+            <span class="text-[10px] uppercase font-bold tracking-wider">{{ t("admin.authOrPassword") }}</span>
             <span class="h-px flex-1 bg-bd/60" />
           </div>
         </div>
@@ -150,7 +167,7 @@ onMounted(() => {
         <form class="space-y-3 mt-3" @submit.prevent="handleAdminLogin">
           <div>
             <label class="block text-[10px] uppercase font-bold tracking-wider text-muted mb-1">
-              Email администратора
+              {{ t("admin.authEmailLabel") }}
             </label>
             <input
               v-model="adminEmail"
@@ -163,17 +180,17 @@ onMounted(() => {
 
           <div>
             <label class="block text-[10px] uppercase font-bold tracking-wider text-muted mb-1">
-              Пароль
+              {{ t("admin.authPasswordLabel") }}
             </label>
             <input
               v-model="adminPassword"
               type="password"
               required
-              placeholder="Введите пароль..."
+              :placeholder="t('admin.authPasswordPlaceholder')"
               class="w-full rounded-xl border border-bd bg-bg px-3.5 py-2 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
             />
             <p class="mt-1 text-[10px] text-muted leading-normal">
-              💡 Если вы входите с паролем впервые, указанный пароль будет автоматически привязан к аккаунту администратора.
+              {{ t("admin.authPasswordHint") }}
             </p>
           </div>
 
@@ -186,13 +203,13 @@ onMounted(() => {
             :disabled="loginLoading || !adminEmail || !adminPassword"
             class="w-full rounded-xl bg-accent py-2.5 text-xs font-bold text-white shadow-lg transition hover:bg-accent/90 disabled:opacity-50"
           >
-            {{ loginLoading ? "Авторизация..." : "Войти как администратор" }}
+            {{ loginLoading ? t("admin.authLoggingIn") : t("admin.authLoginBtn") }}
           </button>
         </form>
 
         <div class="mt-6 text-center border-t border-bd/60 pt-3">
           <router-link to="/" class="text-xs text-muted hover:text-ink transition">
-            ← Вернуться к поиску
+            {{ t("admin.backToSearch") }}
           </router-link>
         </div>
       </div>
@@ -214,12 +231,25 @@ onMounted(() => {
               </span>
             </div>
             <p class="text-xs text-muted">
-              {{ overview?.system_health?.overall === "healthy" ? "All systems operational" : "System operational" }}
+              {{ overview?.system_health?.overall === "healthy" ? t("admin.allSystemsOperational") : t("admin.systemOperational") }}
             </p>
           </div>
         </div>
 
         <div class="flex items-center gap-2">
+          <!-- Language Switcher in Header -->
+          <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono mr-1">
+            <button
+              v-for="loc in (['ru', 'en', 'es'] as const)"
+              :key="loc"
+              class="rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase transition"
+              :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+              @click="ui.setLocale(loc)"
+            >
+              {{ loc }}
+            </button>
+          </div>
+
           <!-- Dev mode warning banner if auth is disabled -->
           <div
             v-if="overview?.is_dev_mode"
@@ -232,10 +262,10 @@ onMounted(() => {
           <!-- Logout / Switch account button -->
           <button
             class="rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
-            title="Выйти из аккаунта администратора"
+            :title="t('admin.logout')"
             @click="handleLogout"
           >
-            Выйти
+            {{ t("admin.logout") }}
           </button>
         </div>
       </div>

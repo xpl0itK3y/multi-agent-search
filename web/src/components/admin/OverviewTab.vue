@@ -27,12 +27,12 @@ function formatBytes(bytes: number): string {
 function timeAgo(isoString: string): string {
   if (!isoString) return "—";
   const diffSec = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
-  if (diffSec < 5) return "just now";
-  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 5) return t("admin.overview.justNow");
+  if (diffSec < 60) return t("admin.overview.secAgo", { n: diffSec });
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffMin < 60) return t("admin.overview.minAgo", { n: diffMin });
   const diffHours = Math.floor(diffMin / 60);
-  return `${diffHours}h ago`;
+  return t("admin.overview.hoursAgo", { n: diffHours });
 }
 
 async function loadData() {
@@ -93,10 +93,10 @@ const isHealthy = computed(() => {
           :class="isHealthy ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50 animate-pulse' : 'bg-amber-500 animate-pulse'"
         />
         <h2 class="text-base font-semibold text-ink">
-          {{ isHealthy ? "System Healthy & Operational" : "System Degraded" }}
+          {{ isHealthy ? t("admin.overview.systemHealthy") : t("admin.overview.systemDegradedTitle") }}
         </h2>
         <span class="rounded bg-surface px-2 py-0.5 text-xs text-muted">
-          {{ isStreaming && !streamError ? "● LIVE SSE" : "Polling" }}
+          {{ isStreaming && !streamError ? t("admin.overview.liveSse") : t("admin.overview.polling") }}
         </span>
       </div>
 
@@ -105,7 +105,7 @@ const isHealthy = computed(() => {
         @click="loadData"
       >
         <span>🔄</span>
-        <span>Refresh</span>
+        <span>{{ t("admin.overview.refresh") }}</span>
       </button>
     </div>
 
@@ -121,7 +121,7 @@ const isHealthy = computed(() => {
           <span class="text-xl font-bold uppercase text-emerald-400">
             {{ overview?.system_health?.postgres || "ok" }}
           </span>
-          <span class="text-xs text-muted">Active</span>
+          <span class="text-xs text-muted">{{ t("admin.overview.active") }}</span>
         </div>
       </div>
 
@@ -136,7 +136,7 @@ const isHealthy = computed(() => {
             {{ overview?.active_researches_count ?? 0 }}
           </span>
           <span v-if="(overview?.active_researches_count ?? 0) > 0" class="text-xs text-accent animate-pulse">
-            running
+            {{ t("admin.overview.running") }}
           </span>
         </div>
       </div>
@@ -151,7 +151,7 @@ const isHealthy = computed(() => {
           <span class="text-2xl font-bold text-ink">
             {{ overview?.pending_tasks_count ?? 0 }}
           </span>
-          <span class="text-xs text-muted">in queues</span>
+          <span class="text-xs text-muted">{{ t("admin.overview.inQueues") }}</span>
         </div>
       </div>
 
@@ -168,7 +168,7 @@ const isHealthy = computed(() => {
           >
             {{ overview?.failed_tasks_count ?? 0 }}
           </span>
-          <span class="text-xs text-muted">dead letters</span>
+          <span class="text-xs text-muted">{{ t("admin.overview.deadLetters") }}</span>
         </div>
       </div>
     </div>
@@ -185,7 +185,7 @@ const isHealthy = computed(() => {
         v-if="!overview?.workers || overview.workers.length === 0"
         class="rounded-xl border border-dashed border-bd p-8 text-center text-sm text-muted"
       >
-        No worker heartbeats recorded yet. Workers will report here when active.
+        {{ t("admin.overview.noWorkers") }}
       </div>
 
       <div v-else class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -221,11 +221,11 @@ const isHealthy = computed(() => {
             <!-- Stats Bar -->
             <div class="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-bg/50 p-2 text-xs">
               <div>
-                <span class="text-muted block text-[10px] uppercase tracking-wider">Status</span>
+                <span class="text-muted block text-[10px] uppercase tracking-wider">{{ t("admin.overview.status") }}</span>
                 <span class="font-medium text-ink capitalize">{{ w.status }}</span>
               </div>
               <div>
-                <span class="text-muted block text-[10px] uppercase tracking-wider">Jobs Processed</span>
+                <span class="text-muted block text-[10px] uppercase tracking-wider">{{ t("admin.overview.jobsProcessed") }}</span>
                 <span class="font-bold text-accent">{{ w.processed_jobs }}</span>
               </div>
             </div>
@@ -242,7 +242,7 @@ const isHealthy = computed(() => {
                 </span>
               </div>
               <div class="text-[11px] text-muted flex justify-between">
-                <span>Downloaded:</span>
+                <span>{{ t("admin.overview.downloaded") }}:</span>
                 <span class="text-ink">{{ formatBytes(w.extraction_metrics.downloaded_bytes || 0) }}</span>
               </div>
             </div>

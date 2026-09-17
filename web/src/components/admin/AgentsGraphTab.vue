@@ -1,11 +1,23 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useUiStore } from "@/stores/ui";
 import { adminApi } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
+const ui = useUiStore();
+
+function getNodeName(nodeId: string, fallback: string): string {
+  const key = `admin.agents.names.${nodeId}`;
+  return te(key) ? t(key) : fallback;
+}
+
+function getNodeSubtitle(nodeId: string, fallback: string): string {
+  const key = `admin.agents.subtitles.${nodeId}`;
+  return te(key) ? t(key) : fallback;
+}
 
 const agents = ref<AgentMetadataItem[]>([]);
 const loading = ref(true);
@@ -1014,28 +1026,41 @@ function isNodeDimmed(nodeId: string): boolean {
       <div class="hidden lg:flex items-center gap-2 text-[11px] font-mono">
         <div class="flex items-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-orange-400">
           <span>⚡</span>
-          <span>Trigger</span>
+          <span>{{ t("admin.agents.legendTrigger") }}</span>
         </div>
         <div class="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-400">
           <span>🟣</span>
-          <span>Planning</span>
+          <span>{{ t("admin.agents.legendPlanning") }}</span>
         </div>
         <div class="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400">
           <span>🟢</span>
-          <span>Search & Extraction</span>
+          <span>{{ t("admin.agents.legendSearch") }}</span>
         </div>
         <div class="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-purple-400">
           <span>🟠</span>
-          <span>Synthesis & Reasoning</span>
+          <span>{{ t("admin.agents.legendSynthesis") }}</span>
         </div>
         <div class="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">
           <span>🔵</span>
-          <span>Delivery</span>
+          <span>{{ t("admin.agents.legendDelivery") }}</span>
         </div>
       </div>
 
-      <!-- Right Action Group: Simulation Controls, Zoom & Layout -->
+      <!-- Right Action Group: Simulation Controls, Zoom, Language & Layout -->
       <div class="flex items-center gap-2">
+        <!-- Language Switcher in Graph Toolbar -->
+        <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono mr-1">
+          <button
+            v-for="loc in (['ru', 'en', 'es'] as const)"
+            :key="loc"
+            class="rounded-lg px-2 py-1 text-[10.5px] font-bold uppercase transition"
+            :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+            @click="ui.setLocale(loc)"
+          >
+            {{ loc }}
+          </button>
+        </div>
+
         <!-- Simulation Run / Pause Toggle -->
         <div class="flex items-center gap-1 rounded-xl border border-bd bg-surface/70 p-1">
           <button
@@ -1044,7 +1069,7 @@ function isNodeDimmed(nodeId: string): boolean {
             @click="startSimulation"
           >
             <span>▶</span>
-            <span>{{ currentStepIndex === 0 ? t("admin.agents.startSim") : "Продолжить" }}</span>
+            <span>{{ currentStepIndex === 0 ? t("admin.agents.startSim") : t("admin.agents.continueSim") }}</span>
           </button>
           <button
             v-else
@@ -1074,13 +1099,13 @@ function isNodeDimmed(nodeId: string): boolean {
 
         <!-- Zoom & Pan Controls -->
         <div class="flex items-center gap-1 rounded-lg border border-bd bg-surface/60 p-1 text-xs text-muted">
-          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Увеличить" @click="zoomIn">
+          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomIn')" @click="zoomIn">
             +
           </button>
-          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" title="Сбросить масштаб" @click="resetView">
+          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" :title="t('admin.agents.resetZoom')" @click="resetView">
             {{ Math.round(zoom * 100) }}%
           </button>
-          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" title="Уменьшить" @click="zoomOut">
+          <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomOut')" @click="zoomOut">
             −
           </button>
         </div>
@@ -1362,23 +1387,23 @@ function isNodeDimmed(nodeId: string): boolean {
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-1">
                 <span class="truncate font-bold text-xs text-ink group-hover:text-accent transition-colors">
-                  {{ node.name }}
+                  {{ getNodeName(node.id, node.name) }}
                 </span>
               </div>
               <p class="truncate text-[10px] text-muted mt-0.5 font-sans">
-                {{ node.subtitle }}
+                {{ getNodeSubtitle(node.id, node.subtitle) }}
               </p>
             </div>
 
             <!-- Active / Done Simulation Status Badges -->
             <div v-if="getAgentSimStatus(node.id) === 'active'" class="absolute -top-2 right-2">
               <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-sky-400 animate-pulse shadow">
-                ● Active
+                ● {{ t("admin.agents.activeBadge") }}
               </span>
             </div>
             <div v-else-if="getAgentSimStatus(node.id) === 'completed'" class="absolute -top-2 right-2">
               <span class="flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-400 shadow">
-                ✓ Done
+                ✓ {{ t("admin.agents.doneBadge") }}
               </span>
             </div>
 
@@ -1458,7 +1483,7 @@ function isNodeDimmed(nodeId: string): boolean {
 
           <button
             class="ml-2 rounded-lg p-1 text-xs text-muted hover:text-ink"
-            title="Закрыть симуляцию"
+            :title="t('admin.agents.close')"
             @click="resetSimulation"
           >
             ✕

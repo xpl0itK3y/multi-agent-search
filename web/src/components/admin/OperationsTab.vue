@@ -100,7 +100,7 @@ async function executeRequeue() {
     <div>
       <h2 class="text-base font-semibold text-ink">{{ t("admin.operations.title") }}</h2>
       <p class="text-xs text-muted">
-        Maintenance procedures with safe dry-run preview and immutable audit trail.
+        {{ t("admin.operations.subtitle") }}
       </p>
     </div>
 
@@ -124,10 +124,10 @@ async function executeRequeue() {
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>🔄</span>
-            <span>Recover Stale Finalize Jobs</span>
+            <span>{{ t("admin.operations.recoverStaleFinalizeTitle") }}</span>
           </div>
           <p class="mt-1 text-xs text-muted">
-            Finds finalize jobs stuck in RUNNING status for over 5 minutes and resets them to PENDING with an incremented lease epoch.
+            {{ t("admin.operations.recoverStaleFinalizeDesc") }}
           </p>
         </div>
         <div class="mt-4 flex gap-2">
@@ -136,7 +136,7 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('recover_stale_finalize_jobs', { stale_seconds: 300 })"
           >
-            Preview Dry-Run
+            {{ t("admin.operations.previewBtn") }}
           </button>
         </div>
       </div>
@@ -146,10 +146,10 @@ async function executeRequeue() {
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>🔎</span>
-            <span>Recover Stale Search Jobs</span>
+            <span>{{ t("admin.operations.recoverStaleSearchTitle") }}</span>
           </div>
           <p class="mt-1 text-xs text-muted">
-            Finds search task worker jobs stuck in RUNNING status and resets them to PENDING so available workers can claim them.
+            {{ t("admin.operations.recoverStaleSearchDesc") }}
           </p>
         </div>
         <div class="mt-4 flex gap-2">
@@ -158,7 +158,7 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('recover_stale_search_jobs', { stale_seconds: 300 })"
           >
-            Preview Dry-Run
+            {{ t("admin.operations.previewBtn") }}
           </button>
         </div>
       </div>
@@ -168,10 +168,10 @@ async function executeRequeue() {
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>🧹</span>
-            <span>Cleanup Old Completed Jobs</span>
+            <span>{{ t("admin.operations.cleanupOldTitle") }}</span>
           </div>
           <p class="mt-1 text-xs text-muted">
-            Purges completed and dead-letter queue records older than 7 days to keep table indexes compact and performant.
+            {{ t("admin.operations.cleanupOldDesc") }}
           </p>
         </div>
         <div class="mt-4 flex gap-2">
@@ -180,7 +180,7 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('cleanup_old_jobs', { days: 7 })"
           >
-            Preview Dry-Run
+            {{ t("admin.operations.previewBtn") }}
           </button>
         </div>
       </div>
@@ -190,10 +190,10 @@ async function executeRequeue() {
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>⚡</span>
-            <span>Cleanup Search Result Cache</span>
+            <span>{{ t("admin.operations.cleanupCacheTitle") }}</span>
           </div>
           <p class="mt-1 text-xs text-muted">
-            Removes cached search query responses older than 3 days to free storage and ensure up-to-date web answers.
+            {{ t("admin.operations.cleanupCacheDesc") }}
           </p>
         </div>
         <div class="mt-4 flex gap-2">
@@ -202,7 +202,7 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('cleanup_search_cache', { days: 3 })"
           >
-            Preview Dry-Run
+            {{ t("admin.operations.previewBtn") }}
           </button>
         </div>
       </div>
@@ -210,22 +210,22 @@ async function executeRequeue() {
 
     <!-- Targeted Job Requeue Tool -->
     <div class="rounded-xl border border-bd bg-surface/30 p-5">
-      <h3 class="text-sm font-semibold text-ink">Single Job Requeue</h3>
-      <p class="mt-1 text-xs text-muted">Reset a failed or dead-letter job ID back into pending queue status.</p>
+      <h3 class="text-sm font-semibold text-ink">{{ t("admin.operations.singleRequeueTitle") }}</h3>
+      <p class="mt-1 text-xs text-muted">{{ t("admin.operations.singleRequeueDesc") }}</p>
 
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <select
           v-model="requeueJobType"
           class="rounded-lg border border-bd bg-bg px-3 py-1.5 text-xs text-ink focus:outline-none"
         >
-          <option value="finalize">Finalize Job</option>
-          <option value="search">Search Task Job</option>
+          <option value="finalize">{{ t("admin.operations.finalizeJobOpt") }}</option>
+          <option value="search">{{ t("admin.operations.searchJobOpt") }}</option>
         </select>
 
         <input
           v-model="requeueJobId"
           type="text"
-          placeholder="Enter Job UUID..."
+          :placeholder="t('admin.operations.jobIdPlaceholder')"
           class="min-w-64 flex-1 rounded-lg border border-bd bg-bg px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
         />
 
@@ -234,7 +234,7 @@ async function executeRequeue() {
           :disabled="!requeueJobId.trim() || actionLoading"
           @click="executeRequeue"
         >
-          Preview & Requeue
+          {{ t("admin.operations.previewAndRequeueBtn") }}
         </button>
       </div>
     </div>
@@ -246,14 +246,14 @@ async function executeRequeue() {
           <h3 class="text-xs font-bold uppercase tracking-wider text-muted">
             {{ t("admin.operations.auditTitle") }}
           </h3>
-          <p class="text-[11px] text-muted">Immutable log of all administrative actions and mutations.</p>
+          <p class="text-[11px] text-muted">{{ t("admin.operations.auditSubtitle") }}</p>
         </div>
 
         <button
           class="rounded-lg border border-bd bg-surface px-2.5 py-1 text-xs font-medium text-ink hover:bg-surface/80"
           @click="fetchAuditLogs"
         >
-          Refresh Log
+          {{ t("admin.operations.refreshLogBtn") }}
         </button>
       </div>
 
@@ -274,7 +274,7 @@ async function executeRequeue() {
               <td colspan="6" class="py-8 text-muted">{{ t("common.loading") }}</td>
             </tr>
             <tr v-else-if="auditLogs.length === 0" class="text-center font-sans">
-              <td colspan="6" class="py-8 text-muted">No admin audit events recorded yet.</td>
+              <td colspan="6" class="py-8 text-muted">{{ t("admin.operations.noAuditLogs") }}</td>
             </tr>
             <tr v-for="log in auditLogs" :key="log.id" class="transition hover:bg-surface/50">
               <td class="px-4 py-2.5 whitespace-nowrap text-muted">{{ formatDate(log.created_at) }}</td>
@@ -308,19 +308,19 @@ async function executeRequeue() {
         <div class="flex items-center justify-between border-b border-bd pb-3">
           <div class="flex items-center gap-2">
             <span class="text-lg">🛡️</span>
-            <h3 class="font-bold text-ink text-sm">Dry-Run Preview Confirmation</h3>
+            <h3 class="font-bold text-ink text-sm">{{ t("admin.operations.dryRunModalTitle") }}</h3>
           </div>
           <button class="text-muted hover:text-ink text-xs" @click="modalOpen = false">✕</button>
         </div>
 
         <div class="space-y-3 text-xs">
           <div>
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">Action</span>
+            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunActionLabel") }}</span>
             <span class="font-mono font-semibold text-accent text-sm">{{ previewResult?.action }}</span>
           </div>
 
           <div class="rounded-xl border border-bd bg-surface/50 p-3">
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">Affected Records</span>
+            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunAffectedLabel") }}</span>
             <div class="text-2xl font-black text-ink mt-1">
               {{ previewResult?.affected_count ?? 0 }}
             </div>
@@ -328,7 +328,7 @@ async function executeRequeue() {
           </div>
 
           <div v-if="previewResult?.sample_affected_ids?.length" class="space-y-1">
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">Sample IDs</span>
+            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunSampleIdsLabel") }}</span>
             <div class="max-h-24 overflow-y-auto rounded-lg bg-bg p-2 font-mono text-[10px] text-muted space-y-0.5">
               <div v-for="sid in previewResult.sample_affected_ids" :key="sid">
                 {{ sid }}
@@ -342,14 +342,14 @@ async function executeRequeue() {
             class="rounded-lg border border-bd px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface hover:text-ink"
             @click="modalOpen = false"
           >
-            Cancel
+            {{ t("common.cancel") }}
           </button>
           <button
             class="rounded-lg bg-accent px-4 py-1.5 text-xs font-bold text-white shadow transition hover:bg-accent/90 disabled:opacity-50"
             :disabled="actionLoading"
             @click="confirmExecute"
           >
-            Confirm & Execute
+            {{ t("admin.operations.confirmAndExecuteBtn") }}
           </button>
         </div>
       </div>

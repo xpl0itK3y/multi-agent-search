@@ -68,7 +68,7 @@ function exportCsv() {
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h2 class="text-base font-semibold text-ink">{{ t("admin.analytics.title") }}</h2>
-        <p class="text-xs text-muted">Complete accounting of LLM tokens and API expenditures</p>
+        <p class="text-xs text-muted">{{ t("admin.analytics.subtitle") }}</p>
       </div>
 
       <button
@@ -93,7 +93,7 @@ function exportCsv() {
         <div class="mt-2 text-2xl font-black text-ink">
           {{ formatNumber(analytics?.total_tokens ?? 0) }}
         </div>
-        <div class="mt-1 text-[11px] text-muted">Prompt + Completion</div>
+        <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.promptPlusCompletion") }}</div>
       </div>
 
       <!-- Total Cost -->
@@ -102,7 +102,7 @@ function exportCsv() {
         <div class="mt-2 text-2xl font-black text-emerald-400">
           {{ formatCurrency(analytics?.total_cost_usd ?? 0) }}
         </div>
-        <div class="mt-1 text-[11px] text-muted">Estimated USD spend</div>
+        <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.estimatedSpend") }}</div>
       </div>
 
       <!-- Prompt Tokens -->
@@ -111,7 +111,7 @@ function exportCsv() {
         <div class="mt-2 text-2xl font-black text-ink">
           {{ formatNumber(analytics?.total_prompt_tokens ?? 0) }}
         </div>
-        <div class="mt-1 text-[11px] text-muted">Input context processed</div>
+        <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.inputContextProcessed") }}</div>
       </div>
 
       <!-- Completion Tokens -->
@@ -120,7 +120,7 @@ function exportCsv() {
         <div class="mt-2 text-2xl font-black text-ink">
           {{ formatNumber(analytics?.total_completion_tokens ?? 0) }}
         </div>
-        <div class="mt-1 text-[11px] text-muted">Generated reports & reasoning</div>
+        <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.generatedReports") }}</div>
       </div>
     </div>
 
@@ -133,7 +133,7 @@ function exportCsv() {
         </h3>
 
         <div v-if="!analytics?.by_model?.length" class="text-xs text-muted py-4 text-center">
-          No model usage recorded yet.
+          {{ t("admin.analytics.noModelUsage") }}
         </div>
 
         <div v-else class="space-y-4">
@@ -158,8 +158,8 @@ function exportCsv() {
             </div>
 
             <div class="flex items-center justify-between text-[11px] text-muted pt-1">
-              <span>{{ formatNumber(m.total_tokens) }} tokens ({{ m.calls_count }} calls)</span>
-              <span>In: {{ formatNumber(m.prompt_tokens) }} / Out: {{ formatNumber(m.completion_tokens) }}</span>
+              <span>{{ formatNumber(m.total_tokens) }} {{ t("admin.analytics.tokens") }} ({{ m.calls_count }} {{ t("admin.analytics.calls") }})</span>
+              <span>{{ t("admin.analytics.inTokens") }}: {{ formatNumber(m.prompt_tokens) }} / {{ t("admin.analytics.outTokens") }}: {{ formatNumber(m.completion_tokens) }}</span>
             </div>
           </div>
         </div>
@@ -172,7 +172,7 @@ function exportCsv() {
         </h3>
 
         <div v-if="!analytics?.by_depth?.length" class="text-xs text-muted py-4 text-center">
-          No depth breakdown data available.
+          {{ t("admin.analytics.noDepthData") }}
         </div>
 
         <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -192,7 +192,7 @@ function exportCsv() {
             </div>
             <div class="mt-2 text-lg font-bold text-ink">{{ formatNumber(d.total_tokens) }}</div>
             <div class="text-[11px] text-emerald-400 font-semibold">{{ formatCurrency(d.estimated_cost_usd) }}</div>
-            <div class="mt-1 text-[10px] text-muted">{{ d.researches_count }} researches</div>
+            <div class="mt-1 text-[10px] text-muted">{{ d.researches_count }} {{ t("admin.analytics.researches") }}</div>
           </div>
         </div>
       </div>
@@ -210,13 +210,13 @@ function exportCsv() {
         <table class="w-full text-left text-xs">
           <thead class="border-b border-bd bg-surface/60 text-muted uppercase text-[10px] tracking-wider">
             <tr>
-              <th class="px-4 py-3">Research ID</th>
-              <th class="px-4 py-3">Prompt</th>
-              <th class="px-4 py-3">Depth</th>
-              <th class="px-4 py-3">Status</th>
-              <th class="px-4 py-3 text-right">Tokens</th>
-              <th class="px-4 py-3 text-right">Cost (USD)</th>
-              <th class="px-4 py-3 text-right">Created</th>
+              <th class="px-4 py-3">{{ t("admin.analytics.colResearchId") }}</th>
+              <th class="px-4 py-3">{{ t("admin.analytics.colPrompt") }}</th>
+              <th class="px-4 py-3">{{ t("admin.analytics.colDepth") }}</th>
+              <th class="px-4 py-3">{{ t("admin.analytics.colStatus") }}</th>
+              <th class="px-4 py-3 text-right">{{ t("admin.analytics.colTokens") }}</th>
+              <th class="px-4 py-3 text-right">{{ t("admin.analytics.colCost") }}</th>
+              <th class="px-4 py-3 text-right">{{ t("admin.analytics.colCreated") }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-bd/40">
@@ -224,7 +224,7 @@ function exportCsv() {
               <td colspan="7" class="py-8 text-muted">{{ t("common.loading") }}</td>
             </tr>
             <tr v-else-if="!analytics?.researches?.length" class="text-center">
-              <td colspan="7" class="py-8 text-muted">No research records found.</td>
+              <td colspan="7" class="py-8 text-muted">{{ t("admin.analytics.noResearches") }}</td>
             </tr>
             <tr
               v-for="r in analytics?.researches"
@@ -282,14 +282,14 @@ function exportCsv() {
             :disabled="page <= 1"
             @click="page--"
           >
-            ← Previous
+            {{ t("admin.analytics.prev") }}
           </button>
           <button
             class="rounded border border-bd px-2.5 py-1 text-xs font-medium text-ink transition hover:bg-surface disabled:opacity-30"
             :disabled="page >= totalPages"
             @click="page++"
           >
-            Next →
+            {{ t("admin.analytics.next") }}
           </button>
         </div>
       </div>
