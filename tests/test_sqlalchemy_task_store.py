@@ -139,6 +139,8 @@ def test_research_history_uses_lookup_indexes_and_preserves_summary_fields(
     postgres_session_factory,
 ):
     store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("history-user")  # users survive truncate_runtime_tables between runs
+    store.create_user("history-user", "history-user@example.com", None)
     research = store.add_research(
         ResearchRequest(prompt="indexed history topic", depth=SearchDepth.MEDIUM),
         task_ids=[],
@@ -262,6 +264,8 @@ def test_sqlalchemy_task_store_persists_search_jobs(postgres_session_factory):
 @pytest.mark.postgres
 def test_sqlalchemy_task_and_jobs_are_scoped_to_research_owner(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("owner-a")  # users survive truncate_runtime_tables between runs
+    store.create_user("owner-a", "owner-a@example.com", None)
     research = store.add_research(
         ResearchRequest(prompt="owned research topic", depth=SearchDepth.EASY),
         task_ids=[],

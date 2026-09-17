@@ -22,8 +22,23 @@ If `langgraph` is not installed, the project falls back to an internal sequentia
 The project now supports:
 
 - structured JSON logging with `LOG_FORMAT=json`
-- Prometheus metrics at `/metrics`
-- Docker Compose services for `prometheus` and `grafana`
+- Prometheus metrics at `/metrics` (API) and one exporter per worker
+  (`WORKER_METRICS_PORT`, internal network only)
+- Docker Compose services for `prometheus` and `grafana`, with provisioned
+  dashboards (Platform Overview, Research Operations) and alert rules
+  (`WorkerDown`, `APIDown`, `DeadLetterQueueGrowth`, `APIHighErrorRate`)
+
+Health endpoints: `GET /health` is the cheap readiness probe (status +
+dependency pings); `GET /health/detail` (admin) returns the full operational
+payload — queue metrics, graph alerts and trends.
+
+`/metrics` is blocked at the nginx edge and, optionally, protected by a shared
+secret (`METRICS_TOKEN`; sent as `Authorization: Bearer …` or `X-Metrics-Token`).
+When you set it, add the same token to the Prometheus scrape jobs in
+`ops/prometheus/prometheus.yml`.
+
+Note: with `LANGSMITH_TRACING=true`, prompts and generated content are sent to
+the configured LangSmith project — keep it off for sensitive workloads.
 
 Useful flags:
 
@@ -31,6 +46,9 @@ Useful flags:
 LOG_FORMAT=json
 PROMETHEUS_METRICS_ENABLED=true
 USE_LANGGRAPH_FINALIZE_GRAPH=true
+# METRICS_TOKEN=change-me
+# Retention for finished researches; 0 keeps everything (default).
+# RESEARCH_RETENTION_SECONDS=0
 ```
 
 ## Requirements
@@ -189,7 +207,19 @@ Still not implemented yet:
 Health:
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8000/health          # cheap readiness probe
+curl http://localhost:8000/health/detail   # full operational payload (admin)
+```
+
+Delete an account with all owned data (researches, results, public share
+links — cascades in the database; requires the current password and
+`confirm: true`):
+
+```bash
+curl -X DELETE "http://localhost:8000/v1/auth/account" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"confirm": true, "current_password": "..."}'
 ```
 
 Prometheus metrics:

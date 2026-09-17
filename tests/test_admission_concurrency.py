@@ -14,6 +14,8 @@ pytestmark = pytest.mark.postgres
 
 def test_postgres_concurrent_starts_respect_per_user_limit(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("same-user")  # users survive truncate_runtime_tables between runs
+    store.create_user("same-user", "same-user@example.com", None)
     workers = 10
     barrier = threading.Barrier(workers)
     stale_before = datetime.now(timezone.utc) - timedelta(minutes=5)

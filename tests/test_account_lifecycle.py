@@ -128,3 +128,32 @@ async def test_delete_account_endpoint_flow(auth_client):
     # The token no longer resolves to an account.
     me = await auth_client.get("/v1/auth/me", headers=headers)
     assert me.status_code == 401
+
+
+@pytest.mark.postgres
+def test_postgres_delete_user_cascades_via_fk(postgres_session_factory):
+    from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
+
+    pytest.importorskip("sqlalchemy")
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.create_user("cascade-user", "cascade@example.com", None)
+    research = store.add_research(
+        ResearchRequest(prompt="postgres cascade topic", depth=SearchDepth.EASY),
+        task_ids=[],
+        user_id="cascade-user",
+    )
+    store.add_task(
+        {
+            "id": "task-pg-cascade",
+            "research_id": research.id,
+            "description": "search",
+            "queries": ["q"],
+            "status": TaskStatus.PENDING,
+        }
+    )
+
+    assert store.delete_user("cascade-user") is True
+
+    assert store.get_user_by_id("cascade-user") is None
+    assert store.get_research(research.id) is None
+    assert store.get_task("task-pg-cascade") is None
