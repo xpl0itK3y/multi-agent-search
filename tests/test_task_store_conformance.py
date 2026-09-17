@@ -5,15 +5,13 @@ SQLAlchemyTaskStore. The premise of the 500+ non-postgres tests is that the two
 implementations behave identically; this suite is what keeps that true — a
 method that drifts fails on the postgres leg instead of in production.
 
-The postgres leg runs against a dedicated throwaway database migrated to head,
-so it never depends on (or truncates) a developer's working database.
+The postgres leg shares the conftest throwaway database (migrated to head),
+so it never depends on a developer's working database.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
 from src.api.schemas import (
     FinalizeJobStatus,
@@ -26,59 +24,7 @@ from src.api.schemas import (
 )
 from src.repositories.in_memory_task_store import InMemoryTaskStore
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
-
-CONFORMANCE_DB = "mas_task_store_conformance"
-
-
-@pytest.fixture(scope="session")
-def conformance_session_factory():
-    from src.config import settings
-
-    if settings.database_url:
-        base_url = settings.database_url.rsplit("/", 1)[0]
-    else:
-        base_url = (
-            f"postgresql+psycopg://{settings.postgres_user}:{settings.postgres_password}"
-            f"@{settings.postgres_host}:{settings.postgres_port}"
-        )
-    try:
-        server = create_engine(
-            f"{base_url}/postgres", isolation_level="AUTOCOMMIT", pool_pre_ping=True
-        )
-        with server.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{CONFORMANCE_DB}"'))
-            conn.execute(text(f'CREATE DATABASE "{CONFORMANCE_DB}"'))
-        server.dispose()
-    except Exception as exc:
-        pytest.skip(f"Postgres conformance leg skipped (server unreachable): {exc}")
-
-    # Migrate the throwaway DB to head in-process; point alembic's env at it via
-    # the live settings object, then restore whatever the developer had.
-    original_db = settings.postgres_db
-    original_url = settings.database_url
-    settings.database_url = ""
-    settings.postgres_db = CONFORMANCE_DB
-    try:
-        from alembic import command
-        from alembic.config import Config
-
-        command.upgrade(Config("alembic.ini"), "head")
-    finally:
-        settings.postgres_db = original_db
-        settings.database_url = original_url
-
-    engine = create_engine(f"{base_url}/{CONFORMANCE_DB}", pool_pre_ping=True)
-    yield sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    engine.dispose()
-    try:
-        server = create_engine(
-            f"{base_url}/postgres", isolation_level="AUTOCOMMIT", pool_pre_ping=True
-        )
-        with server.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{CONFORMANCE_DB}"'))
-        server.dispose()
-    except Exception:
-        pass
+from tests.postgres_helpers import truncate_runtime_tables
 
 
 @pytest.fixture(
@@ -87,13 +33,12 @@ def conformance_session_factory():
         pytest.param("postgres", marks=pytest.mark.postgres),
     ]
 )
-def store(request, conformance_session_factory):
+def store(request, _postgres_test_db):
     if request.param == "memory":
         return InMemoryTaskStore()
-    from tests.postgres_helpers import truncate_runtime_tables
-
-    truncate_runtime_tables(conformance_session_factory)  # fresh runtime tables per test
-    return SQLAlchemyTaskStore(conformance_session_factory)
+    engine, session_factory = _postgres_test_db
+    truncate_runtime_tables(session_factory)  # fresh runtime tables per test
+    return SQLAlchemyTaskStore(session_factory)
 
 
 def _request(prompt="conformance topic", depth=SearchDepth.EASY):

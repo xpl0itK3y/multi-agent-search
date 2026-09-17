@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from src.api.schemas import ResearchRequest, SearchDepth
-from src.db import create_session_factory
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
+from tests.postgres_helpers import truncate_runtime_tables
 
 pytestmark = pytest.mark.postgres
 
@@ -32,8 +32,13 @@ def _drain(store, barrier, sink, lock):
         sink.extend(local)
 
 
-def test_concurrent_claim_never_double_claims():
-    store = SQLAlchemyTaskStore(create_session_factory())
+def test_concurrent_claim_never_double_claims(_postgres_test_db):
+    # The shared throwaway DB: a live dev stack's workers poll the configured
+    # database and would steal this test's PENDING jobs mid-run (its own
+    # docstring warned "never the live stack").
+    engine, session_factory = _postgres_test_db
+    truncate_runtime_tables(session_factory)
+    store = SQLAlchemyTaskStore(session_factory)
     rec = store.add_research(ResearchRequest(prompt="hello world", depth=SearchDepth.EASY), task_ids=[])
     run = uuid.uuid4().hex[:8]  # unique per run so a non-fresh DB can't collide on task ids
     mine: set[str] = set()
