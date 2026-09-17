@@ -25,6 +25,7 @@ def _request_with_user(user: AuthUser | None) -> Request:
 def test_admin_rate_limit_allows_under_limit(monkeypatch):
     reset_admin_rate_limiter()
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     monkeypatch.setattr(settings, "admin_rate_limit_per_minute", 2, raising=False)
 
     req = _request_with_user(None)

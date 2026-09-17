@@ -6,10 +6,12 @@ defineProps<{
   selected: boolean;
   highlighted: boolean;
   dimmed: boolean;
+  simStatus?: "idle" | "active" | "completed";
 }>();
 
 const emit = defineEmits<{
   (e: "select", agent: AgentMetadataItem): void;
+  (e: "hover", agentId: string | null): void;
 }>();
 
 function stageColor(stage: string): { badge: string; border: string; glow: string } {
@@ -50,36 +52,69 @@ function stageColor(stage: string): { badge: string; border: string; glow: strin
 
 <template>
   <div
-    class="group relative flex w-64 cursor-pointer flex-col rounded-xl border bg-surface/80 p-3.5 shadow-md backdrop-blur transition-all duration-200"
+    :data-agent-id="agent.id"
+    class="group relative flex w-64 cursor-pointer flex-col rounded-xl border bg-surface/85 p-3.5 shadow-md backdrop-blur transition-all duration-200"
     :class="[
       stageColor(agent.stage).border,
       selected ? stageColor(agent.stage).glow + ' scale-[1.02]' : 'border-bd/80',
       dimmed ? 'opacity-30' : 'opacity-100',
       highlighted && !selected ? 'ring-2 ring-accent/60' : '',
+      simStatus === 'active' ? 'ring-4 ring-accent shadow-xl shadow-accent/25 scale-[1.03] border-accent' : '',
+      simStatus === 'completed' ? 'border-emerald-500/50' : '',
     ]"
     @click="emit('select', agent)"
+    @mouseenter="emit('hover', agent.id)"
+    @mouseleave="emit('hover', null)"
   >
     <!-- Left Input Port (Handle) -->
     <div
       v-if="agent.dependencies.length > 0"
+      data-port="in"
+      :data-agent-id="agent.id"
       class="absolute -left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 border-surface bg-muted shadow transition-all group-hover:scale-125 group-hover:bg-accent"
+      :class="[
+        simStatus === 'active' ? 'bg-accent scale-125 ring-2 ring-accent/50' : '',
+        highlighted ? 'bg-accent' : '',
+      ]"
       title="Input connection"
     />
 
     <!-- Right Output Port (Handle) -->
     <div
+      data-port="out"
+      :data-agent-id="agent.id"
       class="absolute -right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 border-surface bg-muted shadow transition-all group-hover:scale-125 group-hover:bg-accent"
+      :class="[
+        simStatus === 'active' ? 'bg-accent scale-125 ring-2 ring-accent/50' : '',
+        highlighted ? 'bg-accent' : '',
+      ]"
       title="Output connection"
     />
 
-    <!-- Header: Stage Tag & Model -->
+    <!-- Header: Stage Tag & Model / Sim status -->
     <div class="flex items-center justify-between gap-1">
-      <span
-        class="rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
-        :class="stageColor(agent.stage).badge"
-      >
-        {{ agent.stage }}
-      </span>
+      <div class="flex items-center gap-1.5">
+        <span
+          class="rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+          :class="stageColor(agent.stage).badge"
+        >
+          {{ agent.stage }}
+        </span>
+
+        <span
+          v-if="simStatus === 'active'"
+          class="flex items-center gap-1 rounded bg-accent/25 border border-accent/40 px-1.5 py-0.5 text-[9px] font-bold text-accent animate-pulse"
+        >
+          ● Active
+        </span>
+        <span
+          v-else-if="simStatus === 'completed'"
+          class="flex items-center gap-1 rounded bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400"
+        >
+          ✓ Done
+        </span>
+      </div>
+
 
       <span
         v-if="agent.llm_model"

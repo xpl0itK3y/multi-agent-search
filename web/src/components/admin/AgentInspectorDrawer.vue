@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AgentMetadataItem } from "@/lib/types";
 
 const props = defineProps<{
   agent: AgentMetadataItem | null;
+  allAgents?: AgentMetadataItem[];
   open: boolean;
 }>();
 
@@ -15,6 +16,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const copied = ref(false);
+
+const downstreamAgents = computed(() => {
+  if (!props.agent || !props.allAgents) return [];
+  return props.allAgents.filter((a) => a.dependencies.includes(props.agent!.id));
+});
 
 function copyPath() {
   if (!props.agent) return;
@@ -143,6 +149,26 @@ function copyPath() {
                 @click="emit('select-agent', dep)"
               >
                 🔗 {{ dep }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Downstream Consumers -->
+          <div>
+            <h4 class="font-semibold uppercase tracking-wider text-muted text-[10px]">
+              {{ t("admin.agents.downstream") }}
+            </h4>
+            <div v-if="downstreamAgents.length === 0" class="mt-1 text-muted italic text-[11px]">
+              None (Terminal delivery agent)
+            </div>
+            <div v-else class="mt-1.5 flex flex-wrap gap-1.5">
+              <button
+                v-for="down in downstreamAgents"
+                :key="down.id"
+                class="rounded-md border border-bd bg-surface px-2.5 py-1 text-[11px] font-medium text-ink transition hover:border-accent hover:text-accent"
+                @click="emit('select-agent', down.id)"
+              >
+                ➔ {{ down.name }}
               </button>
             </div>
           </div>
