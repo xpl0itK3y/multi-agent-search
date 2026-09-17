@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     langsmith_project: Optional[str] = None
     log_format: str = "text"
     prometheus_metrics_enabled: bool = True
+    # When set, /metrics requires this shared secret (Bearer or X-Metrics-Token).
+    # Prometheus sends it via the scrape job's authorization config. Empty = open
+    # (only safe on an internal network — nginx already blocks external /metrics).
+    metrics_token: str = ""
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False

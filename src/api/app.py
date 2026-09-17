@@ -206,6 +206,12 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/health")
     def health_check(request: Request):
+        # Cheap pings-only payload: this is the compose healthcheck and LB probe path.
+        return get_research_service(request).get_health_summary()
+
+    @app.get("/health/detail", dependencies=admin_guard)
+    def health_detail(request: Request):
+        """Full operational payload (queues, graph alerts, trends) — admin only."""
         return get_research_service(request).get_health_status()
 
     @app.post("/v1/auth/register", response_model=AuthSession, dependencies=auth_rate_limit)
@@ -294,7 +300,18 @@ def register_routes(app: FastAPI) -> None:
         return AuthSession(access_token=token, user=updated_user)
 
     @app.get("/metrics")
-    def metrics_endpoint():
+    def metrics_endpoint(request: Request):
+        # Optional shared-secret guard: Prometheus authenticates via the scrape job's
+        # authorization config; a literal admin login would not work for scraping.
+        token = settings.metrics_token
+        if token:
+            supplied = request.headers.get("x-metrics-token", "")
+            if not supplied:
+                authorization = request.headers.get("authorization", "")
+                if authorization.startswith("Bearer "):
+                    supplied = authorization[len("Bearer "):]
+            if not hmac.compare_digest(supplied, token):
+                raise HTTPException(status_code=401, detail="Valid metrics token required")
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 

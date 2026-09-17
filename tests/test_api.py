@@ -80,15 +80,24 @@ async def test_health_check(client):
     response = await client.get("/health")
     assert response.status_code == 200
     payload = response.json()
+    # The cheap probe returns readiness only — heavy operational detail lives on
+    # the admin-guarded /health/detail.
     assert payload["status"] == "ok"
-    assert "extraction_metrics" in payload
-    assert "graph_metrics" in payload
-    assert "graph_alerts" in payload
-    assert "graph_alert_trend" in payload
-    assert payload["extraction_metrics"]["attempts"] >= 0
-    assert any(alert["code"] == "high_avg_ms" for alert in payload["graph_alerts"])
-    assert "job-worker" in payload["graph_alert_trend"]["top_worker_names"]
+    assert set(payload.keys()) == {"status", "dependencies"}
+    assert payload["dependencies"]["database"] == "ok"
     assert response.headers["X-Request-ID"]
+
+    detail = await client.get("/health/detail")
+    assert detail.status_code == 200
+    detailed = detail.json()
+    assert detailed["status"] == "ok"
+    assert "extraction_metrics" in detailed
+    assert "graph_metrics" in detailed
+    assert "graph_alerts" in detailed
+    assert "graph_alert_trend" in detailed
+    assert detailed["extraction_metrics"]["attempts"] >= 0
+    assert any(alert["code"] == "high_avg_ms" for alert in detailed["graph_alerts"])
+    assert "job-worker" in detailed["graph_alert_trend"]["top_worker_names"]
 
 
 @pytest.mark.anyio
@@ -131,6 +140,23 @@ async def test_metrics_endpoint(client):
 
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
+
+
+@pytest.mark.anyio
+async def test_metrics_endpoint_requires_token_when_configured(client, monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "metrics_token", "secret-metrics-token")
+
+    denied = await client.get("/metrics")
+    assert denied.status_code == 401
+    wrong = await client.get("/metrics", headers={"Authorization": "Bearer nope"})
+    assert wrong.status_code == 401
+
+    ok_bearer = await client.get("/metrics", headers={"Authorization": "Bearer secret-metrics-token"})
+    assert ok_bearer.status_code == 200
+    ok_header = await client.get("/metrics", headers={"X-Metrics-Token": "secret-metrics-token"})
+    assert ok_header.status_code == 200
 
 
 @pytest.mark.anyio
