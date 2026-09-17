@@ -6,3 +6,11 @@ __pycache__/
 venv/
 .git/
 .gitignore
+.DS_Store
+.pytest_cache/
+.codegraph/
+web/node_modules/
+web/dist/
+native/text_processing/target/
+*.dump
+*.sha256

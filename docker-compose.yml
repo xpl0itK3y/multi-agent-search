@@ -54,7 +54,7 @@ services:
     command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2} --proxy-headers --forwarded-allow-ips='*'"
     ports:
       # Keep direct API access local; the web proxy and Prometheus use the Docker network.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_PORT:-8001}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import json,urllib.request; data=json.load(urllib.request.urlopen('http://localhost:8000/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' else 1)"]
       interval: 15s
@@ -72,7 +72,7 @@ services:
       api:
         condition: service_started
     ports:
-      - "8501:80"
+      - "${WEB_PORT:-8502}:80"
     restart: unless-stopped
 
   worker:
