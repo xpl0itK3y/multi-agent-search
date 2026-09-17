@@ -160,6 +160,26 @@ async def test_metrics_endpoint_requires_token_when_configured(client, monkeypat
 
 
 @pytest.mark.anyio
+async def test_research_events_stream_is_async_and_terminates(client):
+    app_service = client._transport.app.state.research_service
+    record = app_service.task_store.add_research(
+        ResearchRequest(prompt="stream me live", depth=SearchDepth.EASY), task_ids=[]
+    )
+    app_service.task_store.update_research_status(record.id, ResearchStatus.COMPLETED, "final")
+
+    async with client.stream("GET", f"/v1/research/{record.id}/events") as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        events = []
+        async for line in response.aiter_lines():
+            if line.startswith("event: "):
+                events.append(line[len("event: "):])
+
+    assert events[0] == "status_change"
+    assert events[-1] == "done"
+
+
+@pytest.mark.anyio
 async def test_start_research_preserves_service_error_status(client, mocker):
     service = client._transport.app.state.research_service
     mocker.patch.object(service, "start_research", side_effect=ConflictError("Research already running"))
