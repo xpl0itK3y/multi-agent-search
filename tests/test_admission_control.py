@@ -144,7 +144,7 @@ def test_concurrent_plan_approvals_respect_limits(monkeypatch):
             task_ids=[],
             user_id="same-user",
         )
-        store.update_research_graph_state(
+        store.merge_research_graph_state(
             record.id,
             {
                 "plan": [
@@ -195,7 +195,7 @@ def test_clarification_submission_keeps_state_when_capacity_is_full(monkeypatch)
             prompt="clarify this topic", depth=SearchDepth.EASY, plan_first=True
         ).model_dump(mode="json"),
     }
-    store.update_research_graph_state(parked.id, initial_state)
+    store.merge_research_graph_state(parked.id, initial_state)
     store.update_research_status(parked.id, ResearchStatus.CLARIFYING)
 
     with pytest.raises(ConflictError):
@@ -221,7 +221,7 @@ def _park_plan(store, user_id, prompt):
         task_ids=[],
         user_id=user_id,
     )
-    store.update_research_graph_state(
+    store.merge_research_graph_state(
         record.id,
         {"plan": [{"id": "planned-task-0", "description": "Search", "queries": ["q"]}]},
     )

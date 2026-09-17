@@ -536,26 +536,19 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None:
-        with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
-                return None
-
-            research.graph_state = graph_state or {}
-            research.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(research)
-            return research_orm_to_record(research)
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None:
-        """Atomically merge `patch` into graph_state under a row lock, so concurrent writers
-        can't clobber each other's keys (AUD-014). Replaces the read-then-write pattern."""
-        if not patch:
+        """Atomically merge `patch` into graph_state (and drop `remove_keys`) under a row
+        lock, so concurrent writers can't clobber each other's keys (AUD-014). Replaces
+        the read-then-write pattern, which must not be reintroduced."""
+        patch = patch or {}
+        remove_keys = remove_keys or []
+        if not patch and not remove_keys:
             return self.get_research(research_id)
         with self.session_scope() as session:
             research = session.execute(
@@ -563,7 +556,10 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if research is None:
                 return None
-            research.graph_state = {**(research.graph_state or {}), **patch}
+            merged = {**(research.graph_state or {}), **patch}
+            for key in remove_keys:
+                merged.pop(key, None)
+            research.graph_state = merged
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)

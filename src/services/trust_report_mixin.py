@@ -19,10 +19,9 @@ logger = logging.getLogger(__name__)
 
 class TrustReportMixin:
     def _store_red_team(self, research_id: str, red_team: RedTeamReport) -> None:
-        research = self.task_store.get_research(research_id)
-        state = dict((research.graph_state if research else None) or {})
-        state["red_team"] = red_team.model_dump()
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id, {"red_team": red_team.model_dump()}
+        )
 
     def get_research_red_team(self, research_id: str) -> RedTeamReport:
         """Stored adversarial findings for the artifact panel (empty if the pass didn't run)."""
@@ -274,9 +273,9 @@ class TrustReportMixin:
                 "queries": queries,
                 "status": TaskStatus.PENDING,
             })
-            state = dict((self.task_store.get_research(research_id).graph_state) or {})
-            state["cross_language_targets"] = langs
-            self.task_store.update_research_graph_state(research_id, state)
+            self.task_store.merge_research_graph_state(
+                research_id, {"cross_language_targets": langs}
+            )
             logger.info("cross_language_task_added research_id=%s langs=%s", research_id, langs)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("cross_language_plan_failed research_id=%s error=%s", research_id, exc)

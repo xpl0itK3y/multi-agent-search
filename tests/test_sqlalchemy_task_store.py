@@ -100,7 +100,7 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
         ResearchRequest(prompt="research topic", depth=SearchDepth.MEDIUM),
         task_ids=[],
     )
-    updated_state = store.update_research_graph_state(
+    updated_state = store.merge_research_graph_state(
         research.id,
         {"step": "collect_context", "analyze_attempts": 0},
     )
@@ -144,7 +144,7 @@ def test_research_history_uses_lookup_indexes_and_preserves_summary_fields(
         task_ids=[],
         user_id="history-user",
     )
-    store.update_research_graph_state(
+    store.merge_research_graph_state(
         research.id,
         {
             "title": "Indexed history",

@@ -500,13 +500,9 @@ class ResearchService(
 
     def _clear_decompose_pending(self, research_id: str) -> None:
         """Remove the crash-recovery marker from graph_state after decompose completes."""
-        research = self.task_store.get_research(research_id)
-        if not research:
-            return
-        state = dict(research.graph_state or {})
-        state.pop("decompose_pending", None)
-        state.pop("decompose_payload", None)
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id, remove_keys=["decompose_pending", "decompose_payload"]
+        )
 
     def recover_pending_decompositions(self) -> int:
         """Re-schedule decompositions lost during a process crash.
@@ -610,10 +606,10 @@ class ResearchService(
         research = self._ensure_research_access(research_id, user_id)
         if not research:
             raise NotFoundError("Research not found")
-        state = dict(research.graph_state or {})
-        state["title"] = title.strip()
-        self.task_store.update_research_graph_state(research_id, state)
-        return self.task_store.get_research(research_id)
+        updated = self.task_store.merge_research_graph_state(
+            research_id, {"title": title.strip()}
+        )
+        return updated or self.task_store.get_research(research_id)
 
     def get_research_status(self, research_id: str) -> ResearchRecord:
         research = self.task_store.get_research(research_id)
@@ -757,11 +753,12 @@ class ResearchService(
 
     def _store_clarifications_for_review(self, research_id: str, questions: list[str]) -> None:
         """Persist clarifying questions and set status CLARIFYING (awaiting user answers)."""
-        research = self.task_store.get_research(research_id)
-        state = dict((research.graph_state if research else None) or {})
-        state.pop("decompose_pending", None)  # wait for user; keep decompose_payload for the re-run
-        state["clarifications"] = {"questions": list(questions), "answers": []}
-        self.task_store.update_research_graph_state(research_id, state)
+        # Wait for the user; keep decompose_payload for the re-run.
+        self.task_store.merge_research_graph_state(
+            research_id,
+            {"clarifications": {"questions": list(questions), "answers": []}},
+            remove_keys=["decompose_pending"],
+        )
         self.task_store.update_research_status(research_id, ResearchStatus.CLARIFYING)
 
     def _augment_prompt_with_clarifications(self, prompt: str, graph_state: dict) -> str:
@@ -794,8 +791,7 @@ class ResearchService(
         if research.status != ResearchStatus.CLARIFYING:
             raise ConflictError("Research is not awaiting clarification")
 
-        state = dict(research.graph_state or {})
-        clar = dict(state.get("clarifications") or {})
+        clar = dict((research.graph_state or {}).get("clarifications") or {})
         questions = clar.get("questions") or []
         answers = list(answers or [])
         clar["answers"] = answers
@@ -803,11 +799,8 @@ class ResearchService(
             {"question": question, "answer": (answers[i] if i < len(answers) else "")}
             for i, question in enumerate(questions)
         ]
-        state["clarifications"] = clar
-        state["clarified"] = True
-        state["decompose_pending"] = True
 
-        payload = state.get("decompose_payload")
+        payload = (research.graph_state or {}).get("decompose_payload")
         try:
             request = ResearchRequest.model_validate(payload) if payload else ResearchRequest(
                 prompt=research.prompt, depth=research.depth, plan_first=True
@@ -816,7 +809,10 @@ class ResearchService(
             request = ResearchRequest(prompt=research.prompt, depth=research.depth, plan_first=True)
 
         self._admit_or_raise(research_id, ResearchStatus.CLARIFYING)
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id,
+            {"clarifications": clar, "clarified": True, "decompose_pending": True},
+        )
 
         import threading
 
@@ -838,12 +834,11 @@ class ResearchService(
             }
             for item in tasks_raw
         ]
-        research = self.task_store.get_research(research_id)
-        state = dict((research.graph_state if research else None) or {})
-        state.pop("decompose_pending", None)
-        state.pop("decompose_payload", None)
-        state["plan"] = plan
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id,
+            {"plan": plan},
+            remove_keys=["decompose_pending", "decompose_payload"],
+        )
         self.task_store.update_research_status(research_id, ResearchStatus.PLAN_REVIEW)
 
     def get_research_plan(self, research_id: str) -> ResearchPlan:
@@ -863,9 +858,9 @@ class ResearchService(
             raise NotFoundError("Research not found")
         if research.status != ResearchStatus.PLAN_REVIEW:
             raise ConflictError("Plan can only be edited while awaiting approval")
-        state = dict(research.graph_state or {})
-        state["plan"] = [item.model_dump() for item in update.items]
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id, {"plan": [item.model_dump() for item in update.items]}
+        )
         return self.get_research_plan(research_id)
 
     def approve_research_plan(self, research_id: str) -> ResearchRecord:
@@ -921,13 +916,13 @@ class ResearchService(
         research = self.task_store.get_research(research_id)
         if not research:
             return
-        state = dict(research.graph_state or {})
-        messages = list(state.get("messages") or [])
+        messages = list((research.graph_state or {}).get("messages") or [])
         messages.append(
             ChatMessage(role=role, content=content, sources=sources or []).model_dump()
         )
-        state["messages"] = messages[-40:]  # cap conversation history
-        self.task_store.update_research_graph_state(research_id, state)
+        self.task_store.merge_research_graph_state(
+            research_id, {"messages": messages[-40:]}  # cap conversation history
+        )
 
     _CHAT_STOPWORDS = {
         "what", "which", "where", "when", "about", "could", "would", "should", "there",
@@ -1355,10 +1350,7 @@ class ResearchService(
     def checkpoint_graph_state(self, research_id: str, graph_state: dict, event: dict | None = None) -> None:
         # The finalize graph's state doesn't carry user-facing metadata (thread_id, title,
         # model, …). Merge over the existing graph_state so a checkpoint can't wipe it.
-        research = self.task_store.get_research(research_id)
-        if research and research.graph_state:
-            graph_state = {**research.graph_state, **graph_state}
-        self.task_store.update_research_graph_state(research_id, graph_state)
+        self.task_store.merge_research_graph_state(research_id, graph_state)
         if event is not None:
             self.task_store.append_research_graph_event(research_id, event)
 
@@ -1464,9 +1456,9 @@ class ResearchService(
             if not table.has_table:
                 return
             table.research_id = research.id
-            state = dict((self.task_store.get_research(research.id).graph_state) or {})
-            state["comparison"] = table.model_dump()
-            self.task_store.update_research_graph_state(research.id, state)
+            self.task_store.merge_research_graph_state(
+                research.id, {"comparison": table.model_dump()}
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("comparison_build_failed research_id=%s error=%s", research.id, exc)
 

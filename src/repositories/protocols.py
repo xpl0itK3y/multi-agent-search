@@ -99,13 +99,13 @@ class TaskStore(Protocol):
         task_ids: list[str],
     ) -> ResearchRecord | None: ...
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None: ...
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None: ...
 
     def save_partial_report(self, research_id: str, partial: str) -> None: ...
 

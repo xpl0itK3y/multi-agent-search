@@ -33,6 +33,8 @@ class InMemoryTaskStore:
         self.users: dict[str, UserRecord] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
         self._admission_lock = threading.RLock()
+        # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
+        self._state_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -407,26 +409,26 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        research.graph_state = graph_state or {}
-        research.updated_at = datetime.now(timezone.utc)
-        return research
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        if patch:
-            research.graph_state = {**(research.graph_state or {}), **patch}
-            research.updated_at = datetime.now(timezone.utc)
-        return research
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            patch = patch or {}
+            remove_keys = remove_keys or []
+            if patch or remove_keys:
+                merged = {**(research.graph_state or {}), **patch}
+                for key in remove_keys:
+                    merged.pop(key, None)
+                research.graph_state = merged
+                research.updated_at = datetime.now(timezone.utc)
+            return research
 
     def save_partial_report(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
