@@ -133,7 +133,6 @@ class Settings(BaseSettings):
     analyzer_conflict_source_limit: int = 12
     analyzer_evidence_source_limit: int = 12
     analyzer_local_repair_issue_threshold: int = 20
-    use_langgraph_finalize_graph: bool = True
     # Deep-research loop is on by default but bounded by the finalize budget below.
     # Set any of these to 0 to disable that branch (faster, shallower finalize).
     langgraph_replan_max_loops: int = 1

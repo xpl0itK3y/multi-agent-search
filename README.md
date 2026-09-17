@@ -4,18 +4,18 @@ FastAPI backend for a research workflow with persistent jobs, Postgres storage, 
 
 ## LangGraph Finalize Loop
 
-The project now includes an optional LangGraph-style finalize orchestration layer in `src/graph/`.
-
-It is used for the post-search decision loop:
+The post-search finalize orchestration lives in `src/graph/` as a single
+LangGraph state machine (a pinned hard dependency):
 
 - collect source and evidence summaries
 - branch into a replan step when coverage looks weak
 - run the analyzer
 - retry analysis once when the generated draft still contains report-note style quality warnings
 
-By default, `USE_LANGGRAPH_FINALIZE_GRAPH=true`.
-
-If `langgraph` is not installed, the project falls back to an internal sequential runner with the same decisions, so the app still works.
+Fresh and resumed runs (after a worker crash) walk the SAME topology — a
+checkpointed run re-enters the graph at the successor of its last completed
+step, so a research's behavior no longer depends on whether a worker died
+mid-finalize.
 
 ## Observability
 
@@ -45,7 +45,6 @@ Useful flags:
 ```env
 LOG_FORMAT=json
 PROMETHEUS_METRICS_ENABLED=true
-USE_LANGGRAPH_FINALIZE_GRAPH=true
 # METRICS_TOKEN=change-me
 # Retention for finished researches; 0 keeps everything (default).
 # RESEARCH_RETENTION_SECONDS=0

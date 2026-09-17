@@ -1599,54 +1599,28 @@ class ResearchService(
             if analyzer_llm is not None and hasattr(analyzer_llm, "reset_usage"):
                 analyzer_llm.reset_usage()
 
-            detected_conflicts = None
-            if settings.use_langgraph_finalize_graph:
-                try:
-                    graph_result = self.finalize_graph_runner.run(
-                        research_id,
-                        research.prompt,
-                        tasks,
-                        research.depth,
-                        finalize_job_id=finalize_job_id,
-                        lease_epoch=lease_epoch,
-                    )
-                    if isinstance(graph_result, tuple) and len(graph_result) == 4:
-                        report, aggregated, effective_prompt, final_tasks = graph_result
-                    else:  # compatibility with custom/test graph runners
-                        report = graph_result
-                        aggregated = None
-                        effective_prompt = research.prompt
-                        final_tasks = tasks
-                except FinalizeCancelled:
-                    latest = self.task_store.get_research(research_id)
-                    if latest is None:
-                        raise NotFoundError("Research not found")
-                    logger.info("finalize_stopped_cancelled research_id=%s", research_id)
-                    return latest
-            else:
-                analysis_kwargs = {
-                    "depth": research.depth,
-                    "model": (research.graph_state or {}).get("model"),
-                }
-                if self._accepts_keyword(analyzer.run_analysis, "language"):
-                    analysis_kwargs["language"] = self._research_language(research)
-                analysis_result = analyzer.run_analysis(
+            try:
+                graph_result = self.finalize_graph_runner.run(
+                    research_id,
                     research.prompt,
                     tasks,
-                    **analysis_kwargs,
+                    research.depth,
+                    finalize_job_id=finalize_job_id,
+                    lease_epoch=lease_epoch,
                 )
-                if isinstance(analysis_result, tuple) and len(analysis_result) in {2, 3}:
-                    report, aggregated = analysis_result[:2]
-                    detected_conflicts = (
-                        analysis_result[2]
-                        if len(analysis_result) == 3 and isinstance(analysis_result[2], list)
-                        else None
-                    )
-                else:  # compatibility with minimal analyzers
-                    report = analysis_result
+                if isinstance(graph_result, tuple) and len(graph_result) == 4:
+                    report, aggregated, effective_prompt, final_tasks = graph_result
+                else:  # compatibility with custom/test graph runners
+                    report = graph_result
                     aggregated = None
-                effective_prompt = research.prompt
-                final_tasks = tasks
+                    effective_prompt = research.prompt
+                    final_tasks = tasks
+            except FinalizeCancelled:
+                latest = self.task_store.get_research(research_id)
+                if latest is None:
+                    raise NotFoundError("Research not found")
+                logger.info("finalize_stopped_cancelled research_id=%s", research_id)
+                return latest
 
             tasks = final_tasks
             source_state: dict[str, Any] = {
@@ -1655,8 +1629,6 @@ class ResearchService(
             }
             if aggregated is not None:
                 source_state["canonical_sources"] = self._canonical_source_table(aggregated)
-            if not settings.use_langgraph_finalize_graph and detected_conflicts is not None:
-                source_state["detected_conflicts"] = detected_conflicts
             self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
             self.task_store.merge_research_graph_state(research_id, source_state)
             research = self.task_store.get_research(research_id) or research
