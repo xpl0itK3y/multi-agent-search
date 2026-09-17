@@ -27,22 +27,18 @@ const startPan = ref({ x: 0, y: 0 });
 const canvasViewportRef = ref<HTMLElement | null>(null);
 
 function onMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return;
   const target = e.target as HTMLElement;
-  if (target.closest(".interactive-node") || target.closest("button") || target.closest("input")) {
+  if (
+    target.closest(".interactive-node") ||
+    target.closest("button") ||
+    target.closest("input") ||
+    target.closest(".tools-drawer")
+  ) {
     return;
   }
   isPanning.value = true;
   startPan.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
-}
-
-function onMouseMove(e: MouseEvent) {
-  if (!isPanning.value) return;
-  panX.value = e.clientX - startPan.value.x;
-  panY.value = e.clientY - startPan.value.y;
-}
-
-function onMouseUp() {
-  isPanning.value = false;
 }
 
 function onWheel(e: WheelEvent) {
@@ -420,12 +416,130 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
   },
 };
 
+// ── Node Positions & Drag-and-Drop (Movable Nodes) ───────────────────────────
+const LOCAL_STORAGE_POSITIONS_KEY = "multi-agent-search:admin-nodes-pos";
+
+const defaultNodePositions: Record<string, { x: number; y: number }> = Object.fromEntries(
+  Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => [id, { x: conf.x, y: conf.y }])
+);
+
+function loadSavedPositions(): Record<string, { x: number; y: number }> {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_POSITIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return { ...defaultNodePositions, ...parsed };
+      }
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  return { ...defaultNodePositions };
+}
+
+const nodePositions = ref<Record<string, { x: number; y: number }>>(loadSavedPositions());
+
+function savePositions() {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_POSITIONS_KEY, JSON.stringify(nodePositions.value));
+  } catch {
+    // Ignore
+  }
+}
+
+function resetNodePositions() {
+  nodePositions.value = { ...defaultNodePositions };
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_POSITIONS_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
 const visualNodes = computed<VisualNode[]>(() => {
-  return Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => ({
-    id,
-    ...conf,
-  }));
+  return Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => {
+    const pos = nodePositions.value[id] || { x: conf.x, y: conf.y };
+    return {
+      id,
+      ...conf,
+      x: pos.x,
+      y: pos.y,
+    };
+  });
 });
+
+// ── Node Dragging State ───────────────────────────────────────────────────────
+const draggingNodeId = ref<string | null>(null);
+const dragStartMouse = ref({ x: 0, y: 0 });
+const dragStartNodePos = ref({ x: 0, y: 0 });
+const hasDraggedNode = ref(false);
+
+function onNodeMouseDown(e: MouseEvent, nodeId: string) {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+
+  draggingNodeId.value = nodeId;
+  dragStartMouse.value = { x: e.clientX, y: e.clientY };
+  const currentPos = nodePositions.value[nodeId] || {
+    x: VISUAL_NODES_CONFIG[nodeId]?.x ?? 0,
+    y: VISUAL_NODES_CONFIG[nodeId]?.y ?? 0,
+  };
+  dragStartNodePos.value = { x: currentPos.x, y: currentPos.y };
+  hasDraggedNode.value = false;
+}
+
+function onGlobalMouseMove(e: MouseEvent) {
+  // 1. If dragging a single node
+  if (draggingNodeId.value) {
+    const dx = (e.clientX - dragStartMouse.value.x) / zoom.value;
+    const dy = (e.clientY - dragStartMouse.value.y) / zoom.value;
+
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      hasDraggedNode.value = true;
+    }
+
+    if (hasDraggedNode.value) {
+      const newX = Math.round(dragStartNodePos.value.x + dx);
+      const newY = Math.round(dragStartNodePos.value.y + dy);
+
+      nodePositions.value = {
+        ...nodePositions.value,
+        [draggingNodeId.value]: {
+          x: Math.max(10, Math.min(4800, newX)),
+          y: Math.max(10, Math.min(950, newY)),
+        },
+      };
+    }
+    return;
+  }
+
+  // 2. If panning canvas
+  if (isPanning.value) {
+    panX.value = e.clientX - startPan.value.x;
+    panY.value = e.clientY - startPan.value.y;
+  }
+}
+
+function onGlobalMouseUp() {
+  if (draggingNodeId.value) {
+    if (hasDraggedNode.value) {
+      savePositions();
+    }
+    setTimeout(() => {
+      draggingNodeId.value = null;
+      hasDraggedNode.value = false;
+    }, 50);
+  }
+  isPanning.value = false;
+}
+
+function handleNodeClick(nodeId: string) {
+  if (hasDraggedNode.value) {
+    return;
+  }
+  openInspector(nodeId);
+}
 
 // ── Graph Edges (n8n Smooth Cubic Curves) ─────────────────────────────────────
 const EDGE_CONNECTIONS: Array<{ from: string; to: string; payload: string }> = [
@@ -777,10 +891,14 @@ async function fetchAgents() {
 
 onMounted(() => {
   fetchAgents();
+  window.addEventListener("mousemove", onGlobalMouseMove);
+  window.addEventListener("mouseup", onGlobalMouseUp);
 });
 
 onBeforeUnmount(() => {
   if (simTimer) clearTimeout(simTimer);
+  window.removeEventListener("mousemove", onGlobalMouseMove);
+  window.removeEventListener("mouseup", onGlobalMouseUp);
 });
 
 function openInspector(nodeId: string) {
@@ -950,6 +1068,16 @@ function isNodeDimmed(nodeId: string): boolean {
             −
           </button>
         </div>
+
+        <!-- Reset Node Layout Button -->
+        <button
+          class="flex items-center gap-1.5 rounded-xl border border-bd bg-surface/70 px-2.5 py-1.5 text-xs text-muted hover:text-ink hover:border-accent/40 transition"
+          :title="t('admin.agents.resetLayoutTooltip')"
+          @click="resetNodePositions"
+        >
+          <span>↺</span>
+          <span class="hidden sm:inline">{{ t("admin.agents.resetLayout") }}</span>
+        </button>
       </div>
     </div>
 
@@ -970,9 +1098,6 @@ function isNodeDimmed(nodeId: string): boolean {
       class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd/80 bg-[#0d111a] shadow-inner min-h-[640px] cursor-grab active:cursor-grabbing"
       style="background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1.2px, transparent 1.2px); background-size: 20px 20px;"
       @mousedown="onMouseDown"
-      @mousemove="onMouseMove"
-      @mouseup="onMouseUp"
-      @mouseleave="onMouseUp"
       @wheel="onWheel"
     >
       <!-- Scalable & Pannable Canvas World -->
@@ -1114,13 +1239,19 @@ function isNodeDimmed(nodeId: string): boolean {
         <div
           v-for="node in visualNodes"
           :key="node.id"
-          class="interactive-node absolute group select-none transition-transform duration-150"
+          class="interactive-node absolute group select-none"
+          :class="[
+            draggingNodeId === node.id
+              ? 'transition-none z-30 cursor-grabbing'
+              : 'transition-transform duration-100 cursor-grab',
+          ]"
           :style="{
             transform: `translate(${node.x}px, ${node.y}px)`,
             width: `${node.width}px`,
             height: `${node.height}px`,
           }"
-          @click="openInspector(node.id)"
+          @mousedown="onNodeMouseDown($event, node.id)"
+          @click="handleNodeClick(node.id)"
           @mouseenter="onNodeHover(node.id)"
           @mouseleave="onNodeHover(null)"
         >
@@ -1128,7 +1259,11 @@ function isNodeDimmed(nodeId: string): boolean {
           <div
             class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur transition-all duration-200"
             :class="[
-              isNodeDimmed(node.id) ? 'opacity-30' : 'opacity-100',
+              draggingNodeId === node.id
+                ? 'border-accent bg-[#1c2233] ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
+                : isNodeDimmed(node.id)
+                ? 'opacity-30'
+                : 'opacity-100',
               selectedAgent?.id === node.id
                 ? 'border-accent bg-[#1c2233] ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
                 : isNodeHighlighted(node.id)
@@ -1251,6 +1386,14 @@ function isNodeDimmed(nodeId: string): boolean {
             </span>
           </div>
         </div>
+      </div>
+
+      <!-- Canvas Hint Badge -->
+      <div
+        class="absolute bottom-3 left-4 pointer-events-none z-10 flex items-center gap-2 rounded-lg border border-bd/60 bg-[#151922]/85 px-3 py-1.5 text-[11px] text-muted backdrop-blur font-sans shadow"
+      >
+        <span class="text-xs">✋</span>
+        <span>{{ t("admin.agents.dragHint") }}</span>
       </div>
     </div>
 

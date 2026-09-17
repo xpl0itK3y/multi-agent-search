@@ -373,6 +373,9 @@ const ru = {
       howItWorks: "Как работает система поиска",
       dataPayload: "Передаваемые данные",
       wireTooltip: "Поток данных: {from} ➔ {to}",
+      resetLayout: "Сбросить расстановку",
+      resetLayoutTooltip: "Вернуть исходные позиции нод графа",
+      dragHint: "Ноды можно свободно перемещать по одной • Колёсико: зум • Зажать фон: панорамирование",
     },
     operations: {
       title: "Операции с очередями и аудит",
@@ -760,6 +763,9 @@ const en: typeof ru = {
       howItWorks: "How Research Engine Works",
       dataPayload: "Payload",
       wireTooltip: "Data flow: {from} ➔ {to}",
+      resetLayout: "Reset Layout",
+      resetLayoutTooltip: "Restore original node positions",
+      dragHint: "Nodes can be freely dragged individually • Wheel: zoom • Drag background: pan",
     },
     operations: {
       title: "Queue Operations & Audit Trail",
@@ -1147,6 +1153,9 @@ const es: typeof ru = {
       howItWorks: "Cómo funciona el motor",
       dataPayload: "Datos transmitidos",
       wireTooltip: "Flujo de datos: {from} ➔ {to}",
+      resetLayout: "Restablecer diseño",
+      resetLayoutTooltip: "Restaurar posiciones originales de los nodos",
+      dragHint: "Los nodos se pueden arrastrar individualmente • Rueda: zoom • Arrastrar fondo: desplazar",
     },
     operations: {
       title: "Operaciones de cola y auditoría",
