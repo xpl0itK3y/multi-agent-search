@@ -20,10 +20,16 @@ from src.api.dependencies import (
 )
 from src.auth.login_rate_limit import enforce_auth_rate_limit
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
+from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminOverviewResponse,
+    AdminTokenAnalyticsResponse,
+    AgentMetadataItem,
     AuthUser,
     AuthSession,
     SetPasswordRequest,
@@ -488,6 +494,106 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
     def cleanup_finalize_jobs(request: Request):
         return get_research_service(request).cleanup_old_research_finalize_jobs()
+
+    # ── Admin Panel Dedicated Endpoints ───────────────────────────────────────
+    @app.get("/v1/admin/overview", response_model=AdminOverviewResponse, dependencies=admin_guard)
+    def admin_overview(request: Request):
+        return get_research_service(request).get_admin_overview()
+
+    @app.get("/v1/admin/tokens", response_model=AdminTokenAnalyticsResponse, dependencies=admin_guard)
+    def admin_tokens(
+        request: Request,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+    ):
+        return get_research_service(request).get_admin_token_analytics(page=page, page_size=page_size)
+
+    @app.get("/v1/admin/tokens/export", dependencies=admin_guard)
+    def admin_tokens_export(request: Request):
+        import csv
+        import io
+        analytics = get_research_service(request).get_admin_token_analytics(page=1, page_size=10000)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"])
+        for item in analytics.researches:
+            clean_prompt = item.prompt.replace("\n", " ").replace("\r", "")
+            writer.writerow([
+                item.research_id,
+                clean_prompt,
+                item.depth,
+                item.status,
+                item.total_tokens,
+                item.estimated_cost_usd,
+                item.created_at.isoformat(),
+            ])
+        csv_content = output.getvalue()
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=token_usage.csv"},
+        )
+
+    @app.get("/v1/admin/agents", response_model=List[AgentMetadataItem], dependencies=admin_guard)
+    def admin_agents(request: Request):
+        return get_research_service(request).get_agents_catalog()
+
+    @app.get("/v1/admin/audit", response_model=List[AdminAuditLogItem], dependencies=admin_guard)
+    def admin_audit_logs(
+        request: Request,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        action: str | None = None,
+    ):
+        return get_research_service(request).get_admin_audit_logs(
+            limit=limit, offset=offset, action=action
+        )
+
+    @app.post("/v1/admin/operations/preview", response_model=AdminDryRunResult, dependencies=admin_guard)
+    def admin_operations_preview(payload: dict, request: Request):
+        action = payload.get("action", "")
+        params = payload.get("params", {})
+        return get_research_service(request).preview_maintenance_action(action=action, params=params)
+
+    @app.post("/v1/admin/operations/execute", response_model=AdminDryRunResult)
+    def admin_operations_execute(payload: dict, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        action = payload.get("action", "")
+        params = payload.get("params", {})
+        client_ip = request.client.host if request.client else None
+        return get_research_service(request).execute_maintenance_action(
+            action=action,
+            actor_email=admin_user.email,
+            params=params,
+            ip_address=client_ip,
+        )
+
+    @app.get("/v1/admin/stream")
+    async def admin_stream(request: Request):
+        require_admin(request)
+        service = get_research_service(request)
+
+        async def event_generator():
+            import asyncio
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    overview = service.get_admin_overview()
+                    data = overview.model_dump_json()
+                    yield f"event: overview\ndata: {data}\n\n"
+                except Exception as err:
+                    yield f"event: error\ndata: {json.dumps({'error': str(err)})}\n\n"
+                await asyncio.sleep(2.0)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.delete("/v1/research/{research_id}", status_code=204)
     def delete_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
