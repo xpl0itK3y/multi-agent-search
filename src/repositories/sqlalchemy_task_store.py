@@ -290,6 +290,16 @@ class SQLAlchemyTaskStore:
                 avatar_url=user.avatar_url,
             )
 
+    def delete_user(self, user_id: str) -> bool:
+        """Delete a user; researches (and via FK cascades: tasks, results, jobs,
+        share tokens inside graph_state) are removed with them (DATA-LIFECYCLE)."""
+        with self.session_scope() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                return False
+            session.delete(user)
+            return True
+
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         with self.session_scope() as session:
             statement = (

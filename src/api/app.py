@@ -27,6 +27,7 @@ from src.api.schemas import (
     AuthUser,
     AuthSession,
     SetPasswordRequest,
+    DeleteAccountRequest,
     DecomposeRequest,
     DecomposeResponse,
     LoginRequest,
@@ -298,6 +299,27 @@ def register_routes(app: FastAPI) -> None:
         )
         token = _issue_session(response, updated_user)
         return AuthSession(access_token=token, user=updated_user)
+
+    @app.delete("/v1/auth/account")
+    def delete_account(
+        payload: DeleteAccountRequest,
+        response: Response,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        """Delete the account and all owned data (researches, results, share links).
+
+        No login-rate-limit here on purpose: this is not a credential-guessing
+        surface — it requires an authenticated session, the current password,
+        and passes through the CSRF middleware like every other mutation."""
+        get_research_service(request).delete_user_account(
+            user.id,
+            current_password=payload.current_password,
+            confirm=payload.confirm,
+        )
+        response.delete_cookie(settings.auth_cookie_name, path="/")
+        response.delete_cookie(settings.csrf_cookie_name, path="/")
+        return {"status": "deleted"}
 
     @app.get("/metrics")
     def metrics_endpoint(request: Request):

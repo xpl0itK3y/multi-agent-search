@@ -231,6 +231,18 @@ class InMemoryTaskStore:
             None,
         )
 
+    def delete_user(self, user_id: str) -> bool:
+        if user_id not in self.users:
+            return False
+        del self.users[user_id]
+        # Mirror the SQL FK cascade: the user's researches (and their tasks) go too,
+        # which also revokes every public share token they had minted.
+        for research in [
+            record for record in self.researches.values() if record.user_id == user_id
+        ]:
+            self.delete_research(research.id)
+        return True
+
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         user = self.users.get(user_id)
         if user is None:
