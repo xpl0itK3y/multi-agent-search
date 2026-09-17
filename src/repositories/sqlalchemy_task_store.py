@@ -105,6 +105,8 @@ class SQLAlchemyTaskStore:
         stale_before: datetime,
         *,
         include_queued: bool,
+        exclude_id: str | None = None,
+        include_parked: bool = True,
     ) -> int:
         running = and_(
             ResearchORM.status.in_(
@@ -112,14 +114,25 @@ class SQLAlchemyTaskStore:
             ),
             ResearchORM.updated_at >= stale_before,
         )
-        status_filter = (
-            or_(running, ResearchORM.status == ResearchStatus.QUEUED.value)
-            if include_queued
-            else running
-        )
+        if include_queued:
+            status_filter = or_(running, ResearchORM.status == ResearchStatus.QUEUED.value)
+            if include_parked:
+                # Parked plan-first researches hold the user's slot while fresh, so a
+                # user cannot park N uncounted plans and then activate them all at once.
+                parked = and_(
+                    ResearchORM.status.in_(
+                        [ResearchStatus.CLARIFYING.value, ResearchStatus.PLAN_REVIEW.value]
+                    ),
+                    ResearchORM.updated_at >= stale_before,
+                )
+                status_filter = or_(status_filter, parked)
+        else:
+            status_filter = running
         statement = select(func.count()).select_from(ResearchORM).where(status_filter)
         if user_id is not None:
             statement = statement.where(ResearchORM.user_id == user_id)
+        if exclude_id is not None:
+            statement = statement.where(ResearchORM.id != exclude_id)
         return int(session.execute(statement).scalar_one())
 
     def add_research_if_under_limit(
@@ -176,17 +189,25 @@ class SQLAlchemyTaskStore:
             research = session.get(ResearchORM, research_id)
             if research is None or research.status != expected_status.value:
                 return False
+            # The parked research being admitted must not count against itself, and
+            # activation needs running capacity only — parked siblings wait on the
+            # user and consume nothing, so they must not block each other.
             if (
                 per_user_limit > 0
                 and self._active_count(
-                    session, research.user_id, stale_before, include_queued=True
+                    session,
+                    research.user_id,
+                    stale_before,
+                    include_queued=True,
+                    exclude_id=research_id,
+                    include_parked=False,
                 ) >= per_user_limit
             ):
                 return False
             if (
                 global_limit > 0
                 and self._active_count(
-                    session, None, stale_before, include_queued=False
+                    session, None, stale_before, include_queued=False, exclude_id=research_id
                 ) >= global_limit
             ):
                 return False

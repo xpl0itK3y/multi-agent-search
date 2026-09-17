@@ -90,21 +90,42 @@ class InMemoryTaskStore:
             and updated_at >= stale_before
         )
 
+    # Parked plan-first researches (waiting on the user) hold the user's slot while
+    # fresh, so a user cannot park N uncounted plans and then activate them all at once.
+    _PARKED_STATUSES = (ResearchStatus.CLARIFYING, ResearchStatus.PLAN_REVIEW)
+
+    @classmethod
+    def _is_fresh_parked(cls, research: ResearchRecord, stale_before: datetime) -> bool:
+        updated_at = research.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        return research.status in cls._PARKED_STATUSES and updated_at >= stale_before
+
     def _active_count(
         self,
         user_id: str | None,
         stale_before: datetime,
         *,
         include_queued: bool,
+        exclude_id: str | None = None,
+        include_parked: bool = True,
     ) -> int:
         records = self.researches.values()
         if user_id is not None:
             records = (record for record in records if record.user_id == user_id)
+        if exclude_id is not None:
+            records = (record for record in records if record.id != exclude_id)
         return sum(
             1
             for record in records
             if self._is_fresh_running(record, stale_before)
-            or (include_queued and record.status == ResearchStatus.QUEUED)
+            or (
+                include_queued
+                and (
+                    record.status == ResearchStatus.QUEUED
+                    or (include_parked and self._is_fresh_parked(record, stale_before))
+                )
+            )
         )
 
     def add_research_if_under_limit(
@@ -157,7 +178,15 @@ class InMemoryTaskStore:
                 return False
             if (
                 per_user_limit > 0
-                and self._active_count(research.user_id, stale_before, include_queued=True)
+                and self._active_count(
+                    research.user_id,
+                    stale_before,
+                    include_queued=True,
+                    exclude_id=research_id,
+                    # Activation needs running capacity only: parked siblings wait on
+                    # the user and consume nothing, so they must not block each other.
+                    include_parked=False,
+                )
                 >= per_user_limit
             ):
                 return False

@@ -257,7 +257,12 @@ class ResearchService(
     # Researches actively consuming search/LLM resources (vs. terminal or waiting on user).
     _RUNNING_STATUSES = {ResearchStatus.PROCESSING, ResearchStatus.ANALYZING}
     # A user's "in flight" research includes a queued one, so the per-user guard counts it.
-    _IN_FLIGHT_STATUSES = _RUNNING_STATUSES | {ResearchStatus.QUEUED}
+    # Fresh parked plan-first researches hold the slot too — otherwise N parked plans
+    # could be mass-activated past the limit via /plan/approve (ADMIT-ATOMIC).
+    _IN_FLIGHT_STATUSES = (
+        _RUNNING_STATUSES
+        | {ResearchStatus.QUEUED, ResearchStatus.CLARIFYING, ResearchStatus.PLAN_REVIEW}
+    )
 
     def _count_active(self, user_id: str | None, statuses: set) -> int:
         # Only count researches still making progress; a stalled one (dead worker /
@@ -2031,6 +2036,21 @@ class ResearchService(
             maintenance_summary=maintenance_summary,
         )
         return OperationalHealth.RecommendationEntry.model_validate(updated_recommendation)
+
+    def get_health_summary(self) -> dict:
+        """Cheap readiness signal for load balancers / healthchecks: pings only."""
+        db_ok = self.task_store.ping()
+        redis_status = "disabled" if self.broker is None else ("ok" if self.broker.ping() else "down")
+        llm_status = "ok" if self.llm_available else "down"
+        dependencies = {
+            "database": "ok" if db_ok else "down",
+            "redis": redis_status,
+            "llm": llm_status,
+        }
+        return {
+            "status": "ok" if db_ok and redis_status != "down" and llm_status == "ok" else "degraded",
+            "dependencies": dependencies,
+        }
 
     def get_health_status(self) -> dict:
         # Probe dependencies first so /health is a real readiness signal (AUD-036).

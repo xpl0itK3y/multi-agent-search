@@ -213,3 +213,83 @@ def test_try_claim_queued_is_atomic_once():
     assert store.try_claim_queued_research(rec.id) is True
     assert store.get_research(rec.id).status == ResearchStatus.PROCESSING
     assert store.try_claim_queued_research(rec.id) is False  # already claimed — no double promote
+
+
+def _park_plan(store, user_id, prompt):
+    record = store.add_research(
+        ResearchRequest(prompt=prompt, depth=SearchDepth.EASY, plan_first=True),
+        task_ids=[],
+        user_id=user_id,
+    )
+    store.update_research_graph_state(
+        record.id,
+        {"plan": [{"id": "planned-task-0", "description": "Search", "queries": ["q"]}]},
+    )
+    store.update_research_status(record.id, ResearchStatus.PLAN_REVIEW)
+    return record.id
+
+
+def test_fresh_parked_plan_holds_user_slot(monkeypatch):
+    monkeypatch.setattr(settings, "max_concurrent_researches", 1)
+    monkeypatch.setattr(settings, "max_global_active_researches", 0)
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    _park_plan(store, "u1", "parked topic here")
+
+    with pytest.raises(ConflictError):
+        service.start_research(
+            ResearchRequest(prompt="second topic here", depth=SearchDepth.EASY), user_id="u1"
+        )
+    # Another user is unaffected: parked plans hold their owner's slot only.
+    _, other = service.start_research(
+        ResearchRequest(prompt="other user topic here", depth=SearchDepth.EASY), user_id="u2"
+    )
+    assert store.get_research(other).status == ResearchStatus.PROCESSING
+
+
+def test_stale_parked_plan_releases_user_slot(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(settings, "max_concurrent_researches", 1)
+    monkeypatch.setattr(settings, "max_global_active_researches", 0)
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    parked_id = _park_plan(store, "u1", "abandoned plan topic here")
+    stale = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.research_stale_active_seconds + 60
+    )
+    store.researches[parked_id].updated_at = stale
+
+    _, research_id = service.start_research(
+        ResearchRequest(prompt="new topic after abandon here", depth=SearchDepth.EASY), user_id="u1"
+    )
+    assert store.get_research(research_id).status == ResearchStatus.PROCESSING
+
+
+def test_approve_admits_parked_plan_without_counting_itself(monkeypatch):
+    monkeypatch.setattr(settings, "max_concurrent_researches", 1)
+    monkeypatch.setattr(settings, "max_global_active_researches", 0)
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    parked_id = _park_plan(store, "u1", "lone plan topic here")
+
+    service.approve_research_plan(parked_id)
+    assert store.get_research(parked_id).status == ResearchStatus.PROCESSING
+
+
+def test_fresh_clarifying_holds_user_slot(monkeypatch):
+    monkeypatch.setattr(settings, "max_concurrent_researches", 1)
+    monkeypatch.setattr(settings, "max_global_active_researches", 0)
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    record = store.add_research(
+        ResearchRequest(prompt="clarify parked topic here", depth=SearchDepth.EASY, plan_first=True),
+        task_ids=[],
+        user_id="u1",
+    )
+    store.update_research_status(record.id, ResearchStatus.CLARIFYING)
+
+    with pytest.raises(ConflictError):
+        service.start_research(
+            ResearchRequest(prompt="blocked second topic here", depth=SearchDepth.EASY), user_id="u1"
+        )
