@@ -332,6 +332,7 @@ const ru = {
     authSwitchAccount: "Сменить аккаунт / Выйти",
     authNotAdminError: "Пользователь {email} успешно авторизован, но не имеет прав администратора.",
     authDefaultError: "Ошибка авторизации администратора",
+    loginPrompt: "Для доступа к панели администратора выполните вход в систему.",
     loadOverviewError: "Не удалось загрузить данные панели",
     tabs: {
       overview: "Обзор системы",
@@ -882,6 +883,7 @@ const en: typeof ru = {
     authSwitchAccount: "Switch account / Log out",
     authNotAdminError: "User {email} signed in successfully, but lacks administrator privileges.",
     authDefaultError: "Administrator authorization error",
+    loginPrompt: "Sign in to access the administrator panel.",
     loadOverviewError: "Failed to load admin overview",
     tabs: {
       overview: "System Overview",
@@ -1432,6 +1434,7 @@ const es: typeof ru = {
     authSwitchAccount: "Cambiar de cuenta / Cerrar sesión",
     authNotAdminError: "El usuario {email} ha iniciado sesión, pero no tiene privilegios de administrador.",
     authDefaultError: "Error de autorización de administrador",
+    loginPrompt: "Inicie sesión para acceder al panel de administración.",
     loadOverviewError: "Error al cargar los datos del panel",
     tabs: {
       overview: "Resumen del sistema",

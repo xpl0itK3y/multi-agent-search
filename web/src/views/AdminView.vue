@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { adminApi, api } from "@/lib/api";
+import { adminApi } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
@@ -11,6 +12,7 @@ import AgentsGraphTab from "@/components/admin/AgentsGraphTab.vue";
 import OperationsTab from "@/components/admin/OperationsTab.vue";
 
 const { t } = useI18n();
+const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
 
@@ -21,46 +23,16 @@ const overview = ref<AdminOverviewResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-// Admin login form state
-const adminEmail = ref("latundenis55@gmail.com");
-const adminPassword = ref("");
-const loginLoading = ref(false);
-const loginError = ref<string | null>(null);
-const googleEnabled = ref(false);
-
-async function checkGoogleAuth() {
-  try {
-    googleEnabled.value = (await api.authConfig()).google_oauth;
-  } catch {
-    googleEnabled.value = false;
-  }
-}
-
-function handleGoogleLogin() {
-  window.location.href = api.googleLoginUrl();
-}
-
-async function handleAdminLogin() {
-  if (loginLoading.value) return;
-  loginLoading.value = true;
-  loginError.value = null;
-  try {
-    await auth.login(adminEmail.value.trim(), adminPassword.value);
-    if (!auth.user?.is_admin) {
-      loginError.value = t("admin.authNotAdminError", { email: auth.user?.email || adminEmail.value });
-    } else {
-      await loadOverview();
-    }
-  } catch (err: any) {
-    loginError.value = err.message || t("admin.authDefaultError");
-  } finally {
-    loginLoading.value = false;
-  }
-}
-
 async function handleLogout() {
   await auth.logout();
   overview.value = null;
+  router.push("/login");
+}
+
+async function handleSwitchAccount() {
+  await auth.logout();
+  overview.value = null;
+  router.push({ path: "/login", query: { redirect: "/admin" } });
 }
 
 async function loadOverview() {
@@ -77,8 +49,11 @@ async function loadOverview() {
 }
 
 onMounted(() => {
-  checkGoogleAuth();
-  if (auth.user?.is_admin) {
+  if (!auth.user) {
+    router.replace({ path: "/login", query: { redirect: "/admin" } });
+    return;
+  }
+  if (auth.user.is_admin) {
     loadOverview();
   }
 });
@@ -86,18 +61,19 @@ onMounted(() => {
 
 <template>
   <div class="flex h-full flex-col overflow-y-auto bg-bg p-6 text-ink">
-    <!-- Unauthenticated or Non-Admin Authorization Guard -->
+    <!-- Non-Admin Authorization Guard (User is logged in, but not an admin) -->
     <div
       v-if="!auth.user?.is_admin"
       class="flex flex-1 items-center justify-center py-8"
     >
-      <div class="w-full max-w-md rounded-2xl border border-bd bg-surface/80 p-8 shadow-2xl backdrop-blur">
-        <!-- Language Switcher in Login Card -->
+      <div class="w-full max-w-md rounded-2xl border border-bd bg-surface/80 p-8 shadow-2xl backdrop-blur text-center">
+        <!-- Language Switcher in Guard Card -->
         <div class="mb-4 flex justify-end">
           <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono">
             <button
               v-for="loc in (['ru', 'en', 'es'] as const)"
               :key="loc"
+              type="button"
               class="rounded-lg px-2.5 py-1 text-[10.5px] font-bold uppercase transition"
               :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
               @click="ui.setLocale(loc)"
@@ -107,110 +83,35 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Shield Icon & Title -->
-        <div class="mb-6 flex flex-col items-center text-center">
-          <div class="grid h-16 w-16 place-items-center rounded-2xl bg-accent/15 text-3xl text-accent mb-3 shadow-inner">
+        <!-- Shield / Warning Icon & Title -->
+        <div class="mb-6 flex flex-col items-center">
+          <div class="grid h-16 w-16 place-items-center rounded-2xl bg-amber-500/15 text-3xl text-amber-400 mb-3 shadow-inner">
             🛡️
           </div>
           <h2 class="text-xl font-bold tracking-tight text-ink">
-            {{ t("admin.authAdminTitle") }}
+            {{ t("admin.authNotAdminWarning") }}
           </h2>
-          <p class="mt-1 text-xs text-muted max-w-xs leading-relaxed">
-            {{ t("admin.authAdminDesc", { email: "latundenis55@gmail.com" }) }}
+          <p class="mt-2 text-xs text-muted max-w-xs leading-relaxed">
+            {{ t("admin.authNotAdminDesc", { email: auth.user?.email || "" }) }}
           </p>
         </div>
 
-        <!-- Warning if logged in as a non-admin user -->
-        <div
-          v-if="auth.user"
-          class="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-300 space-y-2"
-        >
-          <div class="flex items-center gap-2 font-semibold">
-            <span>⚠️</span>
-            <span>{{ t("admin.authNotAdminWarning") }}</span>
-          </div>
-          <p class="text-[11px] text-amber-300/80">
-            {{ t("admin.authNotAdminDesc", { email: auth.user.email }) }}
-          </p>
+        <!-- Action Buttons -->
+        <div class="space-y-3">
           <button
-            class="mt-1 w-full rounded-lg border border-amber-500/40 bg-amber-500/20 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/30"
-            @click="handleLogout"
+            type="button"
+            class="w-full rounded-xl bg-accent py-2.5 text-xs font-bold text-white shadow transition hover:bg-accent/90"
+            @click="router.push('/')"
+          >
+            {{ t("admin.backToSearch") }}
+          </button>
+          <button
+            type="button"
+            class="w-full rounded-xl border border-bd bg-bg py-2.5 text-xs font-semibold text-muted transition hover:text-ink hover:border-accent/40"
+            @click="handleSwitchAccount"
           >
             {{ t("admin.authSwitchAccount") }}
           </button>
-        </div>
-
-        <!-- Google OAuth Button -->
-        <div v-if="googleEnabled" class="space-y-3">
-          <button
-            type="button"
-            class="flex w-full items-center justify-center gap-2.5 rounded-xl border border-bd bg-bg px-4 py-2.5 text-xs font-semibold text-ink shadow-sm transition hover:border-accent/60 hover:bg-surface/60"
-            @click="handleGoogleLogin"
-          >
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
-              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-            </svg>
-            <span>{{ t("admin.authGoogleLogin") }}</span>
-          </button>
-
-          <div class="flex items-center gap-3 text-xs text-muted">
-            <span class="h-px flex-1 bg-bd/60" />
-            <span class="text-[10px] uppercase font-bold tracking-wider">{{ t("admin.authOrPassword") }}</span>
-            <span class="h-px flex-1 bg-bd/60" />
-          </div>
-        </div>
-
-        <!-- Password login form -->
-        <form class="space-y-3 mt-3" @submit.prevent="handleAdminLogin">
-          <div>
-            <label class="block text-[10px] uppercase font-bold tracking-wider text-muted mb-1">
-              {{ t("admin.authEmailLabel") }}
-            </label>
-            <input
-              v-model="adminEmail"
-              type="email"
-              required
-              placeholder="latundenis55@gmail.com"
-              class="w-full rounded-xl border border-bd bg-bg px-3.5 py-2 font-mono text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label class="block text-[10px] uppercase font-bold tracking-wider text-muted mb-1">
-              {{ t("admin.authPasswordLabel") }}
-            </label>
-            <input
-              v-model="adminPassword"
-              type="password"
-              required
-              :placeholder="t('admin.authPasswordPlaceholder')"
-              class="w-full rounded-xl border border-bd bg-bg px-3.5 py-2 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
-            />
-            <p class="mt-1 text-[10px] text-muted leading-normal">
-              {{ t("admin.authPasswordHint") }}
-            </p>
-          </div>
-
-          <div v-if="loginError" class="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs text-red-400">
-            {{ loginError }}
-          </div>
-
-          <button
-            type="submit"
-            :disabled="loginLoading || !adminEmail || !adminPassword"
-            class="w-full rounded-xl bg-accent py-2.5 text-xs font-bold text-white shadow-lg transition hover:bg-accent/90 disabled:opacity-50"
-          >
-            {{ loginLoading ? t("admin.authLoggingIn") : t("admin.authLoginBtn") }}
-          </button>
-        </form>
-
-        <div class="mt-6 text-center border-t border-bd/60 pt-3">
-          <router-link to="/" class="text-xs text-muted hover:text-ink transition">
-            {{ t("admin.backToSearch") }}
-          </router-link>
         </div>
       </div>
     </div>

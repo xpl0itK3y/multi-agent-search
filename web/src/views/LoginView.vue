@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
+import { useUiStore } from "@/stores/ui";
 import SparkLogo from "@/components/SparkLogo.vue";
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const ui = useUiStore();
 
 const mode = ref<"login" | "register">("login");
 const email = ref("");
@@ -34,7 +37,8 @@ async function submit() {
   try {
     if (mode.value === "login") await auth.login(email.value.trim(), password.value);
     else await auth.register(email.value.trim(), password.value);
-    router.push("/");
+    const redirect = (route.query.redirect as string) || "/";
+    router.push(redirect);
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -46,6 +50,31 @@ async function submit() {
 <template>
   <div class="flex h-full items-center justify-center overflow-y-auto px-6">
     <div class="w-full max-w-sm">
+      <!-- Language Switcher -->
+      <div class="mb-4 flex justify-end">
+        <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono">
+          <button
+            v-for="loc in (['ru', 'en', 'es'] as const)"
+            :key="loc"
+            type="button"
+            class="rounded-lg px-2.5 py-1 text-[10.5px] font-bold uppercase transition"
+            :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+            @click="ui.setLocale(loc)"
+          >
+            {{ loc }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Admin redirect notification -->
+      <div
+        v-if="route.query.redirect === '/admin'"
+        class="mb-5 flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-xs text-accent"
+      >
+        <span class="text-base">🛡️</span>
+        <span class="font-medium">{{ $t("admin.loginPrompt") }}</span>
+      </div>
+
       <div class="mb-6 flex items-center justify-center gap-3">
         <SparkLogo :size="28" />
         <h1 class="font-serif text-2xl text-ink">
