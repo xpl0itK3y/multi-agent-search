@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { adminApi } from "@/lib/api";
 import type { AdminOverviewResponse } from "@/lib/types";
 import OverviewTab from "@/components/admin/OverviewTab.vue";
+import AnalyticsTab from "@/components/admin/AnalyticsTab.vue";
 
 const { t } = useI18n();
 
@@ -100,9 +101,7 @@ onMounted(() => {
       <div v-else>
         <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" />
 
-        <div v-else-if="activeTab === 'analytics'" class="rounded-xl border border-bd bg-surface/50 p-6">
-          <h2 class="text-base font-semibold">{{ t("admin.tabs.analytics") }}</h2>
-        </div>
+        <AnalyticsTab v-else-if="activeTab === 'analytics'" />
 
         <div v-else-if="activeTab === 'agents'" class="rounded-xl border border-bd bg-surface/50 p-6">
           <h2 class="text-base font-semibold">{{ t("admin.tabs.agents") }}</h2>
