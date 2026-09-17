@@ -11,4 +11,6 @@ def test_db_metadata_contains_core_tables():
         "research_finalize_jobs",
         "search_task_jobs",
         "worker_heartbeats",
+        "llm_usage_logs",
+        "admin_audit_logs",
     } <= table_names
