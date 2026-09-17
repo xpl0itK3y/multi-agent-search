@@ -45,6 +45,10 @@ services:
       USE_REDIS_BROKER: "true"
       LOG_FORMAT: json
       API_WORKERS: "2"
+      # Optional shared secret for /metrics (defense in depth on top of the
+      # internal-only network). When set, add the same token to the Prometheus
+      # scrape job's `authorization` block in ops/prometheus/prometheus.yml.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     # Multiple uvicorn worker processes for request/SSE concurrency. Safe across workers:
     # startup recovery is single-flighted (Redis lock), queue promotion claims atomically,
     # and SSE wakes via Redis pub/sub shared by all workers.
