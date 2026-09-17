@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi } from "@/lib/api";
 import type { AdminOverviewResponse } from "@/lib/types";
+import OverviewTab from "@/components/admin/OverviewTab.vue";
 
 const { t } = useI18n();
 
@@ -97,24 +98,7 @@ onMounted(() => {
         {{ error }}
       </div>
       <div v-else>
-        <!-- Placeholders will be replaced in Stage 5, 6, 7, 8 -->
-        <div v-if="activeTab === 'overview'" class="rounded-xl border border-bd bg-surface/50 p-6">
-          <h2 class="text-base font-semibold">{{ t("admin.tabs.overview") }}</h2>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div class="rounded-lg border border-bd bg-bg p-4">
-              <div class="text-xs text-muted">{{ t("admin.overview.activeResearches") }}</div>
-              <div class="mt-1 text-2xl font-bold">{{ overview?.active_researches_count ?? 0 }}</div>
-            </div>
-            <div class="rounded-lg border border-bd bg-bg p-4">
-              <div class="text-xs text-muted">{{ t("admin.overview.pendingTasks") }}</div>
-              <div class="mt-1 text-2xl font-bold">{{ overview?.pending_tasks_count ?? 0 }}</div>
-            </div>
-            <div class="rounded-lg border border-bd bg-bg p-4">
-              <div class="text-xs text-muted">{{ t("admin.overview.failedTasks") }}</div>
-              <div class="mt-1 text-2xl font-bold text-red-400">{{ overview?.failed_tasks_count ?? 0 }}</div>
-            </div>
-          </div>
-        </div>
+        <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" />
 
         <div v-else-if="activeTab === 'analytics'" class="rounded-xl border border-bd bg-surface/50 p-6">
           <h2 class="text-base font-semibold">{{ t("admin.tabs.analytics") }}</h2>
