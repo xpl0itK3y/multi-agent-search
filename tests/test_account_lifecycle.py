@@ -22,6 +22,9 @@ async def auth_client(monkeypatch):
     from src.config import settings
 
     monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
+    # The lifespan fails fast on an insecure secret when auth is on; CI has no
+    # AUTH_SECRET_KEY, so pin a strong one explicitly (a dev .env masked this locally).
+    monkeypatch.setattr(settings, "auth_secret_key", "ci-test-secret-" + "x" * 40, raising=False)
     # Don't leak this file's register hits into other tests' per-IP login window.
     reset_auth_rate_limiter()
     app = create_app()
