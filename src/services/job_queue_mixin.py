@@ -9,7 +9,18 @@ from datetime import datetime, timedelta, timezone
 from src.domain.errors import ConflictError, NotFoundError
 
 from src.config import settings
-from src.domain import *  # noqa: F401,F403
+from src.domain import (
+    FinalizeJobStatus,
+    JobCleanupResponse,
+    JobRecoveryResponse,
+    QueueMaintenanceResponse,
+    ResearchFinalizeJob,
+    ResearchStatus,
+    SearchJobStatus,
+    SearchTaskJob,
+    TaskStatus,
+    TaskUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +183,19 @@ class JobQueueMixin:
             logger.info("search_cache_cleaned deleted_count=%s", deleted)
         return deleted
 
+    def cleanup_old_researches(self) -> list[str]:
+        """Retention for finished researches (OPS-RETENTION). No-op by default:
+        research_retention_seconds=0 keeps everything, matching existing deployments."""
+        if settings.research_retention_seconds <= 0:
+            return []
+        older_than = datetime.now(timezone.utc) - timedelta(
+            seconds=settings.research_retention_seconds
+        )
+        deleted_ids = self.task_store.cleanup_old_researches(older_than)
+        if deleted_ids:
+            logger.info("researches_cleaned deleted_count=%s", len(deleted_ids))
+        return deleted_ids
+
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         self.recover_pending_decompositions()
         search_recovery = self.recover_stale_search_task_jobs()
@@ -179,6 +203,7 @@ class JobQueueMixin:
         search_cleanup = self.cleanup_old_search_task_jobs()
         finalize_cleanup = self.cleanup_old_research_finalize_jobs()
         self.cleanup_search_cache()
+        self.cleanup_old_researches()
         compacted_worker_names, compacted_research_ids = self.compact_graph_operational_data()
 
         recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count

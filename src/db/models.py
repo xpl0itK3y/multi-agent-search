@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,12 +36,24 @@ class ResearchORM(Base):
     __tablename__ = "researches"
     # Indexes also created by migrations; declared here so the models are the source of truth
     # and create_all() / drift checks match the migrated schema (AUD-037).
-    __table_args__ = (Index("ix_researches_status", "status"),)
+    __table_args__ = (
+        Index("ix_researches_status", "status"),
+        CheckConstraint(
+            "status IN ('queued','clarifying','plan_review','processing','analyzing',"
+            "'completed','failed','cancelled')",
+            name="ck_researches_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(8), nullable=False, default="unknown")
-    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Real FK: deleting a user cascades their researches (and via existing FKs, all
+    # tasks/results/jobs) — previously a manual user delete left data publicly served
+    # through surviving share tokens (DATA-LIFECYCLE).
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
     final_report: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -85,7 +97,13 @@ Index(
 
 class SearchTaskORM(Base):
     __tablename__ = "search_tasks"
-    __table_args__ = (Index("ix_search_tasks_status", "status"),)
+    __table_args__ = (
+        Index("ix_search_tasks_status", "status"),
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed')",
+            name="ck_search_tasks_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     research_id: Mapped[str | None] = mapped_column(
@@ -142,6 +160,10 @@ class ResearchFinalizeJobORM(Base):
     __tablename__ = "research_finalize_jobs"
     __table_args__ = (
         Index("ix_research_finalize_jobs_status", "status"),
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed','dead_letter')",
+            name="ck_research_finalize_jobs_status",
+        ),
         Index(
             "ix_research_finalize_jobs_pending",
             "created_at",
@@ -187,6 +209,10 @@ class SearchTaskJobORM(Base):
     __tablename__ = "search_task_jobs"
     __table_args__ = (
         Index("ix_search_task_jobs_status", "status"),
+        CheckConstraint(
+            "status IN ('pending','running','completed','failed','dead_letter')",
+            name="ck_search_task_jobs_status",
+        ),
         Index(
             "ix_search_task_jobs_pending",
             "created_at",

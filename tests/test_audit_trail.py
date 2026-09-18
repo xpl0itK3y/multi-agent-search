@@ -23,7 +23,7 @@ def _setup():
         "result": [{"url": "https://b.org/y", "title": "Y", "domain": "b.org", "source_quality": "medium", "content": "about y"}],
     })
     store.set_research_task_ids(rec.id, ["t1", "t2"])
-    store.update_research_graph_state(rec.id, {
+    store.merge_research_graph_state(rec.id, {
         "model": "deepseek-v4-pro",
         "llm_token_usage": {"prompt_tokens": 1000, "completion_tokens": 500, "estimated_cost_usd": 0.012},
         "analyze_attempts": 2, "replan_attempts": 1,

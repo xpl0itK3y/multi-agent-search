@@ -114,6 +114,34 @@ class AuthMixin:
         user = self.task_store.get_user_by_id(user_id)
         return self._to_auth_user(user) if user else None
 
+    def delete_user_account(
+        self,
+        user_id: str,
+        *,
+        current_password: str | None = None,
+        confirm: bool = False,
+    ) -> None:
+        """Delete the account and everything it owns (DATA-LIFECYCLE).
+
+        The DB cascade removes researches, tasks, results and jobs — which also revokes
+        every public share token the user had minted. Password (when the account has
+        one) plus an explicit confirm flag guard against accidents and CSRF-style abuse.
+        """
+        from src.auth.security import verify_password
+
+        if not confirm:
+            raise BadRequestError("Pass confirm=true to delete the account")
+        user = self.task_store.get_user_by_id(user_id)
+        if user is None:
+            raise UnauthorizedError("User not found")
+        if user.password_hash is not None:
+            if not current_password:
+                raise BadRequestError("Current password is required")
+            if not verify_password(current_password, user.password_hash):
+                raise UnauthorizedError("Current password is incorrect")
+        if not self.task_store.delete_user(user_id):
+            raise UnauthorizedError("User not found")
+
     @staticmethod
     def _to_auth_user(user) -> AuthUser:
         from src.config import settings

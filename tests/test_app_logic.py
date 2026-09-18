@@ -2687,7 +2687,7 @@ def test_research_decompose_incorporates_clarification_answers():
         "answers": ["2024"],
         "qa": [{"question": "When?", "answer": "2024"}],
     }
-    task_store.update_research_graph_state(research_id, state)
+    task_store.merge_research_graph_state(research_id, state)
 
     service.decompose_and_enqueue(research_id, request)
 
@@ -2909,7 +2909,7 @@ def test_list_thread_resolves_by_research_id_when_thread_id_lost():
     service = ResearchService(task_store=store)
     research = store.add_research(ResearchRequest(prompt="lost thread topic", depth=SearchDepth.EASY), task_ids=[])
     # Simulate a research whose thread_id got wiped from graph_state.
-    store.update_research_graph_state(research.id, {"some": "state"})
+    store.merge_research_graph_state(research.id, {"some": "state"})
     # /thread/<research_id> still resolves it (fallback to id match).
     thread = service.list_thread(research.id)
     assert [t.id for t in thread] == [research.id]

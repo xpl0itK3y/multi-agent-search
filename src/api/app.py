@@ -1,9 +1,13 @@
+import asyncio
+import contextlib
 import hmac
 import json
 import secrets
 import uuid
 import time
 from typing import List
+
+from starlette.concurrency import run_in_threadpool
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
@@ -33,6 +37,7 @@ from src.api.schemas import (
     AuthUser,
     AuthSession,
     SetPasswordRequest,
+    DeleteAccountRequest,
     DecomposeRequest,
     DecomposeResponse,
     LoginRequest,
@@ -212,6 +217,12 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/health")
     def health_check(request: Request):
+        # Cheap pings-only payload: this is the compose healthcheck and LB probe path.
+        return get_research_service(request).get_health_summary()
+
+    @app.get("/health/detail", dependencies=admin_guard)
+    def health_detail(request: Request):
+        """Full operational payload (queues, graph alerts, trends) — admin only."""
         return get_research_service(request).get_health_status()
 
     @app.post("/v1/auth/register", response_model=AuthSession, dependencies=auth_rate_limit)
@@ -299,8 +310,40 @@ def register_routes(app: FastAPI) -> None:
         token = _issue_session(response, updated_user)
         return AuthSession(access_token=token, user=updated_user)
 
+    @app.delete("/v1/auth/account")
+    def delete_account(
+        payload: DeleteAccountRequest,
+        response: Response,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        """Delete the account and all owned data (researches, results, share links).
+
+        No login-rate-limit here on purpose: this is not a credential-guessing
+        surface — it requires an authenticated session, the current password,
+        and passes through the CSRF middleware like every other mutation."""
+        get_research_service(request).delete_user_account(
+            user.id,
+            current_password=payload.current_password,
+            confirm=payload.confirm,
+        )
+        response.delete_cookie(settings.auth_cookie_name, path="/")
+        response.delete_cookie(settings.csrf_cookie_name, path="/")
+        return {"status": "deleted"}
+
     @app.get("/metrics")
-    def metrics_endpoint():
+    def metrics_endpoint(request: Request):
+        # Optional shared-secret guard: Prometheus authenticates via the scrape job's
+        # authorization config; a literal admin login would not work for scraping.
+        token = settings.metrics_token
+        if token:
+            supplied = request.headers.get("x-metrics-token", "")
+            if not supplied:
+                authorization = request.headers.get("authorization", "")
+                if authorization.startswith("Bearer "):
+                    supplied = authorization[len("Bearer "):]
+            if not hmac.compare_digest(supplied, token):
+                raise HTTPException(status_code=401, detail="Valid metrics token required")
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 
@@ -759,53 +802,59 @@ def register_routes(app: FastAPI) -> None:
         return answer
 
     @app.post("/v1/research/{research_id}/messages/stream", dependencies=research_guard)
-    def ask_research_stream(
+    async def ask_research_stream(
         research_id: str,
         payload: ChatAsk,
         request: Request,
         _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
     ):
-        """Stream a grounded follow-up answer token-by-token via SSE, then persist the turn."""
+        """Stream a grounded follow-up answer token-by-token via SSE, then persist the turn.
+
+        Async generator: the blocking LLM call runs on a worker thread bridged into an
+        asyncio.Queue, so an open stream parks zero threadpool tokens (PERF-SSE)."""
         service = get_research_service(request)
         question = payload.question
 
         def sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        def event_stream():
-            import queue
+        async def event_stream():
             import threading
 
-            channel: "queue.Queue" = queue.Queue()
+            loop = asyncio.get_running_loop()
+            channel: asyncio.Queue = asyncio.Queue()
 
-            def on_delta(partial: str) -> None:
-                channel.put(("delta", partial))
-
-            def on_status(status: str) -> None:
-                channel.put(("status", status))
+            def emit(kind: str, value) -> None:
+                loop.call_soon_threadsafe(channel.put_nowait, (kind, value))
 
             def worker() -> None:
                 try:
                     answer = service.generate_research_answer(
-                        research_id, question, streaming_callback=on_delta, status_callback=on_status
+                        research_id,
+                        question,
+                        streaming_callback=lambda partial: emit("delta", partial),
+                        status_callback=lambda status: emit("status", status),
                     )
-                    channel.put(("final", answer))
+                    emit("final", answer)
                 except ServiceError as exc:
-                    channel.put(("error", str(exc.detail)))
+                    emit("error", str(exc.detail))
                 except Exception as exc:  # pragma: no cover - defensive
-                    channel.put(("error", str(exc)))
+                    emit("error", str(exc))
 
             threading.Thread(target=worker, daemon=True, name=f"chat-{research_id[:8]}").start()
             yield ": connected\n\n"
             while True:
-                kind, value = channel.get()
+                kind, value = await channel.get()
                 if kind == "delta":
                     yield sse("delta", {"answer": value})
                 elif kind == "status":
                     yield sse("searching", {"status": value})
                 elif kind == "final":
-                    service.append_research_message(research_id, "user", question)
-                    service.append_research_message(
+                    await run_in_threadpool(
+                        service.append_research_message, research_id, "user", question
+                    )
+                    await run_in_threadpool(
+                        service.append_research_message,
                         research_id,
                         "assistant",
                         value.content,
@@ -834,14 +883,18 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).get_research_graph(research_id)
 
     @app.get("/v1/research/{research_id}/events", dependencies=research_guard)
-    def research_events(research_id: str, request: Request):
-        """Server-Sent Events stream: live status, graph trace and report deltas (F1)."""
+    async def research_events(research_id: str, request: Request):
+        """Server-Sent Events stream: live status, graph trace and report deltas (F1).
+
+        Async generator (PERF-SSE): DB reads hop to the threadpool and the Redis
+        pub/sub wait runs on redis.asyncio, so each open stream costs zero
+        threadpool tokens — /health stays responsive under many viewers."""
         service = get_research_service(request)
 
         def sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        def event_stream():
+        async def event_stream():
             last_status: str | None = None
             last_report: str | None = None
             last_reasoning: str | None = None
@@ -851,14 +904,20 @@ def register_routes(app: FastAPI) -> None:
             # a heartbeat timeout still re-reads + keeps the connection alive (and is the
             # fallback when no broker is configured).
             broker = getattr(service, "broker", None)
-            try:
-                listener = broker.research_listener(research_id) if broker is not None else None
-            except Exception:
+            async with contextlib.AsyncExitStack() as stack:
                 listener = None
-            yield ": connected\n\n"
-            try:
+                if broker is not None:
+                    try:
+                        listener = await stack.enter_async_context(
+                            broker.research_listener_async(research_id)
+                        )
+                    except Exception:
+                        listener = None
+                yield ": connected\n\n"
                 while time.monotonic() < deadline:
-                    research = service.task_store.get_research(research_id)
+                    research = await run_in_threadpool(
+                        service.task_store.get_research, research_id
+                    )
                     if research is None:
                         yield sse("stream_error", {"detail": "Research not found"})
                         yield sse("done", {"status": "failed"})
@@ -895,22 +954,16 @@ def register_routes(app: FastAPI) -> None:
 
                     if listener is not None:
                         try:
-                            woke = listener.get_message(timeout=15.0)
+                            woke = await listener.get_message(15.0)
                         except Exception:
                             woke = None
-                            time.sleep(1.0)
+                            await asyncio.sleep(1.0)
                         if woke is None:  # heartbeat — no change this interval
                             yield ": ping\n\n"
                     else:
-                        time.sleep(1.0)
+                        await asyncio.sleep(1.0)
 
                 yield sse("done", {"status": "timeout"})
-            finally:
-                if listener is not None:
-                    try:
-                        listener.close()
-                    except Exception:
-                        pass
 
         return StreamingResponse(
             event_stream(),

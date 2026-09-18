@@ -7,7 +7,6 @@ import json
 
 from src.domain.errors import ConflictError, NotFoundError, UnprocessableError
 
-from src.domain import *  # noqa: F401,F403
 
 
 class ExportMixin:

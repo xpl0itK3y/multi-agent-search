@@ -69,6 +69,9 @@ class TaskStore(Protocol):
 
     def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None: ...
 
+    # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
+    def delete_user(self, user_id: str) -> bool: ...
+
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None: ...
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None: ...
@@ -104,13 +107,13 @@ class TaskStore(Protocol):
         task_ids: list[str],
     ) -> ResearchRecord | None: ...
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None: ...
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None: ...
 
     def save_partial_report(self, research_id: str, partial: str) -> None: ...
 
@@ -291,6 +294,9 @@ class TaskStore(Protocol):
     def put_cached_search(self, cache_key: str, payload: list[dict]) -> None: ...
 
     def cleanup_search_cache(self, older_than: datetime) -> int: ...
+
+    # Retention: cascade-delete terminal researches past the retention window (OPS-RETENTION).
+    def cleanup_old_researches(self, older_than: datetime) -> list[str]: ...
 
     # ── admin & token tracking ────────────────────────────────────────────────
     def record_llm_usage(

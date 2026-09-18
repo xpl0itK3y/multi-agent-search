@@ -1,7 +1,6 @@
 from src.agents.optimizer import PromptOptimizerAgent
 from src.agents.orchestrator import OrchestratorAgent
 from src.api.schemas import SearchDepth
-import json
 
 def test_optimizer_agent_run(mock_llm):
     agent = PromptOptimizerAgent(mock_llm)

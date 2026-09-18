@@ -136,10 +136,6 @@ def test_finalize_service_discards_result_after_lease_recovery(monkeypatch):
     _, job = service.enqueue_research_finalization(research.id)
     assert job is not None
     analyzer.job_id = job.id
-    monkeypatch.setattr(
-        "src.services.research_service.settings.use_langgraph_finalize_graph",
-        False,
-    )
 
     processed = service.process_finalize_job(job.id)
 

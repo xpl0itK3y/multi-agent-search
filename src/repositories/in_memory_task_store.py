@@ -43,6 +43,8 @@ class InMemoryTaskStore:
         self.llm_usage_logs: list[dict] = []
         self.admin_audit_logs: list[AdminAuditLogItem] = []
         self._admission_lock = threading.RLock()
+        # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
+        self._state_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -100,21 +102,42 @@ class InMemoryTaskStore:
             and updated_at >= stale_before
         )
 
+    # Parked plan-first researches (waiting on the user) hold the user's slot while
+    # fresh, so a user cannot park N uncounted plans and then activate them all at once.
+    _PARKED_STATUSES = (ResearchStatus.CLARIFYING, ResearchStatus.PLAN_REVIEW)
+
+    @classmethod
+    def _is_fresh_parked(cls, research: ResearchRecord, stale_before: datetime) -> bool:
+        updated_at = research.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        return research.status in cls._PARKED_STATUSES and updated_at >= stale_before
+
     def _active_count(
         self,
         user_id: str | None,
         stale_before: datetime,
         *,
         include_queued: bool,
+        exclude_id: str | None = None,
+        include_parked: bool = True,
     ) -> int:
         records = self.researches.values()
         if user_id is not None:
             records = (record for record in records if record.user_id == user_id)
+        if exclude_id is not None:
+            records = (record for record in records if record.id != exclude_id)
         return sum(
             1
             for record in records
             if self._is_fresh_running(record, stale_before)
-            or (include_queued and record.status == ResearchStatus.QUEUED)
+            or (
+                include_queued
+                and (
+                    record.status == ResearchStatus.QUEUED
+                    or (include_parked and self._is_fresh_parked(record, stale_before))
+                )
+            )
         )
 
     def add_research_if_under_limit(
@@ -167,7 +190,15 @@ class InMemoryTaskStore:
                 return False
             if (
                 per_user_limit > 0
-                and self._active_count(research.user_id, stale_before, include_queued=True)
+                and self._active_count(
+                    research.user_id,
+                    stale_before,
+                    include_queued=True,
+                    exclude_id=research_id,
+                    # Activation needs running capacity only: parked siblings wait on
+                    # the user and consume nothing, so they must not block each other.
+                    include_parked=False,
+                )
                 >= per_user_limit
             ):
                 return False
@@ -210,6 +241,18 @@ class InMemoryTaskStore:
             None,
         )
 
+    def delete_user(self, user_id: str) -> bool:
+        if user_id not in self.users:
+            return False
+        del self.users[user_id]
+        # Mirror the SQL FK cascade: the user's researches (and their tasks) go too,
+        # which also revokes every public share token they had minted.
+        for research in [
+            record for record in self.researches.values() if record.user_id == user_id
+        ]:
+            self.delete_research(research.id)
+        return True
+
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         user = self.users.get(user_id)
         if user is None:
@@ -245,6 +288,23 @@ class InMemoryTaskStore:
         for tid in task_ids:
             del self.tasks[tid]
         return True
+
+    _TERMINAL_RESEARCH_STATUSES = (
+        ResearchStatus.COMPLETED,
+        ResearchStatus.FAILED,
+        ResearchStatus.CANCELLED,
+    )
+
+    def cleanup_old_researches(self, older_than: datetime) -> list[str]:
+        deleted_ids = [
+            research.id
+            for research in self.researches.values()
+            if research.status in self._TERMINAL_RESEARCH_STATUSES
+            and (research.updated_at or research.created_at) < older_than
+        ]
+        for research_id in deleted_ids:
+            self.delete_research(research_id)
+        return deleted_ids
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         records = self.researches.values()
@@ -388,26 +448,26 @@ class InMemoryTaskStore:
         research.updated_at = datetime.now(timezone.utc)
         return research
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        research.graph_state = graph_state or {}
-        research.updated_at = datetime.now(timezone.utc)
-        return research
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        if patch:
-            research.graph_state = {**(research.graph_state or {}), **patch}
-            research.updated_at = datetime.now(timezone.utc)
-        return research
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            patch = patch or {}
+            remove_keys = remove_keys or []
+            if patch or remove_keys:
+                merged = {**(research.graph_state or {}), **patch}
+                for key in remove_keys:
+                    merged.pop(key, None)
+                research.graph_state = merged
+                research.updated_at = datetime.now(timezone.utc)
+            return research
 
     def save_partial_report(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)

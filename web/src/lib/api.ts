@@ -67,6 +67,61 @@ export function authHeaders(method = "GET"): Record<string, string> {
   return headers;
 }
 
+// Typed error for every non-2xx API response. `detail` is the server-provided
+// reason (FastAPI's `detail` field when present), `status` the HTTP code.
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`${status} ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// FastAPI errors are `{"detail": ...}` — prefer that, then any JSON string
+// body, then a truncated non-JSON body, and finally the status text.
+async function errorDetail(res: Response): Promise<string> {
+  const raw = (await res.text().catch(() => "")).trim();
+  if (raw) {
+    try {
+      const body: unknown = JSON.parse(raw);
+      if (typeof body === "string" && body.trim()) return body.trim();
+      if (body && typeof body === "object") {
+        const detail = (body as { detail?: unknown }).detail;
+        if (typeof detail === "string" && detail.trim()) return detail.trim();
+        if (detail != null) return JSON.stringify(detail);
+      }
+    } catch {
+      // Not JSON (e.g. an HTML error page) — show a slice of the raw body.
+      return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+    }
+  }
+  return res.statusText || `HTTP ${res.status}`;
+}
+
+export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
+  return new ApiError(res.status, await errorDetail(res));
+}
+
+// Routes that legitimately make unauthenticated calls — the public share page,
+// and /login itself (redirecting there from a failed sign-in would loop).
+function isPublicPath(pathname: string): boolean {
+  return pathname === "/login" || pathname.startsWith("/r/");
+}
+
+// A stored bearer token the server just rejected is stale — drop it and bounce
+// to /login (with a `redirect` back param) so the user can re-authenticate.
+function recoverFromExpiredSession(hadToken: boolean): void {
+  if (!hadToken) return;
+  const { pathname, search } = window.location;
+  if (isPublicPath(pathname)) return;
+  setAuthToken(null);
+  window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? "GET";
   const headers: Record<string, string> = {
@@ -74,17 +129,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...((init?.headers as Record<string, string>) ?? {}),
     ...authHeaders(method),
   };
+  const hadToken = authToken !== null;
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     ...init,
     headers,
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status} ${detail}`);
+    if (res.status === 401) recoverFromExpiredSession(hadToken);
+    throw await apiErrorFromResponse(res);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// Frequent HTTP statuses → `errors.api.*` i18n keys (see web/src/i18n/index.ts).
+const API_STATUS_KEYS: Record<number, string> = {
+  401: "unauthorized",
+  403: "forbidden",
+  404: "notFound",
+  409: "conflict",
+  422: "validation",
+  429: "rateLimited",
+  500: "server",
+};
+
+// Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
+// statuses get a translated text; anything else falls back to the server
+// detail, and network-level failures (fetch's TypeError) to a network text.
+export function apiErrorMessage(err: unknown, t: (key: string) => string): string {
+  if (err instanceof ApiError) {
+    const key = API_STATUS_KEYS[err.status];
+    if (key) return t(`errors.api.${key}`);
+    return err.detail || t("errors.api.unexpected");
+  }
+  if (err instanceof TypeError) return t("errors.api.network");
+  if (err instanceof Error && err.message) return err.message;
+  return t("errors.api.unexpected");
 }
 
 export const api = {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import SparkLogo from "@/components/SparkLogo.vue";
@@ -10,6 +11,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
+const { t } = useI18n();
 
 const mode = ref<"login" | "register">("login");
 const email = ref("");
@@ -40,7 +42,7 @@ async function submit() {
     const redirect = (route.query.redirect as string) || "/";
     router.push(redirect);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     busy.value = false;
   }

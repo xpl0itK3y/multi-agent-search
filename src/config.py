@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     langsmith_project: Optional[str] = None
     log_format: str = "text"
     prometheus_metrics_enabled: bool = True
+    # When set, /metrics requires this shared secret (Bearer or X-Metrics-Token).
+    # Prometheus sends it via the scrape job's authorization config. Empty = open
+    # (only safe on an internal network — nginx already blocks external /metrics).
+    metrics_token: str = ""
 
     app_name: str = "Prompt Optimizer API"
     debug: bool = False
@@ -97,6 +101,9 @@ class Settings(BaseSettings):
     finalize_job_timeout_seconds: int = 600
     search_job_retention_seconds: int = 86400
     finalize_job_retention_seconds: int = 86400
+    # Terminal researches older than this are cascade-deleted by maintenance.
+    # 0 (default) keeps researches forever — existing deployments are unchanged.
+    research_retention_seconds: int = 0
     search_extraction_concurrency: int = 4
     search_extraction_timeout_seconds: int = 12
     search_extraction_max_redirects: int = 1
@@ -128,7 +135,6 @@ class Settings(BaseSettings):
     analyzer_conflict_source_limit: int = 12
     analyzer_evidence_source_limit: int = 12
     analyzer_local_repair_issue_threshold: int = 20
-    use_langgraph_finalize_graph: bool = True
     # Deep-research loop is on by default but bounded by the finalize budget below.
     # Set any of these to 0 to disable that branch (faster, shallower finalize).
     langgraph_replan_max_loops: int = 1
