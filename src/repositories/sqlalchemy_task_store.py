@@ -1,6 +1,6 @@
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
@@ -105,6 +105,8 @@ class SQLAlchemyTaskStore:
         stale_before: datetime,
         *,
         include_queued: bool,
+        exclude_id: str | None = None,
+        include_parked: bool = True,
     ) -> int:
         running = and_(
             ResearchORM.status.in_(
@@ -112,14 +114,25 @@ class SQLAlchemyTaskStore:
             ),
             ResearchORM.updated_at >= stale_before,
         )
-        status_filter = (
-            or_(running, ResearchORM.status == ResearchStatus.QUEUED.value)
-            if include_queued
-            else running
-        )
+        if include_queued:
+            status_filter = or_(running, ResearchORM.status == ResearchStatus.QUEUED.value)
+            if include_parked:
+                # Parked plan-first researches hold the user's slot while fresh, so a
+                # user cannot park N uncounted plans and then activate them all at once.
+                parked = and_(
+                    ResearchORM.status.in_(
+                        [ResearchStatus.CLARIFYING.value, ResearchStatus.PLAN_REVIEW.value]
+                    ),
+                    ResearchORM.updated_at >= stale_before,
+                )
+                status_filter = or_(status_filter, parked)
+        else:
+            status_filter = running
         statement = select(func.count()).select_from(ResearchORM).where(status_filter)
         if user_id is not None:
             statement = statement.where(ResearchORM.user_id == user_id)
+        if exclude_id is not None:
+            statement = statement.where(ResearchORM.id != exclude_id)
         return int(session.execute(statement).scalar_one())
 
     def add_research_if_under_limit(
@@ -176,17 +189,25 @@ class SQLAlchemyTaskStore:
             research = session.get(ResearchORM, research_id)
             if research is None or research.status != expected_status.value:
                 return False
+            # The parked research being admitted must not count against itself, and
+            # activation needs running capacity only — parked siblings wait on the
+            # user and consume nothing, so they must not block each other.
             if (
                 per_user_limit > 0
                 and self._active_count(
-                    session, research.user_id, stale_before, include_queued=True
+                    session,
+                    research.user_id,
+                    stale_before,
+                    include_queued=True,
+                    exclude_id=research_id,
+                    include_parked=False,
                 ) >= per_user_limit
             ):
                 return False
             if (
                 global_limit > 0
                 and self._active_count(
-                    session, None, stale_before, include_queued=False
+                    session, None, stale_before, include_queued=False, exclude_id=research_id
                 ) >= global_limit
             ):
                 return False
@@ -269,6 +290,16 @@ class SQLAlchemyTaskStore:
                 avatar_url=user.avatar_url,
             )
 
+    def delete_user(self, user_id: str) -> bool:
+        """Delete a user; researches (and via FK cascades: tasks, results, jobs,
+        share tokens inside graph_state) are removed with them (DATA-LIFECYCLE)."""
+        with self.session_scope() as session:
+            user = session.get(UserORM, user_id)
+            if user is None:
+                return False
+            session.delete(user)
+            return True
+
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
         with self.session_scope() as session:
             statement = (
@@ -336,6 +367,27 @@ class SQLAlchemyTaskStore:
                 return False
             session.delete(research)
             return True
+
+    # Retention (OPS-RETENTION): terminal researches past the window are removed
+    # with their tasks/results via the existing ON DELETE CASCADEs.
+    _TERMINAL_RESEARCH_STATUSES = (
+        ResearchStatus.COMPLETED,
+        ResearchStatus.FAILED,
+        ResearchStatus.CANCELLED,
+    )
+
+    def cleanup_old_researches(self, older_than: datetime) -> list[str]:
+        terminal = [status.value for status in self._TERMINAL_RESEARCH_STATUSES]
+        with self.session_scope() as session:
+            research_ids = session.execute(
+                select(ResearchORM.id).where(
+                    ResearchORM.status.in_(terminal),
+                    ResearchORM.updated_at < older_than,
+                )
+            ).scalars().all()
+            if research_ids:
+                session.execute(delete(ResearchORM).where(ResearchORM.id.in_(research_ids)))
+            return list(research_ids)
 
     @staticmethod
     def _research_history_select():
@@ -515,26 +567,19 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
-    def update_research_graph_state(
+    def merge_research_graph_state(
         self,
         research_id: str,
-        graph_state: dict,
+        patch: dict | None = None,
+        *,
+        remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None:
-        with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
-                return None
-
-            research.graph_state = graph_state or {}
-            research.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(research)
-            return research_orm_to_record(research)
-
-    def merge_research_graph_state(self, research_id: str, patch: dict) -> ResearchRecord | None:
-        """Atomically merge `patch` into graph_state under a row lock, so concurrent writers
-        can't clobber each other's keys (AUD-014). Replaces the read-then-write pattern."""
-        if not patch:
+        """Atomically merge `patch` into graph_state (and drop `remove_keys`) under a row
+        lock, so concurrent writers can't clobber each other's keys (AUD-014). Replaces
+        the read-then-write pattern, which must not be reintroduced."""
+        patch = patch or {}
+        remove_keys = remove_keys or []
+        if not patch and not remove_keys:
             return self.get_research(research_id)
         with self.session_scope() as session:
             research = session.execute(
@@ -542,7 +587,10 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if research is None:
                 return None
-            research.graph_state = {**(research.graph_state or {}), **patch}
+            merged = {**(research.graph_state or {}), **patch}
+            for key in remove_keys:
+                merged.pop(key, None)
+            research.graph_state = merged
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
@@ -593,16 +641,34 @@ class SQLAlchemyTaskStore:
         return result
 
     def compact_research_graph_trails(self) -> list[str]:
+        # Bounded working set (OPS-RETENTION): only recently-active researches still grow a
+        # trail, so older rows are skipped; fetching id+graph_trail in batches avoids
+        # loading full rows (report blobs, graph_state) into worker memory each pass.
+        from src.config import settings as _settings
+
+        horizon = datetime.now(timezone.utc) - timedelta(
+            seconds=_settings.graph_trail_retention_seconds
+        )
+        compacted_ids: list[str] = []
         with self.session_scope() as session:
-            researches = session.execute(select(ResearchORM)).scalars().all()
-            compacted_ids: list[str] = []
-            for research in researches:
-                compacted_trail = compact_graph_trail(research.graph_trail or [], [])
-                if compacted_trail != (research.graph_trail or []):
-                    research.graph_trail = compacted_trail
-                    research.updated_at = datetime.now(timezone.utc)
-                    compacted_ids.append(research.id)
-            return compacted_ids
+            statement = (
+                select(ResearchORM.id, ResearchORM.graph_trail)
+                .where(ResearchORM.updated_at >= horizon)
+                .execution_options(yield_per=200)
+            )
+            for research_id, graph_trail in session.execute(statement):
+                compacted_trail = compact_graph_trail(graph_trail or [], [])
+                if compacted_trail != (graph_trail or []):
+                    session.execute(
+                        update(ResearchORM)
+                        .where(ResearchORM.id == research_id)
+                        .values(
+                            graph_trail=compacted_trail,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    compacted_ids.append(research_id)
+        return compacted_ids
 
     def add_research_finalize_job(
         self,

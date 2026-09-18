@@ -57,7 +57,7 @@ async def run_level(base, path, headers, concurrency, duration):
         stop_at = time.monotonic() + duration
         await asyncio.gather(*[_worker(client, path, headers, stop_at, out) for _ in range(concurrency)])
     total = len(out)
-    lat = [l for l, _ in out]
+    lat = [ms for ms, _ in out]
     errs = sum(1 for _, s in out if s == 0 or s >= 500)
     rps = total / duration
     print(
@@ -76,12 +76,12 @@ async def main():
     levels = [int(x) for x in args.levels.split(",")]
 
     token = await get_token(args.base)
-    print(f"\n=== /v1/models (no DB, no auth) — raw request handling ===")
+    print("\n=== /v1/models (no DB, no auth) — raw request handling ===")
     for c in levels:
         await run_level(args.base, "/v1/models", {}, c, args.duration)
 
     if token:
-        print(f"\n=== /v1/auth/me (authed DB read — pgbouncer + pool) ===")
+        print("\n=== /v1/auth/me (authed DB read — pgbouncer + pool) ===")
         hdr = {"Authorization": f"Bearer {token}"}
         for c in levels:
             await run_level(args.base, "/v1/auth/me", hdr, c, args.duration)

@@ -1,0 +1,123 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// api.ts touches localStorage / document.cookie at import time and
+// window.location on 401 recovery — stub the globals before each dynamic import.
+function stubEnv(token: string | null, pathname: string, search = "") {
+  const assign = vi.fn();
+  const removeItem = vi.fn();
+  vi.stubGlobal("localStorage", {
+    getItem: vi.fn(() => token),
+    setItem: vi.fn(),
+    removeItem,
+  });
+  vi.stubGlobal("document", { cookie: "" });
+  vi.stubGlobal("window", { location: { pathname, search, assign } });
+  return { assign, removeItem };
+}
+
+describe("api request error handling", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("throws a typed ApiError with the JSON detail from the body", async () => {
+    const { assign } = stubEnv(null, "/research/abc");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "research not found" }), { status: 404 }),
+      ),
+    );
+
+    const { api, ApiError } = await import("./api");
+    const err: unknown = await api.getReport("abc").catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as InstanceType<typeof ApiError>).status).toBe(404);
+    expect((err as InstanceType<typeof ApiError>).detail).toBe("research not found");
+    expect((err as Error).message).toBe("404 research not found");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("falls back to statusText when the error body has no detail", async () => {
+    stubEnv(null, "/research/abc");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 500, statusText: "Internal Server Error" })),
+    );
+
+    const { api, ApiError } = await import("./api");
+    const err: unknown = await api.getReport("abc").catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as InstanceType<typeof ApiError>).detail).toBe("Internal Server Error");
+  });
+
+  it("on 401 with a stored token: clears it and redirects to /login with a redirect param", async () => {
+    const { assign, removeItem } = stubEnv("stale-token", "/research/abc", "?tab=sources");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "token expired" }), { status: 401 }),
+      ),
+    );
+
+    const { api } = await import("./api");
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    expect(assign).toHaveBeenCalledOnce();
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fresearch%2Fabc%3Ftab%3Dsources");
+  });
+
+  it("on 401 without a stored token: no redirect (unauthenticated page)", async () => {
+    const { assign, removeItem } = stubEnv(null, "/research/abc");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+    const { api } = await import("./api");
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  it("on 401 on public routes (/r/…, /login): no redirect loop", async () => {
+    for (const pathname of ["/r/share-token", "/login"]) {
+      const { assign } = stubEnv("stale-token", pathname);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+      const { api } = await import("./api");
+      await expect(api.getPublicReport("t")).rejects.toMatchObject({ status: 401 });
+      expect(assign).not.toHaveBeenCalled();
+
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("apiErrorMessage", () => {
+  it("maps frequent statuses to errors.api.* keys", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    expect(apiErrorMessage(new ApiError(401, "nope"), t)).toBe("[errors.api.unauthorized]");
+    expect(apiErrorMessage(new ApiError(429, "slow down"), t)).toBe("[errors.api.rateLimited]");
+    expect(apiErrorMessage(new ApiError(500, "boom"), t)).toBe("[errors.api.server]");
+  });
+
+  it("falls back to the server detail, network and generic texts", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    expect(apiErrorMessage(new ApiError(418, "teapot"), t)).toBe("teapot");
+    expect(apiErrorMessage(new ApiError(418, ""), t)).toBe("[errors.api.unexpected]");
+    expect(apiErrorMessage(new TypeError("fetch failed"), t)).toBe("[errors.api.network]");
+    expect(apiErrorMessage(new Error("custom"), t)).toBe("custom");
+  });
+});

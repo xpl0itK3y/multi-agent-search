@@ -35,6 +35,7 @@ class RedisBroker:
     def __init__(self, redis_url: str, pop_timeout_seconds: int = 2) -> None:
         # socket_timeout must exceed the BLPOP server-side timeout so a normal empty poll
         # doesn't trip it, while still bounding a silently-dropped connection.
+        self._redis_url = redis_url
         self._client = redis.from_url(
             redis_url,
             decode_responses=True,
@@ -120,6 +121,11 @@ class RedisBroker:
         pubsub.subscribe(self._research_channel(research_id))
         return pubsub
 
+    def research_listener_async(self, research_id: str) -> "AsyncResearchListener":
+        """Async pub/sub for one research's channel — for async SSE generators that
+        must not park a threadpool token per open stream (PERF-SSE)."""
+        return AsyncResearchListener(self._redis_url, self._research_channel(research_id))
+
     def try_acquire_lock(self, name: str, ttl_seconds: int = 30) -> bool:
         """Best-effort single-flight lock (SET NX EX). True if acquired. On Redis error,
         returns True so a single-process deployment still runs the guarded work."""
@@ -156,3 +162,40 @@ class RedisBroker:
             self._client.close()
         except Exception:
             pass
+
+
+class AsyncResearchListener:
+    """One research channel over redis.asyncio, for use in async SSE generators.
+
+    Use as an async context manager; `get_message` returns None after `timeout`
+    seconds (heartbeat) or a message when the research changed. A dedicated
+    connection per listener: streams are long-lived, so the per-SSE cost is one
+    Redis connection and zero event-loop blocking.
+    """
+
+    def __init__(self, redis_url: str, channel: str) -> None:
+        self._redis_url = redis_url
+        self._channel = channel
+        self._client = None
+        self._pubsub = None
+
+    async def __aenter__(self) -> "AsyncResearchListener":
+        import redis.asyncio as aioredis
+
+        self._client = aioredis.from_url(self._redis_url, decode_responses=True)
+        self._pubsub = self._client.pubsub(ignore_subscribe_messages=True)
+        await self._pubsub.subscribe(self._channel)
+        return self
+
+    async def get_message(self, timeout: float = 15.0):
+        return await self._pubsub.get_message(timeout=timeout)
+
+    async def __aexit__(self, *exc_info) -> bool:
+        for closer in (getattr(self._pubsub, "aclose", None), getattr(self._client, "aclose", None)):
+            if closer is None:
+                continue
+            try:
+                await closer()
+            except Exception:
+                pass
+        return False

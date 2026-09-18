@@ -3,12 +3,16 @@ extracted as a mixin (AUD-030). Composed into ResearchService; the builders call
 remain on ResearchService (self._build_graph_alerts, self._filter_graph_step_events, etc.) via
 normal composition.
 """
-import json
-import time
 from datetime import datetime, timezone
 
-from src.config import settings
-from src.domain import *  # noqa: F401,F403 (op-health builders reference many domain models)
+from src.domain import (
+    GraphAlert,
+    GraphAlertHistoryEntry,
+    GraphAlertTrend,
+    MaintenanceSummary,
+    OperationalHealth,
+    QueueMetrics,
+)
 
 
 class OperationalHealthMixin:

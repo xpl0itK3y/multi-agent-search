@@ -536,6 +536,12 @@ class SetPasswordRequest(BaseModel):
     current_password: Optional[str] = Field(default=None, max_length=200)
 
 
+class DeleteAccountRequest(BaseModel):
+    """Account deletion (DATA-LIFECYCLE): destructive, cascades all owned data."""
+    current_password: Optional[str] = Field(default=None, max_length=200)
+    confirm: bool = Field(default=False)
+
+
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=200)
     password: str = Field(..., min_length=1, max_length=200)

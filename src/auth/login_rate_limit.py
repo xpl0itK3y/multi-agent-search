@@ -39,6 +39,12 @@ class SlidingWindowLimiter:
 _auth_limiter = SlidingWindowLimiter()
 
 
+def reset_auth_rate_limiter() -> None:
+    """Test hook: drop all recorded hits so suites don't share the per-IP window."""
+    with _auth_limiter._lock:
+        _auth_limiter._hits.clear()
+
+
 def enforce_auth_rate_limit(request: Request) -> None:
     if settings.auth_disabled:
         return

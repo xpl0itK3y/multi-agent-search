@@ -1,0 +1,40 @@
+groups:
+  - name: multi-agent-search
+    rules:
+      - alert: WorkerDown
+        expr: up{job="multi-agent-search-workers"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker {{ $labels.worker }} is down"
+          description: "Prometheus has been unable to scrape worker {{ $labels.worker }} at {{ $labels.instance }} for more than 1 minute."
+
+      - alert: APIDown
+        expr: up{job="multi-agent-search-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API is down"
+          description: "Prometheus has been unable to scrape the API /metrics endpoint at {{ $labels.instance }} for more than 1 minute."
+
+      - alert: DeadLetterQueueGrowth
+        expr: max by (job_type) (increase(mas_queue_jobs{status="dead_letter"}[30m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter {{ $labels.job_type }} queue is growing"
+          description: "Dead-letter {{ $labels.job_type }} jobs had a net increase over the last 30 minutes and the condition has held for 5 minutes."
+
+      - alert: APIHighErrorRate
+        expr: >
+          sum(rate(mas_api_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(mas_api_requests_total[5m])), 1e-9) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx error rate above 5%"
+          description: "More than 5% of API responses were 5xx for 10 minutes (currently {{ $value | humanizePercentage }})."

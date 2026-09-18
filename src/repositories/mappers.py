@@ -5,7 +5,6 @@ from src.domain import (
     FinalizeJobStatus,
     GraphMetrics,
     MaintenanceSummary,
-    QueueMetrics,
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchTaskJob,

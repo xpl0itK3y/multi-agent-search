@@ -3,11 +3,7 @@ import pytest
 
 from src.api.app import create_app
 from src.core.llm import LLMProvider
-from tests.postgres_helpers import (
-    create_postgres_session_factory,
-    require_postgres,
-    truncate_runtime_tables,
-)
+from tests.postgres_helpers import truncate_runtime_tables
 
 
 class MockLLMProvider(LLMProvider):
@@ -41,12 +37,25 @@ async def client():
             yield test_client
 
 
+@pytest.fixture(scope="session")
+def _postgres_test_db():
+    """Session-scoped throwaway database, migrated to head (never the dev DB —
+    it may sit on another branch's alembic revision)."""
+    from tests.postgres_helpers import (
+        POSTGRES_TEST_DATABASE,
+        create_migrated_throwaway_database,
+        drop_throwaway_database,
+        server_base_url,
+    )
+
+    engine, session_factory = create_migrated_throwaway_database(POSTGRES_TEST_DATABASE)
+    yield engine, session_factory
+    engine.dispose()
+    drop_throwaway_database(server_base_url(), POSTGRES_TEST_DATABASE)
+
+
 @pytest.fixture
-def postgres_session_factory():
-    engine, session_factory = create_postgres_session_factory()
-    require_postgres(session_factory)
+def postgres_session_factory(_postgres_test_db):
+    engine, session_factory = _postgres_test_db
     truncate_runtime_tables(session_factory)
-    try:
-        yield session_factory
-    finally:
-        engine.dispose()
+    yield session_factory

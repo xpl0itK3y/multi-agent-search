@@ -100,7 +100,7 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
         ResearchRequest(prompt="research topic", depth=SearchDepth.MEDIUM),
         task_ids=[],
     )
-    updated_state = store.update_research_graph_state(
+    updated_state = store.merge_research_graph_state(
         research.id,
         {"step": "collect_context", "analyze_attempts": 0},
     )
@@ -139,12 +139,14 @@ def test_research_history_uses_lookup_indexes_and_preserves_summary_fields(
     postgres_session_factory,
 ):
     store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("history-user")  # users survive truncate_runtime_tables between runs
+    store.create_user("history-user", "history-user@example.com", None)
     research = store.add_research(
         ResearchRequest(prompt="indexed history topic", depth=SearchDepth.MEDIUM),
         task_ids=[],
         user_id="history-user",
     )
-    store.update_research_graph_state(
+    store.merge_research_graph_state(
         research.id,
         {
             "title": "Indexed history",
@@ -262,6 +264,8 @@ def test_sqlalchemy_task_store_persists_search_jobs(postgres_session_factory):
 @pytest.mark.postgres
 def test_sqlalchemy_task_and_jobs_are_scoped_to_research_owner(postgres_session_factory):
     store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("owner-a")  # users survive truncate_runtime_tables between runs
+    store.create_user("owner-a", "owner-a@example.com", None)
     research = store.add_research(
         ResearchRequest(prompt="owned research topic", depth=SearchDepth.EASY),
         task_ids=[],

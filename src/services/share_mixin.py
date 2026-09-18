@@ -6,8 +6,20 @@ import logging
 import secrets
 
 from src.domain.errors import ConflictError, NotFoundError
+from src.domain import (
+    CitationAudit,
+    ConfidenceReport,
+    CrossLanguageReport,
+    NumericCheck,
+    PublicReport,
+    RedTeamReport,
+    ShareInfo,
+    SourceIndependence,
+    SourceIntegrity,
+    SourceReputation,
+    StanceBalance,
+)
 
-from src.domain import *  # noqa: F401,F403
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +32,10 @@ class ShareMixin:
             raise NotFoundError("Research not found")
         if not research.final_report:
             raise ConflictError("Report is not ready yet")
-        state = dict(research.graph_state or {})
-        token = state.get("share_token")
+        token = (research.graph_state or {}).get("share_token")
         if not token:
             token = secrets.token_urlsafe(32)  # 256-bit, non-sequential
-            state["share_token"] = token
-            self.task_store.update_research_graph_state(research_id, state)
+            self.task_store.merge_research_graph_state(research_id, {"share_token": token})
             logger.info("share_link_created research_id=%s", research_id)
         return ShareInfo(shared=True, token=token)
 
@@ -34,9 +44,10 @@ class ShareMixin:
         research = self.task_store.get_research(research_id)
         if not research:
             raise NotFoundError("Research not found")
-        state = dict(research.graph_state or {})
-        if state.pop("share_token", None) is not None:
-            self.task_store.update_research_graph_state(research_id, state)
+        if (research.graph_state or {}).get("share_token"):
+            self.task_store.merge_research_graph_state(
+                research_id, remove_keys=["share_token"]
+            )
             logger.info("share_link_revoked research_id=%s", research_id)
         return ShareInfo(shared=False, token="")
 

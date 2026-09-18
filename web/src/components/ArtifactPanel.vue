@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, apiErrorFromResponse, apiErrorMessage } from "@/lib/api";
 import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
@@ -386,6 +386,7 @@ function stepLabel(step: string): string {
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
+const exportError = ref<string | null>(null);
 const exportMenuOpen = ref(false);
 const siteMenuOpen = ref(false);
 const siteThemes = [
@@ -410,6 +411,7 @@ function saveBlob(blob: Blob, name: string) {
 
 async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trail", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
+  exportError.value = null;
   try {
     const params = new URLSearchParams({ format: fmt });
     if (opts?.theme) params.set("theme", opts.theme);
@@ -418,8 +420,11 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     const res = await fetch(`${BASE}/v1/research/${props.id}/export?${params.toString()}`, {
       credentials: "include",
     });
-    if (!res.ok) return;
+    if (!res.ok) throw await apiErrorFromResponse(res);
     saveBlob(await res.blob(), filenameFrom(res, fmt === "trail" ? "audit-trail.md" : `research.${fmt}`));
+  } catch (e) {
+    // Failed download must be visible — previously a non-2xx silently did nothing.
+    exportError.value = apiErrorMessage(e, t);
   } finally {
     exporting.value = null;
     siteMenuOpen.value = false;
@@ -535,6 +540,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
         </div>
       </div>
       <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.dataGroup") }} · {{ $t("artifact.webGroup") }}</span>
+      <p v-if="exportError" class="ml-auto text-xs text-red-400">{{ exportError }}</p>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">

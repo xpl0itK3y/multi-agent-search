@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import io
+import html as _html_mod
 import os
 import re
 from urllib.parse import urlparse
@@ -683,7 +684,6 @@ def generate_docx(
 
 # ── HTML export (self-contained, shareable "mini-site") ──────────────────────────
 
-import html as _html_mod
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")

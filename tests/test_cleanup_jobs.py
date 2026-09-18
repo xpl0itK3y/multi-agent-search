@@ -98,3 +98,67 @@ def test_service_cleans_up_old_finalize_jobs(monkeypatch):
     assert result.deleted_count == 1
     assert result.deleted_job_ids == [old_job.id]
     assert store.get_research_finalize_job(old_job.id) is None
+
+
+def test_service_research_retention_deletes_only_old_terminal_researches(monkeypatch):
+    from src.api.schemas import ResearchStatus
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+
+    old_done = store.add_research(
+        ResearchRequest(prompt="finished long ago", depth=SearchDepth.EASY), task_ids=[]
+    )
+    store.update_research_status(old_done.id, ResearchStatus.COMPLETED, "done")
+    old_done_row = store.researches[old_done.id]
+    old_done_row.updated_at = datetime.now(timezone.utc) - timedelta(days=30)
+
+    fresh_done = store.add_research(
+        ResearchRequest(prompt="finished recently", depth=SearchDepth.EASY), task_ids=[]
+    )
+    store.update_research_status(fresh_done.id, ResearchStatus.COMPLETED, "done")
+
+    still_running = store.add_research(
+        ResearchRequest(prompt="ancient but running", depth=SearchDepth.EASY), task_ids=[]
+    )
+    store.update_research_status(still_running.id, ResearchStatus.PROCESSING)
+    store.researches[still_running.id].updated_at = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # Default: retention disabled — nothing is deleted.
+    assert service.cleanup_old_researches() == []
+    assert store.get_research(old_done.id) is not None
+
+    monkeypatch.setattr(
+        "src.services.research_service.settings.research_retention_seconds", 7 * 86400
+    )
+    deleted = service.cleanup_old_researches()
+
+    assert deleted == [old_done.id]
+    assert store.get_research(old_done.id) is None
+    assert store.get_research(fresh_done.id) is not None
+    assert store.get_research(still_running.id) is not None
+
+
+def test_store_cleanup_old_researches_cascades_tasks():
+    from src.api.schemas import ResearchStatus, TaskStatus
+
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="cascade me", depth=SearchDepth.EASY), task_ids=[]
+    )
+    store.add_task(
+        {
+            "id": "task-cascade",
+            "description": "search",
+            "queries": ["q"],
+            "status": TaskStatus.COMPLETED,
+            "research_id": research.id,
+        }
+    )
+    store.update_research_status(research.id, ResearchStatus.COMPLETED, "done")
+    store.researches[research.id].updated_at = datetime.now(timezone.utc) - timedelta(days=30)
+
+    deleted = store.cleanup_old_researches(datetime.now(timezone.utc) - timedelta(days=7))
+
+    assert deleted == [research.id]
+    assert store.get_task("task-cascade") is None
