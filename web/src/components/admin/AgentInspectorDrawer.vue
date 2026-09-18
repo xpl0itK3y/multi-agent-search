@@ -14,7 +14,37 @@ const emit = defineEmits<{
   (e: "select-agent", agentId: string): void;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
+
+function getAgentRole(agent: AgentMetadataItem): string {
+  const key = `admin.agents.roles.${agent.id}`;
+  return te(key) ? t(key) : agent.role;
+}
+
+function getAgentDescription(agent: AgentMetadataItem): string {
+  const key = `admin.agents.descriptions.${agent.id}`;
+  return te(key) ? t(key) : agent.description;
+}
+
+function getAgentTrigger(agent: AgentMetadataItem): string {
+  const key = `admin.agents.triggers.${agent.id}`;
+  return te(key) ? t(key) : agent.trigger;
+}
+
+function getAgentRetryPolicy(agent: AgentMetadataItem): string {
+  const key = `admin.agents.retryPolicies.${agent.id}`;
+  return te(key) ? t(key) : (agent.retry_policy || t("admin.agents.defaultRetry"));
+}
+
+function getAgentCacheTtl(agent: AgentMetadataItem): string {
+  const key = `admin.agents.cacheTtls.${agent.id}`;
+  return te(key) ? t(key) : (agent.cache_ttl || t("admin.agents.sessionCache"));
+}
+
+function getAgentResponseFormat(agent: AgentMetadataItem): string {
+  const key = `admin.agents.responseFormats.${agent.id}`;
+  return te(key) ? t(key) : (agent.response_format || "Pydantic Model");
+}
 
 type TabKey = "overview" | "prompt" | "model" | "schemas" | "code";
 const activeTab = ref<TabKey>("overview");
@@ -145,7 +175,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 {{ agent.name }}
               </h2>
               <p class="mt-0.5 text-xs font-medium text-accent">
-                {{ agent.role }}
+                {{ getAgentRole(agent) }}
               </p>
             </div>
 
@@ -246,7 +276,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 {{ t('admin.agents.roleAndPurpose') }}
               </h4>
               <p class="mt-1.5 leading-relaxed text-ink/90 text-[13px]">
-                {{ agent.description }}
+                {{ getAgentDescription(agent) }}
               </p>
             </div>
 
@@ -258,8 +288,8 @@ function copyJson(data: any, targetRef: "input" | "output") {
               <div class="mt-1.5 flex items-start gap-2.5 rounded-xl border border-orange-500/30 bg-orange-500/10 p-3 text-ink">
                 <span class="text-base text-orange-400">⚡</span>
                 <div class="text-xs leading-relaxed">
-                  <span class="font-bold text-orange-400">Event Trigger:</span>
-                  <p class="mt-0.5 text-ink/90 font-medium">{{ agent.trigger }}</p>
+                  <span class="font-bold text-orange-400">{{ t('admin.agents.eventTrigger') }}:</span>
+                  <p class="mt-0.5 text-ink/90 font-medium">{{ getAgentTrigger(agent) }}</p>
                 </div>
               </div>
             </div>
@@ -280,21 +310,21 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.retryPolicy') }}</div>
                   <div class="mt-1 text-xs font-semibold text-ink">
-                    🔁 {{ agent.retry_policy || t('admin.agents.defaultRetry') }}
+                    🔁 {{ getAgentRetryPolicy(agent) }}
                   </div>
                 </div>
 
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.cacheTtl') }}</div>
                   <div class="mt-1 text-xs font-semibold text-ink">
-                    💾 {{ agent.cache_ttl || t('admin.agents.sessionCache') }}
+                    💾 {{ getAgentCacheTtl(agent) }}
                   </div>
                 </div>
 
                 <div class="rounded-xl border border-bd bg-surface/50 p-3">
                   <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.responseFormat') }}</div>
-                  <div class="mt-1 font-mono text-[11px] font-semibold text-accent truncate" :title="agent.response_format || 'Pydantic Model'">
-                    📄 {{ agent.response_format || 'Pydantic Model' }}
+                  <div class="mt-1 font-mono text-[11px] font-semibold text-accent truncate" :title="getAgentResponseFormat(agent)">
+                    📄 {{ getAgentResponseFormat(agent) }}
                   </div>
                 </div>
               </div>

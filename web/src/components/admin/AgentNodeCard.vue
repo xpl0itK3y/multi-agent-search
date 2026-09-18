@@ -1,5 +1,13 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import type { AgentMetadataItem } from "@/lib/types";
+
+const { t, te } = useI18n();
+
+function getAgentRole(agent: AgentMetadataItem): string {
+  const key = `admin.agents.roles.${agent.id}`;
+  return te(key) ? t(key) : agent.role;
+}
 
 defineProps<{
   agent: AgentMetadataItem;
@@ -137,7 +145,7 @@ function stageColor(stage: string): { badge: string; border: string; glow: strin
 
     <!-- Agent Role Subtitle -->
     <div class="mt-1 line-clamp-2 text-xs text-muted leading-relaxed">
-      {{ agent.role }}
+      {{ getAgentRole(agent) }}
     </div>
 
     <!-- Footer: Contract Badges -->
