@@ -28,6 +28,7 @@ def _isolate_auth_settings(monkeypatch):
     from src.config import settings
 
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     monkeypatch.setattr(settings, "google_client_id", "", raising=False)
     monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
 
