@@ -6,6 +6,7 @@ import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, C
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
+import ReportSkeletonCanvas from "./ReportSkeletonCanvas.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
@@ -713,7 +714,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           :verify="verifyInline && isFinal"
           :class="{ 'opacity-80': !isFinal }"
         />
-        <p v-else class="text-muted">{{ $t("artifact.reportForming") }}</p>
+        <ReportSkeletonCanvas v-else :source-count="sources?.length" />
       </template>
 
       <template v-else-if="tab === 'dashboard'">

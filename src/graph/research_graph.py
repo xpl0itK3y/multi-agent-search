@@ -33,6 +33,40 @@ class FinalizeLeaseLost(RuntimeError):
     """Raised when stale-job recovery fences off a previous finalize runner."""
 
 
+GRAPH_STEP_METADATA: dict[str, dict[str, Any]] = {
+    "collect_context": {
+        "agent": "SourceCriticAgent",
+        "phase": "critic",
+        "action": "evaluate_sources",
+        "detail": "Оценка достоверности источников и структурирование доказательств",
+    },
+    "replan": {
+        "agent": "ReplanAgent",
+        "phase": "plan",
+        "action": "suggest_follow_up",
+        "detail": "Анализ белых пятен и запуск дополнительных поисковых веток",
+    },
+    "analyze": {
+        "agent": "AnalyzerAgent",
+        "phase": "synthesis",
+        "action": "synthesize_report",
+        "detail": "Глубокий синтез аналитического отчёта и сведение фактов",
+    },
+    "tie_break": {
+        "agent": "ReplanAgent",
+        "phase": "critic",
+        "action": "resolve_conflicts",
+        "detail": "Разрешение противоречий между найденными источниками",
+    },
+    "verify": {
+        "agent": "ReportCriticAgent",
+        "phase": "verify",
+        "action": "verify_claims",
+        "detail": "Верификация утверждений отчёта и контроль качества цитирования",
+    },
+}
+
+
 class FinalizeGraphRunner:
     def __init__(self, service):
         self.service = service
@@ -163,10 +197,26 @@ class FinalizeGraphRunner:
             "canonical_sources": state.get("canonical_sources", []),
             "report": state.get("report", ""),
         }
-        event = {"step": step, "detail": detail}
+        meta = GRAPH_STEP_METADATA.get(step, {})
+        event = {
+            "step": step,
+            "agent": meta.get("agent", "FinalizeRunner"),
+            "phase": meta.get("phase", "synthesis"),
+            "action": meta.get("action", step),
+            "detail": detail,
+        }
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
 
-    def _emit_trail(self, research_id: str, step: str) -> None:
+    def _emit_trail(
+        self,
+        research_id: str,
+        step: str,
+        agent: str | None = None,
+        phase: str | None = None,
+        action: str | None = None,
+        detail: str | None = None,
+        metrics: dict | None = None,
+    ) -> None:
         """Surface this finalize step on the live progress trail (streamed via SSE) so the
         trace keeps moving during synthesis instead of freezing after the search phase.
         Step names reuse the existing trace.* i18n labels (collect_context/analyze/…)."""
@@ -174,7 +224,17 @@ class FinalizeGraphRunner:
         if not research_id or store is None or not hasattr(store, "append_research_graph_event"):
             return
         try:
-            store.append_research_graph_event(research_id, {"step": step})
+            meta = GRAPH_STEP_METADATA.get(step, {})
+            event = {
+                "step": step,
+                "agent": agent or meta.get("agent", "FinalizeRunner"),
+                "phase": phase or meta.get("phase", "synthesis"),
+                "action": action or meta.get("action", step),
+                "detail": detail or meta.get("detail", ""),
+            }
+            if metrics:
+                event["metrics"] = metrics
+            store.append_research_graph_event(research_id, event)
         except Exception:  # progress events must never break finalize
             pass
 

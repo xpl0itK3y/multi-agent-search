@@ -4,7 +4,8 @@ import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
-import ProgressTrace, { type TraceEntry } from "./ProgressTrace.vue";
+import AgentActivityConsole from "./AgentActivityConsole.vue";
+import type { TraceEntry } from "@/lib/stream";
 import ArtifactPanel from "./ArtifactPanel.vue";
 import PlanCard from "./PlanCard.vue";
 import ClarifyCard from "./ClarifyCard.vue";
@@ -145,7 +146,25 @@ async function syncStatus(): Promise<boolean> {
     if (!prompt.value) prompt.value = s.prompt;
     status.value = s.status;
     usage.value = s.llm_token_usage ?? null;
-    queuePos.value = s.queue_position ?? null;
+    if (!trace.value.length) {
+      try {
+        const g = await api.getGraph(props.id);
+        if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
+          trace.value = g.graph_trail.map((entry) => ({
+            step: entry.step ?? "",
+            detail: entry.detail ?? "",
+            sources: entry.sources ?? [],
+            agent: entry.agent,
+            phase: entry.phase,
+            action: entry.action,
+            metrics: entry.metrics,
+            timestamp: entry.timestamp,
+          }));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
     if (s.status === "queued") startQueuePoll();
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
@@ -188,7 +207,7 @@ function connect() {
         emit("done", s); // ensure the thread learns of completion even without onDone
       }
     },
-    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
+    onTrace: (entry) => trace.value.push(entry),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       const wasEmpty = !report.value;
@@ -308,11 +327,12 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <ProgressTrace
-        v-if="!done && (trace.length || reasoning)"
+      <AgentActivityConsole
+        v-if="!done || trace.length"
         :entries="trace"
         :reasoning="reasoning"
         :live="!done"
+        :status="status"
       />
 
       <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within).

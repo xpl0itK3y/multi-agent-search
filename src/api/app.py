@@ -935,6 +935,11 @@ def register_routes(app: FastAPI) -> None:
                                 "step": entry.get("step"),
                                 "detail": entry.get("detail"),
                                 "sources": entry.get("sources") or [],
+                                "agent": entry.get("agent"),
+                                "phase": entry.get("phase"),
+                                "action": entry.get("action"),
+                                "metrics": entry.get("metrics"),
+                                "timestamp": entry.get("timestamp"),
                             })
                         last_trail_len = len(trail)
 

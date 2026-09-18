@@ -5,7 +5,8 @@ import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
-import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
+import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
+import type { TraceEntry } from "@/lib/stream";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
 import PlanCard from "@/components/PlanCard.vue";
 import ClarifyCard from "@/components/ClarifyCard.vue";
@@ -151,6 +152,25 @@ onMounted(async () => {
     prompt.value = s.prompt;
     status.value = s.status;
     usage.value = s.llm_token_usage ?? null;
+    if (!trace.value.length) {
+      try {
+        const g = await api.getGraph(props.id);
+        if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
+          trace.value = g.graph_trail.map((entry) => ({
+            step: entry.step ?? "",
+            detail: entry.detail ?? "",
+            sources: entry.sources ?? [],
+            agent: entry.agent,
+            phase: entry.phase,
+            action: entry.action,
+            metrics: entry.metrics,
+            timestamp: entry.timestamp,
+          }));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
   } catch {
@@ -169,7 +189,7 @@ onMounted(async () => {
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
-    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
+    onTrace: (entry) => trace.value.push(entry),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;
@@ -254,11 +274,12 @@ onBeforeUnmount(() => close?.());
 
         <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
 
-        <ProgressTrace
+        <AgentActivityConsole
           v-if="trace.length || reasoning"
           :entries="trace"
           :reasoning="reasoning"
           :live="!done"
+          :status="status"
         />
 
         <!-- Follow-up conversation -->

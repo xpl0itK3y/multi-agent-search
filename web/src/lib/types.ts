@@ -342,6 +342,11 @@ export interface GraphTrailEntry {
   step?: string;
   detail?: string;
   timestamp?: string;
+  agent?: string;
+  phase?: string;
+  action?: string;
+  metrics?: Record<string, any>;
+  sources?: any[];
 }
 
 export interface ResearchGraph {

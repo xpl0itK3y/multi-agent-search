@@ -266,7 +266,16 @@ class SearchAgent:
                 logger.warning("search_cache_put_failed error=%s", exc)
         return results
 
-    def _emit_progress(self, research_id: str | None, detail: str, sources: list[dict] | None = None) -> None:
+    def _emit_progress(
+        self,
+        research_id: str | None,
+        detail: str,
+        sources: list[dict] | None = None,
+        action: str = "crawl",
+        agent: str = "SearchAgent",
+        phase: str = "search",
+        metrics: dict | None = None,
+    ) -> None:
         """Append a live search-progress step to the research trail (streamed via SSE).
 
         ``sources`` (optional): the sites found for this step ({domain, title}) so the UI can
@@ -275,9 +284,17 @@ class SearchAgent:
         if not research_id or not hasattr(self.task_store, "append_research_graph_event"):
             return
         try:
-            event = {"step": "search", "detail": detail}
+            event = {
+                "step": "search",
+                "agent": agent,
+                "phase": phase,
+                "action": action,
+                "detail": detail,
+            }
             if sources:
                 event["sources"] = sources[:6]
+            if metrics:
+                event["metrics"] = metrics
             self.task_store.append_research_graph_event(research_id, event)
         except Exception:  # progress events must never break a search
             pass
@@ -319,15 +336,25 @@ class SearchAgent:
         topics = self._detect_topics(task)
 
         research_id = getattr(task, "research_id", None)
-        self._emit_progress(research_id, f"🔎 {task.description}")
+        self._emit_progress(
+            research_id,
+            f"Запуск направления: {task.description}",
+            action="task_start",
+            agent="SearchAgent",
+            phase="search",
+        )
         try:
             for query in task.queries:
                 self.task_store.update_task(task_id, TaskUpdate(log=f"Searching for: {query}"))
                 search_results = self._search_with_cache(query)
                 self._emit_progress(
                     research_id,
-                    f"🔍 {query} — {len(search_results)}",
+                    f"Поиск: «{query}» — найдено {len(search_results)} страниц",
                     sources=self._result_previews(search_results),
+                    action="query",
+                    agent="SearchAgent",
+                    phase="search",
+                    metrics={"query": query, "results_count": len(search_results)},
                 )
 
                 for res in search_results:
@@ -449,6 +476,17 @@ class SearchAgent:
                         )
                         all_results.append(enriched_result)
                         successful_results.append(enriched_result)
+                        if len(successful_results) % 2 == 1:
+                            domain = urlparse(url).netloc.lower().removeprefix("www.")
+                            self._emit_progress(
+                                research_id,
+                                f"Сканирование: {domain} ({len(content)} симв.)",
+                                action="scrape",
+                                agent="SearchAgent",
+                                phase="search",
+                                sources=[{"domain": domain, "title": (title or domain)[:90], "url": url}],
+                                metrics={"url": url, "chars": len(content)},
+                            )
                     else:
                         all_results.append(
                             enrich_search_result_dict(
@@ -477,7 +515,15 @@ class SearchAgent:
                     submit_candidates()
 
             selected_results = self._select_best_results(all_results)
-            self._emit_progress(research_id, f"✓ {task.description} — {len(selected_results)} источников")
+            self._emit_progress(
+                research_id,
+                f"Направление «{task.description}» обработано: отобрано {len(selected_results)} источников",
+                action="task_complete",
+                agent="SearchAgent",
+                phase="search",
+                sources=self._result_previews(selected_results),
+                metrics={"selected_count": len(selected_results)},
+            )
             success_count = sum(1 for item in all_results if item.get("extraction_status") == "success")
             failure_count = sum(1 for item in all_results if item.get("extraction_status") != "success")
             avg_content_chars = (
