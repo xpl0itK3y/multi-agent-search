@@ -389,3 +389,7 @@ The script will:
 - verify search/finalize jobs
 - verify worker heartbeat
 - verify final state persisted in Postgres
+
+## License
+
+Released under the [MIT License](./LICENSE).
