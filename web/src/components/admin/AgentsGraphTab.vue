@@ -596,9 +596,11 @@ interface ReturnConnectionConfig {
   payloadKey: string;
   defaultPayload: string;
   arcY: number;
-  sourceOffsetX: number;
-  targetOffsetX: number;
+  sourceOffsetX?: number;
+  targetOffsetX?: number;
 }
+
+const RETURN_PORT_OFFSET = 36;
 
 const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
   {
@@ -608,8 +610,6 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.source_critic",
     defaultPayload: "↩ spam_filter_retry",
     arcY: 460,
-    sourceOffsetX: 35,
-    targetOffsetX: 35,
   },
   {
     id: "replan->search",
@@ -618,8 +618,6 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.replan",
     defaultPayload: "↩ gap_analysis_loop",
     arcY: 530,
-    sourceOffsetX: 40,
-    targetOffsetX: 60,
   },
   {
     id: "claim_verifier->analyzer",
@@ -628,8 +626,6 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.claim_verifier",
     defaultPayload: "↩ hallucination_retry",
     arcY: 480,
-    sourceOffsetX: 35,
-    targetOffsetX: 60,
   },
   {
     id: "report_critic->analyzer",
@@ -638,8 +634,6 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.report_critic",
     defaultPayload: "↩ draft_revision",
     arcY: 600,
-    sourceOffsetX: 35,
-    targetOffsetX: 35,
   },
   {
     id: "report_critic->replan",
@@ -648,8 +642,6 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.report_critic_replan",
     defaultPayload: "↩ tie_break_search",
     arcY: 670,
-    sourceOffsetX: 55,
-    targetOffsetX: 40,
   },
 ];
 
@@ -776,11 +768,11 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
         }
 
         // Outgoing port at bottom right of source
-        const x1 = src.x + src.width - conn.sourceOffsetX;
+        const x1 = src.x + src.width - (conn.sourceOffsetX ?? RETURN_PORT_OFFSET);
         const y1 = src.y + src.height;
 
         // Incoming port at bottom left of target
-        const x2 = tgt.x + conn.targetOffsetX;
+        const x2 = tgt.x + (conn.targetOffsetX ?? RETURN_PORT_OFFSET);
         const y2 = tgt.y + tgt.height;
 
         const arcY = conn.arcY;
@@ -1496,19 +1488,13 @@ function isNodeDimmed(nodeId: string): boolean {
                 draggingNodeId !== null ? 'transition-none' : 'transition-[stroke,stroke-width] duration-150',
                 { 'animate-n8n-wire': edge.isActive }
               ]"
-              :marker-end="`url(#${
-                edge.isReturn
-                  ? edge.isActive
-                    ? 'n8n-arrow-return-active'
-                    : edge.isHighlighted
-                    ? 'n8n-arrow-return-highlight'
-                    : 'n8n-arrow-return-default'
-                  : edge.isActive
+              :marker-end="!edge.isReturn ? `url(#${
+                edge.isActive
                   ? 'n8n-arrow-active'
                   : edge.isHighlighted
                   ? 'n8n-arrow-highlight'
                   : 'n8n-arrow-default'
-              })`"
+              })` : undefined"
               class="pointer-events-auto cursor-pointer"
               @mouseenter="onEdgeHover(edge.id)"
               @mouseleave="onEdgeHover(null)"
@@ -1690,7 +1676,8 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Bottom Outgoing Return Port (Handle for Feedback Emitters) -->
             <div
               v-if="hasReturnCapability(node.id)"
-              class="absolute -bottom-1.5 right-7 h-3 w-3 rounded-full border border-[#151922] bg-rose-500/80 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] bg-rose-500/80 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              :style="{ left: `${node.width - RETURN_PORT_OFFSET}px` }"
               :class="[
                 isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
               ]"
@@ -1700,7 +1687,8 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Bottom Incoming Return Port (Handle for Feedback Receivers) -->
             <div
               v-if="hasReturnReceiver(node.id)"
-              class="absolute -bottom-1.5 left-7 h-3 w-3 rounded-full border border-[#151922] bg-rose-500/60 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] bg-rose-500/60 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              :style="{ left: `${RETURN_PORT_OFFSET}px` }"
               :class="[
                 isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
               ]"
