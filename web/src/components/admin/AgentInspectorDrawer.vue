@@ -72,6 +72,89 @@ const upstreamAgents = computed(() => {
   return props.allAgents.filter((a) => props.agent!.dependencies.includes(a.id));
 });
 
+const RETURN_LOOP_CONFIGS: Record<string, { roleKey: string; reasonKey: string; targets: string[] }> = {
+  report_critic: {
+    roleKey: "admin.agents.feedbackLoop.reportCriticRole",
+    reasonKey: "admin.agents.feedbackLoop.reportCriticReason",
+    targets: ["analyzer", "replan"],
+  },
+  source_critic: {
+    roleKey: "admin.agents.feedbackLoop.sourceCriticRole",
+    reasonKey: "admin.agents.feedbackLoop.sourceCriticReason",
+    targets: ["search"],
+  },
+  replan: {
+    roleKey: "admin.agents.feedbackLoop.replanRole",
+    reasonKey: "admin.agents.feedbackLoop.replanReason",
+    targets: ["search"],
+  },
+  claim_verifier: {
+    roleKey: "admin.agents.feedbackLoop.claimVerifierRole",
+    reasonKey: "admin.agents.feedbackLoop.claimVerifierReason",
+    targets: ["analyzer"],
+  },
+};
+
+const INCOMING_RETURN_CONFIGS: Record<string, { reasonKey: string; sources: string[] }> = {
+  analyzer: {
+    reasonKey: "admin.agents.feedbackLoop.incomingAnalyzerReason",
+    sources: ["report_critic", "claim_verifier"],
+  },
+  search: {
+    reasonKey: "admin.agents.feedbackLoop.incomingSearchReason",
+    sources: ["source_critic", "replan"],
+  },
+  replan: {
+    reasonKey: "admin.agents.feedbackLoop.incomingReplanReason",
+    sources: ["report_critic"],
+  },
+};
+
+function hasReturnLoop(agentId?: string): boolean {
+  if (!agentId) return false;
+  return Boolean(RETURN_LOOP_CONFIGS[agentId]);
+}
+
+function hasIncomingReturnLoops(agentId?: string): boolean {
+  if (!agentId) return false;
+  return Boolean(INCOMING_RETURN_CONFIGS[agentId]);
+}
+
+function getFeedbackLoopRole(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = RETURN_LOOP_CONFIGS[agentId];
+  return conf && te(conf.roleKey) ? t(conf.roleKey) : "";
+}
+
+function getFeedbackLoopDescription(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = RETURN_LOOP_CONFIGS[agentId];
+  return conf && te(conf.reasonKey) ? t(conf.reasonKey) : "";
+}
+
+function getFeedbackLoopTargets(agentId?: string): string[] {
+  if (!agentId) return [];
+  return RETURN_LOOP_CONFIGS[agentId]?.targets || [];
+}
+
+function getIncomingReturnDescription(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = INCOMING_RETURN_CONFIGS[agentId];
+  return conf && te(conf.reasonKey) ? t(conf.reasonKey) : "";
+}
+
+function getIncomingReturnSources(agentId?: string): string[] {
+  if (!agentId) return [];
+  return INCOMING_RETURN_CONFIGS[agentId]?.sources || [];
+}
+
+function getAgentName(agentId: string): string {
+  const key = `admin.agents.names.${agentId}`;
+  if (te(key)) return t(key);
+  const found = props.allAgents?.find((a) => a.id === agentId);
+  return found ? found.name : agentId;
+}
+
 function copyPath() {
   if (!props.agent) return;
   navigator.clipboard.writeText(props.agent.source_file);
@@ -291,6 +374,65 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   <span class="font-bold text-orange-400">{{ t('admin.agents.eventTrigger') }}:</span>
                   <p class="mt-0.5 text-ink/90 font-medium">{{ getAgentTrigger(agent) }}</p>
                 </div>
+              </div>
+            </div>
+
+            <!-- Outgoing Feedback Loop Card (If agent can return back) -->
+            <div v-if="hasReturnLoop(agent.id)" class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 text-rose-400 font-bold text-xs">
+                  <span class="text-sm">↩</span>
+                  <span>{{ t("admin.agents.feedbackLoop.sectionTitle") }}</span>
+                </div>
+                <span class="rounded-full bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 text-[9.5px] font-mono font-bold text-rose-300">
+                  {{ t("admin.agents.feedbackLoop.activeStatus") }}
+                </span>
+              </div>
+              <div v-if="getFeedbackLoopRole(agent.id)" class="inline-block rounded-md bg-rose-500/20 px-2 py-0.5 text-[10.5px] font-semibold text-rose-300">
+                {{ getFeedbackLoopRole(agent.id) }}
+              </div>
+              <p class="text-xs text-ink/90 leading-relaxed font-medium">
+                {{ getFeedbackLoopDescription(agent.id) }}
+              </p>
+              <div class="pt-2 border-t border-rose-500/20 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted font-medium">{{ t("admin.agents.feedbackLoop.returnsTo") }}:</span>
+                <button
+                  v-for="targetId in getFeedbackLoopTargets(agent.id)"
+                  :key="targetId"
+                  class="flex items-center gap-1.5 rounded-lg border border-rose-500/35 bg-surface/80 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-500/20 hover:text-white transition font-mono shadow-sm"
+                  @click="emit('select-agent', targetId)"
+                >
+                  <span>↩</span>
+                  <span>{{ getAgentName(targetId) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Incoming Feedback Loop Card (If agent receives returns) -->
+            <div v-if="hasIncomingReturnLoops(agent.id)" class="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3.5 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+                  <span class="text-sm">↩</span>
+                  <span>{{ t("admin.agents.feedbackLoop.incomingTitle") }}</span>
+                </div>
+                <span class="rounded-full bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 text-[9.5px] font-mono font-bold text-indigo-300">
+                  {{ t("admin.agents.feedbackLoop.activeStatus") }}
+                </span>
+              </div>
+              <p class="text-xs text-ink/90 leading-relaxed font-medium">
+                {{ getIncomingReturnDescription(agent.id) }}
+              </p>
+              <div class="pt-2 border-t border-indigo-500/20 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted font-medium">{{ t("admin.agents.feedbackLoop.receivedFrom") }}:</span>
+                <button
+                  v-for="sourceId in getIncomingReturnSources(agent.id)"
+                  :key="sourceId"
+                  class="flex items-center gap-1.5 rounded-lg border border-indigo-500/35 bg-surface/80 px-2.5 py-1 text-xs text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition font-mono shadow-sm"
+                  @click="emit('select-agent', sourceId)"
+                >
+                  <span>↩</span>
+                  <span>{{ getAgentName(sourceId) }}</span>
+                </button>
               </div>
             </div>
 

@@ -563,7 +563,7 @@ function handleNodeClick(nodeId: string) {
   openInspector(nodeId);
 }
 
-// ── Graph Edges (n8n Smooth Cubic Curves) ─────────────────────────────────────
+// ── Graph Edges (Forward & Feedback Loops) ───────────────────────────────────
 const EDGE_CONNECTIONS: Array<{ from: string; to: string; payload: string }> = [
   { from: "trigger_start", to: "clarifier", payload: "user_query" },
   { from: "clarifier", to: "optimizer", payload: "clarified_intent" },
@@ -589,6 +589,94 @@ const EDGE_CONNECTIONS: Array<{ from: string; to: string; payload: string }> = [
   { from: "confidence", to: "chat", payload: "final_report" },
 ];
 
+interface ReturnConnectionConfig {
+  id: string;
+  from: string;
+  to: string;
+  payloadKey: string;
+  defaultPayload: string;
+  arcY: number;
+  sourceOffsetX: number;
+  targetOffsetX: number;
+}
+
+const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
+  {
+    id: "source_critic->search",
+    from: "source_critic",
+    to: "search",
+    payloadKey: "admin.agents.returnPayloads.source_critic",
+    defaultPayload: "↩ spam_filter_retry",
+    arcY: 460,
+    sourceOffsetX: 35,
+    targetOffsetX: 35,
+  },
+  {
+    id: "replan->search",
+    from: "replan",
+    to: "search",
+    payloadKey: "admin.agents.returnPayloads.replan",
+    defaultPayload: "↩ gap_analysis_loop",
+    arcY: 530,
+    sourceOffsetX: 40,
+    targetOffsetX: 60,
+  },
+  {
+    id: "claim_verifier->analyzer",
+    from: "claim_verifier",
+    to: "analyzer",
+    payloadKey: "admin.agents.returnPayloads.claim_verifier",
+    defaultPayload: "↩ hallucination_retry",
+    arcY: 480,
+    sourceOffsetX: 35,
+    targetOffsetX: 60,
+  },
+  {
+    id: "report_critic->analyzer",
+    from: "report_critic",
+    to: "analyzer",
+    payloadKey: "admin.agents.returnPayloads.report_critic",
+    defaultPayload: "↩ draft_revision",
+    arcY: 600,
+    sourceOffsetX: 35,
+    targetOffsetX: 35,
+  },
+  {
+    id: "report_critic->replan",
+    from: "report_critic",
+    to: "replan",
+    payloadKey: "admin.agents.returnPayloads.report_critic_replan",
+    defaultPayload: "↩ tie_break_search",
+    arcY: 670,
+    sourceOffsetX: 55,
+    targetOffsetX: 40,
+  },
+];
+
+const showReturnLoops = ref(true);
+
+const RETURN_CAPABLE_NODES = new Set(["report_critic", "source_critic", "replan", "claim_verifier"]);
+const RETURN_RECEIVER_NODES = new Set(["search", "analyzer", "replan"]);
+
+function hasReturnCapability(nodeId: string): boolean {
+  return RETURN_CAPABLE_NODES.has(nodeId);
+}
+
+function hasReturnReceiver(nodeId: string): boolean {
+  return RETURN_RECEIVER_NODES.has(nodeId);
+}
+
+function getReturnCapabilityTooltip(nodeId: string): string {
+  const map: Record<string, string> = {
+    report_critic: "admin.agents.feedbackLoop.reportCriticReason",
+    source_critic: "admin.agents.feedbackLoop.sourceCriticReason",
+    replan: "admin.agents.feedbackLoop.replanReason",
+    claim_verifier: "admin.agents.feedbackLoop.claimVerifierReason",
+  };
+  const key = map[nodeId];
+  return key && te(key) ? t(key) : t("admin.agents.canReturnBadgeFull");
+}
+
 interface RenderedEdge {
   id: string;
   from: string;
@@ -600,6 +688,7 @@ interface RenderedEdge {
   labelWidth: number;
   isHighlighted: boolean;
   isActive: boolean;
+  isReturn: boolean;
 }
 
 const renderedEdges = computed<RenderedEdge[]>(() => {
@@ -608,7 +697,7 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
     nodeMap.set(n.id, n);
   }
 
-  return EDGE_CONNECTIONS.map((conn) => {
+  const forwardEdges: RenderedEdge[] = EDGE_CONNECTIONS.map((conn) => {
     const src = nodeMap.get(conn.from);
     const tgt = nodeMap.get(conn.to);
     if (!src || !tgt) {
@@ -623,6 +712,7 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
         labelWidth: 60,
         isHighlighted: false,
         isActive: false,
+        isReturn: false,
       };
     }
 
@@ -659,8 +749,79 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
       labelWidth,
       isHighlighted,
       isActive,
+      isReturn: false,
     };
   });
+
+  const returnEdges: RenderedEdge[] = !showReturnLoops.value
+    ? []
+    : RETURN_CONNECTIONS.map((conn) => {
+        const src = nodeMap.get(conn.from);
+        const tgt = nodeMap.get(conn.to);
+        const payload = te(conn.payloadKey) ? t(conn.payloadKey) : conn.defaultPayload;
+        if (!src || !tgt) {
+          return {
+            id: conn.id,
+            from: conn.from,
+            to: conn.to,
+            d: "",
+            midX: 0,
+            midY: 0,
+            payload,
+            labelWidth: 80,
+            isHighlighted: false,
+            isActive: false,
+            isReturn: true,
+          };
+        }
+
+        // Outgoing port at bottom right of source
+        const x1 = src.x + src.width - conn.sourceOffsetX;
+        const y1 = src.y + src.height;
+
+        // Incoming port at bottom left of target
+        const x2 = tgt.x + conn.targetOffsetX;
+        const y2 = tgt.y + tgt.height;
+
+        const arcY = conn.arcY;
+        const cornerRadius = Math.min(35, Math.abs(x1 - x2) / 4);
+
+        // Orthogonal rounded bus curve going down, left, and up:
+        const d =
+          `M ${x1} ${y1} ` +
+          `V ${arcY - cornerRadius} ` +
+          `Q ${x1} ${arcY} ${x1 - cornerRadius} ${arcY} ` +
+          `L ${x2 + cornerRadius} ${arcY} ` +
+          `Q ${x2} ${arcY} ${x2} ${arcY - cornerRadius} ` +
+          `V ${y2}`;
+
+        const midX = (x1 + x2) / 2;
+        const midY = arcY;
+
+        const isWireHovered = hoveredEdgeId.value === conn.id;
+        const isHighlighted = isWireHovered;
+        const isActive =
+          (isSimulating.value || currentStepIndex.value > 0) &&
+          currentStep.value.activeEdges.includes(conn.id);
+
+        const labelWidth = Math.max(90, payload.length * 6.8 + 20);
+
+        return {
+          id: conn.id,
+          from: conn.from,
+          to: conn.to,
+          d,
+          midX,
+          midY,
+          payload,
+          labelWidth,
+          isHighlighted,
+          isActive,
+          isReturn: true,
+        };
+      });
+
+  return [...forwardEdges, ...returnEdges];
 });
 
 // ── Simulation Walkthrough Steps ("Как они работают") ────────────────────────
@@ -729,11 +890,12 @@ const SIMULATION_STEPS: SimulationStep[] = [
       "search->source_critic",
       "source_critic->source_reputation",
       "source_reputation->source_independence",
+      "source_critic->search",
     ],
     title: "5. Фильтрация источников, оценка репутации и дедупликация",
     description:
-      "SourceCritic отсекает спам-фермы и дорвеи. SourceReputation взвешивает домены (.edu, .gov, peer-reviewed). SourceIndependence удаляет синдицированные копии новостей (AP/Reuters).",
-    payloadInfo: "scraped_pages ➔ trusted_domains, canonical_sources",
+      "SourceCritic отсекает спам-фермы и дорвеи (при необходимости возвращает на повторный поиск). SourceReputation взвешивает домены. SourceIndependence удаляет синдицированные копии.",
+    payloadInfo: "scraped_pages ➔ trusted_domains, canonical_sources / ↩ spam_retry",
   },
   {
     stepNumber: 6,
@@ -750,12 +912,12 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stepNumber: 7,
     stageName: "Synthesis & Logic",
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
-    agentIds: ["replan"],
-    activeEdges: ["evidence_mapper->replan"],
-    title: "7. ReplanAgent: Поиск пробелов (LangGraph Gap Analysis)",
+    agentIds: ["replan", "search"],
+    activeEdges: ["evidence_mapper->replan", "replan->search"],
+    title: "7. ReplanAgent: Поиск пробелов (LangGraph Gap Analysis Loop)",
     description:
-      "Анализирует матрицу фактов. Если обнаружены белые пятна или нехватка доказательств, динамически возвращает воркеры на дополнительный целевой цикл сбора.",
-    payloadInfo: "evidence_blocks ➔ gap_detected, verified_evidence",
+      "Анализирует матрицу фактов. Если обнаружены белые пятна или нехватка доказательств, динамически возвращает воркеры на дополнительный целевой цикл сбора источников.",
+    payloadInfo: "evidence_blocks ➔ gap_detected, ↩ gap_queries (на SearchAgent)",
   },
   {
     stepNumber: 8,
@@ -773,11 +935,11 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageName: "Synthesis & Logic",
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
     agentIds: ["numeric_check", "claim_verifier"],
-    activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier"],
+    activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier", "claim_verifier->analyzer"],
     title: "9. NumericCheck & ClaimVerifier: Сверка чисел и фактов",
     description:
-      "NumericCheck сверяет проценты, даты и финансовые суммы с исходными таблицами. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации LLM.",
-    payloadInfo: "draft_report ➔ verified_numbers, verified_claims",
+      "NumericCheck сверяет проценты, даты и финансовые суммы. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации и возвращая сомнительные фрагменты на правку.",
+    payloadInfo: "draft_report ➔ verified_numbers, verified_claims / ↩ fact_fix",
   },
   {
     stepNumber: 10,
@@ -798,25 +960,39 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 11,
     stageName: "Synthesis & Polish",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
-    agentIds: ["report_critic", "confidence"],
+    stageColor: "text-rose-400 border-rose-500/30 bg-rose-500/10",
+    agentIds: ["report_critic", "analyzer", "replan"],
     activeEdges: [
       "stance->report_critic",
       "retraction->report_critic",
-      "report_critic->confidence",
+      "report_critic->analyzer",
+      "report_critic->replan",
     ],
-    title: "11. ReportCritic & Confidence: Финальная полировка и скоринг",
+    title: "11. ReportCritic: Контроль качества и возврат на доработку (Feedback Loop)",
     description:
-      "ReportCritic шлифует текст по принципу перевёрнутой пирамиды, удаляя повторы. ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и бейдж прозрачности.",
-    payloadInfo: "consensus_matrix + clean_sources ➔ polished_draft, trust_indicators",
+      "ReportCritic оценивает черновик. При обнаружении логических пробелов или слабых аргументов он возвращает задачу назад: в AnalyzerAgent (на пересинтез) или в ReplanAgent (на добор фактов).",
+    payloadInfo: "draft_review ➔ ↩ draft_revision (в Analyzer) / ↩ tie_break (в Replan)",
   },
   {
     stepNumber: 12,
+    stageName: "Synthesis & Polish",
+    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    agentIds: ["report_critic", "confidence"],
+    activeEdges: [
+      "report_critic->confidence",
+    ],
+    title: "12. ConfidenceAgent: Калибровка достоверности и скоринг",
+    description:
+      "После одобрения критиками ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и формирует бейдж прозрачности отчёта.",
+    payloadInfo: "approved_draft ➔ calibrated_trust_score, trust_indicators",
+  },
+  {
+    stepNumber: 13,
     stageName: "Delivery & Follow-Up",
     stageColor: "text-amber-400 border-amber-500/30 bg-amber-500/10",
     agentIds: ["chat"],
     activeEdges: ["confidence->chat"],
-    title: "12. ChatAgent: Интерактивный эксперт по доказательной базе",
+    title: "13. ChatAgent: Интерактивный эксперт по доказательной базе",
     description:
       "Отчёт доставлен. ChatAgent готов отвечать на любые последующие вопросы пользователя, строго опираясь на собранную базу цитат и проверенных фактов.",
     payloadInfo: "final_report + trust_badge ➔ grounded_interactive_answers",
@@ -1044,10 +1220,39 @@ function isNodeDimmed(nodeId: string): boolean {
           <span>🔵</span>
           <span>{{ t("admin.agents.legendDelivery") }}</span>
         </div>
+        <div
+          class="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-400 cursor-pointer hover:bg-rose-500/20 transition"
+          :title="t('admin.agents.toggleReturnLoopsTooltip')"
+          @click="showReturnLoops = !showReturnLoops"
+        >
+          <span>↩</span>
+          <span>{{ t("admin.agents.legendReturn") }}</span>
+        </div>
       </div>
 
       <!-- Right Action Group: Simulation Controls, Zoom, Language & Layout -->
       <div class="flex items-center gap-2">
+        <!-- Toggle Return / Feedback Loops Button -->
+        <button
+          class="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition shadow-sm"
+          :class="[
+            showReturnLoops
+              ? 'border-rose-500/60 bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40'
+              : 'border-bd bg-surface/70 text-muted hover:text-ink hover:border-rose-500/40'
+          ]"
+          :title="t('admin.agents.toggleReturnLoopsTooltip')"
+          @click="showReturnLoops = !showReturnLoops"
+        >
+          <span class="text-sm">↩</span>
+          <span class="hidden sm:inline">{{ t("admin.agents.showReturnLoops") }}</span>
+          <span
+            class="rounded-full px-1.5 py-0.2 text-[9.5px] font-mono font-bold"
+            :class="showReturnLoops ? 'bg-rose-500/30 text-rose-200' : 'bg-surface text-muted'"
+          >
+            {{ RETURN_CONNECTIONS.length }}
+          </span>
+        </button>
+
         <!-- Language Switcher in Graph Toolbar -->
         <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono mr-1">
           <button
@@ -1219,6 +1424,43 @@ function isNodeDimmed(nodeId: string): boolean {
               <path d="M 0 1 L 9 5 L 0 9 z" fill="#38bdf8" />
             </marker>
 
+            <!-- Return / Feedback wire arrowheads -->
+            <marker
+              id="n8n-arrow-return-default"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#fb7185" opacity="0.85" />
+            </marker>
+
+            <marker
+              id="n8n-arrow-return-highlight"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f43f5e" />
+            </marker>
+
+            <marker
+              id="n8n-arrow-return-active"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="#fda4af" />
+            </marker>
+
             <!-- Glow filter for traveling particles -->
             <filter id="n8n-glow" x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />
@@ -1235,20 +1477,38 @@ function isNodeDimmed(nodeId: string): boolean {
             <path
               :d="edge.d"
               :stroke="
-                edge.isActive
+                edge.isReturn
+                  ? edge.isActive
+                    ? '#fda4af'
+                    : edge.isHighlighted
+                    ? '#f43f5e'
+                    : 'rgba(244, 63, 94, 0.55)'
+                  : edge.isActive
                   ? '#38bdf8'
                   : edge.isHighlighted
                   ? '#818cf8'
                   : 'rgba(148, 163, 184, 0.3)'
               "
-              :stroke-width="edge.isActive ? 3.2 : edge.isHighlighted ? 2.6 : 2"
+              :stroke-width="edge.isActive ? 3.2 : edge.isHighlighted ? 2.6 : edge.isReturn ? 2.2 : 2"
               fill="none"
-              :stroke-dasharray="edge.isActive ? '7,7' : 'none'"
+              :stroke-dasharray="edge.isReturn ? (edge.isActive ? '5,4' : '6,4') : (edge.isActive ? '7,7' : 'none')"
               :class="[
                 draggingNodeId !== null ? 'transition-none' : 'transition-[stroke,stroke-width] duration-150',
                 { 'animate-n8n-wire': edge.isActive }
               ]"
-              :marker-end="`url(#${edge.isActive ? 'n8n-arrow-active' : edge.isHighlighted ? 'n8n-arrow-highlight' : 'n8n-arrow-default'})`"
+              :marker-end="`url(#${
+                edge.isReturn
+                  ? edge.isActive
+                    ? 'n8n-arrow-return-active'
+                    : edge.isHighlighted
+                    ? 'n8n-arrow-return-highlight'
+                    : 'n8n-arrow-return-default'
+                  : edge.isActive
+                  ? 'n8n-arrow-active'
+                  : edge.isHighlighted
+                  ? 'n8n-arrow-highlight'
+                  : 'n8n-arrow-default'
+              })`"
               class="pointer-events-auto cursor-pointer"
               @mouseenter="onEdgeHover(edge.id)"
               @mouseleave="onEdgeHover(null)"
@@ -1258,12 +1518,12 @@ function isNodeDimmed(nodeId: string): boolean {
             <circle
               v-if="edge.isActive"
               r="4.5"
-              fill="#38bdf8"
+              :fill="edge.isReturn ? '#fda4af' : '#38bdf8'"
               filter="url(#n8n-glow)"
             >
               <animateMotion
                 :path="edge.d"
-                :dur="simSpeed === 2 ? '0.9s' : '1.8s'"
+                :dur="simSpeed === 2 ? '1.0s' : '2.0s'"
                 repeatCount="indefinite"
               />
             </circle>
@@ -1285,7 +1545,13 @@ function isNodeDimmed(nodeId: string): boolean {
                   rx="6"
                   class="stroke-[1.5]"
                   :class="[
-                    edge.isActive
+                    edge.isReturn
+                      ? edge.isActive
+                        ? 'fill-slate-950 stroke-rose-400 shadow-lg'
+                        : edge.isHighlighted
+                        ? 'fill-slate-950 stroke-rose-400'
+                        : 'fill-[#171015] stroke-rose-500/50'
+                      : edge.isActive
                       ? 'fill-slate-900 stroke-sky-400'
                       : edge.isHighlighted
                       ? 'fill-slate-900 stroke-indigo-400'
@@ -1298,7 +1564,11 @@ function isNodeDimmed(nodeId: string): boolean {
                   text-anchor="middle"
                   class="font-mono text-[9px] font-semibold select-none"
                   :class="[
-                    edge.isActive
+                    edge.isReturn
+                      ? edge.isActive || edge.isHighlighted
+                        ? 'fill-rose-300'
+                        : 'fill-rose-400/90'
+                      : edge.isActive
                       ? 'fill-sky-400'
                       : edge.isHighlighted
                       ? 'fill-indigo-300'
@@ -1395,6 +1665,16 @@ function isNodeDimmed(nodeId: string): boolean {
               </p>
             </div>
 
+            <!-- Return Capability Badge (Critics / Loop Nodes) -->
+            <div
+              v-if="hasReturnCapability(node.id)"
+              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-300 shadow backdrop-blur transition-transform hover:scale-105 cursor-help"
+              :title="getReturnCapabilityTooltip(node.id)"
+            >
+              <span class="text-[9px]">↩</span>
+              <span>{{ t("admin.agents.canReturnBadge") }}</span>
+            </div>
+
             <!-- Active / Done Simulation Status Badges -->
             <div v-if="getAgentSimStatus(node.id) === 'active'" class="absolute -top-2 right-2">
               <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-sky-400 animate-pulse shadow">
@@ -1406,6 +1686,26 @@ function isNodeDimmed(nodeId: string): boolean {
                 ✓ {{ t("admin.agents.doneBadge") }}
               </span>
             </div>
+
+            <!-- Bottom Outgoing Return Port (Handle for Feedback Emitters) -->
+            <div
+              v-if="hasReturnCapability(node.id)"
+              class="absolute -bottom-1.5 right-7 h-3 w-3 rounded-full border border-[#151922] bg-rose-500/80 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              :class="[
+                isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
+              ]"
+              :title="t('admin.agents.returnOutgoingPort')"
+            />
+
+            <!-- Bottom Incoming Return Port (Handle for Feedback Receivers) -->
+            <div
+              v-if="hasReturnReceiver(node.id)"
+              class="absolute -bottom-1.5 left-7 h-3 w-3 rounded-full border border-[#151922] bg-rose-500/60 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
+              :class="[
+                isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
+              ]"
+              :title="t('admin.agents.returnIncomingPort')"
+            />
 
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div

@@ -9,6 +9,10 @@ function getAgentRole(agent: AgentMetadataItem): string {
   return te(key) ? t(key) : agent.role;
 }
 
+function hasReturnLoop(agentId: string): boolean {
+  return ["report_critic", "source_critic", "replan", "claim_verifier"].includes(agentId);
+}
+
 defineProps<{
   agent: AgentMetadataItem;
   selected: boolean;
@@ -107,6 +111,15 @@ function stageColor(stage: string): { badge: string; border: string; glow: strin
           :class="stageColor(agent.stage).badge"
         >
           {{ agent.stage }}
+        </span>
+
+        <span
+          v-if="hasReturnLoop(agent.id)"
+          class="flex items-center gap-0.5 rounded border border-rose-500/35 bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-bold text-rose-300 shadow-sm"
+          :title="t('admin.agents.canReturnBadgeFull')"
+        >
+          <span>↩</span>
+          <span>{{ t("admin.agents.canReturnBadge") }}</span>
         </span>
 
         <span
