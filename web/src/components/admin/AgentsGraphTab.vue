@@ -608,6 +608,8 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.source_critic",
     defaultPayload: "↩ spam_filter_retry",
     arcY: 460,
+    sourceOffsetX: 36,
+    targetOffsetX: 54,
   },
   {
     id: "replan->search",
@@ -616,6 +618,8 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.replan",
     defaultPayload: "↩ gap_analysis_loop",
     arcY: 530,
+    sourceOffsetX: 36,
+    targetOffsetX: 28,
   },
   {
     id: "claim_verifier->analyzer",
@@ -624,6 +628,8 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.claim_verifier",
     defaultPayload: "↩ hallucination_retry",
     arcY: 480,
+    sourceOffsetX: 36,
+    targetOffsetX: 54,
   },
   {
     id: "report_critic->analyzer",
@@ -632,6 +638,8 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.report_critic",
     defaultPayload: "↩ draft_revision",
     arcY: 600,
+    sourceOffsetX: 54,
+    targetOffsetX: 28,
   },
   {
     id: "report_critic->replan",
@@ -640,20 +648,17 @@ const RETURN_CONNECTIONS: ReturnConnectionConfig[] = [
     payloadKey: "admin.agents.returnPayloads.report_critic_replan",
     defaultPayload: "↩ tie_break_search",
     arcY: 670,
+    sourceOffsetX: 28,
+    targetOffsetX: 36,
   },
 ];
 
 const showReturnLoops = ref(true);
 
 const RETURN_CAPABLE_NODES = new Set(["report_critic", "source_critic", "replan", "claim_verifier"]);
-const RETURN_RECEIVER_NODES = new Set(["search", "analyzer", "replan"]);
 
 function hasReturnCapability(nodeId: string): boolean {
   return RETURN_CAPABLE_NODES.has(nodeId);
-}
-
-function hasReturnReceiver(nodeId: string): boolean {
-  return RETURN_RECEIVER_NODES.has(nodeId);
 }
 
 function getReturnCapabilityTooltip(nodeId: string): string {
@@ -665,6 +670,60 @@ function getReturnCapabilityTooltip(nodeId: string): string {
   };
   const key = map[nodeId];
   return key && te(key) ? t(key) : t("admin.agents.canReturnBadgeFull");
+}
+
+interface NodeReturnPort {
+  id: string;
+  connId: string;
+  type: "incoming" | "outgoing";
+  left: number;
+  title: string;
+  isHighlighted: boolean;
+  isActive: boolean;
+}
+
+function getNodeReturnPorts(nodeId: string, nodeWidth: number): NodeReturnPort[] {
+  if (!showReturnLoops.value) return [];
+  const ports: NodeReturnPort[] = [];
+  for (const conn of RETURN_CONNECTIONS) {
+    if (conn.from === nodeId) {
+      const offset = conn.sourceOffsetX ?? RETURN_PORT_OFFSET;
+      const left = nodeWidth - offset;
+      const isWireHovered = hoveredEdgeId.value === conn.id;
+      const isActive =
+        (isSimulating.value || currentStepIndex.value > 0) &&
+        currentStep.value.activeEdges.includes(conn.id);
+      const payload = te(conn.payloadKey) ? t(conn.payloadKey) : conn.defaultPayload;
+      ports.push({
+        id: `out-${conn.id}`,
+        connId: conn.id,
+        type: "outgoing",
+        left,
+        title: `${t("admin.agents.returnOutgoingPort")}: ${payload}`,
+        isHighlighted: isWireHovered || isNodeHighlighted(nodeId),
+        isActive,
+      });
+    }
+    if (conn.to === nodeId) {
+      const offset = conn.targetOffsetX ?? RETURN_PORT_OFFSET;
+      const left = offset;
+      const isWireHovered = hoveredEdgeId.value === conn.id;
+      const isActive =
+        (isSimulating.value || currentStepIndex.value > 0) &&
+        currentStep.value.activeEdges.includes(conn.id);
+      const payload = te(conn.payloadKey) ? t(conn.payloadKey) : conn.defaultPayload;
+      ports.push({
+        id: `in-${conn.id}`,
+        connId: conn.id,
+        type: "incoming",
+        left,
+        title: `${t("admin.agents.returnIncomingPort")}: ${payload}`,
+        isHighlighted: isWireHovered || isNodeHighlighted(nodeId),
+        isActive,
+      });
+    }
+  }
+  return ports;
 }
 
 interface RenderedEdge {
@@ -773,20 +832,32 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
         const x2 = tgt.x + (conn.targetOffsetX ?? RETURN_PORT_OFFSET);
         const y2 = tgt.y + tgt.height;
 
-        const arcY = conn.arcY;
-        const cornerRadius = Math.min(35, Math.abs(x1 - x2) / 4);
+        const effectiveArcY = Math.max(conn.arcY, Math.max(y1, y2) + 45);
+        const drop = Math.min(effectiveArcY - y1, effectiveArcY - y2);
+        const dx = Math.abs(x1 - x2);
+        const cornerRadius = Math.min(24, Math.max(4, Math.min(dx / 2, drop / 2)));
 
-        // Orthogonal rounded bus curve going down, left, and up:
-        const d =
-          `M ${x1} ${y1} ` +
-          `V ${arcY - cornerRadius} ` +
-          `Q ${x1} ${arcY} ${x1 - cornerRadius} ${arcY} ` +
-          `L ${x2 + cornerRadius} ${arcY} ` +
-          `Q ${x2} ${arcY} ${x2} ${arcY - cornerRadius} ` +
-          `V ${y2}`;
+        let d = "";
+        if (x1 >= x2) {
+          d =
+            `M ${x1} ${y1} ` +
+            `V ${effectiveArcY - cornerRadius} ` +
+            `A ${cornerRadius} ${cornerRadius} 0 0 1 ${x1 - cornerRadius} ${effectiveArcY} ` +
+            `L ${x2 + cornerRadius} ${effectiveArcY} ` +
+            `A ${cornerRadius} ${cornerRadius} 0 0 1 ${x2} ${effectiveArcY - cornerRadius} ` +
+            `V ${y2}`;
+        } else {
+          d =
+            `M ${x1} ${y1} ` +
+            `V ${effectiveArcY - cornerRadius} ` +
+            `A ${cornerRadius} ${cornerRadius} 0 0 0 ${x1 + cornerRadius} ${effectiveArcY} ` +
+            `L ${x2 - cornerRadius} ${effectiveArcY} ` +
+            `A ${cornerRadius} ${cornerRadius} 0 0 0 ${x2} ${effectiveArcY - cornerRadius} ` +
+            `V ${y2}`;
+        }
 
         const midX = (x1 + x2) / 2;
-        const midY = arcY;
+        const midY = effectiveArcY;
 
         const isWireHovered = hoveredEdgeId.value === conn.id;
         const isHighlighted = isWireHovered;
@@ -1658,26 +1729,23 @@ function isNodeDimmed(nodeId: string): boolean {
               </span>
             </div>
 
-            <!-- Bottom Outgoing Return Port (Handle for Feedback Emitters) -->
+            <!-- Bottom Return Ports (Dedicated handles for each feedback loop) -->
             <div
-              v-if="hasReturnCapability(node.id)"
-              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] bg-rose-500/80 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
-              :style="{ left: `${node.width - RETURN_PORT_OFFSET}px` }"
+              v-for="port in getNodeReturnPorts(node.id, node.width)"
+              :key="port.id"
+              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] shadow transition cursor-pointer group-hover:scale-125"
               :class="[
-                isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
+                port.type === 'outgoing' ? 'bg-rose-500/85 hover:bg-rose-400' : 'bg-rose-500/65 hover:bg-rose-400',
+                port.isActive
+                  ? 'bg-rose-300 ring-2 ring-rose-400/80 scale-125 animate-pulse'
+                  : port.isHighlighted
+                  ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125'
+                  : '',
               ]"
-              :title="t('admin.agents.returnOutgoingPort')"
-            />
-
-            <!-- Bottom Incoming Return Port (Handle for Feedback Receivers) -->
-            <div
-              v-if="hasReturnReceiver(node.id)"
-              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] bg-rose-500/60 shadow transition group-hover:scale-125 group-hover:bg-rose-400"
-              :style="{ left: `${RETURN_PORT_OFFSET}px` }"
-              :class="[
-                isNodeHighlighted(node.id) ? 'bg-rose-400 ring-2 ring-rose-400/60 scale-125' : '',
-              ]"
-              :title="t('admin.agents.returnIncomingPort')"
+              :style="{ left: `${port.left}px` }"
+              :title="port.title"
+              @mouseenter="onEdgeHover(port.connId)"
+              @mouseleave="onEdgeHover(null)"
             />
 
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
