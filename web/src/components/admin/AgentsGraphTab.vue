@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useUiStore } from "@/stores/ui";
 import { adminApi } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
 
 const { t, te } = useI18n();
-const ui = useUiStore();
 
 function getNodeName(nodeId: string, fallback: string): string {
   const key = `admin.agents.names.${nodeId}`;
@@ -1244,19 +1242,6 @@ function isNodeDimmed(nodeId: string): boolean {
             {{ RETURN_CONNECTIONS.length }}
           </span>
         </button>
-
-        <!-- Language Switcher in Graph Toolbar -->
-        <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono mr-1">
-          <button
-            v-for="loc in (['ru', 'en', 'es'] as const)"
-            :key="loc"
-            class="rounded-lg px-2 py-1 text-[10.5px] font-bold uppercase transition"
-            :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
-            @click="ui.setLocale(loc)"
-          >
-            {{ loc }}
-          </button>
-        </div>
 
         <!-- Simulation Run / Pause Toggle -->
         <div class="flex items-center gap-1 rounded-xl border border-bd bg-surface/70 p-1">
