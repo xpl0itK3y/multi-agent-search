@@ -20,12 +20,18 @@ const busy = ref(false);
 const error = ref<string | null>(null);
 const googleEnabled = ref(false);
 
-onMounted(async () => {
+async function loadAuthConfig(retries = 2) {
   try {
-    googleEnabled.value = (await api.authConfig()).google_oauth;
+    googleEnabled.value = Boolean((await api.authConfig())?.google_oauth);
   } catch {
-    /* config endpoint optional */
+    if (retries > 0) {
+      setTimeout(() => loadAuthConfig(retries - 1), 1000);
+    }
   }
+}
+
+onMounted(() => {
+  loadAuthConfig();
 });
 
 function googleLogin() {
