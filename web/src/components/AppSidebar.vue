@@ -12,7 +12,11 @@ import SparkLogo from "@/components/SparkLogo.vue";
 const ui = useUiStore();
 const auth = useAuthStore();
 
-const displayName = computed(() => auth.user?.name || auth.user?.email || ui.userName);
+const displayName = computed(() => {
+  const user = auth.user;
+  if (!user) return ui.userName || "";
+  return user.name?.trim() || user.email?.split("@")[0] || ui.userName || "";
+});
 const avatarUrl = computed(() => auth.user?.avatar_url || null);
 
 async function logout() {

@@ -15,6 +15,30 @@ const ru = {
     evening: "Добрый вечер",
     night: "Доброй ночи",
     greeting: "{part}, {name}",
+    examplesTitle: "Примеры исследований",
+    insertPrompt: "Вставить",
+    examples: {
+      ai: {
+        tag: "Архитектура AI",
+        title: "Сравнение моделей рассуждений",
+        prompt: "Сравни модели DeepSeek-V3, Claude 3.7 Sonnet и OpenAI o3: качество рассуждений, архитектурные особенности, окно контекста и стоимость API",
+      },
+      robotaxi: {
+        tag: "Анализ рынка",
+        title: "Рынок автономного транспорта и роботакси",
+        prompt: "Проведи подробный анализ мирового рынка роботакси в 2026 году: ключевые игроки (Waymo, Tesla Cybercab, Baidu), регуляторика и экономика поездки",
+      },
+      rag: {
+        tag: "Инженерия",
+        title: "Архитектура производственного Agentic RAG",
+        prompt: "Исследуй современные архитектуры Agentic RAG: гибридный поиск (Dense + BM25), GraphRAG, reranking через ColBERT и автоматическая верификация фактов",
+      },
+      biotech: {
+        tag: "Биотехнологии",
+        title: "Прорывы в редактировании генома CRISPR",
+        prompt: "Сделай обзор последних клинических достижений в генной терапии на базе CRISPR и эпигенетического редактирования: одобренные препараты и исследования 2025–2026 гг.",
+      },
+    },
   },
   composer: {
     placeholder: "О чём провести исследование?",
@@ -773,6 +797,30 @@ const en: typeof ru = {
     evening: "Good evening",
     night: "Good night",
     greeting: "{part}, {name}",
+    examplesTitle: "Research Examples",
+    insertPrompt: "Insert",
+    examples: {
+      ai: {
+        tag: "AI Architecture",
+        title: "Reasoning models benchmark & comparison",
+        prompt: "Compare DeepSeek-V3, Claude 3.7 Sonnet, and OpenAI o3: reasoning benchmarks, architectural innovations, context length, and API pricing",
+      },
+      robotaxi: {
+        tag: "Market Analysis",
+        title: "Autonomous mobility & robotaxi market",
+        prompt: "Provide an in-depth market analysis of robotaxis and autonomous vehicles in 2026: key players (Waymo, Tesla Cybercab, Baidu), regulations, and unit economics",
+      },
+      rag: {
+        tag: "Engineering",
+        title: "Production Agentic RAG architecture",
+        prompt: "Explore modern production Agentic RAG architectures: hybrid Dense + BM25 retrieval, GraphRAG, ColBERT reranking, and self-reflective fact validation",
+      },
+      biotech: {
+        tag: "Biotechnology",
+        title: "CRISPR gene editing breakthroughs",
+        prompt: "Review the latest clinical milestones in CRISPR gene editing and epigenetic therapy: approved treatments and key 2025–2026 trials",
+      },
+    },
   },
   composer: {
     placeholder: "What should we research?",
@@ -1531,6 +1579,30 @@ const es: typeof ru = {
     evening: "Buenas noches",
     night: "Buenas noches",
     greeting: "{part}, {name}",
+    examplesTitle: "Ejemplos de investigación",
+    insertPrompt: "Insertar",
+    examples: {
+      ai: {
+        tag: "Arquitectura IA",
+        title: "Comparativa de modelos de razonamiento",
+        prompt: "Compara DeepSeek-V3, Claude 3.7 Sonnet y OpenAI o3: calidad de razonamiento, innovaciones técnicas, ventana de contexto y costes de API",
+      },
+      robotaxi: {
+        tag: "Análisis de Mercado",
+        title: "Mercado de vehículos autónomos y robotaxis",
+        prompt: "Realiza un análisis exhaustivo del mercado de robotaxis y conducción autónoma en 2026: actores clave (Waymo, Tesla Cybercab, Baidu), regulación y modelos de negocio",
+      },
+      rag: {
+        tag: "Ingeniería",
+        title: "Arquitectura de Agentic RAG en producción",
+        prompt: "Investiga arquitecturas de Agentic RAG en producción: recuperación híbrida Dense + BM25, GraphRAG, reordenación ColBERT y verificación de alucinaciones",
+      },
+      biotech: {
+        tag: "Biotecnología",
+        title: "Avances en edición genética con CRISPR",
+        prompt: "Revisa los últimos hitos clínicos en terapia génica con CRISPR y edición epigenética: tratamientos aprobados y ensayos destacados de 2025–2026",
+      },
+    },
   },
   composer: {
     placeholder: "¿Qué investigamos?",

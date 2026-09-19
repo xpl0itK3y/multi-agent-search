@@ -74,6 +74,16 @@ function onKeydown(e: KeyboardEvent) {
     submit();
   }
 }
+
+function focus() {
+  if (textarea.value) {
+    textarea.value.focus();
+    const len = textarea.value.value.length;
+    textarea.value.setSelectionRange(len, len);
+  }
+}
+
+defineExpose({ focus });
 </script>
 
 <template>
