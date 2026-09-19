@@ -327,21 +327,58 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <AgentActivityConsole
-        v-if="!done || trace.length"
-        :entries="trace"
-        :reasoning="reasoning"
-        :live="!done"
-        :status="status"
-      />
+      <!-- UNIFIED RESEARCH & AGENT CONTAINER -->
+      <div class="rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden transition-all duration-300">
+        <!-- Agent Activity Console (embedded inside unified container) -->
+        <AgentActivityConsole
+          v-if="!done || trace.length"
+          :entries="trace"
+          :reasoning="reasoning"
+          :live="!done"
+          :status="status"
+          :embedded="true"
+        />
 
-      <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within).
-           Hidden for a cancelled run — there's no report, just the "Отменено" status. -->
-      <div
-        v-if="(report || done) && status !== 'cancelled'"
-        class="animate-fade-in h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
-      >
-        <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" @refreshed="(id) => emit('refreshed', { id, prompt })" />
+        <!-- Error Card (when status === 'failed' or 'timeout') -->
+        <div
+          v-if="status === 'failed' || status === 'timeout'"
+          class="border-t border-red-500/30 bg-red-500/10 p-5"
+        >
+          <div class="flex items-start gap-3">
+            <span class="text-2xl shrink-0">⚠️</span>
+            <div class="min-w-0 flex-1">
+              <h4 class="font-semibold text-red-400 text-sm">
+                {{ $t("research.failedTitle") || "Исследование завершилось с ошибкой" }}
+              </h4>
+              <p class="mt-1 text-xs text-red-300/90 leading-relaxed break-words">
+                {{ errorMsg || report || "Произошла ошибка при анализе данных. Пожалуйста, проверьте параметры и повторите попытку." }}
+              </p>
+              <div class="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  class="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5"
+                  @click="resume"
+                >
+                  <span>↻</span>
+                  <span>{{ $t("research.resume") || "Повторить попытку" }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Artifact Panel (Report, Dashboard, Sources, etc.) - ONLY when completed with a real report -->
+        <div
+          v-else-if="status === 'completed' && report"
+          class="border-t border-bd/80 h-[68vh] min-h-[380px] overflow-hidden bg-surface/30"
+        >
+          <ArtifactPanel
+            :id="props.id"
+            :report="report"
+            :is-final="isFinal"
+            @refreshed="(id) => emit('refreshed', { id, prompt })"
+          />
+        </div>
       </div>
     </template>
   </div>

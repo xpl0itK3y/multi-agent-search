@@ -15,9 +15,9 @@ class _StubLLM:
 
 def test_resolve_model_id_rejects_unknown_and_falls_back():
     assert model_catalog.resolve_model_id("evil-model", "deepseek-v4-pro") == "deepseek-v4-pro"
-    assert model_catalog.resolve_model_id("deepseek-v4.1-flash", "deepseek-v4-pro") == "deepseek-v4.1-flash"
-    assert model_catalog.resolve_model_id("deepseek-v4-flash", "deepseek-v4-pro") == "deepseek-v4.1-flash"
-    assert model_catalog.resolve_model_id("deepseek-flash", "deepseek-v4-pro") == "deepseek-v4.1-flash"
+    assert model_catalog.resolve_model_id("deepseek-v4.1-flash", "deepseek-v4-pro") == "deepseek-flash"
+    assert model_catalog.resolve_model_id("deepseek-v4-flash", "deepseek-v4-pro") == "deepseek-flash"
+    assert model_catalog.resolve_model_id("deepseek-flash", "deepseek-v4-pro") == "deepseek-flash"
     assert model_catalog.resolve_model_id(None, "deepseek-v4-pro") == "deepseek-v4-pro"
 
 
@@ -26,7 +26,7 @@ def test_catalog_exposes_default_and_is_serializable():
     ids = {m["id"] for m in models}
     assert any(m["default"] for m in models)
     assert model_catalog.DEFAULT_MODEL_ID in ids
-    assert "deepseek-v4.1-flash" in ids
+    assert "deepseek-flash" in ids
     assert "deepseek-chat" in ids  # fast chat model is selectable
     assert model_catalog.resolve_model_id("deepseek-chat", "deepseek-v4-pro") == "deepseek-chat"
 
@@ -37,9 +37,9 @@ def test_analyzer_threads_selected_model_to_llm():
     analyzer._generate_report(
         {"original_prompt": "x", "gathered_data": [{"source_id": "S1", "content": "c", "url": "http://e.com"}]},
         "en",
-        model="deepseek-v4.1-flash",
+        model="deepseek-flash",
     )
-    assert llm.models == ["deepseek-v4.1-flash"]
+    assert llm.models == ["deepseek-flash"]
 
 
 def test_analyzer_passes_none_model_when_unset():

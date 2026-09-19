@@ -3,21 +3,36 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
 
-const props = defineProps<{
-  entries: TraceEntry[];
-  reasoning?: string;
-  live?: boolean;
-  status?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    entries: TraceEntry[];
+    reasoning?: string;
+    live?: boolean;
+    status?: string;
+    embedded?: boolean;
+  }>(),
+  {
+    embedded: false,
+  }
+);
 
 const { t, te } = useI18n();
 
-// Persist open/collapse state across visits
+// Persist open/collapse state across visits (defaults to collapsed if completed)
 const CONSOLE_OPEN_KEY = "activity_console.open";
 const open = ref(
-  typeof localStorage !== "undefined"
+  props.status === "completed"
+    ? false
+    : typeof localStorage !== "undefined"
     ? localStorage.getItem(CONSOLE_OPEN_KEY) !== "0"
     : true
+);
+
+watch(
+  () => props.status,
+  (s) => {
+    if (s === "completed") open.value = false;
+  }
 );
 
 watch(open, (v) => {
@@ -156,6 +171,22 @@ const AGENT_MAP: Record<string, AgentMeta> = {
 };
 
 const currentAgent = computed<AgentMeta>(() => {
+  if (props.status === "completed") {
+    return {
+      name: "Аналитический отчёт",
+      badge: "Готово ✓",
+      avatar: "📄",
+      colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+    };
+  }
+  if (props.status === "failed") {
+    return {
+      name: "Сбой анализа",
+      badge: "Ошибка",
+      avatar: "⚠️",
+      colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
+    };
+  }
   const entry = currentEntry.value;
   if (!entry || !entry.agent) {
     if (currentPhase.value === "synthesis") return AGENT_MAP.AnalyzerAgent;
@@ -170,6 +201,16 @@ const currentAgent = computed<AgentMeta>(() => {
       colorClass: "text-accent bg-accent/10 border-accent/30",
     }
   );
+});
+
+const currentStatusDetail = computed(() => {
+  if (props.status === "completed") {
+    return "Все 5 этапов исследования завершены. Итоговый отчёт готов к изучению.";
+  }
+  if (props.status === "failed") {
+    return "Произошла ошибка при формировании отчёта.";
+  }
+  return currentEntry.value?.detail || (te("trace.live_status") ? t("trace.live_status") : "Агенты работают в реальном времени");
 });
 
 // Filters
@@ -196,6 +237,36 @@ const filteredEntries = computed(() => {
   }
   return props.entries;
 });
+
+// Micro-actions feed auto-scroll
+const feedBox = ref<HTMLElement | null>(null);
+const userHasScrolledUp = ref(false);
+
+function onFeedScroll() {
+  if (!feedBox.value) return;
+  const { scrollTop, scrollHeight, clientHeight } = feedBox.value;
+  const atBottom = scrollHeight - (scrollTop + clientHeight) < 60;
+  userHasScrolledUp.value = !atBottom;
+}
+
+function scrollToBottom(behavior: ScrollBehavior = "smooth") {
+  if (!feedBox.value) return;
+  feedBox.value.scrollTo({
+    top: feedBox.value.scrollHeight,
+    behavior,
+  });
+}
+
+watch(
+  () => props.entries.length,
+  () => {
+    if (props.live && !userHasScrolledUp.value) {
+      nextTick(() => {
+        scrollToBottom("smooth");
+      });
+    }
+  }
+);
 
 // Reasoning auto-scroll
 const reasoningBox = ref<HTMLElement | null>(null);
@@ -231,7 +302,10 @@ function formatTime(isoStr?: string): string {
 </script>
 
 <template>
-  <div class="rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden transition-all duration-300">
+  <div
+    class="transition-all duration-300"
+    :class="embedded ? '' : 'rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden'"
+  >
     <!-- TOP AGENT HUD HEADER BAR -->
     <div class="px-4 py-3 bg-surface/90 border-b border-bd flex flex-wrap items-center justify-between gap-3">
       <!-- Active Agent Identity -->
@@ -255,7 +329,7 @@ function formatTime(isoStr?: string): string {
           </div>
           <div class="text-xs text-muted truncate flex items-center gap-1.5">
             <span v-if="live" class="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
-            <span class="truncate">{{ currentEntry?.detail || $t("trace.live_status") }}</span>
+            <span class="truncate">{{ currentStatusDetail }}</span>
           </div>
         </div>
       </div>
@@ -269,10 +343,10 @@ function formatTime(isoStr?: string): string {
 
         <button
           class="flex items-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition"
-          :title="open ? 'Свернуть пульт' : 'Развернуть пульт'"
+          :title="open ? 'Свернуть журнал' : 'Развернуть журнал'"
           @click="open = !open"
         >
-          <span>{{ open ? "Свернуть" : "Развернуть" }}</span>
+          <span>{{ open ? "Свернуть журнал" : `Журнал агентов (${entries.length})` }}</span>
           <span class="text-[10px]">{{ open ? "▾" : "▸" }}</span>
         </button>
       </div>
@@ -382,86 +456,104 @@ function formatTime(isoStr?: string): string {
       </div>
 
       <!-- STREAM OF MICRO-ACTIONS -->
-      <div class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-bd">
+      <div class="relative">
         <div
-          v-for="(entry, idx) in filteredEntries"
-          :key="idx"
-          class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-all text-xs"
-          :class="{
-            'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1,
-          }"
+          ref="feedBox"
+          class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-bd"
+          @scroll="onFeedScroll"
         >
-          <div class="flex items-start justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">
-              <span
-                class="flex items-center justify-center h-4 w-4 rounded-full text-[9px] font-bold shrink-0"
-                :class="live && idx === filteredEntries.length - 1 ? 'bg-accent text-white animate-pulse' : 'bg-surface border border-bd text-muted'"
-              >
-                {{ idx + 1 }}
-              </span>
+          <div
+            v-for="(entry, idx) in filteredEntries"
+            :key="idx"
+            class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-all text-xs"
+            :class="{
+              'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1,
+            }"
+          >
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span
+                  class="flex items-center justify-center h-4 w-4 rounded-full text-[9px] font-bold shrink-0"
+                  :class="live && idx === filteredEntries.length - 1 ? 'bg-accent text-white animate-pulse' : 'bg-surface border border-bd text-muted'"
+                >
+                  {{ idx + 1 }}
+                </span>
 
-              <span v-if="entry.agent" class="font-medium text-ink truncate">
-                {{ entry.agent }}
-              </span>
-              <span v-else class="font-medium text-ink truncate">
-                {{ stepLabel(entry.step) }}
-              </span>
+                <span v-if="entry.agent" class="font-medium text-ink truncate">
+                  {{ entry.agent }}
+                </span>
+                <span v-else class="font-medium text-ink truncate">
+                  {{ stepLabel(entry.step) }}
+                </span>
 
-              <span
-                v-if="entry.action"
-                class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
-              >
-                {{ entry.action }}
+                <span
+                  v-if="entry.action"
+                  class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
+                >
+                  {{ entry.action }}
+                </span>
+              </div>
+
+              <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
+                {{ formatTime(entry.timestamp) }}
               </span>
             </div>
 
-            <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
-              {{ formatTime(entry.timestamp) }}
-            </span>
+            <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
+              {{ entry.detail }}
+            </p>
+
+            <!-- Metrics badges if present -->
+            <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
+              <span
+                v-for="(val, key) in entry.metrics"
+                :key="key"
+                class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
+              >
+                <span class="opacity-60">{{ key }}:</span>
+                <span class="font-semibold text-ink">{{ val }}</span>
+              </span>
+            </div>
+
+            <!-- Discovered / Scraped Sources Chips -->
+            <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
+              <a
+                v-for="(s, j) in entry.sources"
+                :key="j"
+                :href="s.url || `https://${s.domain}`"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
+                :title="s.title || s.domain"
+              >
+                <img
+                  :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
+                  alt=""
+                  class="h-3 w-3 shrink-0 rounded-xs"
+                  loading="lazy"
+                  @error="($event.target as HTMLImageElement).style.display = 'none'"
+                />
+                <span class="truncate">{{ s.domain }}</span>
+                <span class="text-[9px] text-muted opacity-60">↗</span>
+              </a>
+            </div>
           </div>
 
-          <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
-            {{ entry.detail }}
-          </p>
-
-          <!-- Metrics badges if present -->
-          <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
-            <span
-              v-for="(val, key) in entry.metrics"
-              :key="key"
-              class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
-            >
-              <span class="opacity-60">{{ key }}:</span>
-              <span class="font-semibold text-ink">{{ val }}</span>
-            </span>
-          </div>
-
-          <!-- Discovered / Scraped Sources Chips -->
-          <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
-            <a
-              v-for="(s, j) in entry.sources"
-              :key="j"
-              :href="s.url || `https://${s.domain}`"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
-              :title="s.title || s.domain"
-            >
-              <img
-                :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
-                alt=""
-                class="h-3 w-3 shrink-0 rounded-xs"
-                loading="lazy"
-                @error="($event.target as HTMLImageElement).style.display = 'none'"
-              />
-              <span class="truncate">{{ s.domain }}</span>
-              <span class="text-[9px] text-muted opacity-60">↗</span>
-            </a>
+          <div v-if="!filteredEntries.length" class="py-6 text-center text-xs text-muted">
+            {{ $t("artifact.trailEmpty") }}
           </div>
         </div>
 
-        <div v-if="!filteredEntries.length" class="py-6 text-center text-xs text-muted">
-          {{ $t("artifact.trailEmpty") }}
+        <!-- Floating button to return to latest actions -->
+        <div v-if="userHasScrolledUp && live" class="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
+          <button
+            type="button"
+            class="pointer-events-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white shadow-lg transition hover:bg-accent/90"
+            @click="userHasScrolledUp = false; scrollToBottom('smooth');"
+          >
+            <span>↓</span>
+            <span>{{ te('trace.to_latest') ? t('trace.to_latest') : 'К новым действиям' }}</span>
+          </button>
         </div>
       </div>
     </div>

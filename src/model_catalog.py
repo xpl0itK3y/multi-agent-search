@@ -31,7 +31,7 @@ MODEL_CATALOG: tuple[ModelOption, ...] = (
         default=True,
     ),
     ModelOption(
-        id="deepseek-v4.1-flash",
+        id="deepseek-flash",
         label="V4.1 Flash",
         description="Быстрее и дешевле. Новейшая архитектура MoE 552B с контекстом 1M токенов.",
         tier="flash",
@@ -48,8 +48,8 @@ MODEL_CATALOG: tuple[ModelOption, ...] = (
 
 _BY_ID: dict[str, ModelOption] = {option.id: option for option in MODEL_CATALOG}
 _ALIASES: dict[str, str] = {
-    "deepseek-v4-flash": "deepseek-v4.1-flash",
-    "deepseek-flash": "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
 }
 DEFAULT_MODEL_ID: str = next((o.id for o in MODEL_CATALOG if o.default), MODEL_CATALOG[0].id)
 
