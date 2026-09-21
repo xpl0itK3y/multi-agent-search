@@ -13,7 +13,7 @@ validated) guard new writes against out-of-enum statuses.
 from alembic import op
 
 revision = "20260917_000026"
-down_revision = "20260909_000024"
+down_revision = "20260917_000025"
 branch_labels = None
 depends_on = None
 

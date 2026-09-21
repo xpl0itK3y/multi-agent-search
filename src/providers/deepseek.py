@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import logging
 import random
 import threading
@@ -14,9 +15,66 @@ logger = logging.getLogger(__name__)
 
 _RETRYABLE = (RateLimitError, APIConnectionError, APITimeoutError)
 
-# DeepSeek Chat pricing (USD per 1M tokens, cache-miss blended estimate)
-_PRICE_INPUT_PER_M  = 0.14
-_PRICE_OUTPUT_PER_M = 1.10
+# DeepSeek API pricing per 1M tokens (USD)
+# Source: https://api-docs.deepseek.com/quick_start/pricing/
+# Format: (input_cache_miss, input_cache_hit, output)
+_DEEPSEEK_MODEL_PRICING: dict[str, dict[str, tuple[float, float, float]]] = {
+    "pro": {
+        "off_peak": (0.66, 0.022, 1.98),
+        "peak":     (1.32, 0.044, 3.96),
+    },
+    "flash": {
+        "off_peak": (0.15, 0.003, 0.60),
+        "peak":     (0.30, 0.006, 1.20),
+    },
+}
+
+# Legacy fallback rates for test mocks (e.g. "deepseek-test" in test_llm_cost_metrics.py)
+_DEFAULT_PRICE_INPUT_PER_M = 0.14
+_DEFAULT_PRICE_OUTPUT_PER_M = 1.10
+
+
+def is_deepseek_peak_hours(dt: datetime | None = None) -> bool:
+    """Check whether a given UTC time falls within DeepSeek's Peak hours.
+
+    Peak hours: Monday to Friday, 01:00–04:00 and 06:00–10:00 UTC.
+    All other times (including weekends) are Off-Peak (50% discount).
+    """
+    now = dt or datetime.now(timezone.utc)
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    return (1 <= now.hour < 4) or (6 <= now.hour < 10)
+
+
+def calculate_deepseek_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cache_hit_tokens: int = 0,
+    at_time: datetime | None = None,
+) -> float:
+    """Calculate the estimated USD cost of an LLM call according to DeepSeek's model-specific pricing and context caching."""
+    m = (model or "").lower()
+    if "pro" in m:
+        tier = "pro"
+    elif "flash" in m or "chat" in m:
+        tier = "flash"
+    elif "test" in m:
+        return (prompt_tokens * _DEFAULT_PRICE_INPUT_PER_M + completion_tokens * _DEFAULT_PRICE_OUTPUT_PER_M) / 1_000_000
+    else:
+        tier = "pro" if "pro" in settings.deepseek_model.lower() else "flash"
+
+    period = "peak" if is_deepseek_peak_hours(at_time) else "off_peak"
+    miss_rate, hit_rate, out_rate = _DEEPSEEK_MODEL_PRICING[tier][period]
+
+    cache_hit = min(max(0, cache_hit_tokens), prompt_tokens)
+    cache_miss = max(0, prompt_tokens - cache_hit)
+
+    return (
+        cache_miss * miss_rate
+        + cache_hit * hit_rate
+        + completion_tokens * out_rate
+    ) / 1_000_000
 
 
 class DeepSeekProvider(LLMProvider):
@@ -38,33 +96,51 @@ class DeepSeekProvider(LLMProvider):
         self._lock = threading.Lock()
         self._prompt_tokens: int = 0
         self._completion_tokens: int = 0
+        self._cache_hit_tokens: int = 0
+        self._cost_usd: float = 0.0
 
     # ── token tracking ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_usage(usage) -> tuple[int, int, int]:
+        pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        ct = int(getattr(usage, "completion_tokens", 0) or 0)
+        cht = getattr(usage, "prompt_cache_hit_tokens", None)
+        if cht is None and hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            cht = getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+        return pt, ct, int(cht or 0)
 
     def _record_usage(
         self,
         prompt_tokens: int,
         completion_tokens: int,
         model: str,
+        cache_hit_tokens: int = 0,
     ) -> None:
+        cost = calculate_deepseek_cost(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_hit_tokens=cache_hit_tokens,
+        )
         with self._lock:
-            self._prompt_tokens     += prompt_tokens
-            self._completion_tokens += completion_tokens
-        cost = (
-            prompt_tokens * _PRICE_INPUT_PER_M
-            + completion_tokens * _PRICE_OUTPUT_PER_M
-        ) / 1_000_000
+            self._prompt_tokens     = getattr(self, "_prompt_tokens", 0) + prompt_tokens
+            self._completion_tokens = getattr(self, "_completion_tokens", 0) + completion_tokens
+            self._cache_hit_tokens  = getattr(self, "_cache_hit_tokens", 0) + cache_hit_tokens
+            self._cost_usd          = getattr(self, "_cost_usd", 0.0) + cost
         observe_llm_cost(cost, model)
 
     @property
     def token_usage(self) -> dict:
         with self._lock:
-            pt = self._prompt_tokens
-            ct = self._completion_tokens
-        cost = (pt * _PRICE_INPUT_PER_M + ct * _PRICE_OUTPUT_PER_M) / 1_000_000
+            pt = getattr(self, "_prompt_tokens", 0)
+            ct = getattr(self, "_completion_tokens", 0)
+            cht = getattr(self, "_cache_hit_tokens", 0)
+            cost = getattr(self, "_cost_usd", 0.0)
         return {
             "prompt_tokens":      pt,
             "completion_tokens":  ct,
+            "cache_hit_tokens":   cht,
             "total_tokens":       pt + ct,
             "estimated_cost_usd": round(cost, 4),
         }
@@ -73,6 +149,8 @@ class DeepSeekProvider(LLMProvider):
         with self._lock:
             self._prompt_tokens     = 0
             self._completion_tokens = 0
+            self._cache_hit_tokens  = 0
+            self._cost_usd          = 0.0
 
     # ── generate ──────────────────────────────────────────────────────────────
 
@@ -86,7 +164,10 @@ class DeepSeekProvider(LLMProvider):
     ) -> str:
         # Per-call model override (e.g. a reasoner for planning); pop so it doesn't
         # collide with the explicit model= below.
-        model = kwargs.pop("model", None) or self.model
+        from src.model_catalog import resolve_model_id
+
+        raw_model = kwargs.pop("model", None) or self.model
+        model = resolve_model_id(raw_model, self.model)
         # Streaming is also needed when we only want reasoning tokens.
         use_stream = streaming_callback is not None or reasoning_callback is not None
         if use_stream:
@@ -114,10 +195,12 @@ class DeepSeekProvider(LLMProvider):
 
                     if not use_stream:
                         if response.usage:
+                            pt, ct, cht = self._extract_usage(response.usage)
                             self._record_usage(
-                                response.usage.prompt_tokens,
-                                response.usage.completion_tokens,
+                                pt,
+                                ct,
                                 model,
+                                cache_hit_tokens=cht,
                             )
                         return response.choices[0].message.content
 
@@ -126,10 +209,12 @@ class DeepSeekProvider(LLMProvider):
                     for chunk in response:
                         # final usage chunk (stream_options include_usage)
                         if chunk.usage:
+                            pt, ct, cht = self._extract_usage(chunk.usage)
                             self._record_usage(
-                                chunk.usage.prompt_tokens,
-                                chunk.usage.completion_tokens,
+                                pt,
+                                ct,
                                 model,
+                                cache_hit_tokens=cht,
                             )
                         if not chunk.choices:
                             continue

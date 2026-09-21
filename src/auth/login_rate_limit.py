@@ -35,6 +35,10 @@ class SlidingWindowLimiter:
             hits.append(now)
             return True
 
+    def reset(self) -> None:
+        with self._lock:
+            self._hits.clear()
+
 
 _auth_limiter = SlidingWindowLimiter()
 

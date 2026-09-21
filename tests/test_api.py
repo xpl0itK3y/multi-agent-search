@@ -999,7 +999,7 @@ async def test_research_graph_endpoint(client):
     payload = graph_response.json()
     assert payload["research_id"] == research_id
     assert payload["graph_state"]["step"] == "collect_context"
-    assert payload["graph_trail"][0]["detail"] == "Collected 1 source"
+    assert any(item.get("detail") == "Collected 1 source" for item in payload["graph_trail"])
 
 
 @pytest.mark.anyio

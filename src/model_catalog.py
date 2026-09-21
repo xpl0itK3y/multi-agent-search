@@ -31,9 +31,9 @@ MODEL_CATALOG: tuple[ModelOption, ...] = (
         default=True,
     ),
     ModelOption(
-        id="deepseek-v4-flash",
-        label="V4 Flash",
-        description="Быстрее и дешевле. Для лёгких задач и быстрых прогонов.",
+        id="deepseek-flash",
+        label="V4.1 Flash",
+        description="Быстрее и дешевле. Новейшая архитектура MoE 552B с контекстом 1M токенов.",
         tier="flash",
         reasoning=False,
     ),
@@ -47,6 +47,10 @@ MODEL_CATALOG: tuple[ModelOption, ...] = (
 )
 
 _BY_ID: dict[str, ModelOption] = {option.id: option for option in MODEL_CATALOG}
+_ALIASES: dict[str, str] = {
+    "deepseek-v4.1-flash": "deepseek-flash",
+    "deepseek-v4-flash": "deepseek-flash",
+}
 DEFAULT_MODEL_ID: str = next((o.id for o in MODEL_CATALOG if o.default), MODEL_CATALOG[0].id)
 
 
@@ -56,11 +60,17 @@ def list_models() -> list[dict]:
 
 
 def get_model(model_id: str | None) -> ModelOption | None:
-    return _BY_ID.get(model_id or "")
+    if not model_id:
+        return None
+    canonical_id = _ALIASES.get(model_id, model_id)
+    return _BY_ID.get(canonical_id)
 
 
 def is_selectable(model_id: str | None) -> bool:
-    return model_id in _BY_ID
+    if not model_id:
+        return False
+    canonical_id = _ALIASES.get(model_id, model_id)
+    return canonical_id in _BY_ID
 
 
 def resolve_model_id(model_id: str | None, fallback: str) -> str:
@@ -68,4 +78,7 @@ def resolve_model_id(model_id: str | None, fallback: str) -> str:
 
     Guards against arbitrary/unsafe model ids coming from the client.
     """
-    return model_id if is_selectable(model_id) else fallback
+    if not model_id:
+        return fallback
+    canonical_id = _ALIASES.get(model_id, model_id)
+    return canonical_id if canonical_id in _BY_ID else fallback

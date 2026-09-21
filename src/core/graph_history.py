@@ -82,6 +82,8 @@ def compact_graph_trail(
             normalized.get("timestamp"),
             normalized.get("step"),
             normalized.get("detail"),
+            normalized.get("agent"),
+            normalized.get("action"),
         )
         if dedupe_key in seen:
             continue

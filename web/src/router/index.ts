@@ -26,6 +26,17 @@ const router = createRouter({
       props: true,
       meta: { public: true },
     },
+    {
+      path: "/admin",
+      name: "admin",
+      component: () => import("@/views/AdminView.vue"),
+      meta: { requiresAdmin: true },
+    },
+    {
+      path: "/settings",
+      name: "settings",
+      component: () => import("@/views/SettingsView.vue"),
+    },
   ],
 });
 
@@ -34,8 +45,12 @@ const router = createRouter({
 router.beforeEach((to) => {
   if (to.meta.public) return true;
   const auth = useAuthStore();
-  if (to.name !== "login" && !auth.user) return { name: "login" };
-  if (to.name === "login" && auth.user) return { name: "home" };
+  if (to.name !== "login" && !auth.user) {
+    return { name: "login", query: { redirect: to.fullPath } };
+  }
+  if (to.name === "login" && auth.user) {
+    return (to.query.redirect as string) || { name: "home" };
+  }
   return true;
 });
 

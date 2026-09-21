@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     admin_emails: str = ""
     # Per-IP login/register attempts allowed per minute (auth-enabled mode; 0 disables).
     auth_rate_limit_per_minute: int = 10
+    # Per-admin mutations allowed per minute on admin endpoints (0 disables).
+    admin_rate_limit_per_minute: int = 10
     # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""

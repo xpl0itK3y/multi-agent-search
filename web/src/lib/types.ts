@@ -5,12 +5,43 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatar_url?: string | null;
+  is_admin?: boolean;
 }
 
 export interface AuthSession {
   access_token: string;
   token_type: string;
   user: AuthUser;
+}
+
+export interface UserTokenModelBreakdown {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+}
+
+export interface UserRecentResearchTokenUsage {
+  id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  created_at: string | null;
+}
+
+export interface UserTokenStats {
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+  researches_count: number;
+  by_model: UserTokenModelBreakdown[];
+  recent: UserRecentResearchTokenUsage[];
 }
 
 export interface ModelOption {
@@ -341,6 +372,11 @@ export interface GraphTrailEntry {
   step?: string;
   detail?: string;
   timestamp?: string;
+  agent?: string;
+  phase?: string;
+  action?: string;
+  metrics?: Record<string, any>;
+  sources?: any[];
 }
 
 export interface ResearchGraph {
@@ -349,3 +385,245 @@ export interface ResearchGraph {
   graph_state: Record<string, unknown>;
   graph_trail: GraphTrailEntry[];
 }
+
+export interface AdminAuditLogItem {
+  id: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id?: string | null;
+  details: Record<string, any>;
+  ip_address?: string | null;
+  created_at: string;
+}
+
+export interface AdminWorkerFleetItem {
+  worker_name: string;
+  status: string;
+  processed_jobs: number;
+  last_error?: string | null;
+  last_seen_at: string;
+  is_alive: boolean;
+  extraction_metrics: Record<string, any>;
+  graph_metrics: Record<string, any>;
+  maintenance_summary: Record<string, any>;
+}
+
+export interface AdminOverviewResponse {
+  system_health: Record<string, any>;
+  active_researches_count: number;
+  pending_tasks_count: number;
+  failed_tasks_count: number;
+  workers: AdminWorkerFleetItem[];
+  is_dev_mode: boolean;
+}
+
+export interface AdminTokenModelBreakdown {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+}
+
+export interface AdminTokenDepthBreakdown {
+  depth: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  researches_count: number;
+}
+
+export interface AdminTokenResearchUsageItem {
+  research_id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminTokenAnalyticsResponse {
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  by_model: AdminTokenModelBreakdown[];
+  by_depth: AdminTokenDepthBreakdown[];
+  researches: AdminTokenResearchUsageItem[];
+  total_researches: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminDryRunResult {
+  action: string;
+  dry_run: boolean;
+  affected_count: number;
+  sample_affected_ids: string[];
+  summary: string;
+}
+
+export interface AgentMetadataItem {
+  id: string;
+  name: string;
+  stage: "planning" | "search" | "synthesis" | "delivery";
+  role: string;
+  trigger: string;
+  llm_model?: string | null;
+  inputs: string[];
+  outputs: string[];
+  source_file: string;
+  line_number: number;
+  description: string;
+  dependencies: string[];
+  system_prompt?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  context_window?: string | null;
+  response_format?: string | null;
+  tools?: string[];
+  timeout_seconds?: number | null;
+  retry_policy?: string | null;
+  cache_ttl?: string | null;
+  example_input?: Record<string, any> | null;
+  example_output?: Record<string, any> | null;
+}
+
+export interface AdminUserListItem {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url?: string | null;
+  is_admin: boolean;
+  created_at: string;
+  last_seen_at?: string | null;
+  is_online: boolean;
+  last_ip?: string | null;
+  last_device?: string | null;
+  last_browser?: string | null;
+  last_os?: string | null;
+  researches_count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserListItem[];
+  total_users: number;
+  online_users: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminUserSessionItem {
+  id: string;
+  session_id: string;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  device_type: string;
+  browser?: string | null;
+  os?: string | null;
+  screen_res?: string | null;
+  viewport?: string | null;
+  language?: string | null;
+  timezone?: string | null;
+  country?: string | null;
+  city?: string | null;
+  started_at: string;
+  last_active_at: string;
+}
+
+export interface AdminUserResearchItem {
+  id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminUserDetailResponse {
+  user: AdminUserListItem;
+  sessions: AdminUserSessionItem[];
+  researches?: AdminUserResearchItem[];
+  recent_researches?: AdminUserResearchItem[];
+  recent_events: Array<{
+    id: string;
+    event_name: string;
+    event_category: string;
+    details: Record<string, any>;
+    ip_address?: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface AdminTelemetrySummaryResponse {
+  total_users: number;
+  online_users_now?: number;
+  online_now?: number;
+  dau_today?: number;
+  dau?: number;
+  wau_7d?: number;
+  wau?: number;
+  mau_30d?: number;
+  mau?: number;
+  total_researches: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  os_breakdown?: Record<string, number>;
+  browser_breakdown?: Record<string, number>;
+  device_breakdown?: Record<string, number>;
+  depth_distribution?: Record<string, number>;
+  by_os?: Array<{ name: string; count: number }>;
+  by_browser?: Array<{ name: string; count: number }>;
+  by_device?: Array<{ name: string; count: number }>;
+  by_country?: Array<{ name: string; count: number }>;
+  popular_depths?: Array<{ depth: string; count: number }>;
+  popular_models?: Array<{ model: string; count: number }>;
+  avg_prompt_len?: number;
+}
+
+export interface AdminEventLogItem {
+  id: string;
+  user_id?: string | null;
+  session_id?: string | null;
+  event_name: string;
+  event_category: string;
+  details: Record<string, any>;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  created_at: string;
+}
+
+export interface AdminEventLogResponse {
+  events: AdminEventLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminPromptItem {
+  id: string;
+  prompt_type: "research" | "chat" | string;
+  prompt: string;
+  research_id: string;
+  user_id?: string | null;
+  user_email?: string | null;
+  user_name?: string | null;
+  depth?: string | null;
+  status?: string | null;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminPromptsResponse {
+  prompts: AdminPromptItem[];
+  total_count: number;
+  page: number;
+  page_size: number;
+}
+

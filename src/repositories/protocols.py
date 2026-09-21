@@ -2,6 +2,16 @@ from datetime import datetime
 from typing import Protocol
 
 from src.domain import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminEventLogResponse,
+    AdminOverviewResponse,
+    AdminPromptsResponse,
+    AdminTelemetrySummaryResponse,
+    AdminTokenAnalyticsResponse,
+    AdminUserDetailResponse,
+    AdminUserListResponse,
+    AgentMetadataItem,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
@@ -69,13 +79,21 @@ class TaskStore(Protocol):
 
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None: ...
 
-    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None: ...
+    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None: ...
+
+    def get_user_token_analytics(self, user_id: str) -> dict: ...
 
     def update_research_status(
         self,
         research_id: str,
         status: ResearchStatus,
         report: str | None = None,
+    ) -> ResearchRecord | None: ...
+
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
     ) -> ResearchRecord | None: ...
 
     def try_admit_research(
@@ -292,3 +310,126 @@ class TaskStore(Protocol):
 
     # Retention: cascade-delete terminal researches past the retention window (OPS-RETENTION).
     def cleanup_old_researches(self, older_than: datetime) -> list[str]: ...
+
+    # ── admin & token tracking ────────────────────────────────────────────────
+    def record_llm_usage(
+        self,
+        research_id: str | None,
+        user_id: str | None,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+    ) -> str: ...
+
+    def record_admin_audit(
+        self,
+        actor_email: str,
+        action: str,
+        target_type: str,
+        target_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+    ) -> str: ...
+
+    def get_admin_audit_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        action: str | None = None,
+        actor_email: str | None = None,
+    ) -> list[AdminAuditLogItem]: ...
+
+    def get_admin_token_analytics(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> AdminTokenAnalyticsResponse: ...
+
+    def get_admin_overview(self) -> AdminOverviewResponse: ...
+
+    def preview_maintenance_action(
+        self,
+        action: str,
+        params: dict | None = None,
+    ) -> AdminDryRunResult: ...
+
+    def execute_maintenance_action(
+        self,
+        action: str,
+        actor_email: str,
+        params: dict | None = None,
+        ip_address: str | None = None,
+    ) -> AdminDryRunResult: ...
+
+    # ── user telemetry & activity tracking ───────────────────────────────────
+    def record_user_session(
+        self,
+        user_id: str,
+        session_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device_type: str = "desktop",
+        browser: str | None = None,
+        os: str | None = None,
+        screen_res: str | None = None,
+        viewport: str | None = None,
+        language: str | None = None,
+        client_timezone: str | None = None,
+        country: str | None = None,
+        city: str | None = None,
+    ) -> str: ...
+
+    def record_user_event(
+        self,
+        event_name: str,
+        event_category: str = "general",
+        user_id: str | None = None,
+        session_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> str: ...
+
+    def touch_user_activity(
+        self,
+        user_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device: str | None = None,
+    ) -> None: ...
+
+    def get_admin_users_list(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+        role: str | None = None,
+        online_only: bool = False,
+        sort_by: str = "last_seen",
+    ) -> AdminUserListResponse: ...
+
+    def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None: ...
+
+    def get_admin_telemetry_summary(self) -> AdminTelemetrySummaryResponse: ...
+
+    def get_admin_event_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        event_name: str | None = None,
+        user_id: str | None = None,
+    ) -> AdminEventLogResponse: ...
+
+    def get_admin_prompts(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ) -> AdminPromptsResponse: ...
+
+

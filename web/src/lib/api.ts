@@ -1,6 +1,17 @@
 import type {
+  AdminAuditLogItem,
+  AdminDryRunResult,
+  AdminEventLogResponse,
+  AdminOverviewResponse,
+  AdminPromptsResponse,
+  AdminTelemetrySummaryResponse,
+  AdminTokenAnalyticsResponse,
+  AdminUserDetailResponse,
+  AdminUserListResponse,
+  AgentMetadataItem,
   AuthSession,
   AuthUser,
+  UserTokenStats,
   ChatMessage,
   Clarification,
   ComparisonTable,
@@ -194,6 +205,22 @@ export const api = {
 
   authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
 
+  updateProfile: async (payload: { name?: string; avatar_url?: string }) => {
+    return await request<AuthUser>("/v1/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
+
+  deleteAccount: async (currentPassword?: string) => {
+    return await request<{ status: string }>("/v1/auth/account", {
+      method: "DELETE",
+      body: JSON.stringify({ current_password: currentPassword }),
+    });
+  },
+
   setPassword: async (password: string, currentPassword?: string) => {
     const res = await request<AuthSession>("/v1/auth/set-password", {
       method: "POST",
@@ -311,9 +338,133 @@ export const api = {
   cancelResearch: (id: string) =>
     request<{ id: string; status: string }>(`/v1/research/${id}/cancel`, { method: "POST" }),
 
+  retryResearch: (id: string) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/retry`, { method: "POST" }),
+
   renameResearch: (id: string, title: string) =>
     request<{ id: string }>(`/v1/research/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
 };
+
+export const adminApi = {
+  getUsers: (
+    page: number = 1,
+    pageSize: number = 20,
+    search?: string,
+    role?: string,
+    onlineOnly: boolean = false,
+    sortBy: string = "activity"
+  ) => {
+    let url = `/v1/admin/users?page=${page}&page_size=${pageSize}&online_only=${onlineOnly}&sort_by=${sortBy}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (role) url += `&role=${encodeURIComponent(role)}`;
+    return request<AdminUserListResponse>(url);
+  },
+
+  getUserDetail: (userId: string) =>
+    request<AdminUserDetailResponse>(`/v1/admin/users/${userId}`),
+
+  getTelemetrySummary: () =>
+    request<AdminTelemetrySummaryResponse>("/v1/admin/users/analytics/summary"),
+
+  getUserEvents: (
+    page: number = 1,
+    pageSize: number = 50,
+    userId?: string,
+    eventName?: string,
+    eventCategory?: string
+  ) => {
+    let url = `/v1/admin/users/events?page=${page}&page_size=${pageSize}`;
+    if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
+    if (eventName) url += `&event_name=${encodeURIComponent(eventName)}`;
+    if (eventCategory) url += `&event_category=${encodeURIComponent(eventCategory)}`;
+    return request<AdminEventLogResponse>(url);
+  },
+
+  exportUsersCsvUrl: () => `${BASE}/v1/admin/users/export`,
+
+  getPrompts: (
+    page: number = 1,
+    pageSize: number = 25,
+    search?: string,
+    userId?: string,
+    promptType?: string
+  ) => {
+    let url = `/v1/admin/prompts?page=${page}&page_size=${pageSize}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
+    if (promptType && promptType !== "all") url += `&prompt_type=${encodeURIComponent(promptType)}`;
+    return request<AdminPromptsResponse>(url);
+  },
+
+  exportPromptsCsvUrl: () => `${BASE}/v1/admin/prompts/export`,
+
+  deleteUser: (userId: string) =>
+    request<{ status: string; deleted_user_id: string }>(`/v1/admin/users/${userId}`, {
+      method: "DELETE",
+    }),
+
+  getOverview: () => request<AdminOverviewResponse>("/v1/admin/overview"),
+
+  getTokens: (page: number = 1, pageSize: number = 20) =>
+    request<AdminTokenAnalyticsResponse>(`/v1/admin/tokens?page=${page}&page_size=${pageSize}`),
+
+  exportTokensCsvUrl: () => `${BASE}/v1/admin/tokens/export`,
+
+  getAgents: () => request<AgentMetadataItem[]>("/v1/admin/agents"),
+
+  getAuditLogs: (limit: number = 50, offset: number = 0, action?: string) => {
+    let url = `/v1/admin/audit?limit=${limit}&offset=${offset}`;
+    if (action) url += `&action=${encodeURIComponent(action)}`;
+    return request<AdminAuditLogItem[]>(url);
+  },
+
+  previewOperation: (action: string, params: Record<string, any> = {}) =>
+    request<AdminDryRunResult>("/v1/admin/operations/preview", {
+      method: "POST",
+      body: JSON.stringify({ action, params }),
+    }),
+
+  executeOperation: (action: string, params: Record<string, any> = {}) =>
+    request<AdminDryRunResult>("/v1/admin/operations/execute", {
+      method: "POST",
+      body: JSON.stringify({ action, params }),
+    }),
+
+  connectStream: (
+    onOverview: (data: AdminOverviewResponse) => void,
+    onError?: (err: any) => void
+  ) => {
+    const url = `${BASE}/v1/admin/stream`;
+    const es = new EventSource(url, { withCredentials: true });
+    es.addEventListener("overview", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        onOverview(data);
+      } catch (err) {
+        if (onError) onError(err);
+      }
+    });
+    es.onerror = (e) => {
+      if (onError) onError(e);
+    };
+    return () => es.close();
+  },
+};
+
+export const telemetryApi = {
+  recordEvent: (payload: {
+    session_id?: string;
+    event_name: string;
+    event_category?: string;
+    details?: Record<string, any>;
+    device_info?: Record<string, any>;
+  }) =>
+    request<{ ok: boolean; event_id: string }>("/v1/telemetry/event", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+};
+

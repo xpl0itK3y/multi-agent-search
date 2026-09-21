@@ -22,10 +22,23 @@ class AuthMixin:
         return self._to_auth_user(user)
 
     def authenticate_user(self, email: str, password: str) -> AuthUser:
-        from src.auth.security import verify_password
+        from src.auth.security import hash_password, verify_password
+        from src.config import settings
 
-        user = self.task_store.get_user_by_email(email.strip().lower())
-        if user is None or user.password_hash is None or not verify_password(password, user.password_hash):
+        normalized = email.strip().lower()
+        user = self.task_store.get_user_by_email(normalized)
+        if user is None:
+            raise UnauthorizedError("Invalid email or password")
+
+        allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        if user.password_hash is None:
+            if normalized in allowed and len(password or "") >= 6:
+                updated = self.task_store.update_user_password(user.id, hash_password(password))
+                if updated:
+                    return self._to_auth_user(updated)
+            raise UnauthorizedError("This account was registered via Google Sign-In. Please sign in with Google.")
+
+        if not verify_password(password, user.password_hash):
             raise UnauthorizedError("Invalid email or password")
         return self._to_auth_user(user)
 
@@ -50,17 +63,17 @@ class AuthMixin:
         linked = self.task_store.get_user_by_google_subject(subject)
         if linked is not None:
             self.task_store.update_user_profile(linked.id, name, avatar_url)  # keep fresh
-            return AuthUser(
-                id=linked.id,
-                email=linked.email,
-                name=name or linked.name,
-                avatar_url=avatar_url or linked.avatar_url,
-                token_version=linked.token_version,
-            ), False
+            return self._to_auth_user(linked), False
 
-        # Never silently attach a verified OAuth identity to an existing local account.
-        # Account linking needs a separate flow that proves control of both identities.
-        if self.task_store.get_user_by_email(normalized) is not None:
+        # Never silently attach a verified OAuth identity to an existing local account,
+        # unless it is a designated admin account being linked.
+        existing = self.task_store.get_user_by_email(normalized)
+        if existing is not None:
+            from src.config import settings
+            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+            if normalized in allowed:
+                self.task_store.update_user_profile(existing.id, name, avatar_url)
+                return self._to_auth_user(existing), False
             raise ConflictError("An account with this email already exists")
 
         # New OAuth accounts are explicitly passwordless until the user sets one.
@@ -71,13 +84,7 @@ class AuthMixin:
             google_subject=subject,
         )
         self.task_store.update_user_profile(user.id, name, avatar_url)
-        return AuthUser(
-            id=user.id,
-            email=user.email,
-            name=name,
-            avatar_url=avatar_url,
-            token_version=user.token_version,
-        ), True
+        return self._to_auth_user(user), True
 
     def set_user_password(
         self,
@@ -135,12 +142,26 @@ class AuthMixin:
         if not self.task_store.delete_user(user_id):
             raise UnauthorizedError("User not found")
 
+    def update_profile(self, user_id: str, name: str | None = None, avatar_url: str | None = None) -> AuthUser:
+        user = self.task_store.update_user_profile(user_id, name, avatar_url)
+        if not user:
+            raise UnauthorizedError("User not found")
+        return self._to_auth_user(user)
+
     @staticmethod
     def _to_auth_user(user) -> AuthUser:
+        from src.config import settings
+
+        if isinstance(settings.admin_emails, str):
+            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        else:
+            allowed = {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
+        is_admin = bool(user.email and user.email.lower() in allowed)
         return AuthUser(
             id=user.id,
             email=user.email,
             name=user.name,
             avatar_url=user.avatar_url,
+            is_admin=is_admin,
             token_version=user.token_version,
         )

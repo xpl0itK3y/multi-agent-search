@@ -16,7 +16,7 @@ export const THEMES: { id: ThemeId; dark: boolean; swatch: string }[] = [
 
 export const useUiStore = defineStore("ui", () => {
   const sidebarCollapsed = ref(false);
-  const userName = ref((import.meta.env.VITE_USER_NAME as string) || "denis");
+  const userName = ref((import.meta.env.VITE_USER_NAME as string) || "");
 
   // User-draggable sidebar width (persisted, clamped).
   const SIDEBAR_MIN = 220;

@@ -24,11 +24,24 @@ from src.api.dependencies import (
 )
 from src.auth.login_rate_limit import enforce_auth_rate_limit
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
+from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
+    AdminAuditLogItem,
+    AdminDryRunResult,
+    AdminEventLogResponse,
+    AdminOverviewResponse,
+    AdminPromptsResponse,
+    AdminTelemetrySummaryResponse,
+    AdminTokenAnalyticsResponse,
+    AdminUserDetailResponse,
+    AdminUserListResponse,
+    AgentMetadataItem,
+    UserTelemetryEventInput,
     AuthUser,
+    UpdateProfileRequest,
     AuthSession,
     SetPasswordRequest,
     DeleteAccountRequest,
@@ -89,7 +102,7 @@ from src.observability import bind_observability_context, metric_route_template,
 
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register", "/v1/telemetry/event"})
 
 
 def _is_csrf_violation(request: Request) -> bool:
@@ -116,6 +129,62 @@ def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
         return record
     cleaned = {k: v for k, v in record.graph_state.items() if k not in _SENSITIVE_GRAPH_STATE_KEYS}
     return record.model_copy(update={"graph_state": cleaned})
+
+
+def extract_client_ip(request: Request) -> str:
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    x_real_ip = request.headers.get("x-real-ip")
+    if x_real_ip:
+        return x_real_ip.strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
+
+
+def parse_client_ua(ua_string: str | None) -> dict[str, str]:
+    if not ua_string:
+        return {"browser": "Unknown", "os": "Unknown", "device_type": "desktop"}
+    ua = ua_string.lower()
+
+    if any(k in ua for k in ["ipad", "tablet"]):
+        device_type = "tablet"
+    elif any(k in ua for k in ["mobile", "android", "iphone", "ipod"]):
+        device_type = "mobile"
+    else:
+        device_type = "desktop"
+
+    if "macintosh" in ua or "mac os" in ua:
+        os_name = "macOS"
+    elif "windows" in ua:
+        os_name = "Windows"
+    elif "iphone" in ua or "ipad" in ua or "ios" in ua:
+        os_name = "iOS"
+    elif "android" in ua:
+        os_name = "Android"
+    elif "linux" in ua:
+        os_name = "Linux"
+    else:
+        os_name = "Other"
+
+    if "edg/" in ua or "edge" in ua:
+        browser = "Edge"
+    elif "chrome" in ua and "safari" in ua and "edg" not in ua and "opr" not in ua:
+        browser = "Chrome"
+    elif "safari" in ua and "chrome" not in ua:
+        browser = "Safari"
+    elif "firefox" in ua:
+        browser = "Firefox"
+    elif "opera" in ua or "opr" in ua:
+        browser = "Opera"
+    else:
+        browser = "Other"
+
+    return {"browser": browser, "os": os_name, "device_type": device_type}
 
 
 def create_app() -> FastAPI:
@@ -155,6 +224,35 @@ def create_app() -> FastAPI:
             time.perf_counter() - started_at,
         )
         response.headers["X-Request-ID"] = request_id
+
+        # Automatic server-side user activity telemetry
+        path_str = str(request.url.path)
+        if not path_str.startswith("/metrics") and not path_str.startswith("/health"):
+            auth_header = request.headers.get("authorization")
+            token_str = None
+            if auth_header and auth_header.startswith("Bearer "):
+                token_str = auth_header.split(" ", 1)[1]
+            elif settings.auth_cookie_name in request.cookies:
+                token_str = request.cookies[settings.auth_cookie_name]
+
+            if token_str:
+                try:
+                    dec = decode_token(token_str)
+                    uid = dec.get("sub")
+                    if uid:
+                        service = getattr(request.app.state, "research_service", None)
+                        if service and hasattr(service, "task_store"):
+                            c_ip = extract_client_ip(request)
+                            u_agent = request.headers.get("user-agent")
+                            dev_info = parse_client_ua(u_agent)
+                            service.task_store.touch_user_activity(
+                                user_id=uid,
+                                ip_address=c_ip,
+                                user_agent=u_agent,
+                                device=dev_info["device_type"],
+                            )
+                except Exception:
+                    pass
         # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
         # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -240,6 +338,25 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/me", response_model=AuthUser)
     def me(user: AuthUser = Depends(get_current_user)):
         return user
+
+    @app.patch("/v1/auth/profile", response_model=AuthUser)
+    def update_profile(
+        payload: UpdateProfileRequest,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).update_profile(
+            user.id,
+            name=payload.name,
+            avatar_url=payload.avatar_url,
+        )
+
+    @app.get("/v1/auth/token-stats")
+    def get_user_token_stats(
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).task_store.get_user_token_analytics(user.id)
 
     @app.get("/v1/auth/config")
     def auth_config():
@@ -489,6 +606,21 @@ def register_routes(app: FastAPI) -> None:
     ):
         service = get_research_service(request)
         response, research_id = service.start_research(payload, user_id=owner)
+        try:
+            service.task_store.record_user_event(
+                event_name="research_prompt",
+                event_category="prompt",
+                details={
+                    "research_id": research_id,
+                    "prompt": payload.prompt,
+                    "depth": payload.depth.value if hasattr(payload.depth, "value") else str(payload.depth),
+                },
+                user_id=owner,
+                ip_address=extract_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+        except Exception:
+            pass
         # LLM decompose runs after response is sent — user gets research_id instantly
         background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
         return response
@@ -532,6 +664,318 @@ def register_routes(app: FastAPI) -> None:
     def cleanup_finalize_jobs(request: Request):
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 
+    # ── Client Telemetry Ingestion ────────────────────────────────────────────
+    @app.post("/v1/telemetry/event")
+    def record_telemetry_event(
+        payload: UserTelemetryEventInput,
+        request: Request,
+    ):
+        service = get_research_service(request)
+        c_ip = extract_client_ip(request)
+        u_agent = request.headers.get("user-agent")
+
+        user_id = None
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+            try:
+                decoded = decode_token(token)
+                user_id = decoded.get("sub")
+            except Exception:
+                pass
+        elif settings.auth_cookie_name in request.cookies:
+            try:
+                decoded = decode_token(request.cookies[settings.auth_cookie_name])
+                user_id = decoded.get("sub")
+            except Exception:
+                pass
+
+        if payload.device_info and user_id:
+            dev = payload.device_info
+            ua_parsed = parse_client_ua(u_agent)
+            service.task_store.record_user_session(
+                user_id=user_id,
+                session_id=payload.session_id or str(uuid.uuid4()),
+                ip_address=c_ip,
+                user_agent=u_agent,
+                device_type=dev.get("device_type") or ua_parsed["device_type"],
+                browser=dev.get("browser") or ua_parsed["browser"],
+                os=dev.get("os") or ua_parsed["os"],
+                screen_res=dev.get("screen_res"),
+                viewport=dev.get("viewport"),
+                language=dev.get("language"),
+                client_timezone=dev.get("timezone"),
+                country=request.headers.get("cf-ipcountry"),
+                city=request.headers.get("cf-ipcity"),
+            )
+
+        event_id = service.task_store.record_user_event(
+            event_name=payload.event_name,
+            event_category=payload.event_category,
+            user_id=user_id,
+            session_id=payload.session_id,
+            details=payload.details,
+            ip_address=c_ip,
+            user_agent=u_agent,
+        )
+        return {"status": "ok", "event_id": event_id}
+
+    # ── Admin Panel Dedicated Endpoints ───────────────────────────────────────
+    @app.get("/v1/admin/users", response_model=AdminUserListResponse, dependencies=admin_guard)
+    def admin_users_list(
+        request: Request,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        search: str | None = None,
+        role: str | None = None,
+        online_only: bool = False,
+        sort_by: str = "last_seen",
+    ):
+        return get_research_service(request).task_store.get_admin_users_list(
+            page=page,
+            page_size=page_size,
+            search=search,
+            role=role,
+            online_only=online_only,
+            sort_by=sort_by,
+        )
+
+    @app.get("/v1/admin/users/analytics/summary", response_model=AdminTelemetrySummaryResponse, dependencies=admin_guard)
+    def admin_telemetry_summary(request: Request):
+        return get_research_service(request).task_store.get_admin_telemetry_summary()
+
+    @app.get("/v1/admin/users/events", response_model=AdminEventLogResponse, dependencies=admin_guard)
+    def admin_user_events(
+        request: Request,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        category: str | None = None,
+        event_name: str | None = None,
+        user_id: str | None = None,
+    ):
+        return get_research_service(request).task_store.get_admin_event_logs(
+            limit=limit,
+            offset=offset,
+            category=category,
+            event_name=event_name,
+            user_id=user_id,
+        )
+
+    @app.get("/v1/admin/users/export", dependencies=admin_guard)
+    def admin_users_export(request: Request):
+        import csv
+        import io
+        users_resp = get_research_service(request).task_store.get_admin_users_list(page=1, page_size=10000)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "user_id", "email", "name", "role", "is_online", "last_seen_at",
+            "last_ip", "last_device", "last_browser", "last_os",
+            "researches_count", "total_tokens", "total_cost_usd", "created_at"
+        ])
+        for u in users_resp.users:
+            writer.writerow([
+                u.id,
+                u.email,
+                u.name or "",
+                "admin" if u.is_admin else "user",
+                "yes" if u.is_online else "no",
+                u.last_seen_at or "",
+                u.last_ip or "",
+                u.last_device or "",
+                u.last_browser or "",
+                u.last_os or "",
+                u.researches_count,
+                u.total_tokens,
+                u.total_cost_usd,
+                u.created_at,
+            ])
+        csv_content = output.getvalue()
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=users_telemetry.csv"},
+        )
+
+    @app.get("/v1/admin/prompts", response_model=AdminPromptsResponse, dependencies=admin_guard)
+    def admin_prompts(
+        request: Request,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ):
+        return get_research_service(request).task_store.get_admin_prompts(
+            page=page,
+            page_size=page_size,
+            search=search,
+            user_id=user_id,
+            prompt_type=prompt_type,
+        )
+
+    @app.get("/v1/admin/prompts/export", dependencies=admin_guard)
+    def admin_prompts_export(request: Request):
+        import csv
+        import io
+        resp = get_research_service(request).task_store.get_admin_prompts(page=1, page_size=10000)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
+            "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at"
+        ])
+        for p in resp.prompts:
+            writer.writerow([
+                p.id,
+                p.prompt_type,
+                p.research_id,
+                p.user_id or "",
+                p.user_email or "",
+                p.user_name or "",
+                p.prompt,
+                p.depth or "",
+                p.status or "",
+                p.total_tokens,
+                p.cost_usd,
+                p.created_at,
+            ])
+        csv_content = output.getvalue()
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=user_prompts.csv"},
+        )
+
+    @app.get("/v1/admin/users/{user_id}", response_model=AdminUserDetailResponse, dependencies=admin_guard)
+    def admin_user_detail(user_id: str, request: Request):
+        detail = get_research_service(request).task_store.get_admin_user_detail(user_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="User not found")
+        return detail
+
+    @app.delete("/v1/admin/users/{user_id}")
+    def admin_delete_user(
+        user_id: str,
+        request: Request,
+        admin_user: AuthUser = Depends(require_admin),
+    ):
+        if admin_user.id == user_id:
+            raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
+        service = get_research_service(request)
+        deleted = service.task_store.delete_user(user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="User not found")
+        client_ip = extract_client_ip(request)
+        service.task_store.record_admin_audit(
+            actor_email=admin_user.email,
+            action="delete_user",
+            target_type="user",
+            target_id=user_id,
+            details={"deleted_user_id": user_id},
+            ip_address=client_ip,
+        )
+        return {"status": "ok", "deleted_user_id": user_id}
+
+    @app.get("/v1/admin/overview", response_model=AdminOverviewResponse, dependencies=admin_guard)
+    def admin_overview(request: Request):
+        return get_research_service(request).get_admin_overview()
+
+    @app.get("/v1/admin/tokens", response_model=AdminTokenAnalyticsResponse, dependencies=admin_guard)
+    def admin_tokens(
+        request: Request,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+    ):
+        return get_research_service(request).get_admin_token_analytics(page=page, page_size=page_size)
+
+    @app.get("/v1/admin/tokens/export", dependencies=admin_guard)
+    def admin_tokens_export(request: Request):
+        import csv
+        import io
+        analytics = get_research_service(request).get_admin_token_analytics(page=1, page_size=10000)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"])
+        for item in analytics.researches:
+            clean_prompt = item.prompt.replace("\n", " ").replace("\r", "")
+            writer.writerow([
+                item.research_id,
+                clean_prompt,
+                item.depth,
+                item.status,
+                item.total_tokens,
+                item.estimated_cost_usd,
+                item.created_at.isoformat(),
+            ])
+        csv_content = output.getvalue()
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=token_usage.csv"},
+        )
+
+    @app.get("/v1/admin/agents", response_model=List[AgentMetadataItem], dependencies=admin_guard)
+    def admin_agents(request: Request):
+        return get_research_service(request).get_agents_catalog()
+
+    @app.get("/v1/admin/audit", response_model=List[AdminAuditLogItem], dependencies=admin_guard)
+    def admin_audit_logs(
+        request: Request,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        action: str | None = None,
+    ):
+        return get_research_service(request).get_admin_audit_logs(
+            limit=limit, offset=offset, action=action
+        )
+
+    @app.post("/v1/admin/operations/preview", response_model=AdminDryRunResult, dependencies=admin_guard)
+    def admin_operations_preview(payload: dict, request: Request):
+        action = payload.get("action", "")
+        params = payload.get("params", {})
+        return get_research_service(request).preview_maintenance_action(action=action, params=params)
+
+    @app.post("/v1/admin/operations/execute", response_model=AdminDryRunResult)
+    def admin_operations_execute(payload: dict, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        action = payload.get("action", "")
+        params = payload.get("params", {})
+        client_ip = request.client.host if request.client else None
+        return get_research_service(request).execute_maintenance_action(
+            action=action,
+            actor_email=admin_user.email,
+            params=params,
+            ip_address=client_ip,
+        )
+
+    @app.get("/v1/admin/stream")
+    async def admin_stream(request: Request):
+        require_admin(request)
+        service = get_research_service(request)
+
+        async def event_generator():
+            import asyncio
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    overview = service.get_admin_overview()
+                    data = overview.model_dump_json()
+                    yield f"event: overview\ndata: {data}\n\n"
+                except Exception as err:
+                    yield f"event: error\ndata: {json.dumps({'error': str(err)})}\n\n"
+                await asyncio.sleep(2.0)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.delete("/v1/research/{research_id}", status_code=204)
     def delete_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         deleted = get_research_service(request).delete_research(research_id, user_id=owner)
@@ -541,6 +985,19 @@ def register_routes(app: FastAPI) -> None:
     @app.post("/v1/research/{research_id}/cancel", response_model=ResearchRecord)
     def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return _public_record(get_research_service(request).cancel_research(research_id, user_id=owner))
+
+    @app.post("/v1/research/{research_id}/retry", response_model=ResearchRecord)
+    def retry_research(
+        research_id: str,
+        request: Request,
+        background_tasks: BackgroundTasks,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        return _public_record(
+            get_research_service(request).retry_research(
+                research_id, user_id=owner, background_tasks=background_tasks
+            )
+        )
 
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
     def rename_research(
@@ -685,6 +1142,20 @@ def register_routes(app: FastAPI) -> None:
     ):
         # sync def -> runs in a threadpool so the blocking LLM call doesn't stall the event loop
         service = get_research_service(request)
+        try:
+            service.task_store.record_user_event(
+                event_name="chat_prompt",
+                event_category="prompt",
+                details={
+                    "research_id": research_id,
+                    "prompt": payload.question,
+                },
+                user_id=_rate_user.id if _rate_user else None,
+                ip_address=extract_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+        except Exception:
+            pass
         answer = service.generate_research_answer(research_id, payload.question)
         service.append_research_message(research_id, "user", payload.question)
         service.append_research_message(
@@ -708,6 +1179,20 @@ def register_routes(app: FastAPI) -> None:
         asyncio.Queue, so an open stream parks zero threadpool tokens (PERF-SSE)."""
         service = get_research_service(request)
         question = payload.question
+        try:
+            service.task_store.record_user_event(
+                event_name="chat_prompt",
+                event_category="prompt",
+                details={
+                    "research_id": research_id,
+                    "prompt": question,
+                },
+                user_id=_rate_user.id if _rate_user else None,
+                ip_address=extract_client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+        except Exception:
+            pass
 
         def sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -793,7 +1278,9 @@ def register_routes(app: FastAPI) -> None:
             last_report: str | None = None
             last_reasoning: str | None = None
             last_trail_len = 0
-            deadline = time.monotonic() + 900  # 10-minute safety cap
+            # Sized for long deep-research workloads (HARD can take 30-45+ minutes);
+            # dynamically bumped whenever new steps/reasoning/reports arrive.
+            deadline = time.monotonic() + 3600
             # Wake on a Redis pub/sub change ping instead of polling Postgres every second;
             # a heartbeat timeout still re-reads + keeps the connection alive (and is the
             # fallback when no broker is configured).
@@ -829,18 +1316,26 @@ def register_routes(app: FastAPI) -> None:
                                 "step": entry.get("step"),
                                 "detail": entry.get("detail"),
                                 "sources": entry.get("sources") or [],
+                                "agent": entry.get("agent"),
+                                "phase": entry.get("phase"),
+                                "action": entry.get("action"),
+                                "metrics": entry.get("metrics"),
+                                "timestamp": entry.get("timestamp"),
                             })
                         last_trail_len = len(trail)
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     reasoning = research.partial_reasoning
                     if reasoning and reasoning != last_reasoning:
                         last_reasoning = reasoning
                         yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     report = research.final_report or research.partial_report
                     if report and report != last_report:
                         last_report = report
                         yield sse("report", {"report": report, "final": bool(research.final_report)})
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     if status in ("completed", "failed", "cancelled"):
                         yield sse("done", {"status": status})
@@ -857,7 +1352,12 @@ def register_routes(app: FastAPI) -> None:
                     else:
                         await asyncio.sleep(1.0)
 
-                yield sse("done", {"status": "timeout"})
+                if last_status in ("completed", "failed", "cancelled"):
+                    yield sse("done", {"status": last_status})
+                else:
+                    # Stream timed out on transport, but research is still running in background.
+                    # Send stream_error so client auto-reconnects, rather than marking research as dead.
+                    yield sse("stream_error", {"detail": "stream_timeout"})
 
         return StreamingResponse(
             event_stream(),

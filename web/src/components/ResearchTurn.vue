@@ -4,7 +4,8 @@ import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
-import ProgressTrace, { type TraceEntry } from "./ProgressTrace.vue";
+import AgentActivityConsole from "./AgentActivityConsole.vue";
+import type { TraceEntry } from "@/lib/stream";
 import ArtifactPanel from "./ArtifactPanel.vue";
 import PlanCard from "./PlanCard.vue";
 import ClarifyCard from "./ClarifyCard.vue";
@@ -109,6 +110,19 @@ const costLabel = computed(() => {
   return parts.join(" · ");
 });
 
+const costTooltip = computed(() => {
+  const u = usage.value;
+  if (!u) return t("research.costTitle");
+  const lines: string[] = [t("research.costTitle")];
+  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.cache_hit_tokens) {
+    const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
+    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+  }
+  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  return lines.join(" · ");
+});
+
 async function loadPlan() {
   try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
 }
@@ -145,18 +159,36 @@ async function syncStatus(): Promise<boolean> {
     if (!prompt.value) prompt.value = s.prompt;
     status.value = s.status;
     usage.value = s.llm_token_usage ?? null;
-    queuePos.value = s.queue_position ?? null;
+    if (!trace.value.length) {
+      try {
+        const g = await api.getGraph(props.id);
+        if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
+          trace.value = g.graph_trail.map((entry) => ({
+            step: entry.step ?? "",
+            detail: entry.detail ?? "",
+            sources: entry.sources ?? [],
+            agent: entry.agent,
+            phase: entry.phase,
+            action: entry.action,
+            metrics: entry.metrics,
+            timestamp: entry.timestamp,
+          }));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
     if (s.status === "queued") startQueuePoll();
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
     if (DONE.has(s.status)) {
       done.value = true;
       emit("done", s.status);
-      if (s.status === "completed") {
+      if (s.status === "completed" || s.has_final_report) {
         try {
           const r = await api.getReport(props.id);
           report.value = r.final_report ?? "";
-          isFinal.value = true;
+          isFinal.value = s.status === "completed";
           emit("grow");
         } catch {
           /* SSE may still deliver it */
@@ -188,7 +220,7 @@ function connect() {
         emit("done", s); // ensure the thread learns of completion even without onDone
       }
     },
-    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
+    onTrace: (entry) => trace.value.push(entry),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       const wasEmpty = !report.value;
@@ -196,7 +228,16 @@ function connect() {
       isFinal.value = final;
       if (wasEmpty && r) emit("grow"); // first time the report panel appears → scroll to it
     },
-    onDone: (s) => {
+    onDone: async (s) => {
+      if (s === "timeout" || s === "failed") {
+        const terminal = await syncStatus();
+        if (!terminal) {
+          // Research is still processing or analyzing on the server — reconnect stream!
+          connect();
+          return;
+        }
+        return;
+      }
       status.value = s;
       done.value = true;
       emit("done", s);
@@ -208,7 +249,16 @@ function connect() {
     },
     onError: (m) => {
       errorMsg.value = m;
-      if (!done.value) streamLost.value = true; // offer a resume button
+      if (!done.value) {
+        streamLost.value = true; // offer a resume button
+        // Auto-reconnect attempt after 3s to catch up or continue
+        setTimeout(async () => {
+          if (!done.value && status.value !== "completed") {
+            const terminal = await syncStatus();
+            if (!terminal) connect();
+          }
+        }, 3000);
+      }
     },
   });
 }
@@ -217,6 +267,25 @@ async function resume() {
   errorMsg.value = null;
   const terminal = await syncStatus(); // catch up on anything missed while disconnected
   if (!terminal) connect();
+}
+
+const retrying = ref(false);
+
+async function retry() {
+  retrying.value = true;
+  errorMsg.value = null;
+  try {
+    await api.retryResearch(props.id);
+    status.value = "processing";
+    done.value = false;
+    report.value = "";
+    isFinal.value = false;
+    connect();
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    retrying.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -287,7 +356,7 @@ onBeforeUnmount(() => {
         >
           {{ cancelling ? $t("research.cancelling") : $t("research.cancel") }}
         </button>
-        <span v-if="costLabel" class="ml-auto text-xs text-muted" :title="$t('research.costTitle')">{{ costLabel }}</span>
+        <span v-if="costLabel" class="ml-auto text-xs text-muted cursor-help" :title="costTooltip">{{ costLabel }}</span>
       </div>
 
       <!-- live "what's happening now" commentary (visible even when the trace is collapsed) -->
@@ -308,20 +377,59 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <ProgressTrace
-        v-if="!done && (trace.length || reasoning)"
-        :entries="trace"
-        :reasoning="reasoning"
-        :live="!done"
-      />
+      <!-- UNIFIED RESEARCH & AGENT CONTAINER -->
+      <div class="rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden transition-all duration-300">
+        <!-- Agent Activity Console (embedded inside unified container) -->
+        <AgentActivityConsole
+          v-if="!done || trace.length"
+          :entries="trace"
+          :reasoning="reasoning"
+          :live="!done"
+          :status="status"
+          :embedded="true"
+        />
 
-      <!-- report + sources/confidence/conflicts/trail tabs (bounded, scrolls within).
-           Hidden for a cancelled run — there's no report, just the "Отменено" status. -->
-      <div
-        v-if="(report || done) && status !== 'cancelled'"
-        class="animate-fade-in h-[68vh] min-h-[380px] overflow-hidden rounded-xl border border-bd bg-surface/30"
-      >
-        <ArtifactPanel :id="props.id" :report="report" :is-final="isFinal" @refreshed="(id) => emit('refreshed', { id, prompt })" />
+        <!-- Error Card (when status === 'failed' or 'timeout' and no report exists) -->
+        <div
+          v-if="(status === 'failed' || status === 'timeout') && !report"
+          class="border-t border-red-500/30 bg-red-500/10 p-5"
+        >
+          <div class="flex items-start gap-3">
+            <span class="text-2xl shrink-0">⚠️</span>
+            <div class="min-w-0 flex-1">
+              <h4 class="font-semibold text-red-400 text-sm">
+                {{ $t("research.failedTitle") }}
+              </h4>
+              <p class="mt-1 text-xs text-red-300/90 leading-relaxed break-words">
+                {{ errorMsg || $t("research.failedMessage") }}
+              </p>
+              <div class="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  :disabled="retrying"
+                  class="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
+                  @click="retry"
+                >
+                  <span :class="{ 'animate-spin': retrying }">↻</span>
+                  <span>{{ retrying ? $t("research.retrying") : $t("research.retry") }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Artifact Panel (Report, Dashboard, Sources, etc.) -->
+        <div
+          v-else-if="report"
+          class="border-t border-bd/80 h-[68vh] min-h-[380px] overflow-hidden bg-surface/30"
+        >
+          <ArtifactPanel
+            :id="props.id"
+            :report="report"
+            :is-final="isFinal"
+            @refreshed="(id) => emit('refreshed', { id, prompt })"
+          />
+        </div>
       </div>
     </template>
   </div>

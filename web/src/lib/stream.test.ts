@@ -186,6 +186,33 @@ describe("openResearchStream", () => {
     es.emit("done", { status: "completed" });
     expect(onDone).toHaveBeenCalledOnce();
   });
+
+  it("parses and forwards trace_step events with full agent metadata", async () => {
+    stubEnv();
+    const { openResearchStream } = await import("./stream");
+    const onTrace = vi.fn();
+    openResearchStream("research-id", { onTrace });
+
+    es.emit("trace_step", {
+      step: "search",
+      agent: "SearchAgent",
+      phase: "search",
+      action: "query",
+      detail: "Searching web",
+      sources: [{ domain: "example.com", title: "Example" }],
+      metrics: { count: 5 },
+    });
+
+    expect(onTrace).toHaveBeenCalledOnce();
+    const entry = onTrace.mock.calls[0][0];
+    expect(entry.step).toBe("search");
+    expect(entry.agent).toBe("SearchAgent");
+    expect(entry.phase).toBe("search");
+    expect(entry.action).toBe("query");
+    expect(entry.detail).toBe("Searching web");
+    expect(entry.sources).toHaveLength(1);
+    expect(entry.metrics).toEqual({ count: 5 });
+  });
 });
 
 function stubEnv() {

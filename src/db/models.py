@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,12 @@ class UserORM(Base):
         nullable=False,
         default=utcnow,
     )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_device: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ResearchORM(Base):
@@ -275,6 +281,123 @@ class SearchCacheORM(Base):
 
     cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     payload: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        index=True,
+    )
+
+
+class LLMUsageLogORM(Base):
+    __tablename__ = "llm_usage_logs"
+    __table_args__ = (
+        Index("ix_llm_usage_logs_created_model", "created_at", "model"),
+        Index("ix_llm_usage_logs_research_created", "research_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    research_id: Mapped[str | None] = mapped_column(
+        ForeignKey("researches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default=text("0.0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        index=True,
+    )
+
+
+class AdminAuditLogORM(Base):
+    __tablename__ = "admin_audit_logs"
+    __table_args__ = (
+        Index("ix_admin_audit_logs_actor_created", "actor_email", "created_at"),
+        Index("ix_admin_audit_logs_action_created", "action", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    actor_email: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        index=True,
+    )
+
+
+class UserSessionORM(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        Index("ix_user_sessions_started_at", "started_at"),
+        Index("ix_user_sessions_last_active", "last_active_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    device_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="desktop", server_default=text("'desktop'")
+    )
+    browser: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    screen_res: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    viewport: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    last_active_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+
+class UserEventORM(Base):
+    __tablename__ = "user_events"
+    __table_args__ = (
+        Index("ix_user_events_user_created", "user_id", "created_at"),
+        Index("ix_user_events_category", "event_category"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="general", server_default=text("'general'")
+    )
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

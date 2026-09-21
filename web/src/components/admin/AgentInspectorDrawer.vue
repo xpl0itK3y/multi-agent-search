@@ -1,0 +1,732 @@
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import type { AgentMetadataItem } from "@/lib/types";
+
+const props = defineProps<{
+  agent: AgentMetadataItem | null;
+  allAgents?: AgentMetadataItem[];
+  open: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "select-agent", agentId: string): void;
+}>();
+
+const { t, te } = useI18n();
+
+function getAgentRole(agent: AgentMetadataItem): string {
+  const key = `admin.agents.roles.${agent.id}`;
+  return te(key) ? t(key) : agent.role;
+}
+
+function getAgentDescription(agent: AgentMetadataItem): string {
+  const key = `admin.agents.descriptions.${agent.id}`;
+  return te(key) ? t(key) : agent.description;
+}
+
+function getAgentTrigger(agent: AgentMetadataItem): string {
+  const key = `admin.agents.triggers.${agent.id}`;
+  return te(key) ? t(key) : agent.trigger;
+}
+
+function getAgentRetryPolicy(agent: AgentMetadataItem): string {
+  const key = `admin.agents.retryPolicies.${agent.id}`;
+  return te(key) ? t(key) : (agent.retry_policy || t("admin.agents.defaultRetry"));
+}
+
+function getAgentCacheTtl(agent: AgentMetadataItem): string {
+  const key = `admin.agents.cacheTtls.${agent.id}`;
+  return te(key) ? t(key) : (agent.cache_ttl || t("admin.agents.sessionCache"));
+}
+
+function getAgentResponseFormat(agent: AgentMetadataItem): string {
+  const key = `admin.agents.responseFormats.${agent.id}`;
+  return te(key) ? t(key) : (agent.response_format || "Pydantic Model");
+}
+
+type TabKey = "overview" | "prompt" | "model" | "schemas" | "code";
+const activeTab = ref<TabKey>("overview");
+
+// Reset to overview whenever a new agent is opened
+watch(
+  () => props.agent?.id,
+  () => {
+    activeTab.value = "overview";
+  }
+);
+
+const copiedPath = ref(false);
+const copiedPrompt = ref(false);
+const copiedInput = ref(false);
+const copiedOutput = ref(false);
+
+const downstreamAgents = computed(() => {
+  if (!props.agent || !props.allAgents) return [];
+  return props.allAgents.filter((a) => a.dependencies.includes(props.agent!.id));
+});
+
+const upstreamAgents = computed(() => {
+  if (!props.agent || !props.allAgents) return [];
+  return props.allAgents.filter((a) => props.agent!.dependencies.includes(a.id));
+});
+
+const RETURN_LOOP_CONFIGS: Record<string, { roleKey: string; reasonKey: string; targets: string[] }> = {
+  report_critic: {
+    roleKey: "admin.agents.feedbackLoop.reportCriticRole",
+    reasonKey: "admin.agents.feedbackLoop.reportCriticReason",
+    targets: ["analyzer", "replan"],
+  },
+  source_critic: {
+    roleKey: "admin.agents.feedbackLoop.sourceCriticRole",
+    reasonKey: "admin.agents.feedbackLoop.sourceCriticReason",
+    targets: ["search"],
+  },
+  replan: {
+    roleKey: "admin.agents.feedbackLoop.replanRole",
+    reasonKey: "admin.agents.feedbackLoop.replanReason",
+    targets: ["search"],
+  },
+  claim_verifier: {
+    roleKey: "admin.agents.feedbackLoop.claimVerifierRole",
+    reasonKey: "admin.agents.feedbackLoop.claimVerifierReason",
+    targets: ["analyzer"],
+  },
+};
+
+const INCOMING_RETURN_CONFIGS: Record<string, { reasonKey: string; sources: string[] }> = {
+  analyzer: {
+    reasonKey: "admin.agents.feedbackLoop.incomingAnalyzerReason",
+    sources: ["report_critic", "claim_verifier"],
+  },
+  search: {
+    reasonKey: "admin.agents.feedbackLoop.incomingSearchReason",
+    sources: ["source_critic", "replan"],
+  },
+  replan: {
+    reasonKey: "admin.agents.feedbackLoop.incomingReplanReason",
+    sources: ["report_critic"],
+  },
+};
+
+function hasReturnLoop(agentId?: string): boolean {
+  if (!agentId) return false;
+  return Boolean(RETURN_LOOP_CONFIGS[agentId]);
+}
+
+function hasIncomingReturnLoops(agentId?: string): boolean {
+  if (!agentId) return false;
+  return Boolean(INCOMING_RETURN_CONFIGS[agentId]);
+}
+
+function getFeedbackLoopRole(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = RETURN_LOOP_CONFIGS[agentId];
+  return conf && te(conf.roleKey) ? t(conf.roleKey) : "";
+}
+
+function getFeedbackLoopDescription(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = RETURN_LOOP_CONFIGS[agentId];
+  return conf && te(conf.reasonKey) ? t(conf.reasonKey) : "";
+}
+
+function getFeedbackLoopTargets(agentId?: string): string[] {
+  if (!agentId) return [];
+  return RETURN_LOOP_CONFIGS[agentId]?.targets || [];
+}
+
+function getIncomingReturnDescription(agentId?: string): string {
+  if (!agentId) return "";
+  const conf = INCOMING_RETURN_CONFIGS[agentId];
+  return conf && te(conf.reasonKey) ? t(conf.reasonKey) : "";
+}
+
+function getIncomingReturnSources(agentId?: string): string[] {
+  if (!agentId) return [];
+  return INCOMING_RETURN_CONFIGS[agentId]?.sources || [];
+}
+
+function getAgentName(agentId: string): string {
+  const key = `admin.agents.names.${agentId}`;
+  if (te(key)) return t(key);
+  const found = props.allAgents?.find((a) => a.id === agentId);
+  return found ? found.name : agentId;
+}
+
+function copyPath() {
+  if (!props.agent) return;
+  navigator.clipboard.writeText(props.agent.source_file);
+  copiedPath.value = true;
+  setTimeout(() => {
+    copiedPath.value = false;
+  }, 2000);
+}
+
+function copyPrompt() {
+  if (!props.agent?.system_prompt) return;
+  navigator.clipboard.writeText(props.agent.system_prompt);
+  copiedPrompt.value = true;
+  setTimeout(() => {
+    copiedPrompt.value = false;
+  }, 2000);
+}
+
+function copyJson(data: any, targetRef: "input" | "output") {
+  if (!data) return;
+  navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+  if (targetRef === "input") {
+    copiedInput.value = true;
+    setTimeout(() => {
+      copiedInput.value = false;
+    }, 2000);
+  } else {
+    copiedOutput.value = true;
+    setTimeout(() => {
+      copiedOutput.value = false;
+    }, 2000);
+  }
+}
+</script>
+
+<template>
+  <div>
+    <!-- Backdrop Overlay -->
+    <div
+      v-if="open"
+      class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity"
+      @click="emit('close')"
+    />
+
+    <!-- Slide-over Drawer (Wider & Richer: max-w-2xl) -->
+    <div
+      class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-2xl flex-col border-l border-bd bg-bg text-ink shadow-2xl transition-transform duration-300 ease-in-out"
+      :class="open ? 'translate-x-0' : 'translate-x-full'"
+    >
+      <div v-if="agent" class="flex h-full flex-col">
+        <!-- Drawer Header with Stage and Status Badges -->
+        <div class="border-b border-bd bg-surface p-5 pb-4">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0 flex-1">
+              <!-- Badges Row -->
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  class="rounded-lg border px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider shadow-sm"
+                  :class="{
+                    'bg-blue-500/15 text-blue-400 border-blue-500/30': agent.stage === 'planning',
+                    'bg-emerald-500/15 text-emerald-400 border-emerald-500/30': agent.stage === 'search',
+                    'bg-purple-500/15 text-purple-400 border-purple-500/30': agent.stage === 'synthesis',
+                    'bg-amber-500/15 text-amber-400 border-amber-500/30': agent.stage === 'delivery',
+                  }"
+                >
+                  {{ agent.stage }}
+                </span>
+
+                <span
+                  v-if="agent.llm_model"
+                  class="flex items-center gap-1 rounded-lg border border-bd/80 bg-surface/80 px-2 py-0.5 font-mono text-[10px] font-semibold text-accent"
+                >
+                  <span>◆</span>
+                  <span>{{ agent.llm_model }}</span>
+                </span>
+                <span
+                  v-else
+                  class="flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-400"
+                >
+                  <span>⚡</span>
+                  <span>Native Rust / Async</span>
+                </span>
+
+                <span
+                  v-if="agent.context_window"
+                  class="rounded-lg border border-bd/60 bg-bg/80 px-2 py-0.5 font-mono text-[10px] text-muted"
+                >
+                  🪟 {{ agent.context_window }}
+                </span>
+
+                <span
+                  v-if="agent.timeout_seconds"
+                  class="rounded-lg border border-bd/60 bg-bg/80 px-2 py-0.5 font-mono text-[10px] text-muted"
+                >
+                  ⏱️ {{ agent.timeout_seconds }}s SLA
+                </span>
+              </div>
+
+              <!-- Title & Subtitle -->
+              <h2 class="mt-2.5 truncate text-xl font-black text-ink tracking-tight">
+                {{ agent.name }}
+              </h2>
+              <p class="mt-0.5 text-xs font-medium text-accent">
+                {{ getAgentRole(agent) }}
+              </p>
+            </div>
+
+            <!-- Close Button -->
+            <button
+              class="grid h-8 w-8 place-items-center rounded-xl border border-bd/80 bg-surface/60 text-muted transition hover:border-bd hover:bg-surface hover:text-ink"
+              :title="t('admin.agents.close')"
+              @click="emit('close')"
+            >
+              ✕
+            </button>
+          </div>
+
+          <!-- Quick Metrics Bar -->
+          <div class="mt-3.5 grid grid-cols-2 gap-2 sm:grid-cols-4 font-mono text-[10.5px]">
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
+              <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.temperature') }}</span>
+              <span class="font-bold text-ink">
+                {{ agent.temperature !== null && agent.temperature !== undefined ? agent.temperature : '— (Heuristic)' }}
+              </span>
+            </div>
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
+              <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.maxTokens') }}</span>
+              <span class="font-bold text-ink">
+                {{ agent.max_tokens ? agent.max_tokens.toLocaleString() : 'Streaming' }}
+              </span>
+            </div>
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
+              <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.timeoutSla') }}</span>
+              <span class="font-bold text-ink">
+                {{ agent.timeout_seconds ? `${agent.timeout_seconds}s` : '30s' }}
+              </span>
+            </div>
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
+              <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.cacheTtl') }}</span>
+              <span class="truncate font-bold text-ink" :title="agent.cache_ttl || 'No cache'">
+                {{ agent.cache_ttl ? agent.cache_ttl.split(' ')[0] + ' ' + (agent.cache_ttl.split(' ')[1] || '') : 'None' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Tabs Navigation -->
+          <div class="mt-4 flex items-center gap-1 border-t border-bd/60 pt-3 text-xs overflow-x-auto">
+            <button
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition"
+              :class="activeTab === 'overview' ? 'bg-accent text-white shadow' : 'text-muted hover:bg-surface hover:text-ink'"
+              @click="activeTab = 'overview'"
+            >
+              <span>📋</span>
+              <span>{{ t('admin.agents.tabOverview') }}</span>
+            </button>
+
+            <button
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition"
+              :class="activeTab === 'prompt' ? 'bg-accent text-white shadow' : 'text-muted hover:bg-surface hover:text-ink'"
+              @click="activeTab = 'prompt'"
+            >
+              <span>🧠</span>
+              <span>{{ t('admin.agents.tabPrompt') }}</span>
+            </button>
+
+            <button
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition"
+              :class="activeTab === 'model' ? 'bg-accent text-white shadow' : 'text-muted hover:bg-surface hover:text-ink'"
+              @click="activeTab = 'model'"
+            >
+              <span>⚙️</span>
+              <span>{{ t('admin.agents.tabModel') }}</span>
+            </button>
+
+            <button
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition"
+              :class="activeTab === 'schemas' ? 'bg-accent text-white shadow' : 'text-muted hover:bg-surface hover:text-ink'"
+              @click="activeTab = 'schemas'"
+            >
+              <span>📦</span>
+              <span>{{ t('admin.agents.tabSchemas') }}</span>
+            </button>
+
+            <button
+              class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition"
+              :class="activeTab === 'code' ? 'bg-accent text-white shadow' : 'text-muted hover:bg-surface hover:text-ink'"
+              @click="activeTab = 'code'"
+            >
+              <span>💻</span>
+              <span>{{ t('admin.agents.tabSource') }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Drawer Body Tabs Content -->
+        <div class="flex-1 space-y-5 overflow-y-auto p-5 text-xs">
+          <!-- TAB 1: OVERVIEW -->
+          <div v-if="activeTab === 'overview'" class="space-y-5">
+            <!-- Detailed Description -->
+            <div>
+              <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                {{ t('admin.agents.roleAndPurpose') }}
+              </h4>
+              <p class="mt-1.5 leading-relaxed text-ink/90 text-[13px]">
+                {{ getAgentDescription(agent) }}
+              </p>
+            </div>
+
+            <!-- Trigger Card -->
+            <div>
+              <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                {{ t("admin.agents.trigger") }}
+              </h4>
+              <div class="mt-1.5 flex items-start gap-2.5 rounded-xl border border-orange-500/30 bg-orange-500/10 p-3 text-ink">
+                <span class="text-base text-orange-400">⚡</span>
+                <div class="text-xs leading-relaxed">
+                  <span class="font-bold text-orange-400">{{ t('admin.agents.eventTrigger') }}:</span>
+                  <p class="mt-0.5 text-ink/90 font-medium">{{ getAgentTrigger(agent) }}</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Outgoing Feedback Loop Card (If agent can return back) -->
+            <div v-if="hasReturnLoop(agent.id)" class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 text-rose-400 font-bold text-xs">
+                  <span class="text-sm">↩</span>
+                  <span>{{ t("admin.agents.feedbackLoop.sectionTitle") }}</span>
+                </div>
+                <span class="rounded-full bg-rose-500/20 border border-rose-500/30 px-2 py-0.5 text-[9.5px] font-mono font-bold text-rose-300">
+                  {{ t("admin.agents.feedbackLoop.activeStatus") }}
+                </span>
+              </div>
+              <div v-if="getFeedbackLoopRole(agent.id)" class="inline-block rounded-md bg-rose-500/20 px-2 py-0.5 text-[10.5px] font-semibold text-rose-300">
+                {{ getFeedbackLoopRole(agent.id) }}
+              </div>
+              <p class="text-xs text-ink/90 leading-relaxed font-medium">
+                {{ getFeedbackLoopDescription(agent.id) }}
+              </p>
+              <div class="pt-2 border-t border-rose-500/20 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted font-medium">{{ t("admin.agents.feedbackLoop.returnsTo") }}:</span>
+                <button
+                  v-for="targetId in getFeedbackLoopTargets(agent.id)"
+                  :key="targetId"
+                  class="flex items-center gap-1.5 rounded-lg border border-rose-500/35 bg-surface/80 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-500/20 hover:text-white transition font-mono shadow-sm"
+                  @click="emit('select-agent', targetId)"
+                >
+                  <span>↩</span>
+                  <span>{{ getAgentName(targetId) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Incoming Feedback Loop Card (If agent receives returns) -->
+            <div v-if="hasIncomingReturnLoops(agent.id)" class="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3.5 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+                  <span class="text-sm">↩</span>
+                  <span>{{ t("admin.agents.feedbackLoop.incomingTitle") }}</span>
+                </div>
+                <span class="rounded-full bg-indigo-500/20 border border-indigo-500/30 px-2 py-0.5 text-[9.5px] font-mono font-bold text-indigo-300">
+                  {{ t("admin.agents.feedbackLoop.activeStatus") }}
+                </span>
+              </div>
+              <p class="text-xs text-ink/90 leading-relaxed font-medium">
+                {{ getIncomingReturnDescription(agent.id) }}
+              </p>
+              <div class="pt-2 border-t border-indigo-500/20 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted font-medium">{{ t("admin.agents.feedbackLoop.receivedFrom") }}:</span>
+                <button
+                  v-for="sourceId in getIncomingReturnSources(agent.id)"
+                  :key="sourceId"
+                  class="flex items-center gap-1.5 rounded-lg border border-indigo-500/35 bg-surface/80 px-2.5 py-1 text-xs text-indigo-300 hover:bg-indigo-500/20 hover:text-white transition font-mono shadow-sm"
+                  @click="emit('select-agent', sourceId)"
+                >
+                  <span>↩</span>
+                  <span>{{ getAgentName(sourceId) }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Execution Guarantees & SLA Grid -->
+            <div>
+              <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                {{ t('admin.agents.slaAndReliability') }}
+              </h4>
+              <div class="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div class="rounded-xl border border-bd bg-surface/50 p-3">
+                  <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.timeoutSla') }}</div>
+                  <div class="mt-1 text-xs font-semibold text-ink">
+                    ⏱️ {{ agent.timeout_seconds ? `${agent.timeout_seconds} ${t('admin.agents.seconds')}` : t('admin.agents.defaultSla') }}
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-bd bg-surface/50 p-3">
+                  <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.retryPolicy') }}</div>
+                  <div class="mt-1 text-xs font-semibold text-ink">
+                    🔁 {{ getAgentRetryPolicy(agent) }}
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-bd bg-surface/50 p-3">
+                  <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.cacheTtl') }}</div>
+                  <div class="mt-1 text-xs font-semibold text-ink">
+                    💾 {{ getAgentCacheTtl(agent) }}
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-bd bg-surface/50 p-3">
+                  <div class="text-[10px] uppercase text-muted font-bold">{{ t('admin.agents.responseFormat') }}</div>
+                  <div class="mt-1 font-mono text-[11px] font-semibold text-accent truncate" :title="getAgentResponseFormat(agent)">
+                    📄 {{ getAgentResponseFormat(agent) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pipeline Graph Connections -->
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <!-- Inputs / Dependencies -->
+              <div>
+                <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                  {{ t("admin.agents.dependencies") }}
+                </h4>
+                <div v-if="upstreamAgents.length === 0" class="mt-2 rounded-xl border border-bd/60 bg-surface/30 p-2.5 text-muted italic text-[11px]">
+                  {{ t("admin.agents.rootDispatcher") }}
+                </div>
+                <div v-else class="mt-2 space-y-1.5">
+                  <button
+                    v-for="dep in upstreamAgents"
+                    :key="dep.id"
+                    class="flex w-full items-center justify-between rounded-xl border border-bd bg-surface/60 px-3 py-2 text-left text-xs font-medium text-ink transition hover:border-accent hover:bg-surface hover:text-accent"
+                    @click="emit('select-agent', dep.id)"
+                  >
+                    <span class="truncate">🔗 {{ dep.name }}</span>
+                    <span class="font-mono text-[10px] text-muted uppercase">← In</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Outputs / Downstream Consumers -->
+              <div>
+                <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                  {{ t("admin.agents.downstream") }}
+                </h4>
+                <div v-if="downstreamAgents.length === 0" class="mt-2 rounded-xl border border-bd/60 bg-surface/30 p-2.5 text-muted italic text-[11px]">
+                  {{ t("admin.agents.terminalOutput") }}
+                </div>
+                <div v-else class="mt-2 space-y-1.5">
+                  <button
+                    v-for="down in downstreamAgents"
+                    :key="down.id"
+                    class="flex w-full items-center justify-between rounded-xl border border-bd bg-surface/60 px-3 py-2 text-left text-xs font-medium text-ink transition hover:border-accent hover:bg-surface hover:text-accent"
+                    @click="emit('select-agent', down.id)"
+                  >
+                    <span class="truncate">➔ {{ down.name }}</span>
+                    <span class="font-mono text-[10px] text-accent uppercase">Out →</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 2: PROMPT & LOGIC -->
+          <div v-if="activeTab === 'prompt'" class="space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="text-xs font-bold text-ink">
+                  {{ agent.llm_model ? t('admin.agents.systemPromptTitle') : t('admin.agents.rulesTitle') }}
+                </h4>
+                <p class="text-[11px] text-muted">
+                  {{ agent.llm_model ? t('admin.agents.systemPromptDesc') : t('admin.agents.rulesDesc') }}
+                </p>
+              </div>
+
+              <button
+                v-if="agent.system_prompt"
+                class="flex items-center gap-1 rounded-lg border border-accent/40 bg-accent/15 px-2.5 py-1 font-mono text-[11px] font-semibold text-accent transition hover:bg-accent/25"
+                @click="copyPrompt"
+              >
+                <span>{{ copiedPrompt ? '✓' : '📋' }}</span>
+                <span>{{ copiedPrompt ? t('admin.agents.copied') : t('admin.agents.copyPrompt') }}</span>
+              </button>
+            </div>
+
+            <!-- Prompt Code Box -->
+            <div class="relative overflow-hidden rounded-2xl border border-bd bg-surface/60 shadow-inner">
+              <div class="flex items-center justify-between border-b border-bd bg-surface px-3.5 py-2">
+                <div class="flex items-center gap-2">
+                  <span class="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+                  <span class="h-2.5 w-2.5 rounded-full bg-amber-500/80" />
+                  <span class="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
+                  <span class="ml-2 font-mono text-[10px] text-muted uppercase">SYSTEM_INSTRUCTION</span>
+                </div>
+                <span class="font-mono text-[10px] text-accent font-medium">
+                  {{ agent.response_format || 'Markdown' }}
+                </span>
+              </div>
+
+              <div class="max-h-[460px] overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-ink whitespace-pre-wrap select-text">
+                {{ agent.system_prompt || t('admin.agents.deterministicNoLlm') }}
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 3: MODEL & TOOLS -->
+          <div v-if="activeTab === 'model'" class="space-y-5">
+            <!-- LLM Engine Card -->
+            <div class="rounded-2xl border border-bd bg-surface/40 p-4">
+              <h4 class="text-xs font-bold text-ink flex items-center gap-2">
+                <span>🧠</span>
+                <span>{{ t('admin.agents.computeArch') }}</span>
+              </h4>
+
+              <div class="mt-3 grid grid-cols-2 gap-3 font-mono text-xs">
+                <div>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.modelEngine') }}</span>
+                  <span class="font-bold text-accent">
+                    {{ agent.llm_model || 'Native Rust Component' }}
+                  </span>
+                </div>
+                <div>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.provider') }}</span>
+                  <span class="font-bold text-ink">
+                    {{ agent.llm_model?.includes('deepseek') ? 'DeepSeek AI' : 'In-House Async Worker' }}
+                  </span>
+                </div>
+                <div>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.temperatureTitle') }}</span>
+                  <div class="flex items-center gap-2 mt-0.5">
+                    <div class="h-2 w-24 rounded-full bg-surface border border-bd overflow-hidden">
+                      <div
+                        class="h-full bg-accent"
+                        :style="{ width: `${Math.min(100, ((agent.temperature || 0) / 1.0) * 100)}%` }"
+                      />
+                    </div>
+                    <span class="font-bold text-ink">{{ agent.temperature ?? 0.0 }}</span>
+                  </div>
+                </div>
+                <div>
+                  <span class="block text-[10px] text-muted uppercase">{{ t('admin.agents.contextWindow') }}</span>
+                  <span class="font-bold text-ink">{{ agent.context_window || '128k' }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tools & Integrations List -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="text-xs font-bold text-ink flex items-center gap-2">
+                  <span>🛠️</span>
+                  <span>{{ t('admin.agents.toolsTitle') }} ({{ agent.tools?.length || 0 }})</span>
+                </h4>
+              </div>
+
+              <div v-if="!agent.tools || agent.tools.length === 0" class="rounded-xl border border-bd/60 bg-surface/30 p-3 text-muted italic">
+                {{ t('admin.agents.noTools') }}
+              </div>
+              <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div
+                  v-for="tool in agent.tools"
+                  :key="tool"
+                  class="flex items-center gap-2.5 rounded-xl border border-bd bg-surface p-2.5 text-xs font-medium text-ink shadow-sm"
+                >
+                  <span class="text-base text-accent">⚙️</span>
+                  <span class="font-mono text-[11px] truncate">{{ tool }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 4: I/O SCHEMAS & EXAMPLES -->
+          <div v-if="activeTab === 'schemas'" class="space-y-5">
+            <!-- Contracts Badges -->
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                  {{ t("admin.agents.inputs") }}
+                </h4>
+                <div class="mt-1.5 flex flex-wrap gap-1.5">
+                  <span
+                    v-for="inp in agent.inputs"
+                    :key="inp"
+                    class="rounded-lg border border-bd bg-surface px-2.5 py-1 font-mono text-[11px] text-ink shadow-sm"
+                  >
+                    📥 {{ inp }}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <h4 class="text-[10px] font-bold uppercase tracking-wider text-muted">
+                  {{ t("admin.agents.outputs") }}
+                </h4>
+                <div class="mt-1.5 flex flex-wrap gap-1.5">
+                  <span
+                    v-for="out in agent.outputs"
+                    :key="out"
+                    class="rounded-lg border border-accent/40 bg-accent/15 px-2.5 py-1 font-mono text-[11px] font-semibold text-accent shadow-sm"
+                  >
+                    📤 {{ out }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Example Input Payload -->
+            <div v-if="agent.example_input" class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <h4 class="text-[11px] font-bold text-ink">
+                  {{ t('admin.agents.exampleInput') }}
+                </h4>
+                <button
+                  class="text-[10px] font-mono text-accent hover:underline"
+                  @click="copyJson(agent.example_input, 'input')"
+                >
+                  {{ copiedInput ? t('admin.agents.copied') : t('admin.agents.copyInput') }}
+                </button>
+              </div>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-emerald-600 dark:text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
+            </div>
+
+            <!-- Example Output Payload -->
+            <div v-if="agent.example_output" class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <h4 class="text-[11px] font-bold text-ink">
+                  {{ t('admin.agents.exampleOutput') }}
+                </h4>
+                <button
+                  class="text-[10px] font-mono text-accent hover:underline"
+                  @click="copyJson(agent.example_output, 'output')"
+                >
+                  {{ copiedOutput ? t('admin.agents.copied') : t('admin.agents.copyOutput') }}
+                </button>
+              </div>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-sky-600 dark:text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
+            </div>
+          </div>
+
+          <!-- TAB 5: SOURCE CODE -->
+          <div v-if="activeTab === 'code'" class="space-y-4">
+            <div class="rounded-2xl border border-bd bg-surface/40 p-4">
+              <h4 class="text-xs font-bold text-ink flex items-center gap-2">
+                <span>📁</span>
+                <span>{{ t('admin.agents.sourceLocation') }}</span>
+              </h4>
+
+              <div class="mt-3 flex items-center justify-between rounded-xl border border-bd bg-surface p-2.5 font-mono text-[11px] shadow-sm">
+                <span class="truncate text-ink font-semibold">{{ agent.source_file }}:{{ agent.line_number }}</span>
+                <button
+                  class="ml-2 rounded-lg bg-accent/20 border border-accent/40 px-2.5 py-1 text-[10px] font-sans font-bold text-accent hover:bg-accent hover:text-white transition"
+                  @click="copyPath"
+                >
+                  {{ copiedPath ? t('admin.agents.copied') : t('admin.agents.copyCode') }}
+                </button>
+              </div>
+
+              <div class="mt-4 space-y-2 text-xs text-muted">
+                <p>
+                  • Стек: <span class="text-ink font-medium">Python 3.12 / Pydantic v2 / AsyncIO</span>
+                </p>
+                <p>
+                  • Вызов: <span class="text-ink font-medium">FastAPI REST / LangGraph State Node / Redis Stream Worker</span>
+                </p>
+                <p>
+                  • Трейсинг: <span class="text-ink font-medium">LangSmith @maybe_traceable & Prometheus Metrics</span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
