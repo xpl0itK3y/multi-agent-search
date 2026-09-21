@@ -79,13 +79,21 @@ class TaskStore(Protocol):
 
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None: ...
 
-    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None: ...
+    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None: ...
+
+    def get_user_token_analytics(self, user_id: str) -> dict: ...
 
     def update_research_status(
         self,
         research_id: str,
         status: ResearchStatus,
         report: str | None = None,
+    ) -> ResearchRecord | None: ...
+
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
     ) -> ResearchRecord | None: ...
 
     def try_admit_research(

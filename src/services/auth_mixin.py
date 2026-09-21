@@ -142,6 +142,12 @@ class AuthMixin:
         if not self.task_store.delete_user(user_id):
             raise UnauthorizedError("User not found")
 
+    def update_profile(self, user_id: str, name: str | None = None, avatar_url: str | None = None) -> AuthUser:
+        user = self.task_store.update_user_profile(user_id, name, avatar_url)
+        if not user:
+            raise UnauthorizedError("User not found")
+        return self._to_auth_user(user)
+
     @staticmethod
     def _to_auth_user(user) -> AuthUser:
         from src.config import settings

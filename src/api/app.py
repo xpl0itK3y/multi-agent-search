@@ -41,6 +41,7 @@ from src.api.schemas import (
     AgentMetadataItem,
     UserTelemetryEventInput,
     AuthUser,
+    UpdateProfileRequest,
     AuthSession,
     SetPasswordRequest,
     DeleteAccountRequest,
@@ -337,6 +338,25 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/me", response_model=AuthUser)
     def me(user: AuthUser = Depends(get_current_user)):
         return user
+
+    @app.patch("/v1/auth/profile", response_model=AuthUser)
+    def update_profile(
+        payload: UpdateProfileRequest,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).update_profile(
+            user.id,
+            name=payload.name,
+            avatar_url=payload.avatar_url,
+        )
+
+    @app.get("/v1/auth/token-stats")
+    def get_user_token_stats(
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).task_store.get_user_token_analytics(user.id)
 
     @app.get("/v1/auth/config")
     def auth_config():
@@ -966,6 +986,19 @@ def register_routes(app: FastAPI) -> None:
     def cancel_research(research_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return _public_record(get_research_service(request).cancel_research(research_id, user_id=owner))
 
+    @app.post("/v1/research/{research_id}/retry", response_model=ResearchRecord)
+    def retry_research(
+        research_id: str,
+        request: Request,
+        background_tasks: BackgroundTasks,
+        owner: str | None = Depends(scope_user_id),
+    ):
+        return _public_record(
+            get_research_service(request).retry_research(
+                research_id, user_id=owner, background_tasks=background_tasks
+            )
+        )
+
     @app.patch("/v1/research/{research_id}", response_model=ResearchRecord)
     def rename_research(
         research_id: str, payload: ResearchRename, request: Request, owner: str | None = Depends(scope_user_id)
@@ -1281,6 +1314,11 @@ def register_routes(app: FastAPI) -> None:
                                 "step": entry.get("step"),
                                 "detail": entry.get("detail"),
                                 "sources": entry.get("sources") or [],
+                                "agent": entry.get("agent"),
+                                "phase": entry.get("phase"),
+                                "action": entry.get("action"),
+                                "metrics": entry.get("metrics"),
+                                "timestamp": entry.get("timestamp"),
                             })
                         last_trail_len = len(trail)
 

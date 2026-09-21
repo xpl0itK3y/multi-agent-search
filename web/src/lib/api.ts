@@ -11,6 +11,7 @@ import type {
   AgentMetadataItem,
   AuthSession,
   AuthUser,
+  UserTokenStats,
   ChatMessage,
   Clarification,
   ComparisonTable,
@@ -204,6 +205,22 @@ export const api = {
 
   authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
 
+  updateProfile: async (payload: { name?: string; avatar_url?: string }) => {
+    return await request<AuthUser>("/v1/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
+
+  deleteAccount: async (currentPassword?: string) => {
+    return await request<{ status: string }>("/v1/auth/account", {
+      method: "DELETE",
+      body: JSON.stringify({ current_password: currentPassword }),
+    });
+  },
+
   setPassword: async (password: string, currentPassword?: string) => {
     const res = await request<AuthSession>("/v1/auth/set-password", {
       method: "POST",
@@ -320,6 +337,9 @@ export const api = {
 
   cancelResearch: (id: string) =>
     request<{ id: string; status: string }>(`/v1/research/${id}/cancel`, { method: "POST" }),
+
+  retryResearch: (id: string) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/retry`, { method: "POST" }),
 
   renameResearch: (id: string, title: string) =>
     request<{ id: string }>(`/v1/research/${id}`, {

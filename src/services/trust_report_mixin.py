@@ -166,6 +166,18 @@ class TrustReportMixin:
             independence = self.independence_auditor.analyze(sources_by_id)
             independence.research_id = research.id
             self.task_store.merge_research_graph_state(research.id, {"source_independence": independence.model_dump()})
+            if hasattr(self.task_store, "append_research_graph_event"):
+                self.task_store.append_research_graph_event(
+                    research.id,
+                    {
+                        "step": "independence",
+                        "agent": "SourceIndependenceAgent",
+                        "phase": "critic",
+                        "action": "cluster_origins",
+                        "detail": f"Проверка независимости источников: обнаружено {len(independence.clusters)} независимых кластеров",
+                        "metrics": {"clusters": len(independence.clusters)},
+                    },
+                )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("source_independence_failed research_id=%s error=%s", research.id, exc)
 
@@ -198,6 +210,17 @@ class TrustReportMixin:
             reputation = self.reputation_auditor.assess(sources_by_id)
             reputation.research_id = research.id
             self.task_store.merge_research_graph_state(research.id, {"source_reputation": reputation.model_dump()})
+            if hasattr(self.task_store, "append_research_graph_event"):
+                self.task_store.append_research_graph_event(
+                    research.id,
+                    {
+                        "step": "reputation",
+                        "agent": "SourceReputationAgent",
+                        "phase": "critic",
+                        "action": "score_reputation",
+                        "detail": "Оценка академического и экспертного авторитета источников",
+                    },
+                )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("source_reputation_failed research_id=%s error=%s", research.id, exc)
 
@@ -292,6 +315,18 @@ class TrustReportMixin:
             self.task_store.merge_research_graph_state(
                 research_id, {"cross_language_targets": langs}
             )
+            if hasattr(self.task_store, "append_research_graph_event"):
+                self.task_store.append_research_graph_event(
+                    research_id,
+                    {
+                        "step": "cross_language",
+                        "agent": "CrossLanguageAgent",
+                        "phase": "plan",
+                        "action": "multilingual_expansion",
+                        "detail": f"Мультиязычное расширение: поиск на {', '.join(langs)}",
+                        "metrics": {"languages": langs, "query_count": len(queries)},
+                    },
+                )
             logger.info("cross_language_task_added research_id=%s langs=%s", research_id, langs)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("cross_language_plan_failed research_id=%s error=%s", research_id, exc)
@@ -334,6 +369,18 @@ class TrustReportMixin:
                 unique_findings=unique_findings,
             )
             self.task_store.merge_research_graph_state(research.id, {"cross_language": report.model_dump()})
+            if hasattr(self.task_store, "append_research_graph_event"):
+                self.task_store.append_research_graph_event(
+                    research.id,
+                    {
+                        "step": "cross_language_analysis",
+                        "agent": "CrossLanguageAgent",
+                        "phase": "verify",
+                        "action": "language_audit",
+                        "detail": f"Сравнение зарубежных и локальных источников ({foreign_count} иноязычных)",
+                        "metrics": {"foreign_sources": foreign_count, "by_language": by_lang},
+                    },
+                )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("cross_language_analysis_failed research_id=%s error=%s", research.id, exc)
 
@@ -421,6 +468,18 @@ class TrustReportMixin:
             check = self.numeric_checker.check(report, sources_by_id)
             check.research_id = research.id
             self.task_store.merge_research_graph_state(research.id, {"numeric_check": check.model_dump()})
+            if hasattr(self.task_store, "append_research_graph_event"):
+                self.task_store.append_research_graph_event(
+                    research.id,
+                    {
+                        "step": "numeric_check",
+                        "agent": "NumericCheckAgent",
+                        "phase": "verify",
+                        "action": "validate_data",
+                        "detail": f"Кросс-проверка численных фактов: верифицировано {len(check.figures)} показателей",
+                        "metrics": {"figures_count": len(check.figures)},
+                    },
+                )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("numeric_check_failed research_id=%s error=%s", research.id, exc)
 

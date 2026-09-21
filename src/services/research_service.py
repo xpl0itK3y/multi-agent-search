@@ -387,6 +387,32 @@ class ResearchService(
             thread_id=thread_id,
         ), research.id
 
+    def _emit_plan_progress(
+        self,
+        research_id: str,
+        step: str,
+        agent: str = "OrchestratorAgent",
+        phase: str = "plan",
+        action: str = "plan",
+        detail: str = "",
+        metrics: dict | None = None,
+    ) -> None:
+        if not research_id or not hasattr(self.task_store, "append_research_graph_event"):
+            return
+        event = {
+            "step": step,
+            "agent": agent,
+            "phase": phase,
+            "action": action,
+            "detail": detail,
+        }
+        if metrics:
+            event["metrics"] = metrics
+        try:
+            self.task_store.append_research_graph_event(research_id, event)
+        except Exception:
+            pass
+
     def decompose_and_enqueue(self, research_id: str, request: ResearchRequest) -> None:
         """Background: run LLM decompose, create tasks, push to worker queue."""
         orchestrator = self.require_agent(self.orchestrator, "Orchestrator")
@@ -406,6 +432,14 @@ class ResearchService(
                     logger.info("decompose_skipped_terminal research_id=%s status=%s", research_id, research.status.value)
                     return
                 graph_state = (research.graph_state if research else None) or {}
+                self._emit_plan_progress(
+                    research_id,
+                    "plan_start",
+                    agent="OrchestratorAgent",
+                    phase="plan",
+                    action="analyze_prompt",
+                    detail="Анализ темы исследования и постановка исследовательских задач",
+                )
                 # Clarify step (plan-first only, once): ask up to 3 questions before planning.
                 if (
                     request.plan_first
@@ -415,6 +449,15 @@ class ResearchService(
                     questions = self.clarifier.generate_questions(request.prompt)
                     if questions:
                         self._store_clarifications_for_review(research_id, questions)
+                        self._emit_plan_progress(
+                            research_id,
+                            "clarify",
+                            agent="ClarifierAgent",
+                            phase="plan",
+                            action="generate_questions",
+                            detail=f"Сформировано {len(questions)} уточняющих вопросов для фокуса исследования",
+                            metrics={"question_count": len(questions)},
+                        )
                         logger.info(
                             "research_clarify_ready research_id=%s question_count=%s",
                             research_id, len(questions),
@@ -423,6 +466,15 @@ class ResearchService(
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
                 language = self._research_language(research) if research else detect_language(
                     request.prompt
+                )
+                self._emit_plan_progress(
+                    research_id,
+                    "decompose",
+                    agent="OrchestratorAgent",
+                    phase="plan",
+                    action="decompose_topics",
+                    detail=f"Декомпозиция темы на направления (глубина: {request.depth.value})",
+                    metrics={"depth": request.depth.value},
                 )
                 tasks_raw = self._run_decompose(
                     orchestrator, effective_prompt, request.depth, language
@@ -437,6 +489,15 @@ class ResearchService(
                 if request.plan_first:
                     # Store an editable plan and wait for user approval (no tasks/jobs yet).
                     self._store_plan_for_review(research_id, tasks_raw)
+                    self._emit_plan_progress(
+                        research_id,
+                        "plan_review",
+                        agent="OrchestratorAgent",
+                        phase="plan",
+                        action="awaiting_approval",
+                        detail=f"Сформирован черновик плана из {len(tasks_raw)} пунктов. Ожидание утверждения.",
+                        metrics={"task_count": len(tasks_raw)},
+                    )
                     logger.info(
                         "research_plan_ready research_id=%s item_count=%s depth=%s",
                         research_id, len(tasks_raw), request.depth.value,
@@ -459,6 +520,15 @@ class ResearchService(
                         enqueued_jobs += 1
                 # Clear crash-recovery marker now that decompose ran.
                 self._clear_decompose_pending(research_id)
+                self._emit_plan_progress(
+                    research_id,
+                    "plan_ready",
+                    agent="OrchestratorAgent",
+                    phase="plan",
+                    action="tasks_enqueued",
+                    detail=f"План утвержден: создано {len(registered_tasks)} поисковых задач, запущен параллельный сбор данных",
+                    metrics={"task_count": len(registered_tasks), "enqueued_jobs": enqueued_jobs},
+                )
                 if enqueued_jobs == 0:
                     # Decompose produced no searchable queries (e.g. the model was
                     # unavailable / a degenerate fallback came back). Fail cleanly instead
@@ -586,6 +656,82 @@ class ResearchService(
             return research
         updated = self.task_store.update_research_status(research_id, ResearchStatus.CANCELLED, "Cancelled by user.")
         logger.info("research_cancelled research_id=%s", research_id)
+        return updated or research
+
+    def retry_research(
+        self,
+        research_id: str,
+        user_id: str | None = None,
+        background_tasks: Any | None = None,
+    ) -> ResearchRecord:
+        """Retry a failed or timed-out research.
+        If all search tasks are completed, retries finalization.
+        If some tasks failed, requeues them.
+        If no tasks were created, re-runs decomposition."""
+        research = (
+            self._ensure_research_access(research_id, user_id)
+            if user_id is not None
+            else self.task_store.get_research(research_id)
+        )
+        if not research:
+            raise NotFoundError("Research not found")
+        if research.status not in (ResearchStatus.FAILED, ResearchStatus.TIMEOUT):
+            raise ConflictError("Only failed or timed out research can be retried")
+
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        finalize_job = self.task_store.get_latest_research_finalize_job(research_id)
+
+        # Case 1: Tasks exist and all completed -> retry finalization
+        completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
+        if tasks and len(completed_tasks) == len(tasks):
+            updated = self.task_store.reset_research_for_retry(
+                research_id, status=ResearchStatus.ANALYZING
+            )
+            if finalize_job is not None:
+                requeued = self.task_store.requeue_research_finalize_job(finalize_job.id)
+                if requeued and self.broker:
+                    self.broker.push_finalize_job(requeued.id)
+            else:
+                self.enqueue_research_finalization(research_id)
+            logger.info("research_retry_finalization research_id=%s", research_id)
+            return updated or research
+
+        # Case 2: Tasks exist but some failed/pending -> requeue tasks
+        updated = self.task_store.reset_research_for_retry(
+            research_id, status=ResearchStatus.PROCESSING
+        )
+        if tasks:
+            for task in tasks:
+                if task.status in (TaskStatus.FAILED, TaskStatus.PENDING):
+                    self.task_store.update_task_status(
+                        task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried")
+                    )
+                    search_job = self.task_store.get_latest_search_task_job(task.id)
+                    if search_job:
+                        requeued_job = self.task_store.requeue_search_task_job(search_job.id)
+                        if requeued_job and self.broker:
+                            self.broker.push_search_job(requeued_job.id)
+                    elif self.broker:
+                        job = self.task_store.add_search_task_job(
+                            research_id, task.id, settings.job_max_attempts
+                        )
+                        self.broker.push_search_job(job.id)
+        else:
+            # Case 3: Failed before decomposition
+            from src.domain.models import ResearchRequest
+
+            payload = ResearchRequest(
+                prompt=research.prompt,
+                depth=research.depth,
+                model=(research.graph_state or {}).get("model"),
+                thread_id=(research.graph_state or {}).get("thread_id"),
+            )
+            if background_tasks is not None:
+                background_tasks.add_task(self.decompose_and_enqueue, research_id, payload)
+            else:
+                self.decompose_and_enqueue(research_id, payload)
+
+        logger.info("research_retried research_id=%s", research_id)
         return updated or research
 
     def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
@@ -1558,12 +1704,44 @@ class ResearchService(
         if not self.task_store.renew_research_finalize_job_lease(job_id, lease_epoch):
             raise FinalizeLeaseLost(f"Finalize job {job_id} lease was lost")
 
+    _FINALIZE_STEP_METADATA = {
+        "redteam": {
+            "agent": "RedTeamAgent",
+            "phase": "verify",
+            "action": "stress_test",
+            "detail": "Анализ контраргументов и стресс-тестирование гипотез",
+        },
+        "audit": {
+            "agent": "CitationAuditAgent",
+            "phase": "verify",
+            "action": "audit_citations",
+            "detail": "Аудит цитат, фактчекинг и проверка источников",
+        },
+        "viewpoints": {
+            "agent": "StanceAgent",
+            "phase": "verify",
+            "action": "stance_detection",
+            "detail": "Оценка баланса точек зрения и выявление предвзятости",
+        },
+        "completed": {
+            "agent": "System",
+            "phase": "complete",
+            "action": "finish",
+            "detail": "Исследование завершено, итоговый аналитический отчёт готов",
+        },
+    }
+
     def _emit_finalize_progress(
         self,
         research_id: str,
         step: str,
         finalize_job_id: str | None = None,
         lease_epoch: int | None = None,
+        agent: str | None = None,
+        phase: str | None = None,
+        action: str | None = None,
+        detail: str | None = None,
+        metrics: dict | None = None,
     ) -> None:
         """Append a finalize-phase step to the live trail so the progress trace keeps moving
         during synthesis (and surfaces the trust/verification work as it happens). Labelled
@@ -1573,8 +1751,18 @@ class ResearchService(
         store = self.task_store
         if not research_id or not hasattr(store, "append_research_graph_event"):
             return
+        meta = self._FINALIZE_STEP_METADATA.get(step, {})
+        event = {
+            "step": step,
+            "agent": agent or meta.get("agent", "FinalizeRunner"),
+            "phase": phase or meta.get("phase", "verify"),
+            "action": action or meta.get("action", step),
+            "detail": detail or meta.get("detail", ""),
+        }
+        if metrics:
+            event["metrics"] = metrics
         try:
-            store.append_research_graph_event(research_id, {"step": step})
+            store.append_research_graph_event(research_id, event)
         except Exception:
             pass
 
@@ -1721,6 +1909,10 @@ class ResearchService(
                     ResearchStatus.COMPLETED,
                     report,
                 )
+
+            self._emit_finalize_progress(
+                research_id, "completed", finalize_job_id, lease_epoch
+            )
 
             finalized_research = self.task_store.get_research(research_id)
             if finalized_research is None:

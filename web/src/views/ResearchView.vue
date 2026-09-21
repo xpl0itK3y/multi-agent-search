@@ -5,7 +5,8 @@ import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
-import ProgressTrace, { type TraceEntry } from "@/components/ProgressTrace.vue";
+import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
+import type { TraceEntry } from "@/lib/stream";
 import ArtifactPanel from "@/components/ArtifactPanel.vue";
 import PlanCard from "@/components/PlanCard.vue";
 import ClarifyCard from "@/components/ClarifyCard.vue";
@@ -50,6 +51,19 @@ const costLabel = computed(() => {
   if (typeof u.estimated_cost_usd === "number") parts.push(`≈ $${u.estimated_cost_usd.toFixed(4)}`);
   if (typeof u.total_tokens === "number") parts.push(`${u.total_tokens.toLocaleString()} ${t("research.tokens")}`);
   return parts.join(" · ");
+});
+
+const costTooltip = computed(() => {
+  const u = usage.value;
+  if (!u) return t("research.costTitle");
+  const lines: string[] = [t("research.costTitle")];
+  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.cache_hit_tokens) {
+    const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
+    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+  }
+  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  return lines.join(" · ");
 });
 
 let close: (() => void) | undefined;
@@ -151,6 +165,25 @@ onMounted(async () => {
     prompt.value = s.prompt;
     status.value = s.status;
     usage.value = s.llm_token_usage ?? null;
+    if (!trace.value.length) {
+      try {
+        const g = await api.getGraph(props.id);
+        if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
+          trace.value = g.graph_trail.map((entry) => ({
+            step: entry.step ?? "",
+            detail: entry.detail ?? "",
+            sources: entry.sources ?? [],
+            agent: entry.agent,
+            phase: entry.phase,
+            action: entry.action,
+            metrics: entry.metrics,
+            timestamp: entry.timestamp,
+          }));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
     if (s.status === "clarifying") loadClarifications();
     if (s.status === "plan_review") loadPlan();
   } catch {
@@ -169,7 +202,7 @@ onMounted(async () => {
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
-    onTrace: (step, detail, sources) => trace.value.push({ step, detail, sources }),
+    onTrace: (entry) => trace.value.push(entry),
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;
@@ -248,17 +281,18 @@ onBeforeUnmount(() => close?.());
           <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
         </div>
 
-        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted" :title="$t('research.costTitle')">
+        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted cursor-help" :title="costTooltip">
           {{ costLabel }}
         </div>
 
         <p v-if="errorMsg" class="mb-4 text-sm text-red-400">{{ errorMsg }}</p>
 
-        <ProgressTrace
+        <AgentActivityConsole
           v-if="trace.length || reasoning"
           :entries="trace"
           :reasoning="reasoning"
           :live="!done"
+          :status="status"
         />
 
         <!-- Follow-up conversation -->

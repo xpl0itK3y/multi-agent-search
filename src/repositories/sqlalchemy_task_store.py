@@ -352,14 +352,25 @@ class SQLAlchemyTaskStore:
                 avatar_url=user.avatar_url,
             )
 
-    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> None:
+    def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is not None:
-                if name:
+                if name is not None:
                     user.name = name
-                if avatar_url:
+                if avatar_url is not None:
                     user.avatar_url = avatar_url
+                session.flush()
+                return UserRecord(
+                    id=user.id,
+                    email=user.email,
+                    password_hash=user.password_hash,
+                    google_subject=user.google_subject,
+                    token_version=user.token_version,
+                    name=user.name,
+                    avatar_url=user.avatar_url,
+                )
+            return None
 
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         with self.session_scope() as session:
@@ -511,6 +522,32 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             result = research_orm_to_record(research)
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
+        return result
+
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            research.status = status.value
+            research.final_report = None
+            research.partial_report = None
+            research.partial_reasoning = None
+            gs = dict(research.graph_state or {})
+            gs.pop("error", None)
+            gs.pop("report", None)
+            gs.pop("step", None)
+            research.graph_state = gs
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)
         return result
 
     def try_claim_queued_research(
@@ -2541,4 +2578,86 @@ class SQLAlchemyTaskStore:
                 page_size=page_size,
             )
 
+    def get_user_token_analytics(self, user_id: str) -> dict:
+        with self.session_scope() as session:
+            tot_stmt = select(
+                func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                func.count(LLMUsageLogORM.id),
+            ).where(LLMUsageLogORM.user_id == user_id)
+            tot_row = session.execute(tot_stmt).one()
+            total_prompt = int(tot_row[0])
+            total_comp = int(tot_row[1])
+            total_tok = int(tot_row[2])
+            total_cost = round(float(tot_row[3]), 4)
+            calls_count = int(tot_row[4])
 
+            res_stmt = select(func.count(ResearchORM.id)).where(ResearchORM.user_id == user_id)
+            researches_count = int(session.execute(res_stmt).scalar_one())
+
+            model_stmt = (
+                select(
+                    LLMUsageLogORM.model,
+                    func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                    func.count(LLMUsageLogORM.id),
+                )
+                .where(LLMUsageLogORM.user_id == user_id)
+                .group_by(LLMUsageLogORM.model)
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+            )
+            by_model = [
+                {
+                    "model": row[0],
+                    "prompt_tokens": int(row[1]),
+                    "completion_tokens": int(row[2]),
+                    "total_tokens": int(row[3]),
+                    "estimated_cost_usd": round(float(row[4]), 4),
+                    "calls_count": int(row[5]),
+                }
+                for row in session.execute(model_stmt).all()
+            ]
+
+            recent_stmt = (
+                select(
+                    ResearchORM.id,
+                    ResearchORM.prompt,
+                    ResearchORM.depth,
+                    ResearchORM.status,
+                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                    ResearchORM.created_at,
+                )
+                .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
+                .where(ResearchORM.user_id == user_id)
+                .group_by(ResearchORM.id, ResearchORM.prompt, ResearchORM.depth, ResearchORM.status, ResearchORM.created_at)
+                .order_by(ResearchORM.created_at.desc())
+                .limit(10)
+            )
+            recent = [
+                {
+                    "id": row[0],
+                    "prompt": row[1],
+                    "depth": row[2],
+                    "status": row[3],
+                    "total_tokens": int(row[4]),
+                    "estimated_cost_usd": round(float(row[5]), 4),
+                    "created_at": row[6].isoformat() if row[6] else None,
+                }
+                for row in session.execute(recent_stmt).all()
+            ]
+
+            return {
+                "total_tokens": total_tok,
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_comp,
+                "estimated_cost_usd": total_cost,
+                "calls_count": calls_count,
+                "researches_count": researches_count,
+                "by_model": by_model,
+                "recent": recent,
+            }

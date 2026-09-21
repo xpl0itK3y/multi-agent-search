@@ -33,6 +33,46 @@ class FinalizeLeaseLost(RuntimeError):
     """Raised when stale-job recovery fences off a previous finalize runner."""
 
 
+GRAPH_STEP_METADATA: dict[str, dict[str, Any]] = {
+    "collect_context": {
+        "agent": "SourceCriticAgent",
+        "phase": "critic",
+        "action": "evaluate_sources",
+        "detail": "Оценка достоверности источников, структурирование доказательств и выявление белых пятен",
+    },
+    "replan": {
+        "agent": "ReplanAgent",
+        "phase": "plan",
+        "action": "gap_analysis_loop",
+        "detail": "↩ Обнаружены пробелы в данных: возврат на допоиск источников для полноты картины",
+    },
+    "analyze": {
+        "agent": "AnalyzerAgent",
+        "phase": "synthesis",
+        "action": "synthesize_report",
+        "detail": "Глубокий синтез аналитического отчёта, сведение фактов и разметка цитат",
+    },
+    "tie_break": {
+        "agent": "ReplanAgent",
+        "phase": "critic",
+        "action": "conflict_tie_break",
+        "detail": "↩ Обнаружены противоречия между источниками: запуск арбитражного поиска (Tie-Break)",
+    },
+    "verify": {
+        "agent": "ReportCriticAgent",
+        "phase": "verify",
+        "action": "verify_claims",
+        "detail": "Верификация утверждений отчёта, контроль точности цитирования и рецензирование",
+    },
+    "verify_retry": {
+        "agent": "ReportCriticAgent",
+        "phase": "verify",
+        "action": "critic_revision_loop",
+        "detail": "↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
+    },
+}
+
+
 class FinalizeGraphRunner:
     def __init__(self, service):
         self.service = service
@@ -163,10 +203,26 @@ class FinalizeGraphRunner:
             "canonical_sources": state.get("canonical_sources", []),
             "report": state.get("report", ""),
         }
-        event = {"step": step, "detail": detail}
+        meta = GRAPH_STEP_METADATA.get(step, {})
+        event = {
+            "step": step,
+            "agent": meta.get("agent", "FinalizeRunner"),
+            "phase": meta.get("phase", "synthesis"),
+            "action": meta.get("action", step),
+            "detail": detail,
+        }
         self.service.checkpoint_graph_state(state["research_id"], snapshot, event)
 
-    def _emit_trail(self, research_id: str, step: str) -> None:
+    def _emit_trail(
+        self,
+        research_id: str,
+        step: str,
+        agent: str | None = None,
+        phase: str | None = None,
+        action: str | None = None,
+        detail: str | None = None,
+        metrics: dict | None = None,
+    ) -> None:
         """Surface this finalize step on the live progress trail (streamed via SSE) so the
         trace keeps moving during synthesis instead of freezing after the search phase.
         Step names reuse the existing trace.* i18n labels (collect_context/analyze/…)."""
@@ -174,7 +230,17 @@ class FinalizeGraphRunner:
         if not research_id or store is None or not hasattr(store, "append_research_graph_event"):
             return
         try:
-            store.append_research_graph_event(research_id, {"step": step})
+            meta = GRAPH_STEP_METADATA.get(step, {})
+            event = {
+                "step": step,
+                "agent": agent or meta.get("agent", "FinalizeRunner"),
+                "phase": phase or meta.get("phase", "synthesis"),
+                "action": action or meta.get("action", step),
+                "detail": detail or meta.get("detail", ""),
+            }
+            if metrics:
+                event["metrics"] = metrics
+            store.append_research_graph_event(research_id, event)
         except Exception:  # progress events must never break finalize
             pass
 
@@ -457,6 +523,26 @@ class FinalizeGraphRunner:
                     f"{state['effective_prompt']}\n\n"
                     "The previous draft still had report notes or weak-support issues. "
                     "Prioritize higher-confidence evidence, reduce overconfident wording, and improve citation discipline."
+                )
+                self._emit_trail(
+                    state["research_id"],
+                    "verify_retry",
+                    agent="ReportCriticAgent",
+                    phase="verify",
+                    action="critic_revision_loop",
+                    detail="↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
+                    metrics={"attempt": state["analyze_attempts"] + 1},
+                )
+            elif should_tie_break and tie_break_recommendations:
+                effective_prompt = state["effective_prompt"]
+                self._emit_trail(
+                    state["research_id"],
+                    "tie_break",
+                    agent="ReplanAgent",
+                    phase="critic",
+                    action="conflict_tie_break",
+                    detail=f"↩ Обнаружены противоречия в источниках ({len(state.get('detected_conflicts') or [])}): запуск арбитражного поиска (Tie-Break)",
+                    metrics={"recommendations": len(tie_break_recommendations)},
                 )
             else:
                 effective_prompt = state["effective_prompt"]
