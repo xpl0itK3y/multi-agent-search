@@ -6,11 +6,19 @@ from src.core.graph_history import compact_graph_step_events, compact_graph_trai
 from src.domain import (
     AdminAuditLogItem,
     AdminDryRunResult,
+    AdminEventLogItem,
+    AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptItem,
+    AdminPromptsResponse,
+    AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
     AdminTokenDepthBreakdown,
     AdminTokenModelBreakdown,
     AdminTokenResearchUsageItem,
+    AdminUserDetailResponse,
+    AdminUserListItem,
+    AdminUserListResponse,
     AdminWorkerFleetItem,
     ExtractionMetrics,
     FinalizeJobStatus,
@@ -42,6 +50,9 @@ class InMemoryTaskStore:
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
         self.llm_usage_logs: list[dict] = []
         self.admin_audit_logs: list[AdminAuditLogItem] = []
+        self.user_sessions: list[dict] = []
+        self.user_events: list[dict] = []
+        self.user_telemetry: dict[str, dict] = {}
         self._admission_lock = threading.RLock()
         # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
         self._state_lock = threading.RLock()
@@ -251,6 +262,8 @@ class InMemoryTaskStore:
             record for record in self.researches.values() if record.user_id == user_id
         ]:
             self.delete_research(research.id)
+        self.user_sessions = [s for s in self.user_sessions if s.get("user_id") != user_id]
+        self.user_events = [e for e in self.user_events if e.get("user_id") != user_id]
         return True
 
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
@@ -1239,3 +1252,436 @@ class InMemoryTaskStore:
             ip_address=ip_address,
         )
         return res
+
+    # ── user telemetry & activity tracking ───────────────────────────────────
+    def record_user_session(
+        self,
+        user_id: str,
+        session_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device_type: str = "desktop",
+        browser: str | None = None,
+        os: str | None = None,
+        screen_res: str | None = None,
+        viewport: str | None = None,
+        language: str | None = None,
+        client_timezone: str | None = None,
+        country: str | None = None,
+        city: str | None = None,
+    ) -> str:
+        record_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        self.user_sessions.append({
+            "id": record_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "device_type": device_type,
+            "browser": browser,
+            "os": os,
+            "screen_res": screen_res,
+            "viewport": viewport,
+            "language": language,
+            "timezone": client_timezone,
+            "country": country,
+            "city": city,
+            "started_at": now,
+            "last_active_at": now,
+        })
+        self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent, device=device_type)
+        return record_id
+
+    def record_user_event(
+        self,
+        event_name: str,
+        event_category: str = "general",
+        user_id: str | None = None,
+        session_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> str:
+        record_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        self.user_events.append({
+            "id": record_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "event_name": event_name,
+            "event_category": event_category,
+            "details": details or {},
+            "ip_address": ip_address,
+            "user_agent": user_agent,
+            "created_at": now,
+        })
+        if user_id:
+            self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent)
+        return record_id
+
+    def touch_user_activity(
+        self,
+        user_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device: str | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        entry = self.user_telemetry.setdefault(user_id, {})
+        entry["last_seen_at"] = now
+        if ip_address:
+            entry["last_ip"] = ip_address
+        if user_agent:
+            entry["last_user_agent"] = user_agent
+        if device:
+            entry["last_device"] = device
+
+    def get_admin_users_list(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+        role: str | None = None,
+        online_only: bool = False,
+        sort_by: str = "last_seen",
+    ) -> AdminUserListResponse:
+        now = datetime.now(timezone.utc)
+        items: list[AdminUserListItem] = []
+
+        for uid, u in self.users.items():
+            telem = self.user_telemetry.get(uid, {})
+            last_seen = telem.get("last_seen_at")
+            is_online = False
+            if last_seen:
+                is_online = (now - last_seen).total_seconds() < 120
+
+            if online_only and not is_online:
+                continue
+
+            if role:
+                if role == "admin" and not getattr(u, "is_admin", False):
+                    continue
+                if role == "user" and getattr(u, "is_admin", False):
+                    continue
+
+            if search:
+                s = search.lower()
+                matches = (
+                    s in (u.email or "").lower()
+                    or s in (getattr(u, "name", "") or "").lower()
+                    or s in (telem.get("last_ip") or "")
+                )
+                if not matches:
+                    continue
+
+            # Research count
+            user_researches = [r for r in self.researches.values() if r.user_id == uid]
+            # Tokens
+            user_logs = [l for l in self.llm_usage_logs if l.get("user_id") == uid]
+            tot_tokens = sum(l.get("total_tokens", 0) for l in user_logs)
+            tot_cost = sum(l.get("estimated_cost_usd", 0.0) for l in user_logs)
+
+            items.append(
+                AdminUserListItem(
+                    id=uid,
+                    email=u.email,
+                    name=getattr(u, "name", None),
+                    avatar_url=getattr(u, "avatar_url", None),
+                    is_admin=getattr(u, "is_admin", False),
+                    created_at=u.created_at.isoformat() if hasattr(u, "created_at") and u.created_at else now.isoformat(),
+                    last_seen_at=last_seen.isoformat() if last_seen else None,
+                    is_online=is_online,
+                    last_ip=telem.get("last_ip"),
+                    last_device=telem.get("last_device"),
+                    last_browser=telem.get("last_browser", "Chrome"),
+                    last_os=telem.get("last_os", "macOS"),
+                    researches_count=len(user_researches),
+                    total_tokens=tot_tokens,
+                    total_cost_usd=round(tot_cost, 4),
+                )
+            )
+
+        online_count = sum(1 for it in items if it.is_online)
+        total_count = len(items)
+
+        # Sorting
+        if sort_by == "tokens":
+            items.sort(key=lambda x: x.total_tokens, reverse=True)
+        elif sort_by == "cost":
+            items.sort(key=lambda x: x.total_cost_usd, reverse=True)
+        elif sort_by == "researches":
+            items.sort(key=lambda x: x.researches_count, reverse=True)
+        elif sort_by == "registered":
+            items.sort(key=lambda x: x.created_at, reverse=True)
+        else:
+            items.sort(key=lambda x: x.last_seen_at or "", reverse=True)
+
+        start = (page - 1) * page_size
+        paged = items[start : start + page_size]
+
+        return AdminUserListResponse(
+            users=paged,
+            total_users=total_count,
+            online_users=online_count,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
+        user_resp = self.get_admin_users_list(page=1, page_size=1000)
+        found_item = next((u for u in user_resp.users if u.id == user_id), None)
+        if not found_item:
+            return None
+
+        # Sessions
+        sessions = [s for s in self.user_sessions if s.get("user_id") == user_id]
+        # Recent researches
+        researches = [
+            {
+                "id": r.id,
+                "prompt": r.prompt,
+                "depth": r.depth,
+                "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+                "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+            }
+            for r in self.researches.values()
+            if r.user_id == user_id
+        ]
+        # Recent events
+        events = [
+            {
+                "id": e["id"],
+                "event_name": e["event_name"],
+                "event_category": e["event_category"],
+                "details": e["details"],
+                "created_at": e["created_at"].isoformat() if hasattr(e["created_at"], "isoformat") else str(e["created_at"]),
+            }
+            for e in self.user_events
+            if e.get("user_id") == user_id
+        ]
+        # Token breakdown
+        user_logs = [l for l in self.llm_usage_logs if l.get("user_id") == user_id]
+        by_model: dict[str, int] = {}
+        for l in user_logs:
+            m = l.get("model", "unknown")
+            by_model[m] = by_model.get(m, 0) + l.get("total_tokens", 0)
+
+        return AdminUserDetailResponse(
+            user=found_item,
+            sessions=sessions[-10:],
+            researches=researches[-10:],
+            recent_researches=researches[-10:],
+            recent_events=events[-20:],
+            token_breakdown={"by_model": by_model},
+        )
+
+    def get_admin_telemetry_summary(self) -> AdminTelemetrySummaryResponse:
+        now = datetime.now(timezone.utc)
+        total_users = len(self.users)
+        online_now = 0
+        dau_set = set()
+        wau_set = set()
+        mau_set = set()
+
+        os_counts: dict[str, int] = {}
+        browser_counts: dict[str, int] = {}
+        device_counts: dict[str, int] = {}
+        country_counts: dict[str, int] = {}
+
+        for s in self.user_sessions:
+            uid = s.get("user_id")
+            active = s.get("last_active_at", now)
+            diff = (now - active).total_seconds()
+            if diff < 120:
+                online_now += 1
+            if diff < 86400 and uid:
+                dau_set.add(uid)
+            if diff < 7 * 86400 and uid:
+                wau_set.add(uid)
+            if diff < 30 * 86400 and uid:
+                mau_set.add(uid)
+
+            os_name = s.get("os") or "macOS"
+            os_counts[os_name] = os_counts.get(os_name, 0) + 1
+
+            b_name = s.get("browser") or "Chrome"
+            browser_counts[b_name] = browser_counts.get(b_name, 0) + 1
+
+            d_name = s.get("device_type") or "desktop"
+            device_counts[d_name] = device_counts.get(d_name, 0) + 1
+
+            c_name = s.get("country") or "Local"
+            country_counts[c_name] = country_counts.get(c_name, 0) + 1
+
+        total_tokens = sum(l.get("total_tokens", 0) for l in self.llm_usage_logs)
+        total_cost = sum(l.get("estimated_cost_usd", 0.0) for l in self.llm_usage_logs)
+
+        depth_counts: dict[str, int] = {}
+        prompt_lens: list[int] = []
+        for r in self.researches.values():
+            d = r.depth or "medium"
+            depth_counts[d] = depth_counts.get(d, 0) + 1
+            if r.prompt:
+                prompt_lens.append(len(r.prompt))
+
+        avg_prompt_len = round(sum(prompt_lens) / len(prompt_lens), 1) if prompt_lens else 0.0
+
+        return AdminTelemetrySummaryResponse(
+            total_users=total_users,
+            online_now=online_now,
+            online_users_now=online_now,
+            dau=len(dau_set),
+            dau_today=len(dau_set),
+            wau=len(wau_set),
+            wau_7d=len(wau_set),
+            mau=len(mau_set),
+            mau_30d=len(mau_set),
+            total_researches=len(self.researches),
+            total_tokens=total_tokens,
+            total_cost_usd=round(total_cost, 4),
+            by_os=[{"name": k, "count": v} for k, v in os_counts.items()],
+            by_browser=[{"name": k, "count": v} for k, v in browser_counts.items()],
+            by_device=[{"name": k, "count": v} for k, v in device_counts.items()],
+            by_country=[{"name": k, "count": v} for k, v in country_counts.items()],
+            os_breakdown=os_counts,
+            browser_breakdown=browser_counts,
+            device_breakdown=device_counts,
+            depth_distribution=depth_counts,
+            popular_depths=[{"depth": k, "count": v} for k, v in depth_counts.items()],
+            popular_models=[],
+            avg_prompt_len=avg_prompt_len,
+        )
+
+    def get_admin_event_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        event_name: str | None = None,
+        user_id: str | None = None,
+    ) -> AdminEventLogResponse:
+        filtered = list(self.user_events)
+        if category:
+            filtered = [e for e in filtered if e.get("event_category") == category]
+        if event_name:
+            filtered = [e for e in filtered if e.get("event_name") == event_name]
+        if user_id:
+            filtered = [e for e in filtered if e.get("user_id") == user_id]
+
+        filtered.reverse()
+        paged = filtered[offset : offset + limit]
+
+        items = []
+        for e in paged:
+            u_email = None
+            uid = e.get("user_id")
+            if uid and uid in self.users:
+                u_email = self.users[uid].email
+            items.append(
+                AdminEventLogItem(
+                    id=e["id"],
+                    user_id=uid,
+                    user_email=u_email,
+                    session_id=e.get("session_id"),
+                    event_name=e["event_name"],
+                    event_category=e["event_category"],
+                    details=e.get("details", {}),
+                    ip_address=e.get("ip_address"),
+                    user_agent=e.get("user_agent"),
+                    created_at=e["created_at"].isoformat() if hasattr(e["created_at"], "isoformat") else str(e["created_at"]),
+                )
+            )
+
+        return AdminEventLogResponse(
+            events=items,
+            total_count=len(filtered),
+            page=(offset // limit) + 1 if limit > 0 else 1,
+            page_size=limit,
+        )
+
+    def get_admin_prompts(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ) -> AdminPromptsResponse:
+        items: list[AdminPromptItem] = []
+        if not prompt_type or prompt_type in ("all", "research"):
+            for r in self.researches.values():
+                if user_id and r.user_id != user_id:
+                    continue
+                user = self.users.get(r.user_id) if r.user_id else None
+                user_email = user.email if user else None
+                user_name = user.name if user else None
+                created_iso = r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)
+                items.append(
+                    AdminPromptItem(
+                        id=f"res_{r.id}",
+                        prompt_type="research",
+                        prompt=r.prompt,
+                        research_id=r.id,
+                        user_id=r.user_id,
+                        user_email=user_email,
+                        user_name=user_name,
+                        depth=r.depth.value if hasattr(r.depth, "value") else str(r.depth),
+                        status=r.status.value if hasattr(r.status, "value") else str(r.status),
+                        total_tokens=0,
+                        cost_usd=0.0,
+                        created_at=created_iso,
+                    )
+                )
+
+        if not prompt_type or prompt_type in ("all", "chat"):
+            for ev in self.user_events:
+                if ev.get("event_name") == "chat_prompt":
+                    ev_user_id = ev.get("user_id")
+                    if user_id and ev_user_id != user_id:
+                        continue
+                    details = ev.get("details") or {}
+                    prompt_text = details.get("prompt", "")
+                    res_id = details.get("research_id", "")
+                    user = self.users.get(ev_user_id) if ev_user_id else None
+                    user_email = user.email if user else None
+                    user_name = user.name if user else None
+                    created_at = ev.get("created_at")
+                    created_iso = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
+                    items.append(
+                        AdminPromptItem(
+                            id=f"chat_{ev.get('id', '')}",
+                            prompt_type="chat",
+                            prompt=prompt_text,
+                            research_id=res_id,
+                            user_id=ev_user_id,
+                            user_email=user_email,
+                            user_name=user_name,
+                            depth=None,
+                            status=None,
+                            total_tokens=0,
+                            cost_usd=0.0,
+                            created_at=created_iso,
+                        )
+                    )
+
+        if search:
+            q = search.lower()
+            items = [
+                it for it in items
+                if q in it.prompt.lower()
+                or (it.user_email and q in it.user_email.lower())
+                or (it.user_name and q in it.user_name.lower())
+            ]
+
+        items.sort(key=lambda x: x.created_at, reverse=True)
+        total_count = len(items)
+        start = (page - 1) * page_size
+        paged_items = items[start : start + page_size]
+        return AdminPromptsResponse(
+            prompts=paged_items,
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+        )
+

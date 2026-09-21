@@ -1123,5 +1123,118 @@ class AgentMetadataItem(BaseModel):
     example_output: Optional[Dict[str, Any]] = None
 
 
+
+class UserTelemetryEventInput(BaseModel):
+    session_id: Optional[str] = None
+    event_name: str
+    event_category: str = "general"
+    details: Dict[str, Any] = Field(default_factory=dict)
+    device_info: Optional[Dict[str, Any]] = None
+
+
+class AdminUserListItem(BaseModel):
+    id: str
+    email: str
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    is_admin: bool = False
+    created_at: str
+    last_seen_at: Optional[str] = None
+    is_online: bool = False
+    last_ip: Optional[str] = None
+    last_device: Optional[str] = None
+    last_browser: Optional[str] = None
+    last_os: Optional[str] = None
+    researches_count: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+
+class AdminUserListResponse(BaseModel):
+    users: List[AdminUserListItem] = Field(default_factory=list)
+    total_users: int = 0
+    online_users: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class AdminUserDetailResponse(BaseModel):
+    user: AdminUserListItem
+    sessions: List[Dict[str, Any]] = Field(default_factory=list)
+    researches: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_researches: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_events: List[Dict[str, Any]] = Field(default_factory=list)
+    token_breakdown: Dict[str, Any] = Field(default_factory=dict)
+
+
+
+class AdminTelemetrySummaryResponse(BaseModel):
+    total_users: int = 0
+    online_now: int = 0
+    online_users_now: int = 0
+    dau: int = 0
+    dau_today: int = 0
+    wau: int = 0
+    wau_7d: int = 0
+    mau: int = 0
+    mau_30d: int = 0
+    total_researches: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    by_os: List[Dict[str, Any]] = Field(default_factory=list)
+    by_browser: List[Dict[str, Any]] = Field(default_factory=list)
+    by_device: List[Dict[str, Any]] = Field(default_factory=list)
+    by_country: List[Dict[str, Any]] = Field(default_factory=list)
+    os_breakdown: Dict[str, int] = Field(default_factory=dict)
+    browser_breakdown: Dict[str, int] = Field(default_factory=dict)
+    device_breakdown: Dict[str, int] = Field(default_factory=dict)
+    depth_distribution: Dict[str, int] = Field(default_factory=dict)
+    popular_depths: List[Dict[str, Any]] = Field(default_factory=list)
+    popular_models: List[Dict[str, Any]] = Field(default_factory=list)
+    avg_prompt_len: float = 0.0
+
+
+class AdminEventLogItem(BaseModel):
+    id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    session_id: Optional[str] = None
+    event_name: str
+    event_category: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: str
+
+
+class AdminEventLogResponse(BaseModel):
+    events: List[AdminEventLogItem] = Field(default_factory=list)
+    total_count: int = 0
+    page: int = 1
+    page_size: int = 50
+
+
+class AdminPromptItem(BaseModel):
+    id: str
+    prompt_type: str  # "research" | "chat"
+    prompt: str
+    research_id: str
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    depth: Optional[str] = None
+    status: Optional[str] = None
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    created_at: str
+
+
+class AdminPromptsResponse(BaseModel):
+    prompts: List[AdminPromptItem] = Field(default_factory=list)
+    total_count: int = 0
+    page: int = 1
+    page_size: int = 25
+
+
 SearchTaskSummary.model_rebuild()
 ResearchSummary.model_rebuild()

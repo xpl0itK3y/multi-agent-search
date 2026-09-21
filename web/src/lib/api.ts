@@ -1,8 +1,13 @@
 import type {
   AdminAuditLogItem,
   AdminDryRunResult,
+  AdminEventLogResponse,
   AdminOverviewResponse,
+  AdminPromptsResponse,
+  AdminTelemetrySummaryResponse,
   AdminTokenAnalyticsResponse,
+  AdminUserDetailResponse,
+  AdminUserListResponse,
   AgentMetadataItem,
   AuthSession,
   AuthUser,
@@ -324,6 +329,63 @@ export const api = {
 };
 
 export const adminApi = {
+  getUsers: (
+    page: number = 1,
+    pageSize: number = 20,
+    search?: string,
+    role?: string,
+    onlineOnly: boolean = false,
+    sortBy: string = "activity"
+  ) => {
+    let url = `/v1/admin/users?page=${page}&page_size=${pageSize}&online_only=${onlineOnly}&sort_by=${sortBy}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (role) url += `&role=${encodeURIComponent(role)}`;
+    return request<AdminUserListResponse>(url);
+  },
+
+  getUserDetail: (userId: string) =>
+    request<AdminUserDetailResponse>(`/v1/admin/users/${userId}`),
+
+  getTelemetrySummary: () =>
+    request<AdminTelemetrySummaryResponse>("/v1/admin/users/analytics/summary"),
+
+  getUserEvents: (
+    page: number = 1,
+    pageSize: number = 50,
+    userId?: string,
+    eventName?: string,
+    eventCategory?: string
+  ) => {
+    let url = `/v1/admin/users/events?page=${page}&page_size=${pageSize}`;
+    if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
+    if (eventName) url += `&event_name=${encodeURIComponent(eventName)}`;
+    if (eventCategory) url += `&event_category=${encodeURIComponent(eventCategory)}`;
+    return request<AdminEventLogResponse>(url);
+  },
+
+  exportUsersCsvUrl: () => `${BASE}/v1/admin/users/export`,
+
+  getPrompts: (
+    page: number = 1,
+    pageSize: number = 25,
+    search?: string,
+    userId?: string,
+    promptType?: string
+  ) => {
+    let url = `/v1/admin/prompts?page=${page}&page_size=${pageSize}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
+    if (promptType && promptType !== "all") url += `&prompt_type=${encodeURIComponent(promptType)}`;
+    return request<AdminPromptsResponse>(url);
+  },
+
+  exportPromptsCsvUrl: () => `${BASE}/v1/admin/prompts/export`,
+
+  deleteUser: (userId: string) =>
+    request<{ status: string; deleted_user_id: string }>(`/v1/admin/users/${userId}`, {
+      method: "DELETE",
+    }),
+
   getOverview: () => request<AdminOverviewResponse>("/v1/admin/overview"),
 
   getTokens: (page: number = 1, pageSize: number = 20) =>
@@ -371,3 +433,18 @@ export const adminApi = {
     return () => es.close();
   },
 };
+
+export const telemetryApi = {
+  recordEvent: (payload: {
+    session_id?: string;
+    event_name: string;
+    event_category?: string;
+    details?: Record<string, any>;
+    device_info?: Record<string, any>;
+  }) =>
+    request<{ ok: boolean; event_id: string }>("/v1/telemetry/event", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+};
+

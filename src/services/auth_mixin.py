@@ -146,7 +146,10 @@ class AuthMixin:
     def _to_auth_user(user) -> AuthUser:
         from src.config import settings
 
-        allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        if isinstance(settings.admin_emails, str):
+            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        else:
+            allowed = {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
         is_admin = bool(user.email and user.email.lower() in allowed)
         return AuthUser(
             id=user.id,

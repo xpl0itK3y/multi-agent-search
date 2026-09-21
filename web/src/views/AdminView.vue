@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
 import OverviewTab from "@/components/admin/OverviewTab.vue";
+import UsersTab from "@/components/admin/UsersTab.vue";
 import AnalyticsTab from "@/components/admin/AnalyticsTab.vue";
 import AgentsGraphTab from "@/components/admin/AgentsGraphTab.vue";
 import OperationsTab from "@/components/admin/OperationsTab.vue";
@@ -16,7 +17,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
 
-type Tab = "overview" | "analytics" | "agents" | "operations";
+type Tab = "overview" | "users" | "analytics" | "agents" | "operations";
 const activeTab = ref<Tab>("overview");
 
 const overview = ref<AdminOverviewResponse | null>(null);
@@ -182,6 +183,13 @@ onMounted(() => {
         </button>
         <button
           class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
+          :class="activeTab === 'users' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
+          @click="activeTab = 'users'"
+        >
+          {{ t("admin.tabs.users") }}
+        </button>
+        <button
+          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
           :class="activeTab === 'analytics' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
           @click="activeTab = 'analytics'"
         >
@@ -213,6 +221,8 @@ onMounted(() => {
         </div>
         <div v-else>
           <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" />
+
+          <UsersTab v-else-if="activeTab === 'users'" />
 
           <AnalyticsTab v-else-if="activeTab === 'analytics'" />
 

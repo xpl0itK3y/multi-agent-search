@@ -4,8 +4,13 @@ from typing import Protocol
 from src.domain import (
     AdminAuditLogItem,
     AdminDryRunResult,
+    AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptsResponse,
+    AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
+    AdminUserDetailResponse,
+    AdminUserListResponse,
     AgentMetadataItem,
     FinalizeJobStatus,
     QueueMetrics,
@@ -349,3 +354,74 @@ class TaskStore(Protocol):
         params: dict | None = None,
         ip_address: str | None = None,
     ) -> AdminDryRunResult: ...
+
+    # ── user telemetry & activity tracking ───────────────────────────────────
+    def record_user_session(
+        self,
+        user_id: str,
+        session_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device_type: str = "desktop",
+        browser: str | None = None,
+        os: str | None = None,
+        screen_res: str | None = None,
+        viewport: str | None = None,
+        language: str | None = None,
+        client_timezone: str | None = None,
+        country: str | None = None,
+        city: str | None = None,
+    ) -> str: ...
+
+    def record_user_event(
+        self,
+        event_name: str,
+        event_category: str = "general",
+        user_id: str | None = None,
+        session_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> str: ...
+
+    def touch_user_activity(
+        self,
+        user_id: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        device: str | None = None,
+    ) -> None: ...
+
+    def get_admin_users_list(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+        role: str | None = None,
+        online_only: bool = False,
+        sort_by: str = "last_seen",
+    ) -> AdminUserListResponse: ...
+
+    def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None: ...
+
+    def get_admin_telemetry_summary(self) -> AdminTelemetrySummaryResponse: ...
+
+    def get_admin_event_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        event_name: str | None = None,
+        user_id: str | None = None,
+    ) -> AdminEventLogResponse: ...
+
+    def get_admin_prompts(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ) -> AdminPromptsResponse: ...
+
+

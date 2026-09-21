@@ -23,6 +23,15 @@ def _extract_token(request: Request) -> str | None:
     return request.cookies.get(settings.auth_cookie_name)
 
 
+def _get_admin_emails() -> set[str]:
+    raw = getattr(settings, "admin_emails", "")
+    if not raw:
+        return set()
+    if isinstance(raw, str):
+        return {e.strip().lower() for e in raw.split(",") if e.strip()}
+    return {str(e).strip().lower() for e in raw if str(e).strip()}
+
+
 def get_current_user(request: Request) -> AuthUser:
     """Authenticated user from a Bearer JWT or session cookie. Local user when auth is off."""
     if settings.auth_disabled:
@@ -39,7 +48,7 @@ def get_current_user(request: Request) -> AuthUser:
         token_version = -1
     if user is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+    allowed = _get_admin_emails()
     if user.email.lower() in allowed:
         user.is_admin = True
     return user
@@ -61,7 +70,7 @@ def require_admin(request: Request) -> AuthUser:
     If auth is enabled:
       - Requires authenticated user whose email is in ADMIN_EMAILS.
     """
-    allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+    allowed = _get_admin_emails()
     if settings.auth_disabled and not allowed:
         return LOCAL_USER
 

@@ -30,6 +30,12 @@ class UserORM(Base):
         nullable=False,
         default=utcnow,
     )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_device: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ResearchORM(Base):
@@ -328,6 +334,70 @@ class AdminAuditLogORM(Base):
     target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        index=True,
+    )
+
+
+class UserSessionORM(Base):
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        Index("ix_user_sessions_started_at", "started_at"),
+        Index("ix_user_sessions_last_active", "last_active_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    device_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="desktop", server_default=text("'desktop'")
+    )
+    browser: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    screen_res: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    viewport: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    last_active_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+
+
+class UserEventORM(Base):
+    __tablename__ = "user_events"
+    __table_args__ = (
+        Index("ix_user_events_user_created", "user_id", "created_at"),
+        Index("ix_user_events_category", "event_category"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="general", server_default=text("'general'")
+    )
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

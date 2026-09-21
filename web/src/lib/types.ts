@@ -455,3 +455,140 @@ export interface AgentMetadataItem {
   example_input?: Record<string, any> | null;
   example_output?: Record<string, any> | null;
 }
+
+export interface AdminUserListItem {
+  id: string;
+  email: string;
+  name: string;
+  avatar_url?: string | null;
+  is_admin: boolean;
+  created_at: string;
+  last_seen_at?: string | null;
+  is_online: boolean;
+  last_ip?: string | null;
+  last_device?: string | null;
+  last_browser?: string | null;
+  last_os?: string | null;
+  researches_count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserListItem[];
+  total_users: number;
+  online_users: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminUserSessionItem {
+  id: string;
+  session_id: string;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  device_type: string;
+  browser?: string | null;
+  os?: string | null;
+  screen_res?: string | null;
+  viewport?: string | null;
+  language?: string | null;
+  timezone?: string | null;
+  country?: string | null;
+  city?: string | null;
+  started_at: string;
+  last_active_at: string;
+}
+
+export interface AdminUserResearchItem {
+  id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminUserDetailResponse {
+  user: AdminUserListItem;
+  sessions: AdminUserSessionItem[];
+  researches?: AdminUserResearchItem[];
+  recent_researches?: AdminUserResearchItem[];
+  recent_events: Array<{
+    id: string;
+    event_name: string;
+    event_category: string;
+    details: Record<string, any>;
+    ip_address?: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface AdminTelemetrySummaryResponse {
+  total_users: number;
+  online_users_now?: number;
+  online_now?: number;
+  dau_today?: number;
+  dau?: number;
+  wau_7d?: number;
+  wau?: number;
+  mau_30d?: number;
+  mau?: number;
+  total_researches: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  os_breakdown?: Record<string, number>;
+  browser_breakdown?: Record<string, number>;
+  device_breakdown?: Record<string, number>;
+  depth_distribution?: Record<string, number>;
+  by_os?: Array<{ name: string; count: number }>;
+  by_browser?: Array<{ name: string; count: number }>;
+  by_device?: Array<{ name: string; count: number }>;
+  by_country?: Array<{ name: string; count: number }>;
+  popular_depths?: Array<{ depth: string; count: number }>;
+  popular_models?: Array<{ model: string; count: number }>;
+  avg_prompt_len?: number;
+}
+
+export interface AdminEventLogItem {
+  id: string;
+  user_id?: string | null;
+  session_id?: string | null;
+  event_name: string;
+  event_category: string;
+  details: Record<string, any>;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  created_at: string;
+}
+
+export interface AdminEventLogResponse {
+  events: AdminEventLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AdminPromptItem {
+  id: string;
+  prompt_type: "research" | "chat" | string;
+  prompt: string;
+  research_id: string;
+  user_id?: string | null;
+  user_email?: string | null;
+  user_name?: string | null;
+  depth?: string | null;
+  status?: string | null;
+  total_tokens: number;
+  cost_usd: number;
+  created_at: string;
+}
+
+export interface AdminPromptsResponse {
+  prompts: AdminPromptItem[];
+  total_count: number;
+  page: number;
+  page_size: number;
+}
+
