@@ -53,6 +53,19 @@ const costLabel = computed(() => {
   return parts.join(" · ");
 });
 
+const costTooltip = computed(() => {
+  const u = usage.value;
+  if (!u) return t("research.costTitle");
+  const lines: string[] = [t("research.costTitle")];
+  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.cache_hit_tokens) {
+    const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
+    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+  }
+  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  return lines.join(" · ");
+});
+
 let close: (() => void) | undefined;
 
 const DONE = new Set(["completed", "failed", "timeout"]);
@@ -268,7 +281,7 @@ onBeforeUnmount(() => close?.());
           <span class="text-sm text-muted">{{ statusLabel(status) }}</span>
         </div>
 
-        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted" :title="$t('research.costTitle')">
+        <div v-if="costLabel" class="mb-5 -mt-2 text-xs text-muted cursor-help" :title="costTooltip">
           {{ costLabel }}
         </div>
 

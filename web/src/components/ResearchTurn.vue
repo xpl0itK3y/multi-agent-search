@@ -110,6 +110,19 @@ const costLabel = computed(() => {
   return parts.join(" · ");
 });
 
+const costTooltip = computed(() => {
+  const u = usage.value;
+  if (!u) return t("research.costTitle");
+  const lines: string[] = [t("research.costTitle")];
+  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.cache_hit_tokens) {
+    const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
+    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+  }
+  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  return lines.join(" · ");
+});
+
 async function loadPlan() {
   try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
 }
@@ -325,7 +338,7 @@ onBeforeUnmount(() => {
         >
           {{ cancelling ? $t("research.cancelling") : $t("research.cancel") }}
         </button>
-        <span v-if="costLabel" class="ml-auto text-xs text-muted" :title="$t('research.costTitle')">{{ costLabel }}</span>
+        <span v-if="costLabel" class="ml-auto text-xs text-muted cursor-help" :title="costTooltip">{{ costLabel }}</span>
       </div>
 
       <!-- live "what's happening now" commentary (visible even when the trace is collapsed) -->
