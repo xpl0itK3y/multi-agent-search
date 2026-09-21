@@ -26,8 +26,11 @@ const emit = defineEmits<{
 const store = useResearchStore();
 
 const depths: Depth[] = ["easy", "medium", "hard"];
-const depth = ref<Depth>("medium");
-const planFirst = ref(true);
+const savedDepth = (typeof localStorage !== "undefined" ? localStorage.getItem("research.default_depth") : null) as Depth | null;
+const depth = ref<Depth>(savedDepth && depths.includes(savedDepth) ? savedDepth : "medium");
+
+const savedPlanFirst = typeof localStorage !== "undefined" ? localStorage.getItem("research.plan_first") : null;
+const planFirst = ref<boolean>(savedPlanFirst !== null ? savedPlanFirst !== "false" : true);
 
 // Thread composer can switch between starting a deep research and a quick grounded
 // follow-up question on the latest report.
@@ -36,11 +39,12 @@ const isQuick = computed(() => !!props.allowQuickQuestion && mode.value === "qui
 // Fall back to research mode whenever quick-questions aren't available (no finished report yet).
 watch(() => props.allowQuickQuestion, (allowed) => { if (!allowed) mode.value = "research"; });
 
-const model = ref<string>("");
+const savedModel = typeof localStorage !== "undefined" ? localStorage.getItem("research.default_model") : null;
+const model = ref<string>(savedModel || "");
 watch(
   () => store.defaultModelId,
   (id) => {
-    if (!model.value && id) model.value = id;
+    if (!model.value && id) model.value = savedModel || id;
   },
   { immediate: true },
 );

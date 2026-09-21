@@ -34,5 +34,10 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
   }
 
-  return { user, checked, fetchMe, login, register, logout };
+  async function updateProfile(payload: { name?: string; avatar_url?: string }) {
+    user.value = await api.updateProfile(payload);
+    return user.value;
+  }
+
+  return { user, checked, fetchMe, login, register, logout, updateProfile };
 });

@@ -6,6 +6,7 @@ import type {
   AgentMetadataItem,
   AuthSession,
   AuthUser,
+  UserTokenStats,
   ChatMessage,
   Clarification,
   ComparisonTable,
@@ -198,6 +199,22 @@ export const api = {
   },
 
   authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
+
+  updateProfile: async (payload: { name?: string; avatar_url?: string }) => {
+    return await request<AuthUser>("/v1/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
+
+  deleteAccount: async (currentPassword?: string) => {
+    return await request<{ status: string }>("/v1/auth/account", {
+      method: "DELETE",
+      body: JSON.stringify({ current_password: currentPassword }),
+    });
+  },
 
   setPassword: async (password: string, currentPassword?: string) => {
     const res = await request<AuthSession>("/v1/auth/set-password", {

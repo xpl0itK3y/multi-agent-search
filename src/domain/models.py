@@ -556,6 +556,11 @@ class AuthUser(BaseModel):
     token_version: int = Field(default=0, exclude=True)
 
 
+class UpdateProfileRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    avatar_url: Optional[str] = Field(None, max_length=1000)
+
+
 class AuthSession(BaseModel):
     """Login/register response: a Bearer JWT plus the authenticated user.
 

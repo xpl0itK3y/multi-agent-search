@@ -14,6 +14,36 @@ export interface AuthSession {
   user: AuthUser;
 }
 
+export interface UserTokenModelBreakdown {
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+}
+
+export interface UserRecentResearchTokenUsage {
+  id: string;
+  prompt: string;
+  depth: string;
+  status: string;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  created_at: string | null;
+}
+
+export interface UserTokenStats {
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number;
+  calls_count: number;
+  researches_count: number;
+  by_model: UserTokenModelBreakdown[];
+  recent: UserRecentResearchTokenUsage[];
+}
+
 export interface ModelOption {
   id: string;
   label: string;

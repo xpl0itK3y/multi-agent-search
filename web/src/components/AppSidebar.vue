@@ -140,6 +140,10 @@ const currentThreadId = computed(() => (route.name === "thread" ? route.params.t
 const vFocus = {
   mounted: (el: HTMLInputElement) => el.focus(),
 };
+
+function openSettings() {
+  router.push("/settings");
+}
 </script>
 
 <template>
@@ -159,16 +163,33 @@ const vFocus = {
     >
       🛡️
     </button>
-    <img
-      v-if="avatarUrl"
-      :src="avatarUrl"
-      alt=""
-      referrerpolicy="no-referrer"
-      class="mt-auto h-9 w-9 rounded-full object-cover"
-    />
-    <div v-else class="mt-auto grid h-9 w-9 place-items-center rounded-full bg-surface text-sm">
-      {{ displayName.charAt(0).toUpperCase() }}
-    </div>
+    <button
+      class="rail-btn mt-auto"
+      :class="route.path === '/settings' ? 'text-accent bg-surface' : ''"
+      :title="$t('sidebar.settings')"
+      @click="openSettings"
+    >
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
+    <button
+      class="group relative cursor-pointer"
+      :title="displayName"
+      @click="openSettings"
+    >
+      <img
+        v-if="avatarUrl"
+        :src="avatarUrl"
+        alt=""
+        referrerpolicy="no-referrer"
+        class="h-9 w-9 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
+      />
+      <div v-else class="grid h-9 w-9 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
+        {{ displayName.charAt(0).toUpperCase() }}
+      </div>
+    </button>
   </aside>
 
   <!-- Expanded sidebar (user-resizable) -->
@@ -321,22 +342,42 @@ const vFocus = {
     </div>
 
     <!-- User card -->
-    <div class="mt-auto flex items-center gap-3 border-t border-bd px-4 py-3">
+    <div
+      class="mt-auto flex items-center gap-3 border-t border-bd px-4 py-3 cursor-pointer hover:bg-surface/50 transition-colors group select-none"
+      :class="route.path === '/settings' ? 'bg-surface/70' : ''"
+      :title="$t('sidebar.settings')"
+      @click="openSettings"
+    >
       <img
         v-if="avatarUrl"
         :src="avatarUrl"
         alt=""
         referrerpolicy="no-referrer"
-        class="h-9 w-9 shrink-0 rounded-full object-cover"
+        class="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
       />
-      <div v-else class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm">
+      <div v-else class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
         {{ displayName.charAt(0).toUpperCase() }}
       </div>
       <div class="min-w-0 flex-1">
-        <div class="truncate text-sm text-ink">{{ displayName }}</div>
+        <div class="truncate text-sm font-medium text-ink group-hover:text-accent transition-colors">{{ displayName }}</div>
         <div class="text-xs text-muted">{{ $t("sidebar.plan") }}</div>
       </div>
-      <button class="shrink-0 rounded p-1 text-muted hover:text-ink" :title="$t('auth.logout')" @click="logout">
+      <button
+        class="shrink-0 rounded p-1.5 text-muted hover:text-ink hover:bg-surface transition-colors"
+        :class="route.path === '/settings' ? 'text-accent bg-surface' : ''"
+        :title="$t('sidebar.settings')"
+        @click.stop="openSettings"
+      >
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+      <button
+        class="shrink-0 rounded p-1.5 text-muted hover:text-ink hover:bg-surface transition-colors"
+        :title="$t('auth.logout')"
+        @click.stop="logout"
+      >
         ⏻
       </button>
     </div>

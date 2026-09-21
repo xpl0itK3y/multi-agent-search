@@ -35,6 +35,7 @@ from src.api.schemas import (
     AdminTokenAnalyticsResponse,
     AgentMetadataItem,
     AuthUser,
+    UpdateProfileRequest,
     AuthSession,
     SetPasswordRequest,
     DeleteAccountRequest,
@@ -246,6 +247,25 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/me", response_model=AuthUser)
     def me(user: AuthUser = Depends(get_current_user)):
         return user
+
+    @app.patch("/v1/auth/profile", response_model=AuthUser)
+    def update_profile(
+        payload: UpdateProfileRequest,
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).update_profile(
+            user.id,
+            name=payload.name,
+            avatar_url=payload.avatar_url,
+        )
+
+    @app.get("/v1/auth/token-stats")
+    def get_user_token_stats(
+        request: Request,
+        user: AuthUser = Depends(get_current_user),
+    ):
+        return get_research_service(request).task_store.get_user_token_analytics(user.id)
 
     @app.get("/v1/auth/config")
     def auth_config():
