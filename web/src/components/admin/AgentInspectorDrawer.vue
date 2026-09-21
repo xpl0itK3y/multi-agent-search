@@ -201,12 +201,12 @@ function copyJson(data: any, targetRef: "input" | "output") {
 
     <!-- Slide-over Drawer (Wider & Richer: max-w-2xl) -->
     <div
-      class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-2xl flex-col border-l border-bd bg-[#10141d] shadow-2xl transition-transform duration-300 ease-in-out"
+      class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-2xl flex-col border-l border-bd bg-bg text-ink shadow-2xl transition-transform duration-300 ease-in-out"
       :class="open ? 'translate-x-0' : 'translate-x-full'"
     >
       <div v-if="agent" class="flex h-full flex-col">
         <!-- Drawer Header with Stage and Status Badges -->
-        <div class="border-b border-bd/80 bg-[#141924] p-5 pb-4">
+        <div class="border-b border-bd bg-surface p-5 pb-4">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1">
               <!-- Badges Row -->
@@ -274,25 +274,25 @@ function copyJson(data: any, targetRef: "input" | "output") {
 
           <!-- Quick Metrics Bar -->
           <div class="mt-3.5 grid grid-cols-2 gap-2 sm:grid-cols-4 font-mono text-[10.5px]">
-            <div class="rounded-xl border border-bd/50 bg-[#161c28] p-2">
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
               <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.temperature') }}</span>
               <span class="font-bold text-ink">
                 {{ agent.temperature !== null && agent.temperature !== undefined ? agent.temperature : '— (Heuristic)' }}
               </span>
             </div>
-            <div class="rounded-xl border border-bd/50 bg-[#161c28] p-2">
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
               <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.maxTokens') }}</span>
               <span class="font-bold text-ink">
                 {{ agent.max_tokens ? agent.max_tokens.toLocaleString() : 'Streaming' }}
               </span>
             </div>
-            <div class="rounded-xl border border-bd/50 bg-[#161c28] p-2">
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
               <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.timeoutSla') }}</span>
               <span class="font-bold text-ink">
                 {{ agent.timeout_seconds ? `${agent.timeout_seconds}s` : '30s' }}
               </span>
             </div>
-            <div class="rounded-xl border border-bd/50 bg-[#161c28] p-2">
+            <div class="rounded-xl border border-bd bg-surface p-2 shadow-sm">
               <span class="block text-[9px] uppercase tracking-wider text-muted">{{ t('admin.agents.cacheTtl') }}</span>
               <span class="truncate font-bold text-ink" :title="agent.cache_ttl || 'No cache'">
                 {{ agent.cache_ttl ? agent.cache_ttl.split(' ')[0] + ' ' + (agent.cache_ttl.split(' ')[1] || '') : 'None' }}
@@ -541,8 +541,8 @@ function copyJson(data: any, targetRef: "input" | "output") {
             </div>
 
             <!-- Prompt Code Box -->
-            <div class="relative overflow-hidden rounded-2xl border border-bd/90 bg-[#0c1017] shadow-inner">
-              <div class="flex items-center justify-between border-b border-bd/50 bg-[#141923] px-3.5 py-2">
+            <div class="relative overflow-hidden rounded-2xl border border-bd bg-surface/60 shadow-inner">
+              <div class="flex items-center justify-between border-b border-bd bg-surface px-3.5 py-2">
                 <div class="flex items-center gap-2">
                   <span class="h-2.5 w-2.5 rounded-full bg-red-500/80" />
                   <span class="h-2.5 w-2.5 rounded-full bg-amber-500/80" />
@@ -554,7 +554,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 </span>
               </div>
 
-              <div class="max-h-[460px] overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-slate-200 whitespace-pre-wrap select-text">
+              <div class="max-h-[460px] overflow-y-auto p-4 font-mono text-[11px] leading-relaxed text-ink whitespace-pre-wrap select-text">
                 {{ agent.system_prompt || t('admin.agents.deterministicNoLlm') }}
               </div>
             </div>
@@ -617,7 +617,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 <div
                   v-for="tool in agent.tools"
                   :key="tool"
-                  class="flex items-center gap-2.5 rounded-xl border border-bd/80 bg-[#151a24] p-2.5 text-xs font-medium text-ink"
+                  class="flex items-center gap-2.5 rounded-xl border border-bd bg-surface p-2.5 text-xs font-medium text-ink shadow-sm"
                 >
                   <span class="text-base text-accent">⚙️</span>
                   <span class="font-mono text-[11px] truncate">{{ tool }}</span>
@@ -674,7 +674,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   {{ copiedInput ? t('admin.agents.copied') : t('admin.agents.copyInput') }}
                 </button>
               </div>
-              <pre class="rounded-xl border border-bd/80 bg-[#0b0e14] p-3 font-mono text-[10.5px] leading-normal text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-emerald-600 dark:text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
             </div>
 
             <!-- Example Output Payload -->
@@ -690,7 +690,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   {{ copiedOutput ? t('admin.agents.copied') : t('admin.agents.copyOutput') }}
                 </button>
               </div>
-              <pre class="rounded-xl border border-bd/80 bg-[#0b0e14] p-3 font-mono text-[10.5px] leading-normal text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-sky-600 dark:text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
             </div>
           </div>
 
@@ -702,7 +702,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                 <span>{{ t('admin.agents.sourceLocation') }}</span>
               </h4>
 
-              <div class="mt-3 flex items-center justify-between rounded-xl border border-bd/80 bg-[#0d111a] p-2.5 font-mono text-[11px]">
+              <div class="mt-3 flex items-center justify-between rounded-xl border border-bd bg-surface p-2.5 font-mono text-[11px] shadow-sm">
                 <span class="truncate text-ink font-semibold">{{ agent.source_file }}:{{ agent.line_number }}</span>
                 <button
                   class="ml-2 rounded-lg bg-accent/20 border border-accent/40 px-2.5 py-1 text-[10px] font-sans font-bold text-accent hover:bg-accent hover:text-white transition"

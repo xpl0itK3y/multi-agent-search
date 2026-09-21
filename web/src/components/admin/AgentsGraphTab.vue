@@ -1235,7 +1235,7 @@ function isNodeDimmed(nodeId: string): boolean {
     class="flex flex-col space-y-3"
     :class="[
       isFullscreen
-        ? 'fixed inset-0 z-50 bg-[#0b0e14] p-4 h-screen w-screen overflow-hidden'
+        ? 'fixed inset-0 z-50 bg-bg p-4 h-screen w-screen overflow-hidden'
         : 'relative h-full'
     ]"
   >
@@ -1314,19 +1314,21 @@ function isNodeDimmed(nodeId: string): boolean {
           </span>
         </button>
 
-        <!-- Simulation Run / Pause Toggle -->
-        <div class="flex items-center gap-1 rounded-xl border border-bd bg-surface/70 p-1">
+        <!-- Play / Pause Simulation Walkthrough -->
+        <div class="flex items-center gap-1.5 rounded-xl border border-bd bg-surface/80 p-1 shadow-sm">
           <button
             v-if="!isSimulating"
-            class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-accent/90"
+            class="flex items-center gap-1.5 rounded-lg bg-accent/15 border border-accent/30 px-3 py-1 text-xs font-semibold text-accent hover:bg-accent/25 transition"
+            :title="t('admin.agents.startSim')"
             @click="startSimulation"
           >
             <span>▶</span>
-            <span>{{ currentStepIndex === 0 ? t("admin.agents.startSim") : t("admin.agents.continueSim") }}</span>
+            <span>{{ currentStepIndex > 0 ? t("admin.agents.resumeSim") : t("admin.agents.walkthrough") }}</span>
           </button>
           <button
             v-else
-            class="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1 text-xs font-bold text-white shadow transition hover:bg-amber-600 animate-pulse"
+            class="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-xs font-semibold text-amber-400 hover:bg-amber-500/30 transition"
+            :title="t('admin.agents.pauseSim')"
             @click="pauseSimulation"
           >
             <span>⏸</span>
@@ -1406,16 +1408,16 @@ function isNodeDimmed(nodeId: string): boolean {
     <div
       v-else
       ref="canvasViewportRef"
-      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd/80 bg-[#0d111a] shadow-inner cursor-grab active:cursor-grabbing"
+      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner cursor-grab active:cursor-grabbing"
       :class="isFullscreen ? 'min-h-[calc(100vh-140px)]' : 'min-h-[640px]'"
-      style="background-image: radial-gradient(circle, rgba(255, 255, 255, 0.12) 1.2px, transparent 1.2px); background-size: 20px 20px;"
+      style="background-image: radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px); background-size: 20px 20px;"
       @mousedown="onMouseDown"
       @wheel="onWheel"
     >
       <!-- Quick Floating Fullscreen Button on Canvas -->
       <div class="absolute right-4 top-4 z-20 flex items-center gap-2">
         <button
-          class="flex items-center gap-1.5 rounded-xl border border-bd/80 bg-[#151922]/90 px-3 py-1.5 text-xs font-medium text-muted shadow-lg backdrop-blur hover:text-ink hover:border-accent/40 transition"
+          class="flex items-center gap-1.5 rounded-xl border border-bd bg-surface/90 px-3 py-1.5 text-xs font-medium text-muted shadow-lg backdrop-blur hover:text-ink hover:border-accent/40 transition"
           :class="{ 'border-accent text-accent bg-accent/20 ring-1 ring-accent/30': isFullscreen }"
           :title="isFullscreen ? `${t('admin.agents.exitFullscreen')} (Esc)` : t('admin.agents.fullscreen')"
           @click.stop="toggleFullscreen"
@@ -1443,7 +1445,7 @@ function isNodeDimmed(nodeId: string): boolean {
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(148, 163, 184, 0.45)" />
+              <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="rgba(148, 163, 184, 0.65)" />
             </marker>
 
             <!-- Highlighted wire arrowhead -->
@@ -1530,12 +1532,12 @@ function isNodeDimmed(nodeId: string): boolean {
                     ? '#fda4af'
                     : edge.isHighlighted
                     ? '#f43f5e'
-                    : 'rgba(244, 63, 94, 0.55)'
+                    : 'rgba(244, 63, 94, 0.65)'
                   : edge.isActive
                   ? '#38bdf8'
                   : edge.isHighlighted
                   ? '#818cf8'
-                  : 'rgba(148, 163, 184, 0.3)'
+                  : 'rgba(148, 163, 184, 0.55)'
               "
               :stroke-width="edge.isActive ? 3.2 : edge.isHighlighted ? 2.6 : edge.isReturn ? 2.2 : 2"
               fill="none"
@@ -1589,15 +1591,15 @@ function isNodeDimmed(nodeId: string): boolean {
                   :class="[
                     edge.isReturn
                       ? edge.isActive
-                        ? 'fill-slate-950 stroke-rose-400 shadow-lg'
+                        ? 'fill-surface stroke-rose-400 shadow-lg'
                         : edge.isHighlighted
-                        ? 'fill-slate-950 stroke-rose-400'
-                        : 'fill-[#171015] stroke-rose-500/50'
+                        ? 'fill-surface stroke-rose-400'
+                        : 'fill-surface stroke-rose-500/50'
                       : edge.isActive
-                      ? 'fill-slate-900 stroke-sky-400'
+                      ? 'fill-surface stroke-sky-400'
                       : edge.isHighlighted
-                      ? 'fill-slate-900 stroke-indigo-400'
-                      : 'fill-[#151922] stroke-bd/80',
+                      ? 'fill-surface stroke-indigo-400'
+                      : 'fill-surface stroke-bd',
                   ]"
                 />
                 <text
@@ -1608,12 +1610,12 @@ function isNodeDimmed(nodeId: string): boolean {
                   :class="[
                     edge.isReturn
                       ? edge.isActive || edge.isHighlighted
-                        ? 'fill-rose-300'
-                        : 'fill-rose-400/90'
+                        ? 'fill-rose-400'
+                        : 'fill-rose-500'
                       : edge.isActive
-                      ? 'fill-sky-400'
+                      ? 'fill-sky-500'
                       : edge.isHighlighted
-                      ? 'fill-indigo-300'
+                      ? 'fill-indigo-500'
                       : 'fill-muted',
                   ]"
                 >
@@ -1646,29 +1648,29 @@ function isNodeDimmed(nodeId: string): boolean {
         >
           <!-- Node Card Container -->
           <div
-            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-lg backdrop-blur"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-md backdrop-blur transition-all"
             :class="[
               draggingNodeId === node.id
-                ? 'transition-none border-accent bg-[#1c2233] ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
-                : 'transition-colors duration-150',
+                ? 'transition-none border-accent bg-surface ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
+                : 'duration-150',
               isNodeDimmed(node.id)
                 ? 'opacity-30'
                 : 'opacity-100',
               selectedAgent?.id === node.id
-                ? 'border-accent bg-[#1c2233] ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
+                ? 'border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
                 : isNodeHighlighted(node.id)
-                ? 'border-indigo-400/80 bg-[#191f2e] ring-2 ring-indigo-400/40 scale-[1.01]'
+                ? 'border-indigo-400/80 bg-surface ring-2 ring-indigo-400/40 scale-[1.01]'
                 : getAgentSimStatus(node.id) === 'active'
-                ? 'border-sky-400 bg-[#192338] ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 scale-[1.03]'
+                ? 'border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 scale-[1.03]'
                 : getAgentSimStatus(node.id) === 'completed'
-                ? 'border-emerald-500/60 bg-[#161d26]'
-                : 'border-[#2a3449] bg-[#161a24] hover:border-slate-500 hover:bg-[#1a202d]',
+                ? 'border-emerald-500/60 bg-surface'
+                : 'border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg',
             ]"
           >
             <!-- Left Input Port (Handle) -->
             <div
               v-if="node.hasInput"
-              class="absolute -left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-[#151922] bg-slate-400 shadow transition group-hover:scale-125 group-hover:bg-accent"
+              class="absolute -left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-surface bg-muted/60 shadow transition group-hover:scale-125 group-hover:bg-accent"
               :class="[
                 getAgentSimStatus(node.id) === 'active' ? 'bg-sky-400 ring-2 ring-sky-400/60 scale-125' : '',
                 isNodeHighlighted(node.id) ? 'bg-indigo-400' : '',
@@ -1679,7 +1681,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Right Output Port (Handle) -->
             <div
               v-if="node.hasOutput"
-              class="absolute -right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-[#151922] bg-slate-400 shadow transition group-hover:scale-125 group-hover:bg-accent"
+              class="absolute -right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full border-2 border-surface bg-muted/60 shadow transition group-hover:scale-125 group-hover:bg-accent"
               :class="[
                 getAgentSimStatus(node.id) === 'active' ? 'bg-sky-400 ring-2 ring-sky-400/60 scale-125' : '',
                 isNodeHighlighted(node.id) ? 'bg-indigo-400' : '',
@@ -1710,7 +1712,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Return Capability Badge (Critics / Loop Nodes) -->
             <div
               v-if="hasReturnCapability(node.id)"
-              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-300 shadow backdrop-blur transition-transform hover:scale-105 cursor-help"
+              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-400 shadow backdrop-blur transition-transform hover:scale-105 cursor-help"
               :title="getReturnCapabilityTooltip(node.id)"
             >
               <span class="text-[9px]">↩</span>
@@ -1733,7 +1735,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <div
               v-for="port in getNodeReturnPorts(node.id, node.width)"
               :key="port.id"
-              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-[#151922] shadow transition cursor-pointer group-hover:scale-125"
+              class="absolute -bottom-1.5 h-3 w-3 -translate-x-1/2 rounded-full border border-surface shadow transition cursor-pointer group-hover:scale-125"
               :class="[
                 port.type === 'outgoing' ? 'bg-rose-500/85 hover:bg-rose-400' : 'bg-rose-500/65 hover:bg-rose-400',
                 port.isActive
@@ -1751,7 +1753,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div
               v-if="node.llmModel"
-              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd/90 bg-[#10141d] px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-md"
+              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm backdrop-blur"
             >
               <span class="text-accent text-[7px]">◆</span>
               <span>{{ node.llmModel }}</span>
@@ -1762,7 +1764,7 @@ function isNodeDimmed(nodeId: string): boolean {
 
       <!-- Canvas Hint Badge -->
       <div
-        class="absolute bottom-3 left-4 pointer-events-none z-10 flex items-center gap-2 rounded-lg border border-bd/60 bg-[#151922]/85 px-3 py-1.5 text-[11px] text-muted backdrop-blur font-sans shadow"
+        class="absolute bottom-3 left-4 pointer-events-none z-10 flex items-center gap-2 rounded-lg border border-bd bg-surface/85 px-3 py-1.5 text-[11px] text-muted backdrop-blur font-sans shadow"
       >
         <span class="text-xs">✋</span>
         <span>{{ t("admin.agents.dragHint") }}</span>
@@ -1772,7 +1774,7 @@ function isNodeDimmed(nodeId: string): boolean {
     <!-- Floating Simulation Walkthrough Banner ("Как они работают") -->
     <div
       v-if="isSimulating || currentStepIndex > 0"
-      class="rounded-2xl border border-accent/40 bg-[#151922]/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
+      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
     >
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd/60 pb-3">
         <div class="flex items-center gap-2">
