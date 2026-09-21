@@ -1278,7 +1278,9 @@ def register_routes(app: FastAPI) -> None:
             last_report: str | None = None
             last_reasoning: str | None = None
             last_trail_len = 0
-            deadline = time.monotonic() + 900  # 10-minute safety cap
+            # Sized for long deep-research workloads (HARD can take 30-45+ minutes);
+            # dynamically bumped whenever new steps/reasoning/reports arrive.
+            deadline = time.monotonic() + 3600
             # Wake on a Redis pub/sub change ping instead of polling Postgres every second;
             # a heartbeat timeout still re-reads + keeps the connection alive (and is the
             # fallback when no broker is configured).
@@ -1321,16 +1323,19 @@ def register_routes(app: FastAPI) -> None:
                                 "timestamp": entry.get("timestamp"),
                             })
                         last_trail_len = len(trail)
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     reasoning = research.partial_reasoning
                     if reasoning and reasoning != last_reasoning:
                         last_reasoning = reasoning
                         yield sse("reasoning_delta", {"reasoning": reasoning, "phase": "analyze"})
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     report = research.final_report or research.partial_report
                     if report and report != last_report:
                         last_report = report
                         yield sse("report", {"report": report, "final": bool(research.final_report)})
+                        deadline = max(deadline, time.monotonic() + 1800)
 
                     if status in ("completed", "failed", "cancelled"):
                         yield sse("done", {"status": status})
@@ -1347,7 +1352,12 @@ def register_routes(app: FastAPI) -> None:
                     else:
                         await asyncio.sleep(1.0)
 
-                yield sse("done", {"status": "timeout"})
+                if last_status in ("completed", "failed", "cancelled"):
+                    yield sse("done", {"status": last_status})
+                else:
+                    # Stream timed out on transport, but research is still running in background.
+                    # Send stream_error so client auto-reconnects, rather than marking research as dead.
+                    yield sse("stream_error", {"detail": "stream_timeout"})
 
         return StreamingResponse(
             event_stream(),

@@ -208,7 +208,26 @@ onMounted(async () => {
       report.value = r;
       isFinal.value = final;
     },
-    onDone: (s) => {
+    onDone: async (s) => {
+      if (s === "timeout" || s === "failed") {
+        try {
+          const st = await api.getStatus(props.id);
+          if (st.status === "completed" || st.has_final_report) {
+            status.value = "completed";
+            done.value = true;
+            const r = await api.getReport(props.id);
+            report.value = r.final_report ?? "";
+            isFinal.value = true;
+            return;
+          }
+          if (st.status === "processing" || st.status === "analyzing") {
+            // Still running on backend
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
       status.value = s;
       done.value = true;
       if (s === "completed") {
@@ -218,7 +237,9 @@ onMounted(async () => {
           .catch(() => {});
       }
     },
-    onError: (m) => (errorMsg.value = m),
+    onError: (m) => {
+      errorMsg.value = m;
+    },
   });
 });
 

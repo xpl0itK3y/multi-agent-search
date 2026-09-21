@@ -228,7 +228,16 @@ function connect() {
       isFinal.value = final;
       if (wasEmpty && r) emit("grow"); // first time the report panel appears → scroll to it
     },
-    onDone: (s) => {
+    onDone: async (s) => {
+      if (s === "timeout" || s === "failed") {
+        const terminal = await syncStatus();
+        if (!terminal) {
+          // Research is still processing or analyzing on the server — reconnect stream!
+          connect();
+          return;
+        }
+        return;
+      }
       status.value = s;
       done.value = true;
       emit("done", s);
@@ -240,7 +249,16 @@ function connect() {
     },
     onError: (m) => {
       errorMsg.value = m;
-      if (!done.value) streamLost.value = true; // offer a resume button
+      if (!done.value) {
+        streamLost.value = true; // offer a resume button
+        // Auto-reconnect attempt after 3s to catch up or continue
+        setTimeout(async () => {
+          if (!done.value && status.value !== "completed") {
+            const terminal = await syncStatus();
+            if (!terminal) connect();
+          }
+        }, 3000);
+      }
     },
   });
 }
@@ -371,9 +389,9 @@ onBeforeUnmount(() => {
           :embedded="true"
         />
 
-        <!-- Error Card (when status === 'failed' or 'timeout') -->
+        <!-- Error Card (when status === 'failed' or 'timeout' and no report exists) -->
         <div
-          v-if="status === 'failed' || status === 'timeout'"
+          v-if="(status === 'failed' || status === 'timeout') && !report"
           class="border-t border-red-500/30 bg-red-500/10 p-5"
         >
           <div class="flex items-start gap-3">
@@ -383,7 +401,7 @@ onBeforeUnmount(() => {
                 {{ $t("research.failedTitle") }}
               </h4>
               <p class="mt-1 text-xs text-red-300/90 leading-relaxed break-words">
-                {{ errorMsg || report || $t("research.failedMessage") }}
+                {{ errorMsg || $t("research.failedMessage") }}
               </p>
               <div class="mt-3 flex items-center gap-2">
                 <button
@@ -400,9 +418,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- Artifact Panel (Report, Dashboard, Sources, etc.) - ONLY when completed with a real report -->
+        <!-- Artifact Panel (Report, Dashboard, Sources, etc.) -->
         <div
-          v-else-if="status === 'completed' && report"
+          v-else-if="report"
           class="border-t border-bd/80 h-[68vh] min-h-[380px] overflow-hidden bg-surface/30"
         >
           <ArtifactPanel
