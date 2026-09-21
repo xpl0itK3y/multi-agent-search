@@ -13,7 +13,6 @@ from src.domain import (
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
-    AdminTokenDepthBreakdown,
     AdminTokenModelBreakdown,
     AdminTokenResearchUsageItem,
     AdminUserDetailResponse,
@@ -1091,9 +1090,9 @@ class InMemoryTaskStore:
     ) -> list[AdminAuditLogItem]:
         logs = self.admin_audit_logs
         if action:
-            logs = [l for l in logs if l.action == action]
+            logs = [entry for entry in logs if entry.action == action]
         if actor_email:
-            logs = [l for l in logs if l.actor_email == actor_email]
+            logs = [entry for entry in logs if entry.actor_email == actor_email]
         sorted_logs = sorted(logs, key=lambda x: x.created_at, reverse=True)
         return sorted_logs[offset : offset + limit]
 
@@ -1402,9 +1401,9 @@ class InMemoryTaskStore:
             # Research count
             user_researches = [r for r in self.researches.values() if r.user_id == uid]
             # Tokens
-            user_logs = [l for l in self.llm_usage_logs if l.get("user_id") == uid]
-            tot_tokens = sum(l.get("total_tokens", 0) for l in user_logs)
-            tot_cost = sum(l.get("estimated_cost_usd", 0.0) for l in user_logs)
+            user_logs = [log_item for log_item in self.llm_usage_logs if log_item.get("user_id") == uid]
+            tot_tokens = sum(log_item.get("total_tokens", 0) for log_item in user_logs)
+            tot_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in user_logs)
 
             items.append(
                 AdminUserListItem(
@@ -1485,11 +1484,11 @@ class InMemoryTaskStore:
             if e.get("user_id") == user_id
         ]
         # Token breakdown
-        user_logs = [l for l in self.llm_usage_logs if l.get("user_id") == user_id]
+        user_logs = [log_item for log_item in self.llm_usage_logs if log_item.get("user_id") == user_id]
         by_model: dict[str, int] = {}
-        for l in user_logs:
-            m = l.get("model", "unknown")
-            by_model[m] = by_model.get(m, 0) + l.get("total_tokens", 0)
+        for log_item in user_logs:
+            m = log_item.get("model", "unknown")
+            by_model[m] = by_model.get(m, 0) + log_item.get("total_tokens", 0)
 
         return AdminUserDetailResponse(
             user=found_item,
@@ -1538,8 +1537,8 @@ class InMemoryTaskStore:
             c_name = s.get("country") or "Local"
             country_counts[c_name] = country_counts.get(c_name, 0) + 1
 
-        total_tokens = sum(l.get("total_tokens", 0) for l in self.llm_usage_logs)
-        total_cost = sum(l.get("estimated_cost_usd", 0.0) for l in self.llm_usage_logs)
+        total_tokens = sum(log_item.get("total_tokens", 0) for log_item in self.llm_usage_logs)
+        total_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in self.llm_usage_logs)
 
         depth_counts: dict[str, int] = {}
         prompt_lens: list[int] = []

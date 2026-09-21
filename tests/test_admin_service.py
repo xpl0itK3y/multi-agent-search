@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 import pytest
 
 from src.repositories.in_memory_task_store import InMemoryTaskStore
@@ -84,7 +83,7 @@ def test_sqlalchemy_task_store_admin_methods():
 
     try:
         engine = create_engine_from_settings()
-        with engine.connect() as conn:
+        with engine.connect():
             pass
     except Exception:
         pytest.skip("PostgreSQL not available")
@@ -102,7 +101,7 @@ def test_sqlalchemy_task_store_admin_methods():
     assert audit_id is not None
     logs = store.get_admin_audit_logs(limit=5)
     assert len(logs) >= 1
-    assert any(l.id == audit_id for l in logs)
+    assert any(entry.id == audit_id for entry in logs)
 
     # 2. Overview
     overview = store.get_admin_overview()

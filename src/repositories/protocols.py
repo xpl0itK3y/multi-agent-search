@@ -11,7 +11,6 @@ from src.domain import (
     AdminTokenAnalyticsResponse,
     AdminUserDetailResponse,
     AdminUserListResponse,
-    AgentMetadataItem,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,

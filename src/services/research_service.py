@@ -36,8 +36,6 @@ from src.domain import (
     AdminOverviewResponse,
     AdminTokenAnalyticsResponse,
     AgentMetadataItem,
-    AuthUser,
-    JobCleanupResponse,
     MaintenanceSummary,
     OperationalHealth,
     DecomposeResponse,
