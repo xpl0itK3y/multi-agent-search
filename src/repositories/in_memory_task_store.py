@@ -1313,7 +1313,14 @@ class InMemoryTaskStore:
             "started_at": now,
             "last_active_at": now,
         })
-        self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent, device=device_type)
+        self.touch_user_activity(
+            user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device=device_type,
+            browser=browser,
+            os=os,
+        )
         return record_id
 
     def record_user_event(
@@ -1349,6 +1356,8 @@ class InMemoryTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
         device: str | None = None,
+        browser: str | None = None,
+        os: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         entry = self.user_telemetry.setdefault(user_id, {})
@@ -1359,6 +1368,10 @@ class InMemoryTaskStore:
             entry["last_user_agent"] = user_agent
         if device:
             entry["last_device"] = device
+        if browser:
+            entry["last_browser"] = browser
+        if os:
+            entry["last_os"] = os
 
     def get_admin_users_list(
         self,
@@ -1405,6 +1418,9 @@ class InMemoryTaskStore:
             tot_tokens = sum(log_item.get("total_tokens", 0) for log_item in user_logs)
             tot_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in user_logs)
 
+            user_sessions = [s for s in self.user_sessions if s.get("user_id") == uid]
+            last_sess = user_sessions[-1] if user_sessions else {}
+
             items.append(
                 AdminUserListItem(
                     id=uid,
@@ -1415,10 +1431,10 @@ class InMemoryTaskStore:
                     created_at=u.created_at.isoformat() if hasattr(u, "created_at") and u.created_at else now.isoformat(),
                     last_seen_at=last_seen.isoformat() if last_seen else None,
                     is_online=is_online,
-                    last_ip=telem.get("last_ip"),
-                    last_device=telem.get("last_device"),
-                    last_browser=telem.get("last_browser", "Chrome"),
-                    last_os=telem.get("last_os", "macOS"),
+                    last_ip=telem.get("last_ip") or last_sess.get("ip_address"),
+                    last_device=telem.get("last_device") or last_sess.get("device_type"),
+                    last_browser=telem.get("last_browser") or last_sess.get("browser"),
+                    last_os=telem.get("last_os") or last_sess.get("os"),
                     researches_count=len(user_researches),
                     total_tokens=tot_tokens,
                     total_cost_usd=round(tot_cost, 4),
@@ -1709,55 +1725,54 @@ class InMemoryTaskStore:
         )
 
     def get_user_token_analytics(self, user_id: str) -> dict:
-        with self._lock:
-            logs = [u for u in self.llm_usage_logs if u.get("user_id") == user_id]
-            total_prompt = sum(u.get("prompt_tokens", 0) for u in logs)
-            total_comp = sum(u.get("completion_tokens", 0) for u in logs)
-            total_tok = sum(u.get("total_tokens", 0) for u in logs)
-            total_cost = round(sum(u.get("estimated_cost_usd", 0.0) for u in logs), 4)
-            researches = [r for r in self.researches.values() if r.user_id == user_id]
+        logs = [u for u in self.llm_usage_logs if u.get("user_id") == user_id]
+        total_prompt = sum(u.get("prompt_tokens", 0) for u in logs)
+        total_comp = sum(u.get("completion_tokens", 0) for u in logs)
+        total_tok = sum(u.get("total_tokens", 0) for u in logs)
+        total_cost = round(sum(u.get("estimated_cost_usd", 0.0) for u in logs), 4)
+        researches = [r for r in self.researches.values() if r.user_id == user_id]
 
-            models_map: dict[str, dict] = {}
-            for u in logs:
-                m = u.get("model", "unknown")
-                if m not in models_map:
-                    models_map[m] = {
-                        "model": m,
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                        "total_tokens": 0,
-                        "estimated_cost_usd": 0.0,
-                        "calls_count": 0,
-                    }
-                models_map[m]["prompt_tokens"] += u.get("prompt_tokens", 0)
-                models_map[m]["completion_tokens"] += u.get("completion_tokens", 0)
-                models_map[m]["total_tokens"] += u.get("total_tokens", 0)
-                models_map[m]["estimated_cost_usd"] += u.get("estimated_cost_usd", 0.0)
-                models_map[m]["calls_count"] += 1
-
-            for v in models_map.values():
-                v["estimated_cost_usd"] = round(v["estimated_cost_usd"], 4)
-
-            recent = [
-                {
-                    "id": r.id,
-                    "prompt": r.prompt,
-                    "depth": r.depth,
-                    "status": r.status,
-                    "total_tokens": sum(u.get("total_tokens", 0) for u in logs if u.get("research_id") == r.id),
-                    "estimated_cost_usd": round(sum(u.get("estimated_cost_usd", 0.0) for u in logs if u.get("research_id") == r.id), 4),
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
+        models_map: dict[str, dict] = {}
+        for u in logs:
+            m = u.get("model", "unknown")
+            if m not in models_map:
+                models_map[m] = {
+                    "model": m,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "estimated_cost_usd": 0.0,
+                    "calls_count": 0,
                 }
-                for r in sorted(researches, key=lambda x: x.created_at or datetime.min, reverse=True)[:10]
-            ]
+            models_map[m]["prompt_tokens"] += u.get("prompt_tokens", 0)
+            models_map[m]["completion_tokens"] += u.get("completion_tokens", 0)
+            models_map[m]["total_tokens"] += u.get("total_tokens", 0)
+            models_map[m]["estimated_cost_usd"] += u.get("estimated_cost_usd", 0.0)
+            models_map[m]["calls_count"] += 1
 
-            return {
-                "total_tokens": total_tok,
-                "prompt_tokens": total_prompt,
-                "completion_tokens": total_comp,
-                "estimated_cost_usd": total_cost,
-                "calls_count": len(logs),
-                "researches_count": len(researches),
-                "by_model": list(models_map.values()),
-                "recent": recent,
+        for v in models_map.values():
+            v["estimated_cost_usd"] = round(v["estimated_cost_usd"], 4)
+
+        recent = [
+            {
+                "id": r.id,
+                "prompt": r.prompt,
+                "depth": r.depth,
+                "status": r.status,
+                "total_tokens": sum(u.get("total_tokens", 0) for u in logs if u.get("research_id") == r.id),
+                "estimated_cost_usd": round(sum(u.get("estimated_cost_usd", 0.0) for u in logs if u.get("research_id") == r.id), 4),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
             }
+            for r in sorted(researches, key=lambda x: x.created_at or datetime.min, reverse=True)[:10]
+        ]
+
+        return {
+            "total_tokens": total_tok,
+            "prompt_tokens": total_prompt,
+            "completion_tokens": total_comp,
+            "estimated_cost_usd": total_cost,
+            "calls_count": len(logs),
+            "researches_count": len(researches),
+            "by_model": list(models_map.values()),
+            "recent": recent,
+        }
