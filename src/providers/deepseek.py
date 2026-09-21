@@ -86,7 +86,10 @@ class DeepSeekProvider(LLMProvider):
     ) -> str:
         # Per-call model override (e.g. a reasoner for planning); pop so it doesn't
         # collide with the explicit model= below.
-        model = kwargs.pop("model", None) or self.model
+        from src.model_catalog import resolve_model_id
+
+        raw_model = kwargs.pop("model", None) or self.model
+        model = resolve_model_id(raw_model, self.model)
         # Streaming is also needed when we only want reasoning tokens.
         use_stream = streaming_callback is not None or reasoning_callback is not None
         if use_stream:

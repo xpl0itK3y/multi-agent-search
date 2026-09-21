@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api } from "@/lib/api";
 import { streamChatAnswer } from "@/lib/stream";
@@ -25,7 +24,6 @@ type ChatItem = {
 type ThreadItem = ResearchItem | ChatItem;
 
 const props = defineProps<{ threadId: string }>();
-const router = useRouter();
 const store = useResearchStore();
 const { t } = useI18n();
 
@@ -36,11 +34,6 @@ const errorMsg = ref<string | null>(null);
 const scroller = ref<HTMLElement | null>(null);
 const completed = ref<Set<string>>(new Set());
 const finished = ref<Set<string>>(new Set());
-
-const threadTitle = computed(() => {
-  const first = items.value.find((it) => it.kind === "research") as ResearchItem | undefined;
-  return first?.prompt ?? "";
-});
 
 // A research is "running" until it reaches a terminal state — block new ones meanwhile.
 const anyResearchRunning = computed(() =>
@@ -161,14 +154,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
 
 <template>
   <div class="relative flex h-full flex-col">
-    <header class="flex items-center gap-3 border-b border-bd px-4 py-3">
-      <button class="text-sm text-muted hover:text-ink" @click="router.push('/')">
-        {{ $t("common.back") }}
-      </button>
-      <span v-if="threadTitle" class="truncate text-sm text-muted">{{ threadTitle }}</span>
-    </header>
-
-    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-4 pt-6 pb-48">
+    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-48">
       <div class="mx-auto max-w-3xl space-y-10">
         <template v-for="(it, i) in items" :key="i">
           <ResearchTurn

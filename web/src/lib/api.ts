@@ -316,6 +316,9 @@ export const api = {
   cancelResearch: (id: string) =>
     request<{ id: string; status: string }>(`/v1/research/${id}/cancel`, { method: "POST" }),
 
+  retryResearch: (id: string) =>
+    request<{ id: string; status: string }>(`/v1/research/${id}/retry`, { method: "POST" }),
+
   renameResearch: (id: string, title: string) =>
     request<{ id: string }>(`/v1/research/${id}`, {
       method: "PATCH",

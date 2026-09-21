@@ -347,6 +347,10 @@ const ru = {
     tokens: "токенов",
     reportForming: "Отчёт формируется — он появится здесь в реальном времени.",
     failed: "Не удалось сформировать отчёт.",
+    failedTitle: "Ошибка исследования",
+    failedMessage: "Произошла ошибка при анализе данных. Пожалуйста, проверьте параметры и повторите попытку.",
+    retry: "Повторить попытку",
+    retrying: "Повтор…",
   },
   auth: {
     loginTitle: "Вход",
@@ -1130,6 +1134,10 @@ const en: typeof ru = {
     tokens: "tokens",
     reportForming: "The report is being generated — it will stream in here.",
     failed: "Could not generate the report.",
+    failedTitle: "Research Failed",
+    failedMessage: "An error occurred during data analysis. Please check the parameters and try again.",
+    retry: "Retry",
+    retrying: "Retrying…",
   },
   auth: {
     loginTitle: "Sign in",
@@ -1913,6 +1921,10 @@ const es: typeof ru = {
     tokens: "tokens",
     reportForming: "El informe se está generando — aparecerá aquí en tiempo real.",
     failed: "No se pudo generar el informe.",
+    failedTitle: "Error de investigación",
+    failedMessage: "Se produjo un error durante el análisis de datos. Por favor, verifique los parámetros y vuelva a intentarlo.",
+    retry: "Reintentar",
+    retrying: "Reintentando…",
   },
   auth: {
     loginTitle: "Iniciar sesión",

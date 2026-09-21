@@ -392,6 +392,26 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
+    ) -> ResearchRecord | None:
+        research = self.researches.get(research_id)
+        if research:
+            research.status = status
+            research.final_report = None
+            research.partial_report = None
+            research.partial_reasoning = None
+            gs = dict(research.graph_state or {})
+            gs.pop("error", None)
+            gs.pop("report", None)
+            gs.pop("step", None)
+            research.graph_state = gs
+            research.updated_at = datetime.now(timezone.utc)
+            self._emit_change(research_id)
+        return research
+
     def try_claim_queued_research(
         self,
         research_id: str,

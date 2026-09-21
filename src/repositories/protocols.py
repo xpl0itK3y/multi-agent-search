@@ -83,6 +83,12 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
+    ) -> ResearchRecord | None: ...
+
     def try_admit_research(
         self,
         research_id: str,

@@ -17,6 +17,8 @@ x-worker-base: &worker-base
     REDIS_URL: redis://redis:6379/0
     USE_REDIS_BROKER: "true"
     LOG_FORMAT: json
+  volumes:
+    - ./src:/app/src
   command: ["python", "scripts/run_finalize_worker.py"]
   restart: unless-stopped
   # Let an in-flight job finish on SIGTERM before Docker SIGKILLs the replica; anything
@@ -56,6 +58,8 @@ services:
     # binds to loopback). Trust its forwarded client address without a startup-time
     # dependency on Docker's dynamically assigned web-container IP.
     command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2} --proxy-headers --forwarded-allow-ips='*'"
+    volumes:
+      - ./src:/app/src
     ports:
       # Keep direct API access local; the web proxy and Prometheus use the Docker network.
       - "127.0.0.1:${API_PORT:-8001}:8000"
@@ -75,6 +79,8 @@ services:
     depends_on:
       api:
         condition: service_started
+    volumes:
+      - ./web/dist:/usr/share/nginx/html:ro
     ports:
       - "${WEB_PORT:-8502}:80"
     restart: unless-stopped

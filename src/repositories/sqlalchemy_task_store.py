@@ -495,6 +495,32 @@ class SQLAlchemyTaskStore:
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
         return result
 
+    def reset_research_for_retry(
+        self,
+        research_id: str,
+        status: ResearchStatus = ResearchStatus.PROCESSING,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.get(ResearchORM, research_id)
+            if research is None:
+                return None
+
+            research.status = status.value
+            research.final_report = None
+            research.partial_report = None
+            research.partial_reasoning = None
+            gs = dict(research.graph_state or {})
+            gs.pop("error", None)
+            gs.pop("report", None)
+            gs.pop("step", None)
+            research.graph_state = gs
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)
+        return result
+
     def try_claim_queued_research(
         self,
         research_id: str,

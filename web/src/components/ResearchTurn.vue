@@ -171,11 +171,11 @@ async function syncStatus(): Promise<boolean> {
     if (DONE.has(s.status)) {
       done.value = true;
       emit("done", s.status);
-      if (s.status === "completed") {
+      if (s.status === "completed" || s.has_final_report) {
         try {
           const r = await api.getReport(props.id);
           report.value = r.final_report ?? "";
-          isFinal.value = true;
+          isFinal.value = s.status === "completed";
           emit("grow");
         } catch {
           /* SSE may still deliver it */
@@ -236,6 +236,25 @@ async function resume() {
   errorMsg.value = null;
   const terminal = await syncStatus(); // catch up on anything missed while disconnected
   if (!terminal) connect();
+}
+
+const retrying = ref(false);
+
+async function retry() {
+  retrying.value = true;
+  errorMsg.value = null;
+  try {
+    await api.retryResearch(props.id);
+    status.value = "processing";
+    done.value = false;
+    report.value = "";
+    isFinal.value = false;
+    connect();
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
+  } finally {
+    retrying.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -348,19 +367,20 @@ onBeforeUnmount(() => {
             <span class="text-2xl shrink-0">⚠️</span>
             <div class="min-w-0 flex-1">
               <h4 class="font-semibold text-red-400 text-sm">
-                {{ $t("research.failedTitle") || "Исследование завершилось с ошибкой" }}
+                {{ $t("research.failedTitle") }}
               </h4>
               <p class="mt-1 text-xs text-red-300/90 leading-relaxed break-words">
-                {{ errorMsg || report || "Произошла ошибка при анализе данных. Пожалуйста, проверьте параметры и повторите попытку." }}
+                {{ errorMsg || report || $t("research.failedMessage") }}
               </p>
               <div class="mt-3 flex items-center gap-2">
                 <button
                   type="button"
-                  class="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5"
-                  @click="resume"
+                  :disabled="retrying"
+                  class="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
+                  @click="retry"
                 >
-                  <span>↻</span>
-                  <span>{{ $t("research.resume") || "Повторить попытку" }}</span>
+                  <span :class="{ 'animate-spin': retrying }">↻</span>
+                  <span>{{ retrying ? $t("research.retrying") : $t("research.retry") }}</span>
                 </button>
               </div>
             </div>

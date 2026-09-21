@@ -203,6 +203,34 @@ const currentAgent = computed<AgentMeta>(() => {
   );
 });
 
+function isLoopback(entry?: TraceEntry | null): boolean {
+  if (!entry) return false;
+  const s = entry.step || "";
+  const a = entry.action || "";
+  const d = entry.detail || "";
+  return (
+    s === "replan" ||
+    s === "tie_break" ||
+    s === "verify_retry" ||
+    a.includes("loop") ||
+    a.includes("replan") ||
+    a.includes("tie_break") ||
+    a.includes("revision") ||
+    d.includes("↩") ||
+    d.includes("возврат") ||
+    d.includes("вернул")
+  );
+}
+
+function loopbackBadgeText(entry: TraceEntry): string {
+  const s = entry.step || "";
+  const a = entry.action || "";
+  if (s === "replan" || a.includes("gap")) return "↩ Добор фактов (Gap Analysis)";
+  if (s === "tie_break" || a.includes("conflict")) return "↩ Арбитраж противоречий (Tie-Break)";
+  if (s === "verify_retry" || a.includes("revision")) return "↩ Доработка отчёта (Revision Loop)";
+  return "↩ Возврат на доработку";
+}
+
 const currentStatusDetail = computed(() => {
   if (props.status === "completed") {
     return "Все 5 этапов исследования завершены. Итоговый отчёт готов к изучению.";
@@ -210,6 +238,33 @@ const currentStatusDetail = computed(() => {
   if (props.status === "failed") {
     return "Произошла ошибка при формировании отчёта.";
   }
+
+  // Dynamic deep status during long synthesis phase
+  if (props.live && currentPhase.value === "synthesis") {
+    const sec = elapsedSeconds.value % 120;
+    if (sec < 12) {
+      return "Сведение доказательств из собранных источников и устранение дубликатов...";
+    } else if (sec < 28) {
+      return "Построение сквозной структуры отчёта и сравнительных аналитических матриц...";
+    } else if (sec < 50) {
+      return "Глубокий синтез текста отчёта, формирование рассуждений и аргументации...";
+    } else if (sec < 75) {
+      return "Привязка фактов к источникам, разметка цитат и проверка числовых данных...";
+    } else if (sec < 105) {
+      return "Финальная вычитка черновика, форматирование таблиц и подготовка выводов...";
+    } else {
+      return "Завершение генерации аналитического отчёта большой глубины...";
+    }
+  }
+
+  // Dynamic status during search phase
+  if (props.live && currentPhase.value === "search" && elapsedSeconds.value > 15) {
+    const sec = elapsedSeconds.value % 60;
+    if (sec < 20) return "Параллельный опрос поисковых систем и сбор релевантных ссылок...";
+    if (sec < 40) return "Извлечение полного текста веб-страниц и фильтрация спама...";
+    return "Структурирование цитат и первичный отбор ключевых доказательств...";
+  }
+
   return currentEntry.value?.detail || (te("trace.live_status") ? t("trace.live_status") : "Агенты работают в реальном времени");
 });
 
@@ -232,21 +287,54 @@ const filteredEntries = computed(() => {
       (e) =>
         e.phase === "critic" ||
         e.phase === "verify" ||
+        isLoopback(e) ||
         ["collect_context", "verify", "audit", "redteam", "viewpoints", "numeric_check"].includes(e.step)
     );
   }
   return props.entries;
 });
 
-// Micro-actions feed auto-scroll
+// Micro-actions feed auto-scroll and scroll position persistence
 const feedBox = ref<HTMLElement | null>(null);
 const userHasScrolledUp = ref(false);
+const savedFeedScrollTop = ref<number | null>(null);
+const savedReasoningScrollTop = ref<number | null>(null);
 
 function onFeedScroll() {
   if (!feedBox.value) return;
+  savedFeedScrollTop.value = feedBox.value.scrollTop;
   const { scrollTop, scrollHeight, clientHeight } = feedBox.value;
   const atBottom = scrollHeight - (scrollTop + clientHeight) < 60;
   userHasScrolledUp.value = !atBottom;
+}
+
+function onReasoningScroll() {
+  if (!reasoningBox.value) return;
+  savedReasoningScrollTop.value = reasoningBox.value.scrollTop;
+}
+
+function toggleOpen() {
+  if (open.value) {
+    if (feedBox.value) savedFeedScrollTop.value = feedBox.value.scrollTop;
+    if (reasoningBox.value) savedReasoningScrollTop.value = reasoningBox.value.scrollTop;
+    open.value = false;
+  } else {
+    open.value = true;
+    nextTick(() => {
+      if (feedBox.value && savedFeedScrollTop.value !== null) {
+        feedBox.value.scrollTop = savedFeedScrollTop.value;
+      }
+      if (reasoningBox.value && savedReasoningScrollTop.value !== null) {
+        reasoningBox.value.scrollTop = savedReasoningScrollTop.value;
+      }
+    });
+  }
+}
+
+function isEntryDone(idx: number): boolean {
+  if (props.status === "completed") return true;
+  if (!props.live) return true;
+  return idx < filteredEntries.value.length - 1;
 }
 
 function scrollToBottom(behavior: ScrollBehavior = "smooth") {
@@ -307,9 +395,9 @@ function formatTime(isoStr?: string): string {
     :class="embedded ? '' : 'rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden'"
   >
     <!-- TOP AGENT HUD HEADER BAR -->
-    <div class="px-4 py-3 bg-surface/90 border-b border-bd flex flex-wrap items-center justify-between gap-3">
+    <div class="px-4 py-2.5 bg-surface/90 border-b border-bd flex items-center justify-between gap-3 min-w-0">
       <!-- Active Agent Identity -->
-      <div class="flex items-center gap-2.5 min-w-0">
+      <div class="flex items-center gap-2.5 min-w-0 flex-1">
         <div class="relative flex items-center justify-center h-8 w-8 rounded-lg border text-base shadow-inner shrink-0" :class="currentAgent.colorClass">
           <span>{{ currentAgent.avatar }}</span>
           <span
@@ -318,35 +406,35 @@ function formatTime(isoStr?: string): string {
           />
         </div>
 
-        <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <span class="font-semibold text-sm text-ink leading-tight truncate">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="font-semibold text-sm text-ink leading-tight truncate shrink-0">
               {{ currentAgent.name }}
             </span>
-            <span class="rounded px-1.5 py-0.2 text-[10px] font-medium uppercase tracking-wider border" :class="currentAgent.colorClass">
+            <span class="rounded px-1.5 py-0.2 text-[10px] font-medium uppercase tracking-wider border shrink-0" :class="currentAgent.colorClass">
               {{ currentAgent.badge }}
             </span>
           </div>
-          <div class="text-xs text-muted truncate flex items-center gap-1.5">
-            <span v-if="live" class="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
-            <span class="truncate">{{ currentStatusDetail }}</span>
+          <div class="text-xs text-muted flex items-center gap-1.5 min-w-0 mt-0.5" :title="currentStatusDetail">
+            <span v-if="live" class="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping shrink-0" />
+            <span class="truncate block min-w-0">{{ currentStatusDetail }}</span>
           </div>
         </div>
       </div>
 
       <!-- Controls & Elapsed Timer -->
-      <div class="flex items-center gap-2 text-xs">
-        <div class="flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd">
+      <div class="flex items-center gap-2 text-xs shrink-0">
+        <div class="flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
           <span class="text-muted">⏱</span>
           <span class="font-mono text-[11px]">{{ formattedElapsed }}</span>
         </div>
 
         <button
-          class="flex items-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition"
+          class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap min-w-[124px]"
           :title="open ? 'Свернуть журнал' : 'Развернуть журнал'"
-          @click="open = !open"
+          @click="toggleOpen"
         >
-          <span>{{ open ? "Свернуть журнал" : `Журнал агентов (${entries.length})` }}</span>
+          <span>{{ open ? "Свернуть журнал" : `Журнал (${entries.length})` }}</span>
           <span class="text-[10px]">{{ open ? "▾" : "▸" }}</span>
         </button>
       </div>
@@ -357,17 +445,17 @@ function formatTime(isoStr?: string): string {
       <div
         v-for="(phase, idx) in PHASES"
         :key="phase.id"
-        class="flex items-center gap-1.5 shrink-0 transition-opacity"
+        class="flex items-center gap-1.5 shrink-0 transition-all duration-300"
         :class="{
           'opacity-100': phaseState(idx) !== 'pending',
           'opacity-40': phaseState(idx) === 'pending',
         }"
       >
         <div
-          class="flex items-center justify-center h-5 w-5 rounded-full text-[11px] font-semibold border transition-all"
+          class="flex items-center justify-center h-5 w-5 rounded-full text-[11px] font-semibold border transition-all duration-300"
           :class="{
-            'bg-emerald-500/20 text-emerald-400 border-emerald-500/40': phaseState(idx) === 'done',
-            'bg-accent/20 text-accent border-accent animate-pulse ring-2 ring-accent/20': phaseState(idx) === 'active',
+            'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm': phaseState(idx) === 'done',
+            'bg-accent text-bg border-accent shadow-md shadow-accent/20 ring-4 ring-accent/20 animate-pulse scale-105': phaseState(idx) === 'active',
             'bg-surface text-muted border-bd': phaseState(idx) === 'pending',
           }"
         >
@@ -376,7 +464,7 @@ function formatTime(isoStr?: string): string {
         </div>
 
         <span
-          class="text-[12px] whitespace-nowrap font-medium"
+          class="text-[12px] whitespace-nowrap font-medium transition-colors"
           :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
         >
           {{ $t('trace.' + phase.key) }}
@@ -385,178 +473,265 @@ function formatTime(isoStr?: string): string {
         <!-- Connector line -->
         <div
           v-if="idx < PHASES.length - 1"
-          class="h-0.5 w-4 sm:w-6 rounded-full mx-1"
-          :class="idx < phaseIndex ? 'bg-emerald-500/50' : 'bg-bd'"
-        />
+          class="h-0.5 w-4 sm:w-8 rounded-full mx-1 transition-all duration-300 relative overflow-hidden"
+          :class="idx < phaseIndex ? 'bg-emerald-500/60' : idx === phaseIndex && live ? 'bg-accent/30' : 'bg-bd'"
+        >
+          <div v-if="idx === phaseIndex && live" class="absolute inset-0 bg-accent animate-pulse" />
+        </div>
       </div>
     </div>
 
-    <!-- EXPANDABLE DETAILS BODY -->
-    <div v-if="open" class="p-4 space-y-4">
-      <!-- LIVE CHAIN-OF-THOUGHT (THINKING) TERMINAL -->
-      <div v-if="reasoning" class="rounded-lg border border-bd/90 bg-[#0d1117] text-[#c9d1d9] shadow-inner overflow-hidden">
-        <div class="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#30363d] text-xs">
-          <div class="flex items-center gap-2">
-            <div class="flex items-center gap-1">
-              <span class="h-2.5 w-2.5 rounded-full bg-[#ff5f56]" />
-              <span class="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
-              <span class="h-2.5 w-2.5 rounded-full bg-[#27c93f]" />
+    <!-- EXPANDABLE DETAILS BODY (State preserved across collapse/expand) -->
+    <Transition name="console-expand">
+      <div v-show="open" class="p-4 space-y-4 max-h-[60vh] overflow-y-auto scrollbar-thin scrollbar-thumb-bd">
+        <!-- LIVE SYNTHESIS DEEP PROGRESS CARD -->
+        <div
+          v-if="live && currentPhase === 'synthesis'"
+          class="rounded-xl border border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-accent/10 to-indigo-500/10 p-3.5 shadow-sm relative overflow-hidden transition-all duration-300"
+        >
+          <div class="flex items-start justify-between gap-3 relative z-10">
+            <div class="flex items-center gap-2.5">
+              <div class="h-8 w-8 rounded-lg bg-violet-500/20 border border-violet-500/40 flex items-center justify-center text-base shrink-0 animate-pulse">
+                ✨
+              </div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-xs text-ink">Синтез аналитического отчёта</span>
+                  <span class="rounded bg-violet-500/20 text-violet-300 border border-violet-500/30 px-1.5 py-0.2 text-[10px] font-mono">
+                    LLM Synthesis
+                  </span>
+                  <span v-if="currentEntry?.metrics?.attempt" class="rounded bg-bg/70 text-muted px-1.5 py-0.2 text-[10px]">
+                    итерация #{{ currentEntry.metrics.attempt }}
+                  </span>
+                </div>
+                <p class="text-xs text-violet-200/90 mt-1 font-medium leading-snug">
+                  {{ currentStatusDetail }}
+                </p>
+              </div>
             </div>
-            <span class="font-mono text-[11px] text-muted ml-1 flex items-center gap-1.5">
-              <span class="text-accentSoft">🧠</span>
-              {{ $t("trace.chain_of_thought") }}
-            </span>
+
+            <div class="flex items-center gap-1.5 text-xs text-violet-300/90 shrink-0 font-mono bg-bg/60 px-2 py-1 rounded-md border border-violet-500/30">
+              <span class="h-1.5 w-1.5 rounded-full bg-violet-400 animate-ping" />
+              <span>{{ formattedElapsed }}</span>
+            </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <span class="text-[10px] text-muted font-mono">
-              {{ reasoning.length }} симв.
-            </span>
-            <button
-              class="text-muted hover:text-white transition px-1"
-              @click="reasoningOpen = !reasoningOpen"
-            >
-              {{ reasoningOpen ? "▾" : "▸" }}
-            </button>
+          <!-- Animated Progress Bar -->
+          <div class="mt-3 h-1.5 w-full rounded-full bg-surface/80 overflow-hidden relative">
+            <div class="h-full bg-gradient-to-r from-violet-500 via-accent to-emerald-400 rounded-full animate-progress-indeterminate" />
           </div>
         </div>
 
-        <div
-          v-if="reasoningOpen"
-          ref="reasoningBox"
-          class="p-3 max-h-56 overflow-y-auto font-mono text-[12px] leading-relaxed whitespace-pre-wrap selection:bg-accent/30 scrollbar-thin scrollbar-thumb-bd"
-        >
-          {{ reasoning }}<span v-if="live" class="inline-block h-3.5 w-1.5 ml-0.5 bg-accent animate-pulse align-middle" />
-        </div>
-      </div>
+        <!-- LIVE CHAIN-OF-THOUGHT (THINKING) TERMINAL -->
+        <div v-if="reasoning" class="rounded-lg border border-bd/90 bg-[#0d1117] text-[#c9d1d9] shadow-inner overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#30363d] text-xs">
+            <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1">
+                <span class="h-2.5 w-2.5 rounded-full bg-[#ff5f56]" />
+                <span class="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
+                <span class="h-2.5 w-2.5 rounded-full bg-[#27c93f]" />
+              </div>
+              <span class="font-mono text-[11px] text-muted ml-1 flex items-center gap-1.5">
+                <span class="text-accentSoft">🧠</span>
+                {{ $t("trace.chain_of_thought") }}
+              </span>
+            </div>
 
-      <!-- FILTER TABS FOR EVENT FEED -->
-      <div class="flex items-center gap-2 border-b border-bd pb-2 text-xs">
-        <button
-          class="px-2.5 py-1 rounded-md transition"
-          :class="activeFilter === 'all' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
-          @click="activeFilter = 'all'"
-        >
-          {{ $t("trace.filter_all") }} <span class="opacity-70">({{ entries.length }})</span>
-        </button>
-        <button
-          class="px-2.5 py-1 rounded-md transition"
-          :class="activeFilter === 'search' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
-          @click="activeFilter = 'search'"
-        >
-          {{ $t("trace.filter_search") }}
-        </button>
-        <button
-          class="px-2.5 py-1 rounded-md transition"
-          :class="activeFilter === 'critic' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
-          @click="activeFilter = 'critic'"
-        >
-          {{ $t("trace.filter_critic") }}
-        </button>
-      </div>
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] text-muted font-mono">
+                {{ reasoning.length }} симв.
+              </span>
+              <button
+                class="text-muted hover:text-white transition px-1"
+                @click="reasoningOpen = !reasoningOpen"
+              >
+                {{ reasoningOpen ? "▾" : "▸" }}
+              </button>
+            </div>
+          </div>
 
-      <!-- STREAM OF MICRO-ACTIONS -->
-      <div class="relative">
-        <div
-          ref="feedBox"
-          class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-bd"
-          @scroll="onFeedScroll"
-        >
           <div
-            v-for="(entry, idx) in filteredEntries"
-            :key="idx"
-            class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-all text-xs"
-            :class="{
-              'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1,
-            }"
+            v-if="reasoningOpen"
+            ref="reasoningBox"
+            class="p-3 max-h-56 overflow-y-auto font-mono text-[12px] leading-relaxed whitespace-pre-wrap selection:bg-accent/30 scrollbar-thin scrollbar-thumb-bd"
+            @scroll="onReasoningScroll"
           >
-            <div class="flex items-start justify-between gap-2">
-              <div class="flex items-center gap-2 min-w-0">
-                <span
-                  class="flex items-center justify-center h-4 w-4 rounded-full text-[9px] font-bold shrink-0"
-                  :class="live && idx === filteredEntries.length - 1 ? 'bg-accent text-white animate-pulse' : 'bg-surface border border-bd text-muted'"
-                >
-                  {{ idx + 1 }}
-                </span>
+            {{ reasoning }}<span v-if="live" class="inline-block h-3.5 w-1.5 ml-0.5 bg-accent animate-pulse align-middle" />
+          </div>
+        </div>
 
-                <span v-if="entry.agent" class="font-medium text-ink truncate">
-                  {{ entry.agent }}
-                </span>
-                <span v-else class="font-medium text-ink truncate">
-                  {{ stepLabel(entry.step) }}
-                </span>
+        <!-- FILTER TABS FOR EVENT FEED -->
+        <div class="flex items-center gap-2 border-b border-bd pb-2 text-xs">
+          <button
+            class="px-2.5 py-1 rounded-md transition"
+            :class="activeFilter === 'all' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
+            @click="activeFilter = 'all'"
+          >
+            {{ $t("trace.filter_all") }} <span class="opacity-70">({{ entries.length }})</span>
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md transition"
+            :class="activeFilter === 'search' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
+            @click="activeFilter = 'search'"
+          >
+            {{ $t("trace.filter_search") }}
+          </button>
+          <button
+            class="px-2.5 py-1 rounded-md transition"
+            :class="activeFilter === 'critic' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
+            @click="activeFilter = 'critic'"
+          >
+            {{ $t("trace.filter_critic") }}
+          </button>
+        </div>
 
-                <span
-                  v-if="entry.action"
-                  class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
-                >
-                  {{ entry.action }}
+        <!-- STREAM OF MICRO-ACTIONS -->
+        <div class="relative">
+          <TransitionGroup
+            name="feed-item"
+            tag="div"
+            ref="feedBox"
+            class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-bd"
+            @scroll="onFeedScroll"
+          >
+            <div
+              v-for="(entry, idx) in filteredEntries"
+              :key="idx"
+              class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-all duration-200 text-xs"
+              :class="{
+                'border-emerald-500/30 bg-surface/60': isEntryDone(idx) && !isLoopback(entry),
+                'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1 && !isLoopback(entry),
+                'border-amber-500/40 bg-amber-500/5 ring-1 ring-amber-500/20': isLoopback(entry),
+              }"
+            >
+              <!-- Loopback Badge when agent is sent back -->
+              <div
+                v-if="isLoopback(entry)"
+                class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+              >
+                <span class="animate-spin">↺</span>
+                <span>{{ loopbackBadgeText(entry) }}</span>
+              </div>
+
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                  <!-- Status icon/number -->
+                  <span
+                    v-if="isEntryDone(idx)"
+                    class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
+                    title="Отработал"
+                  >
+                    ✓
+                  </span>
+                  <span
+                    v-else-if="live && idx === filteredEntries.length - 1"
+                    class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
+                    title="В процессе"
+                  >
+                    ⚡
+                  </span>
+                  <span
+                    v-else
+                    class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[9px] font-bold shrink-0"
+                  >
+                    {{ idx + 1 }}
+                  </span>
+
+                  <span v-if="entry.agent" class="font-medium text-ink truncate">
+                    {{ entry.agent }}
+                  </span>
+                  <span v-else class="font-medium text-ink truncate">
+                    {{ stepLabel(entry.step) }}
+                  </span>
+
+                  <span
+                    v-if="entry.action"
+                    class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
+                  >
+                    {{ entry.action }}
+                  </span>
+
+                  <!-- Status label badge -->
+                  <span
+                    v-if="isEntryDone(idx)"
+                    class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
+                  >
+                    <span>✓</span>
+                    <span>отработал</span>
+                  </span>
+                  <span
+                    v-else-if="live && idx === filteredEntries.length - 1"
+                    class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                    <span>в процессе</span>
+                  </span>
+                </div>
+
+                <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
+                  {{ formatTime(entry.timestamp) }}
                 </span>
               </div>
 
-              <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
-                {{ formatTime(entry.timestamp) }}
-              </span>
-            </div>
+              <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
+                {{ entry.detail }}
+              </p>
 
-            <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
-              {{ entry.detail }}
-            </p>
+              <!-- Metrics badges if present -->
+              <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
+                <span
+                  v-for="(val, key) in entry.metrics"
+                  :key="key"
+                  class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
+                >
+                  <span class="opacity-60">{{ key }}:</span>
+                  <span class="font-semibold text-ink">{{ val }}</span>
+                </span>
+              </div>
 
-            <!-- Metrics badges if present -->
-            <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
-              <span
-                v-for="(val, key) in entry.metrics"
-                :key="key"
-                class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
-              >
-                <span class="opacity-60">{{ key }}:</span>
-                <span class="font-semibold text-ink">{{ val }}</span>
-              </span>
+              <!-- Discovered / Scraped Sources Chips -->
+              <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
+                <a
+                  v-for="(s, j) in entry.sources"
+                  :key="j"
+                  :href="s.url || `https://${s.domain}`"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
+                  :title="s.title || s.domain"
+                >
+                  <img
+                    :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
+                    alt=""
+                    class="h-3 w-3 shrink-0 rounded-xs"
+                    loading="lazy"
+                    @error="($event.target as HTMLImageElement).style.display = 'none'"
+                  />
+                  <span class="truncate">{{ s.domain }}</span>
+                  <span class="text-[9px] text-muted opacity-60">↗</span>
+                </a>
+              </div>
             </div>
-
-            <!-- Discovered / Scraped Sources Chips -->
-            <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
-              <a
-                v-for="(s, j) in entry.sources"
-                :key="j"
-                :href="s.url || `https://${s.domain}`"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
-                :title="s.title || s.domain"
-              >
-                <img
-                  :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
-                  alt=""
-                  class="h-3 w-3 shrink-0 rounded-xs"
-                  loading="lazy"
-                  @error="($event.target as HTMLImageElement).style.display = 'none'"
-                />
-                <span class="truncate">{{ s.domain }}</span>
-                <span class="text-[9px] text-muted opacity-60">↗</span>
-              </a>
-            </div>
-          </div>
+          </TransitionGroup>
 
           <div v-if="!filteredEntries.length" class="py-6 text-center text-xs text-muted">
             {{ $t("artifact.trailEmpty") }}
           </div>
-        </div>
 
-        <!-- Floating button to return to latest actions -->
-        <div v-if="userHasScrolledUp && live" class="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
-          <button
-            type="button"
-            class="pointer-events-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white shadow-lg transition hover:bg-accent/90"
-            @click="userHasScrolledUp = false; scrollToBottom('smooth');"
-          >
-            <span>↓</span>
-            <span>{{ te('trace.to_latest') ? t('trace.to_latest') : 'К новым действиям' }}</span>
-          </button>
+          <!-- Floating button to return to latest actions -->
+          <div v-if="userHasScrolledUp && live" class="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
+            <button
+              type="button"
+              class="pointer-events-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white shadow-lg transition hover:bg-accent/90 active:scale-95"
+              @click="userHasScrolledUp = false; scrollToBottom('smooth');"
+            >
+              <span>↓</span>
+              <span>{{ te('trace.to_latest') ? t('trace.to_latest') : 'К новым действиям' }}</span>
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
   </div>
 </template>
 
@@ -567,5 +742,40 @@ function formatTime(isoStr?: string): string {
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%) scaleX(0.2); }
+  50% { transform: translateX(0%) scaleX(0.7); }
+  100% { transform: translateX(100%) scaleX(0.2); }
+}
+.animate-progress-indeterminate {
+  animation: progress-indeterminate 2.2s infinite ease-in-out;
+  transform-origin: 0% 50%;
+}
+
+.feed-item-enter-active,
+.feed-item-leave-active {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.feed-item-enter-from {
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+}
+.feed-item-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.console-expand-enter-active,
+.console-expand-leave-active {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+.console-expand-enter-from,
+.console-expand-leave-to {
+  opacity: 0;
+  max-height: 0;
+  transform: translateY(-6px);
 }
 </style>

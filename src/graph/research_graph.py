@@ -38,31 +38,37 @@ GRAPH_STEP_METADATA: dict[str, dict[str, Any]] = {
         "agent": "SourceCriticAgent",
         "phase": "critic",
         "action": "evaluate_sources",
-        "detail": "Оценка достоверности источников и структурирование доказательств",
+        "detail": "Оценка достоверности источников, структурирование доказательств и выявление белых пятен",
     },
     "replan": {
         "agent": "ReplanAgent",
         "phase": "plan",
-        "action": "suggest_follow_up",
-        "detail": "Анализ белых пятен и запуск дополнительных поисковых веток",
+        "action": "gap_analysis_loop",
+        "detail": "↩ Обнаружены пробелы в данных: возврат на допоиск источников для полноты картины",
     },
     "analyze": {
         "agent": "AnalyzerAgent",
         "phase": "synthesis",
         "action": "synthesize_report",
-        "detail": "Глубокий синтез аналитического отчёта и сведение фактов",
+        "detail": "Глубокий синтез аналитического отчёта, сведение фактов и разметка цитат",
     },
     "tie_break": {
         "agent": "ReplanAgent",
         "phase": "critic",
-        "action": "resolve_conflicts",
-        "detail": "Разрешение противоречий между найденными источниками",
+        "action": "conflict_tie_break",
+        "detail": "↩ Обнаружены противоречия между источниками: запуск арбитражного поиска (Tie-Break)",
     },
     "verify": {
         "agent": "ReportCriticAgent",
         "phase": "verify",
         "action": "verify_claims",
-        "detail": "Верификация утверждений отчёта и контроль качества цитирования",
+        "detail": "Верификация утверждений отчёта, контроль точности цитирования и рецензирование",
+    },
+    "verify_retry": {
+        "agent": "ReportCriticAgent",
+        "phase": "verify",
+        "action": "critic_revision_loop",
+        "detail": "↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
     },
 }
 
@@ -517,6 +523,26 @@ class FinalizeGraphRunner:
                     f"{state['effective_prompt']}\n\n"
                     "The previous draft still had report notes or weak-support issues. "
                     "Prioritize higher-confidence evidence, reduce overconfident wording, and improve citation discipline."
+                )
+                self._emit_trail(
+                    state["research_id"],
+                    "verify_retry",
+                    agent="ReportCriticAgent",
+                    phase="verify",
+                    action="critic_revision_loop",
+                    detail="↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
+                    metrics={"attempt": state["analyze_attempts"] + 1},
+                )
+            elif should_tie_break and tie_break_recommendations:
+                effective_prompt = state["effective_prompt"]
+                self._emit_trail(
+                    state["research_id"],
+                    "tie_break",
+                    agent="ReplanAgent",
+                    phase="critic",
+                    action="conflict_tie_break",
+                    detail=f"↩ Обнаружены противоречия в источниках ({len(state.get('detected_conflicts') or [])}): запуск арбитражного поиска (Tie-Break)",
+                    metrics={"recommendations": len(tie_break_recommendations)},
                 )
             else:
                 effective_prompt = state["effective_prompt"]

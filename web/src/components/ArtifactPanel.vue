@@ -436,51 +436,68 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 
 <template>
   <div class="flex h-full flex-col">
-    <div class="flex items-center gap-1 border-b border-bd px-4">
-      <button
-        v-for="tb in tabKeys"
-        :key="tb"
-        class="border-b-2 px-3 py-3 text-sm transition-colors"
-        :class="tab === tb ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'"
-        @click="tab = tb"
-      >
-        {{ $t("artifact." + tb) }}
-      </button>
+    <!-- Tab bar (tabs scroll horizontally if needed, share menu stays pinned on the right) -->
+    <div class="flex items-center justify-between border-b border-bd px-3 sm:px-5 min-w-0">
+      <!-- Tabs list -->
+      <div class="flex items-center gap-1 overflow-x-auto min-w-0 scrollbar-none py-0.5">
+        <button
+          v-for="tb in tabKeys"
+          :key="tb"
+          class="border-b-2 px-3 py-3 text-xs sm:text-sm font-medium transition-colors shrink-0 whitespace-nowrap"
+          :class="tab === tb ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'"
+          @click="tab = tb"
+        >
+          {{ $t("artifact." + tb) }}
+        </button>
+      </div>
 
-      <!-- report is streaming in / being edited live -->
-      <span v-if="report && !isFinal" class="ml-auto flex shrink-0 items-center gap-1.5 pr-2 text-xs text-accent">
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-        {{ $t("artifact.generating") }}
-      </span>
+      <!-- Actions on the right (Share / Generating) - ALWAYS pinned and visible -->
+      <div class="flex items-center gap-2 shrink-0 ml-3">
+        <!-- report is streaming in / being edited live -->
+        <span v-if="report && !isFinal" class="flex shrink-0 items-center gap-1.5 text-xs text-accent whitespace-nowrap">
+          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+          {{ $t("artifact.generating") }}
+        </span>
 
-      <div v-if="report && isFinal" class="ml-auto flex items-center gap-1">
-        <div class="relative">
+        <div v-if="report && isFinal" class="relative shrink-0">
           <button
-            class="flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition"
-            :class="share && share.shared ? 'border-accent/50 text-accent' : 'border-bd text-muted hover:text-ink'"
+            class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition shrink-0 whitespace-nowrap"
+            :class="share && share.shared ? 'border-accent/50 text-accent bg-accent/5' : 'border-bd text-muted hover:text-ink hover:bg-surface/60'"
             :title="$t('share.hint')"
             @click="toggleShareMenu"
           >
-            🔗 {{ share && share.shared ? $t("share.shared") : $t("share.share") }}
+            <span>🔗</span>
+            <span>{{ share && share.shared ? $t("share.shared") : $t("share.share") }}</span>
           </button>
+
           <div
             v-if="shareMenuOpen"
-            class="absolute right-0 z-30 mt-1 w-72 rounded-xl border border-bd bg-surface p-3 text-xs shadow-lg"
+            class="absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-bd bg-surface p-3.5 text-xs shadow-xl backdrop-blur-md"
           >
-            <div class="mb-1.5 font-medium text-ink">{{ $t("share.title") }}</div>
-            <p class="mb-2 text-muted">{{ $t("share.desc") }}</p>
-            <div class="flex items-center gap-1">
+            <div class="mb-1 font-semibold text-ink text-xs">{{ $t("share.title") }}</div>
+            <p class="mb-2 text-muted leading-relaxed text-[11px]">{{ $t("share.desc") }}</p>
+            <div class="flex items-center gap-1.5">
               <input
                 :value="shareUrl"
                 readonly
-                class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1 text-ink focus:outline-none"
+                class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1.5 text-ink text-xs focus:outline-none focus:border-accent font-mono select-all"
                 @focus="($event.target as HTMLInputElement).select()"
               />
-              <button class="shrink-0 rounded-md border border-bd px-2 py-1 text-muted hover:text-ink" @click="copyShare">
+              <button
+                class="shrink-0 rounded-md border border-bd px-2.5 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
+                @click="copyShare"
+              >
                 {{ shareCopied ? "✓" : $t("share.copy") }}
               </button>
             </div>
-            <button class="mt-2 text-red-400 hover:underline" @click="revokeShare">{{ $t("share.revoke") }}</button>
+            <div class="mt-2.5 pt-2 border-t border-bd/40 flex items-center justify-between">
+              <button class="text-xs text-red-400 hover:text-red-300 hover:underline transition" @click="revokeShare">
+                {{ $t("share.revoke") }}
+              </button>
+              <span v-if="shareCopied" class="text-[10px] text-emerald-400 font-medium">
+                Скопировано!
+              </span>
+            </div>
           </div>
         </div>
       </div>
