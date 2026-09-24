@@ -162,6 +162,14 @@ class FinalizeGraphRunner:
             "analyze_attempts": int(graph_state.get("analyze_attempts") or 0),
             "replan_attempts": int(graph_state.get("replan_attempts") or 0),
             "tie_break_attempts": int(graph_state.get("tie_break_attempts") or 0),
+            # A resumed run must not take branches the interrupted run had ruled out:
+            # no-progress stays sticky, and the wall-clock budget is not reset by a
+            # resume (a deadline that already passed disables the deep branches).
+            # Checkpoints from before these keys existed get the fresh-run defaults.
+            "branch_stalled": bool(graph_state.get("branch_stalled")),
+            "finalize_deadline": self._resumed_deadline(
+                graph_state.get("finalize_deadline"), state["finalize_deadline"]
+            ),
             "should_replan": bool(graph_state.get("should_replan")),
             "should_tie_break": bool(graph_state.get("should_tie_break")),
             "should_retry_analysis": bool(graph_state.get("should_retry_analysis")),
@@ -177,6 +185,13 @@ class FinalizeGraphRunner:
         logger.info("langgraph_finalize_resume step=%s", step)
         record_graph_resume()
         return resumed_state
+
+    @staticmethod
+    def _resumed_deadline(stored, fresh_deadline: float) -> float:
+        """The earlier of the checkpointed deadline and a fresh budget from now."""
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return fresh_deadline
+        return min(float(stored), fresh_deadline)
 
     def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
         self.service.ensure_finalize_job_lease(
@@ -196,6 +211,8 @@ class FinalizeGraphRunner:
             "should_replan": state.get("should_replan", False),
             "should_tie_break": state.get("should_tie_break", False),
             "should_retry_analysis": state.get("should_retry_analysis", False),
+            "branch_stalled": bool(state.get("branch_stalled", False)),
+            "finalize_deadline": state.get("finalize_deadline"),
             "replan_recommendations": state.get("replan_recommendations", []),
             "tie_break_recommendations": state.get("tie_break_recommendations", []),
             "detected_conflicts": state.get("detected_conflicts", []),
@@ -662,7 +679,8 @@ class FinalizeGraphRunner:
         workflow.add_node("verify", self._verify)
         workflow.set_entry_point("resume_route")
         # Fresh runs route to collect_context; resumed runs enter at the successor
-        # of their last checkpointed step — same topology either way.
+        # of their last checkpointed step — same topology either way. A verify
+        # checkpoint that already settled on its report resumes straight to END.
         workflow.add_conditional_edges(
             "resume_route",
             self._resume_entry,
@@ -671,6 +689,7 @@ class FinalizeGraphRunner:
                 "analyze": "analyze",
                 "verify": "verify",
                 "tie_break": "tie_break",
+                END: END,
             },
         )
         workflow.add_conditional_edges("collect_context", self._next_after_context, {"replan": "replan", "analyze": "analyze"})
