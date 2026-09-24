@@ -29,11 +29,19 @@ export const useUiStore = defineStore("ui", () => {
   }
 
   const locale = ref<Locale>(i18n.global.locale.value as Locale);
+  // <html lang> drives screen readers, hyphenation and spell-check — keep it on
+  // the active locale (index.html ships the default, "ru").
+  function applyLang() {
+    if (typeof document === "undefined") return;
+    document.documentElement.lang = locale.value;
+  }
   function setLocale(value: Locale) {
     locale.value = value;
     i18n.global.locale.value = value;
     if (typeof localStorage !== "undefined") localStorage.setItem("locale", value);
+    applyLang();
   }
+  applyLang();
 
   const stored = (typeof localStorage !== "undefined" ? localStorage.getItem("theme") : null) as ThemeId | null;
   const theme = ref<ThemeId>(THEMES.some((t) => t.id === stored) ? (stored as ThemeId) : "dark");
