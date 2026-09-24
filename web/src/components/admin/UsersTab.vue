@@ -1129,7 +1129,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             :class="eventCategory === 'ui' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'ui'"
           >
-            UI / Client
+            {{ t("admin.users.catUi") }}
           </button>
           <button
             type="button"
@@ -1137,7 +1137,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             :class="eventCategory === 'research' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'research'"
           >
-            Research
+            {{ t("admin.users.catResearch") }}
           </button>
           <button
             type="button"
@@ -1145,7 +1145,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             :class="eventCategory === 'system' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'system'"
           >
-            System
+            {{ t("admin.users.catSystem") }}
           </button>
         </div>
 
@@ -1232,9 +1232,9 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </span>
                 <span
                   v-if="activeUser?.is_online"
-                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400"
+                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-400"
                 >
-                  ONLINE
+                  {{ t("admin.users.online") }}
                 </span>
               </div>
               <p class="font-mono text-xs text-muted">{{ activeUser?.email }}</p>
