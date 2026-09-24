@@ -148,7 +148,7 @@ function phaseState(idx: number): "done" | "active" | "pending" {
   return "pending";
 }
 
-// Active Agent metadata
+// Active Agent metadata (the role badge is localized: console.agents.<id>)
 interface AgentMeta {
   name: string;
   badge: string;
@@ -156,56 +156,60 @@ interface AgentMeta {
   colorClass: string;
 }
 
-const AGENT_MAP: Record<string, AgentMeta> = {
-  OrchestratorAgent: { name: "Orchestrator", badge: "Архитектор", avatar: "🧠", colorClass: "text-indigo-400 bg-indigo-500/10 border-indigo-500/30" },
-  ClarifierAgent: { name: "Clarifier", badge: "Уточнение", avatar: "💬", colorClass: "text-blue-400 bg-blue-500/10 border-blue-500/30" },
-  CrossLanguageAgent: { name: "CrossLanguage", badge: "Мультиязычность", avatar: "🌐", colorClass: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
-  SearchAgent: { name: "SearchAgent", badge: "Поисковик", avatar: "🔍", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
-  SourceCriticAgent: { name: "SourceCritic", badge: "Критик данных", avatar: "📑", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
-  EvidenceMapperAgent: { name: "EvidenceMapper", badge: "Картограф", avatar: "🗺️", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
-  ReplanAgent: { name: "ReplanAgent", badge: "Корректировщик", avatar: "🔄", colorClass: "text-sky-400 bg-sky-500/10 border-sky-500/30" },
-  SourceReputationAgent: { name: "ReputationAuditor", badge: "Репутация", avatar: "🏛️", colorClass: "text-orange-400 bg-orange-500/10 border-orange-500/30" },
-  SourceIndependenceAgent: { name: "IndependenceAuditor", badge: "Аффилиации", avatar: "🔗", colorClass: "text-purple-400 bg-purple-500/10 border-purple-500/30" },
-  AnalyzerAgent: { name: "AnalyzerAgent", badge: "Синтез", avatar: "✨", colorClass: "text-violet-400 bg-violet-500/10 border-violet-500/30" },
-  ReportCriticAgent: { name: "ReportCritic", badge: "Рецензент", avatar: "📝", colorClass: "text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30" },
-  RedTeamAgent: { name: "RedTeamAgent", badge: "Стресс-тест", avatar: "⚔️", colorClass: "text-rose-400 bg-rose-500/10 border-rose-500/30" },
-  CitationAuditAgent: { name: "CitationAudit", badge: "Фактчекинг", avatar: "🔬", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
-  NumericCheckAgent: { name: "NumericCheck", badge: "Числа & Даты", avatar: "📊", colorClass: "text-teal-400 bg-teal-500/10 border-teal-500/30" },
-  StanceAgent: { name: "StanceAgent", badge: "Нейтральность", avatar: "⚖️", colorClass: "text-yellow-400 bg-yellow-500/10 border-yellow-500/30" },
-  System: { name: "System", badge: "Система", avatar: "⚡", colorClass: "text-slate-400 bg-slate-500/10 border-slate-500/30" },
+const AGENT_MAP: Record<string, Omit<AgentMeta, "badge">> = {
+  OrchestratorAgent: { name: "Orchestrator", avatar: "🧠", colorClass: "text-indigo-400 bg-indigo-500/10 border-indigo-500/30" },
+  ClarifierAgent: { name: "Clarifier", avatar: "💬", colorClass: "text-blue-400 bg-blue-500/10 border-blue-500/30" },
+  CrossLanguageAgent: { name: "CrossLanguage", avatar: "🌐", colorClass: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
+  SearchAgent: { name: "SearchAgent", avatar: "🔍", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
+  SourceCriticAgent: { name: "SourceCritic", avatar: "📑", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
+  EvidenceMapperAgent: { name: "EvidenceMapper", avatar: "🗺️", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
+  ReplanAgent: { name: "ReplanAgent", avatar: "🔄", colorClass: "text-sky-400 bg-sky-500/10 border-sky-500/30" },
+  SourceReputationAgent: { name: "ReputationAuditor", avatar: "🏛️", colorClass: "text-orange-400 bg-orange-500/10 border-orange-500/30" },
+  SourceIndependenceAgent: { name: "IndependenceAuditor", avatar: "🔗", colorClass: "text-purple-400 bg-purple-500/10 border-purple-500/30" },
+  AnalyzerAgent: { name: "AnalyzerAgent", avatar: "✨", colorClass: "text-violet-400 bg-violet-500/10 border-violet-500/30" },
+  ReportCriticAgent: { name: "ReportCritic", avatar: "📝", colorClass: "text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30" },
+  RedTeamAgent: { name: "RedTeamAgent", avatar: "⚔️", colorClass: "text-rose-400 bg-rose-500/10 border-rose-500/30" },
+  CitationAuditAgent: { name: "CitationAudit", avatar: "🔬", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
+  NumericCheckAgent: { name: "NumericCheck", avatar: "📊", colorClass: "text-teal-400 bg-teal-500/10 border-teal-500/30" },
+  StanceAgent: { name: "StanceAgent", avatar: "⚖️", colorClass: "text-yellow-400 bg-yellow-500/10 border-yellow-500/30" },
+  System: { name: "System", avatar: "⚡", colorClass: "text-slate-400 bg-slate-500/10 border-slate-500/30" },
 };
+
+function agentMeta(id: string): AgentMeta {
+  const style = AGENT_MAP[id];
+  if (style) return { ...style, badge: t(`console.agents.${id}`) };
+  return {
+    name: id,
+    badge: t("console.genericAgent"),
+    avatar: "🤖",
+    colorClass: "text-accent bg-accent/10 border-accent/30",
+  };
+}
 
 const currentAgent = computed<AgentMeta>(() => {
   if (props.status === "completed") {
     return {
-      name: "Аналитический отчёт",
-      badge: "Готово ✓",
+      name: t("console.reportName"),
+      badge: t("console.reportBadge"),
       avatar: "📄",
       colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
     };
   }
   if (props.status === "failed") {
     return {
-      name: "Сбой анализа",
-      badge: "Ошибка",
+      name: t("console.failedName"),
+      badge: t("console.failedBadge"),
       avatar: "⚠️",
       colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
     };
   }
   const entry = currentEntry.value;
   if (!entry || !entry.agent) {
-    if (currentPhase.value === "synthesis") return AGENT_MAP.AnalyzerAgent;
-    if (currentPhase.value === "search") return AGENT_MAP.SearchAgent;
-    return AGENT_MAP.OrchestratorAgent;
+    if (currentPhase.value === "synthesis") return agentMeta("AnalyzerAgent");
+    if (currentPhase.value === "search") return agentMeta("SearchAgent");
+    return agentMeta("OrchestratorAgent");
   }
-  return (
-    AGENT_MAP[entry.agent] || {
-      name: entry.agent,
-      badge: "Агент",
-      avatar: "🤖",
-      colorClass: "text-accent bg-accent/10 border-accent/30",
-    }
-  );
+  return agentMeta(entry.agent);
 });
 
 function isLoopback(entry?: TraceEntry | null): boolean {
@@ -230,47 +234,47 @@ function isLoopback(entry?: TraceEntry | null): boolean {
 function loopbackBadgeText(entry: TraceEntry): string {
   const s = entry.step || "";
   const a = entry.action || "";
-  if (s === "replan" || a.includes("gap")) return "↩ Добор фактов (Gap Analysis)";
-  if (s === "tie_break" || a.includes("conflict")) return "↩ Арбитраж противоречий (Tie-Break)";
-  if (s === "verify_retry" || a.includes("revision")) return "↩ Доработка отчёта (Revision Loop)";
-  return "↩ Возврат на доработку";
+  if (s === "replan" || a.includes("gap")) return t("console.loopGap");
+  if (s === "tie_break" || a.includes("conflict")) return t("console.loopConflict");
+  if (s === "verify_retry" || a.includes("revision")) return t("console.loopRevision");
+  return t("console.loopGeneric");
 }
 
 const currentStatusDetail = computed(() => {
   if (props.status === "completed") {
-    return "Все 5 этапов исследования завершены. Итоговый отчёт готов к изучению.";
+    return t("console.statusCompleted");
   }
   if (props.status === "failed") {
-    return "Произошла ошибка при формировании отчёта.";
+    return t("console.statusFailed");
   }
 
   // Dynamic deep status during long synthesis phase
   if (props.live && currentPhase.value === "synthesis") {
     const sec = elapsedSeconds.value % 120;
     if (sec < 12) {
-      return "Сведение доказательств из собранных источников и устранение дубликатов...";
+      return t("console.synthesisEvidence");
     } else if (sec < 28) {
-      return "Построение сквозной структуры отчёта и сравнительных аналитических матриц...";
+      return t("console.synthesisStructure");
     } else if (sec < 50) {
-      return "Глубокий синтез текста отчёта, формирование рассуждений и аргументации...";
+      return t("console.synthesisWriting");
     } else if (sec < 75) {
-      return "Привязка фактов к источникам, разметка цитат и проверка числовых данных...";
+      return t("console.synthesisCitations");
     } else if (sec < 105) {
-      return "Финальная вычитка черновика, форматирование таблиц и подготовка выводов...";
+      return t("console.synthesisProofread");
     } else {
-      return "Завершение генерации аналитического отчёта большой глубины...";
+      return t("console.synthesisFinishing");
     }
   }
 
   // Dynamic status during search phase
   if (props.live && currentPhase.value === "search" && elapsedSeconds.value > 15) {
     const sec = elapsedSeconds.value % 60;
-    if (sec < 20) return "Параллельный опрос поисковых систем и сбор релевантных ссылок...";
-    if (sec < 40) return "Извлечение полного текста веб-страниц и фильтрация спама...";
-    return "Структурирование цитат и первичный отбор ключевых доказательств...";
+    if (sec < 20) return t("console.searchQuerying");
+    if (sec < 40) return t("console.searchExtracting");
+    return t("console.searchStructuring");
   }
 
-  return currentEntry.value?.detail || (te("trace.live_status") ? t("trace.live_status") : "Агенты работают в реальном времени");
+  return currentEntry.value?.detail || t("trace.live_status");
 });
 
 // Filters
@@ -436,10 +440,10 @@ function formatTime(isoStr?: string): string {
 
         <button
           class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap min-w-[124px]"
-          :title="open ? 'Свернуть журнал' : 'Развернуть журнал'"
+          :title="open ? t('console.collapse') : t('console.expand')"
           @click="toggleOpen"
         >
-          <span>{{ open ? "Свернуть журнал" : `Журнал (${entries.length})` }}</span>
+          <span>{{ open ? t("console.collapse") : t("console.journal", { n: entries.length }) }}</span>
           <span class="text-[10px]">{{ open ? "▾" : "▸" }}</span>
         </button>
       </div>
@@ -501,12 +505,12 @@ function formatTime(isoStr?: string): string {
               </div>
               <div>
                 <div class="flex items-center gap-2">
-                  <span class="font-semibold text-xs text-ink">Синтез аналитического отчёта</span>
+                  <span class="font-semibold text-xs text-ink">{{ t("console.synthesisTitle") }}</span>
                   <span class="rounded bg-violet-500/20 text-violet-300 border border-violet-500/30 px-1.5 py-0.2 text-[10px] font-mono">
                     LLM Synthesis
                   </span>
                   <span v-if="currentEntry?.metrics?.attempt" class="rounded bg-bg/70 text-muted px-1.5 py-0.2 text-[10px]">
-                    итерация #{{ currentEntry.metrics.attempt }}
+                    {{ t("console.iteration", { n: currentEntry.metrics.attempt }) }}
                   </span>
                 </div>
                 <p class="text-xs text-violet-200/90 mt-1 font-medium leading-snug">
@@ -544,7 +548,7 @@ function formatTime(isoStr?: string): string {
 
             <div class="flex items-center gap-2">
               <span class="text-[10px] text-muted font-mono">
-                {{ reasoning.length }} симв.
+                {{ t("console.chars", { n: reasoning.length }) }}
               </span>
               <button
                 class="text-muted hover:text-white transition px-1"
@@ -624,14 +628,14 @@ function formatTime(isoStr?: string): string {
                   <span
                     v-if="isEntryDone(idx)"
                     class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
-                    title="Отработал"
+                    :title="t('console.entryDone')"
                   >
                     ✓
                   </span>
                   <span
                     v-else-if="live && idx === filteredEntries.length - 1"
                     class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
-                    title="В процессе"
+                    :title="t('console.entryRunning')"
                   >
                     ⚡
                   </span>
@@ -662,14 +666,14 @@ function formatTime(isoStr?: string): string {
                     class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
                   >
                     <span>✓</span>
-                    <span>отработал</span>
+                    <span>{{ t("console.entryDone") }}</span>
                   </span>
                   <span
                     v-else-if="live && idx === filteredEntries.length - 1"
                     class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
                   >
                     <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
-                    <span>в процессе</span>
+                    <span>{{ t("console.entryRunning") }}</span>
                   </span>
                 </div>
 
@@ -731,7 +735,7 @@ function formatTime(isoStr?: string): string {
               @click="userHasScrolledUp = false; scrollToBottom('smooth');"
             >
               <span>↓</span>
-              <span>{{ te('trace.to_latest') ? t('trace.to_latest') : 'К новым действиям' }}</span>
+              <span>{{ t("trace.to_latest") }}</span>
             </button>
           </div>
         </div>

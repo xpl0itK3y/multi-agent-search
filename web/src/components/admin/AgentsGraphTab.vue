@@ -1801,7 +1801,7 @@ function isNodeDimmed(nodeId: string): boolean {
                   ? 'bg-emerald-500/70 w-2.5'
                   : 'bg-muted/40 hover:bg-muted w-2',
               ]"
-              :title="`Шаг ${step.stepNumber}: ${step.title}`"
+              :title="t('admin.agents.stepTitle', { n: step.stepNumber, title: step.title })"
               @click="goToStep(idx)"
             />
           </div>

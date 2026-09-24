@@ -36,6 +36,20 @@ describe("i18n", () => {
     }
   });
 
+  it("uses the three Russian plural forms and singular/plural elsewhere", () => {
+    g.locale.value = "ru";
+    expect([1, 3, 5, 11, 21, 22].map((n) => g.t("plan.items", n))).toEqual([
+      "1 пункт",
+      "3 пункта",
+      "5 пунктов",
+      "11 пунктов",
+      "21 пункт",
+      "22 пункта",
+    ]);
+    g.locale.value = "en";
+    expect([1, 2].map((n) => g.t("plan.items", n))).toEqual(["1 item", "2 items"]);
+  });
+
   it("resolves every ru key to a non-empty string in every locale", () => {
     const keys = flatKeys(g.getLocaleMessage("ru") as Record<string, unknown>);
     expect(keys.length).toBeGreaterThan(0);

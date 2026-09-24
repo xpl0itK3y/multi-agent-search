@@ -475,7 +475,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 {{ $t("share.revoke") }}
               </button>
               <span v-if="shareCopied" class="text-[10px] text-emerald-400 font-medium">
-                Скопировано!
+                {{ $t("share.copied") }}
               </span>
             </div>
           </div>

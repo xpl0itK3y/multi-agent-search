@@ -714,13 +714,13 @@ function copyJson(data: any, targetRef: "input" | "output") {
 
               <div class="mt-4 space-y-2 text-xs text-muted">
                 <p>
-                  • Стек: <span class="text-ink font-medium">Python 3.12 / Pydantic v2 / AsyncIO</span>
+                  • {{ t("admin.agents.stack") }}: <span class="text-ink font-medium">Python 3.12 / Pydantic v2 / AsyncIO</span>
                 </p>
                 <p>
-                  • Вызов: <span class="text-ink font-medium">FastAPI REST / LangGraph State Node / Redis Stream Worker</span>
+                  • {{ t("admin.agents.invocation") }}: <span class="text-ink font-medium">FastAPI REST / LangGraph State Node / Redis Stream Worker</span>
                 </p>
                 <p>
-                  • Трейсинг: <span class="text-ink font-medium">LangSmith @maybe_traceable & Prometheus Metrics</span>
+                  • {{ t("admin.agents.tracing") }}: <span class="text-ink font-medium">LangSmith @maybe_traceable & Prometheus Metrics</span>
                 </p>
               </div>
             </div>

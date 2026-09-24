@@ -23,7 +23,7 @@ defineProps<{
       </div>
 
       <span v-if="sourceCount" class="text-xs text-muted font-mono bg-surface px-2 py-0.5 rounded border border-bd">
-        {{ sourceCount }} источников в пуле
+        {{ $t("artifact.sourcesInPool", sourceCount) }}
       </span>
     </div>
 

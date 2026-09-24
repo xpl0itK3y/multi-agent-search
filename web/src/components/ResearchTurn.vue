@@ -130,12 +130,12 @@ const costTooltip = computed(() => {
   const u = usage.value;
   if (!u) return t("research.costTitle");
   const lines: string[] = [t("research.costTitle")];
-  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.prompt_tokens) lines.push(t("research.costInput", { n: u.prompt_tokens.toLocaleString() }));
   if (u.cache_hit_tokens) {
     const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
-    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+    lines.push(t("research.costCache", { n: u.cache_hit_tokens.toLocaleString(), pct }));
   }
-  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  if (u.completion_tokens) lines.push(t("research.costOutput", { n: u.completion_tokens.toLocaleString() }));
   return lines.join(" · ");
 });
 

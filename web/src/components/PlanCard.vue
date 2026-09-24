@@ -69,7 +69,7 @@ function approve() {
           <span class="text-sm">✶</span> {{ $t("plan.tag") }}
         </div>
         <span class="text-[11px] font-medium text-muted bg-bg/60 border border-bd px-2 py-0.5 rounded-full">
-          {{ rows.length }} {{ rows.length === 1 ? 'пункт' : rows.length < 5 ? 'пункта' : 'пунктов' }}
+          {{ $t("plan.items", rows.length) }}
         </span>
       </div>
 
@@ -118,7 +118,7 @@ function approve() {
       </TransitionGroup>
 
       <div v-if="!rows.length" class="py-6 text-center text-xs text-muted">
-        Нет пунктов плана. Нажмите «Добавить под-вопрос» ниже.
+        {{ $t("plan.empty") }}
       </div>
     </div>
 

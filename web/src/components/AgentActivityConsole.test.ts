@@ -16,6 +16,30 @@ function consoleBodyVisible(status: string): boolean {
   return visible;
 }
 
+describe("AgentActivityConsole localization", () => {
+  afterEach(() => {
+    i18n.global.locale.value = "ru";
+  });
+
+  it("renders agent badges, statuses and labels in the active locale", () => {
+    i18n.global.locale.value = "en";
+    for (const status of ["processing", "completed", "failed"]) {
+      const wrapper = mount(AgentActivityConsole, {
+        props: {
+          entries: [{ step: "search", detail: "Searching the web", agent: "SearchAgent", action: "query" }],
+          reasoning: "thinking",
+          status,
+          live: status === "processing",
+        },
+        global: { plugins: [i18n] },
+      });
+      expect(wrapper.text(), status).not.toMatch(/[А-Яа-яЁё]/);
+      if (status === "processing") expect(wrapper.text()).toContain(i18n.global.t("console.agents.SearchAgent"));
+      wrapper.unmount();
+    }
+  });
+});
+
 describe("AgentActivityConsole initial state", () => {
   afterEach(() => {
     localStorage.clear();

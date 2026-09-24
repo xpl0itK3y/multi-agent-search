@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import type { Locale } from "@/i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
@@ -12,7 +13,7 @@ import type { Depth, UserTokenStats } from "@/lib/types";
 const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
-const { t } = useI18n();
+const { t, te } = useI18n();
 
 // Password change and account deletion verify the current password: a 401 then
 // means it was wrong (api skips session recovery), a 400 that it is required.
@@ -85,7 +86,18 @@ function saveResearchPreferences() {
   setTimeout(() => (researchSuccess.value = false), 3000);
 }
 
+// ── Appearance ────────────────────────────────────────────────────────────────
+// Language names are endonyms: the same whatever the current UI language.
+const LANGUAGES: { value: Locale; label: string }[] = [
+  { value: "ru", label: "🇷🇺 Русский (RU)" },
+  { value: "en", label: "🇬🇧 English (EN)" },
+  { value: "es", label: "🇪🇸 Español (ES)" },
+];
+
 // ── Analytics & Token Stats State ─────────────────────────────────────────────
+function statusLabel(s: string): string {
+  return te(`status.${s}`) ? t(`status.${s}`) : s;
+}
 const tokenStats = ref<UserTokenStats | null>(null);
 const statsLoading = ref(false);
 const statsError = ref<string | null>(null);
@@ -169,11 +181,11 @@ async function changePassword() {
   passwordSuccess.value = false;
 
   if (newPassword.value.length < 8) {
-    passwordError.value = "Пароль должен содержать минимум 8 символов";
+    passwordError.value = t("settings.errors.passwordTooShort");
     return;
   }
   if (newPassword.value !== confirmPassword.value) {
-    passwordError.value = "Пароли не совпадают";
+    passwordError.value = t("settings.errors.passwordMismatch");
     return;
   }
 
@@ -260,7 +272,7 @@ onUnmounted(() => {
             @click="router.back()"
           >
             <span>←</span>
-            <span>Назад</span>
+            <span>{{ t("settings.back") }}</span>
           </button>
           <div class="grid h-10 w-10 place-items-center rounded-xl bg-accent/15 text-accent border border-accent/25 shrink-0">
             <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -269,8 +281,8 @@ onUnmounted(() => {
             </svg>
           </div>
           <div>
-            <h1 class="text-xl font-bold tracking-tight text-ink">Настройки аккаунта</h1>
-            <p class="text-xs text-muted mt-0.5">Управление профилем, параметрами поиска, внешним видом и расходом токенов</p>
+            <h1 class="text-xl font-bold tracking-tight text-ink">{{ t("settings.title") }}</h1>
+            <p class="text-xs text-muted mt-0.5">{{ t("settings.subtitle") }}</p>
           </div>
         </div>
 
@@ -298,7 +310,7 @@ onUnmounted(() => {
               <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
               <circle cx="12" cy="7" r="4" />
             </svg>
-            <span>Профиль</span>
+            <span>{{ t("settings.tabs.profile") }}</span>
           </button>
 
           <button
@@ -309,7 +321,7 @@ onUnmounted(() => {
             <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
             </svg>
-            <span>Исследования</span>
+            <span>{{ t("settings.tabs.research") }}</span>
           </button>
 
           <button
@@ -321,7 +333,7 @@ onUnmounted(() => {
               <circle cx="12" cy="12" r="10" />
               <path d="M12 2a10 10 0 0 1 0 20v-2a8 8 0 0 0 0-16V2z" />
             </svg>
-            <span>Внешний вид</span>
+            <span>{{ t("settings.tabs.appearance") }}</span>
           </button>
 
           <button
@@ -334,7 +346,7 @@ onUnmounted(() => {
               <line x1="12" y1="20" x2="12" y2="4" />
               <line x1="6" y1="20" x2="6" y2="14" />
             </svg>
-            <span>Статистика и токены</span>
+            <span>{{ t("settings.tabs.analytics") }}</span>
           </button>
 
           <button
@@ -345,7 +357,7 @@ onUnmounted(() => {
             <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
-            <span>Безопасность и данные</span>
+            <span>{{ t("settings.tabs.security") }}</span>
           </button>
         </nav>
 
@@ -354,13 +366,13 @@ onUnmounted(() => {
           <!-- ── TAB 1: PROFILE ───────────────────────────────────────────── -->
           <section v-if="activeTab === 'profile'" class="rounded-xl border border-bd bg-surface/50 p-6 space-y-6">
             <div>
-              <h2 class="text-base font-semibold text-ink">Личные данные</h2>
-              <p class="text-xs text-muted mt-1">Отображаемое имя и персонализированный аватар пользователя</p>
+              <h2 class="text-base font-semibold text-ink">{{ t("settings.profile.title") }}</h2>
+              <p class="text-xs text-muted mt-1">{{ t("settings.profile.subtitle") }}</p>
             </div>
 
             <!-- Avatar selection -->
             <div class="space-y-3">
-              <label class="text-xs font-medium text-ink block">Аватар</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.profile.avatar") }}</label>
               <div class="flex items-center gap-4">
                 <div class="h-16 w-16 rounded-2xl bg-surface border-2 border-bd flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden">
                   <img
@@ -373,7 +385,7 @@ onUnmounted(() => {
                 </div>
 
                 <div class="space-y-2 flex-1">
-                  <div class="text-xs text-muted">Выберите готовую иконку агента:</div>
+                  <div class="text-xs text-muted">{{ t("settings.profile.presetHint") }}</div>
                   <div class="flex flex-wrap gap-1.5">
                     <button
                       v-for="em in PRESET_AVATARS"
@@ -393,7 +405,7 @@ onUnmounted(() => {
                 <input
                   v-model="avatarUrl"
                   type="text"
-                  placeholder="Или вставьте URL картинки аватара (https://...)"
+                  :placeholder="t('settings.profile.avatarUrlPlaceholder')"
                   class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink placeholder-muted/60 focus:outline-none focus:border-accent"
                 />
               </div>
@@ -401,18 +413,18 @@ onUnmounted(() => {
 
             <!-- Name -->
             <div class="space-y-1.5">
-              <label class="text-xs font-medium text-ink block">Отображаемое имя</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.profile.name") }}</label>
               <input
                 v-model="name"
                 type="text"
-                placeholder="Например, Денис"
+                :placeholder="t('settings.profile.namePlaceholder')"
                 class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink placeholder-muted/60 focus:outline-none focus:border-accent"
               />
             </div>
 
             <!-- Email (readonly) -->
             <div class="space-y-1.5">
-              <label class="text-xs font-medium text-ink block">Email адрес</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.profile.email") }}</label>
               <input
                 :value="auth.user?.email"
                 readonly
@@ -424,7 +436,7 @@ onUnmounted(() => {
             <!-- Alerts -->
             <div v-if="profileSuccess" class="rounded-lg bg-emerald-500/15 border border-emerald-500/30 p-3 text-xs text-emerald-300 flex items-center gap-2">
               <span>✓</span>
-              <span>Профиль успешно обновлён!</span>
+              <span>{{ t("settings.profile.saved") }}</span>
             </div>
             <div v-if="profileError" class="rounded-lg bg-red-500/15 border border-red-500/30 p-3 text-xs text-red-400">
               {{ profileError }}
@@ -436,7 +448,7 @@ onUnmounted(() => {
                 class="rounded-lg bg-accent text-white px-4 py-2 text-xs font-medium transition hover:bg-accent/90 disabled:opacity-50"
                 @click="saveProfile"
               >
-                {{ profileBusy ? "Сохранение..." : "Сохранить профиль" }}
+                {{ profileBusy ? t("settings.profile.saving") : t("settings.profile.save") }}
               </button>
             </div>
           </section>
@@ -444,13 +456,13 @@ onUnmounted(() => {
           <!-- ── TAB 2: RESEARCH PREFERENCES ──────────────────────────────── -->
           <section v-if="activeTab === 'research'" class="rounded-xl border border-bd bg-surface/50 p-6 space-y-6">
             <div>
-              <h2 class="text-base font-semibold text-ink">Параметры исследований</h2>
-              <p class="text-xs text-muted mt-1">Значения по умолчанию для формы создания новых исследовательских задач</p>
+              <h2 class="text-base font-semibold text-ink">{{ t("settings.research.title") }}</h2>
+              <p class="text-xs text-muted mt-1">{{ t("settings.research.subtitle") }}</p>
             </div>
 
             <!-- Default Depth -->
             <div class="space-y-2">
-              <label class="text-xs font-medium text-ink block">Глубина поиска по умолчанию</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.research.depth") }}</label>
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <label
                   class="flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition"
@@ -458,8 +470,8 @@ onUnmounted(() => {
                 >
                   <input v-model="defaultDepth" type="radio" value="easy" class="mt-0.5 accent-accent" />
                   <div class="text-xs">
-                    <div class="font-semibold text-ink">Быстрый (Fast)</div>
-                    <div class="text-[11px] text-muted leading-tight mt-0.5">Экспресс-поиск (1-2 мин, базовые источники)</div>
+                    <div class="font-semibold text-ink">{{ t("settings.research.depthEasy") }}</div>
+                    <div class="text-[11px] text-muted leading-tight mt-0.5">{{ t("settings.research.depthEasyHint") }}</div>
                   </div>
                 </label>
 
@@ -469,8 +481,8 @@ onUnmounted(() => {
                 >
                   <input v-model="defaultDepth" type="radio" value="medium" class="mt-0.5 accent-accent" />
                   <div class="text-xs">
-                    <div class="font-semibold text-ink">Сбалансированный</div>
-                    <div class="text-[11px] text-muted leading-tight mt-0.5">Оптимальный отчёт с аудитом цитат</div>
+                    <div class="font-semibold text-ink">{{ t("settings.research.depthMedium") }}</div>
+                    <div class="text-[11px] text-muted leading-tight mt-0.5">{{ t("settings.research.depthMediumHint") }}</div>
                   </div>
                 </label>
 
@@ -480,8 +492,8 @@ onUnmounted(() => {
                 >
                   <input v-model="defaultDepth" type="radio" value="hard" class="mt-0.5 accent-accent" />
                   <div class="text-xs">
-                    <div class="font-semibold text-ink">Глубокий (Deep)</div>
-                    <div class="text-[11px] text-muted leading-tight mt-0.5">Полный цикл: Red-Team, арбитраж, кросс-язык</div>
+                    <div class="font-semibold text-ink">{{ t("settings.research.depthHard") }}</div>
+                    <div class="text-[11px] text-muted leading-tight mt-0.5">{{ t("settings.research.depthHardHint") }}</div>
                   </div>
                 </label>
               </div>
@@ -489,7 +501,7 @@ onUnmounted(() => {
 
             <!-- Default Model -->
             <div class="space-y-2">
-              <label class="text-xs font-medium text-ink block">Модель по умолчанию</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.research.model") }}</label>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <label
                   class="flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition"
@@ -499,9 +511,9 @@ onUnmounted(() => {
                   <div class="text-xs">
                     <div class="font-semibold text-ink flex items-center gap-1.5">
                       <span>V4 Pro</span>
-                      <span class="text-[10px] rounded bg-indigo-500/20 text-indigo-300 px-1 py-0.2">Рекомендуется</span>
+                      <span class="text-[10px] rounded bg-indigo-500/20 text-indigo-300 px-1 py-0.2">{{ t("settings.research.recommended") }}</span>
                     </div>
-                    <div class="text-[11px] text-muted leading-tight mt-1">Максимальная глубина рассуждений и точность синтеза</div>
+                    <div class="text-[11px] text-muted leading-tight mt-1">{{ t("settings.research.proHint") }}</div>
                   </div>
                 </label>
 
@@ -513,9 +525,9 @@ onUnmounted(() => {
                   <div class="text-xs">
                     <div class="font-semibold text-ink flex items-center gap-1.5">
                       <span>V4.1 Flash</span>
-                      <span class="text-[10px] rounded bg-emerald-500/20 text-emerald-300 px-1 py-0.2">Экономично</span>
+                      <span class="text-[10px] rounded bg-emerald-500/20 text-emerald-300 px-1 py-0.2">{{ t("settings.research.economical") }}</span>
                     </div>
-                    <div class="text-[11px] text-muted leading-tight mt-1">Сверхбыстрый ответ, минимальная стоимость токенов</div>
+                    <div class="text-[11px] text-muted leading-tight mt-1">{{ t("settings.research.flashHint") }}</div>
                   </div>
                 </label>
               </div>
@@ -523,20 +535,20 @@ onUnmounted(() => {
 
             <!-- Agent Toggles -->
             <div class="space-y-3 pt-2">
-              <label class="text-xs font-medium text-ink block">Поведение агентов</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.research.agents") }}</label>
 
               <label class="flex items-center justify-between p-3 rounded-lg border border-bd bg-surface/40 cursor-pointer">
                 <div>
-                  <div class="text-xs font-semibold text-ink">Согласование плана перед стартом (Plan First)</div>
-                  <div class="text-[11px] text-muted">Предварительно генерировать черновой план с возможностью редактирования шагов</div>
+                  <div class="text-xs font-semibold text-ink">{{ t("settings.research.planFirst") }}</div>
+                  <div class="text-[11px] text-muted">{{ t("settings.research.planFirstHint") }}</div>
                 </div>
                 <input v-model="planFirst" type="checkbox" class="h-4 w-4 accent-accent rounded cursor-pointer" />
               </label>
 
               <label class="flex items-center justify-between p-3 rounded-lg border border-bd bg-surface/40 cursor-pointer">
                 <div>
-                  <div class="text-xs font-semibold text-ink">Автоматически раскрывать журнал агентов</div>
-                  <div class="text-[11px] text-muted">Показывать ленту микродействий и терминал рассуждений сразу в развернутом виде</div>
+                  <div class="text-xs font-semibold text-ink">{{ t("settings.research.autoExpand") }}</div>
+                  <div class="text-[11px] text-muted">{{ t("settings.research.autoExpandHint") }}</div>
                 </div>
                 <input v-model="autoExpandConsole" type="checkbox" class="h-4 w-4 accent-accent rounded cursor-pointer" />
               </label>
@@ -545,7 +557,7 @@ onUnmounted(() => {
             <!-- Alerts -->
             <div v-if="researchSuccess" class="rounded-lg bg-emerald-500/15 border border-emerald-500/30 p-3 text-xs text-emerald-300 flex items-center gap-2">
               <span>✓</span>
-              <span>Настройки исследований сохранены!</span>
+              <span>{{ t("settings.research.saved") }}</span>
             </div>
 
             <div class="pt-2">
@@ -553,7 +565,7 @@ onUnmounted(() => {
                 class="rounded-lg bg-accent text-white px-4 py-2 text-xs font-medium transition hover:bg-accent/90"
                 @click="saveResearchPreferences"
               >
-                Сохранить настройки исследований
+                {{ t("settings.research.save") }}
               </button>
             </div>
           </section>
@@ -561,55 +573,43 @@ onUnmounted(() => {
           <!-- ── TAB 3: APPEARANCE ────────────────────────────────────────── -->
           <section v-if="activeTab === 'appearance'" class="rounded-xl border border-bd bg-surface/50 p-6 space-y-6">
             <div>
-              <h2 class="text-base font-semibold text-ink">Внешний вид и интерфейс</h2>
-              <p class="text-xs text-muted mt-1">Цветовая схема, язык отображения и оформление рабочей области</p>
+              <h2 class="text-base font-semibold text-ink">{{ t("settings.appearance.title") }}</h2>
+              <p class="text-xs text-muted mt-1">{{ t("settings.appearance.subtitle") }}</p>
             </div>
 
             <!-- Theme Picker -->
             <div class="space-y-2.5">
-              <label class="text-xs font-medium text-ink block">Цветовая тема</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.appearance.theme") }}</label>
               <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 <button
-                  v-for="t in THEMES"
-                  :key="t.id"
+                  v-for="th in THEMES"
+                  :key="th.id"
                   class="flex items-center gap-2.5 p-3 rounded-lg border text-left transition"
-                  :class="ui.theme === t.id ? 'border-accent bg-accent/15 ring-2 ring-accent/20' : 'border-bd bg-surface/40 hover:bg-surface'"
-                  @click="ui.setTheme(t.id)"
+                  :class="ui.theme === th.id ? 'border-accent bg-accent/15 ring-2 ring-accent/20' : 'border-bd bg-surface/40 hover:bg-surface'"
+                  @click="ui.setTheme(th.id)"
                 >
-                  <span class="h-4 w-4 rounded-full shrink-0 shadow-xs" :style="{ backgroundColor: t.swatch }" />
+                  <span class="h-4 w-4 rounded-full shrink-0 shadow-xs" :style="{ backgroundColor: th.swatch }" />
                   <div class="min-w-0 flex-1">
-                    <div class="text-xs font-semibold text-ink capitalize">{{ t.id }}</div>
-                    <div class="text-[10px] text-muted">{{ t.dark ? "Тёмная" : "Светлая" }}</div>
+                    <div class="text-xs font-semibold text-ink">{{ t(`themes.${th.id}`) }}</div>
+                    <div class="text-[10px] text-muted">{{ th.dark ? t("themes.dark") : t("themes.light") }}</div>
                   </div>
-                  <span v-if="ui.theme === t.id" class="text-accent text-xs font-bold">✓</span>
+                  <span v-if="ui.theme === th.id" class="text-accent text-xs font-bold">✓</span>
                 </button>
               </div>
             </div>
 
             <!-- Language -->
             <div class="space-y-2.5">
-              <label class="text-xs font-medium text-ink block">Язык интерфейса</label>
+              <label class="text-xs font-medium text-ink block">{{ t("settings.appearance.language") }}</label>
               <div class="grid grid-cols-3 gap-2.5">
                 <button
+                  v-for="lang in LANGUAGES"
+                  :key="lang.value"
                   class="p-3 rounded-lg border text-xs font-semibold transition"
-                  :class="ui.locale === 'ru' ? 'border-accent bg-accent/15 text-accent ring-2 ring-accent/20' : 'border-bd bg-surface/40 text-ink hover:bg-surface'"
-                  @click="ui.setLocale('ru')"
+                  :class="ui.locale === lang.value ? 'border-accent bg-accent/15 text-accent ring-2 ring-accent/20' : 'border-bd bg-surface/40 text-ink hover:bg-surface'"
+                  @click="ui.setLocale(lang.value)"
                 >
-                  🇷🇺 Русский (RU)
-                </button>
-                <button
-                  class="p-3 rounded-lg border text-xs font-semibold transition"
-                  :class="ui.locale === 'en' ? 'border-accent bg-accent/15 text-accent ring-2 ring-accent/20' : 'border-bd bg-surface/40 text-ink hover:bg-surface'"
-                  @click="ui.setLocale('en')"
-                >
-                  🇬🇧 English (EN)
-                </button>
-                <button
-                  class="p-3 rounded-lg border text-xs font-semibold transition"
-                  :class="ui.locale === 'es' ? 'border-accent bg-accent/15 text-accent ring-2 ring-accent/20' : 'border-bd bg-surface/40 text-ink hover:bg-surface'"
-                  @click="ui.setLocale('es')"
-                >
-                  🇪🇸 Español (ES)
+                  {{ lang.label }}
                 </button>
               </div>
             </div>
@@ -618,14 +618,14 @@ onUnmounted(() => {
             <div class="space-y-2.5 pt-2 border-t border-bd">
               <div class="flex items-center justify-between">
                 <div>
-                  <div class="text-xs font-semibold text-ink">Ширина боковой панели</div>
-                  <div class="text-[11px] text-muted">Текущий размер: {{ ui.sidebarWidth }}px</div>
+                  <div class="text-xs font-semibold text-ink">{{ t("settings.appearance.sidebarWidth") }}</div>
+                  <div class="text-[11px] text-muted">{{ t("settings.appearance.sidebarWidthCurrent", { px: ui.sidebarWidth }) }}</div>
                 </div>
                 <button
                   class="px-3 py-1.5 rounded-lg border border-bd text-xs text-muted hover:text-ink hover:bg-surface transition"
                   @click="ui.setSidebarWidth(288)"
                 >
-                  Сбросить (288px)
+                  {{ t("settings.appearance.sidebarReset", { px: 288 }) }}
                 </button>
               </div>
             </div>
@@ -641,9 +641,9 @@ onUnmounted(() => {
                     <line x1="12" y1="20" x2="12" y2="4" />
                     <line x1="6" y1="20" x2="6" y2="14" />
                   </svg>
-                  <span>Статистика и расход токенов</span>
+                  <span>{{ t("settings.analytics.title") }}</span>
                 </h2>
-                <p class="text-xs text-muted mt-1">Фактическое потребление токенов DeepSeek и оценка затрат на исследования</p>
+                <p class="text-xs text-muted mt-1">{{ t("settings.analytics.subtitle") }}</p>
               </div>
 
               <div class="flex items-center gap-2.5">
@@ -653,17 +653,17 @@ onUnmounted(() => {
                   class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer"
                   :class="autoRefresh ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-surface border-bd text-muted hover:text-ink'"
                   @click="toggleAutoRefresh"
-                  :title="autoRefresh ? 'Автообновление включено (каждые 3 сек). Нажмите, чтобы поставить на паузу' : 'Автообновление на паузе. Нажмите, чтобы включить'"
+                  :title="autoRefresh ? t('settings.analytics.liveOnHint') : t('settings.analytics.liveOffHint')"
                 >
                   <span class="relative flex h-2 w-2">
                     <span v-if="autoRefresh" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span class="relative inline-flex rounded-full h-2 w-2" :class="autoRefresh ? 'bg-emerald-500' : 'bg-muted'"></span>
                   </span>
-                  <span>{{ autoRefresh ? 'Live' : 'Пауза' }}</span>
+                  <span>{{ autoRefresh ? t("settings.analytics.live") : t("settings.analytics.paused") }}</span>
                 </button>
 
                 <!-- Last updated timestamp -->
-                <span v-if="lastUpdated" class="text-[11px] text-muted hidden sm:inline font-mono" :title="'Последнее обновление: ' + lastUpdated">
+                <span v-if="lastUpdated" class="text-[11px] text-muted hidden sm:inline font-mono" :title="t('settings.analytics.lastUpdated', { time: lastUpdated })">
                   {{ lastUpdated }}
                 </span>
 
@@ -672,16 +672,16 @@ onUnmounted(() => {
                   :disabled="statsLoading"
                   class="px-3 py-1.5 rounded-lg border border-bd text-xs text-muted hover:text-ink hover:bg-surface transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                   @click="loadTokenStats(false)"
-                  title="Обновить сейчас"
+                  :title="t('settings.analytics.refreshNow')"
                 >
                   <span :class="{ 'animate-spin': statsLoading }">↻</span>
-                  <span>Обновить</span>
+                  <span>{{ t("settings.analytics.refresh") }}</span>
                 </button>
               </div>
             </div>
 
             <div v-if="statsLoading && !tokenStats" class="py-12 text-center text-xs text-muted">
-              Загрузка аналитики...
+              {{ t("settings.analytics.loading") }}
             </div>
 
             <div v-else-if="statsError" class="rounded-lg bg-red-500/15 border border-red-500/30 p-3 text-xs text-red-400">
@@ -692,27 +692,27 @@ onUnmounted(() => {
               <!-- KPI Cards Grid -->
               <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div class="p-3.5 rounded-xl border border-bd bg-surface/60">
-                  <div class="text-[11px] text-muted font-medium">Всего отчётов</div>
+                  <div class="text-[11px] text-muted font-medium">{{ t("settings.analytics.reports") }}</div>
                   <div class="text-xl font-bold text-ink mt-1">{{ tokenStats.researches_count }}</div>
-                  <div class="text-[10px] text-muted mt-0.5">{{ tokenStats.calls_count }} обращений к LLM</div>
+                  <div class="text-[10px] text-muted mt-0.5">{{ t("settings.analytics.llmCalls", tokenStats.calls_count) }}</div>
                 </div>
 
                 <div class="p-3.5 rounded-xl border border-bd bg-surface/60">
-                  <div class="text-[11px] text-muted font-medium">Всего токенов</div>
+                  <div class="text-[11px] text-muted font-medium">{{ t("settings.analytics.totalTokens") }}</div>
                   <div class="text-xl font-bold text-accent mt-1">{{ tokenStats.total_tokens.toLocaleString() }}</div>
-                  <div class="text-[10px] text-muted mt-0.5">Вход + Генерация</div>
+                  <div class="text-[10px] text-muted mt-0.5">{{ t("settings.analytics.inputPlusOutput") }}</div>
                 </div>
 
                 <div class="p-3.5 rounded-xl border border-bd bg-surface/60">
-                  <div class="text-[11px] text-muted font-medium">Входные токены</div>
+                  <div class="text-[11px] text-muted font-medium">{{ t("settings.analytics.promptTokens") }}</div>
                   <div class="text-xl font-bold text-ink mt-1">{{ tokenStats.prompt_tokens.toLocaleString() }}</div>
-                  <div class="text-[10px] text-emerald-400 mt-0.5">С учётом кэширования</div>
+                  <div class="text-[10px] text-emerald-400 mt-0.5">{{ t("settings.analytics.withCaching") }}</div>
                 </div>
 
                 <div class="p-3.5 rounded-xl border border-bd bg-surface/60">
-                  <div class="text-[11px] text-muted font-medium">Оценка стоимости</div>
+                  <div class="text-[11px] text-muted font-medium">{{ t("settings.analytics.cost") }}</div>
                   <div class="text-xl font-bold text-emerald-400 mt-1">≈ ${{ tokenStats.estimated_cost_usd.toFixed(4) }}</div>
-                  <div class="text-[10px] text-muted mt-0.5">По тарифам DeepSeek</div>
+                  <div class="text-[10px] text-muted mt-0.5">{{ t("settings.analytics.deepseekRates") }}</div>
                 </div>
               </div>
 
@@ -720,27 +720,26 @@ onUnmounted(() => {
               <div class="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-4 text-xs text-indigo-200 flex items-start gap-3">
                 <span class="text-xl shrink-0">⚡</span>
                 <div class="space-y-1">
-                  <div class="font-semibold text-white">Экономия с Context Caching</div>
+                  <div class="font-semibold text-white">{{ t("settings.analytics.cachingTitle") }}</div>
                   <p class="text-indigo-200/80 leading-relaxed text-[11px]">
-                    DeepSeek автоматически кэширует системные промпты и повторный контекст веб-страниц.
-                    Повторные токены тарифицируются со скидкой до 90% ($0.003–$0.022 за 1M), что радикально снижает общие затраты.
+                    {{ t("settings.analytics.cachingBody") }}
                   </p>
                 </div>
               </div>
 
               <!-- Breakdown by Model -->
               <div v-if="tokenStats.by_model.length" class="space-y-2.5">
-                <h3 class="text-xs font-semibold text-ink">Расход по моделям</h3>
+                <h3 class="text-xs font-semibold text-ink">{{ t("settings.analytics.byModel") }}</h3>
                 <div class="overflow-x-auto rounded-xl border border-bd">
                   <table class="w-full text-left text-xs">
                     <thead class="bg-surface/80 border-b border-bd text-muted font-medium">
                       <tr>
-                        <th class="p-2.5">Модель</th>
-                        <th class="p-2.5">Вызовов</th>
-                        <th class="p-2.5">Входные</th>
-                        <th class="p-2.5">Выходные</th>
-                        <th class="p-2.5">Всего токенов</th>
-                        <th class="p-2.5">Стоимость (USD)</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colModel") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colCalls") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colInput") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colOutput") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colTotal") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colCostUsd") }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-bd/60 bg-surface/30">
@@ -759,16 +758,16 @@ onUnmounted(() => {
 
               <!-- Recent Researches Table -->
               <div v-if="tokenStats.recent && tokenStats.recent.length" class="space-y-2.5">
-                <h3 class="text-xs font-semibold text-ink">Недавние исследования</h3>
+                <h3 class="text-xs font-semibold text-ink">{{ t("settings.analytics.recent") }}</h3>
                 <div class="overflow-x-auto rounded-xl border border-bd">
                   <table class="w-full text-left text-xs">
                     <thead class="bg-surface/80 border-b border-bd text-muted font-medium">
                       <tr>
-                        <th class="p-2.5">Запрос</th>
-                        <th class="p-2.5">Глубина</th>
-                        <th class="p-2.5">Статус</th>
-                        <th class="p-2.5">Токены</th>
-                        <th class="p-2.5">Стоимость</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colPrompt") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colDepth") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colStatus") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colTokens") }}</th>
+                        <th class="p-2.5">{{ t("settings.analytics.colCost") }}</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-bd/60 bg-surface/30">
@@ -785,7 +784,7 @@ onUnmounted(() => {
                             class="rounded px-1.5 py-0.5 text-[10px] font-medium"
                             :class="r.status === 'completed' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-accent/20 text-accent'"
                           >
-                            {{ r.status }}
+                            {{ statusLabel(r.status) }}
                           </span>
                         </td>
                         <td class="p-2.5 font-mono text-muted">{{ r.total_tokens.toLocaleString() }}</td>
@@ -803,44 +802,44 @@ onUnmounted(() => {
             <!-- Password Change -->
             <div class="rounded-xl border border-bd bg-surface/50 p-6 space-y-4">
               <div>
-                <h2 class="text-base font-semibold text-ink">Смена пароля</h2>
-                <p class="text-xs text-muted mt-1">Обновите пароль для входа в ваш аккаунт</p>
+                <h2 class="text-base font-semibold text-ink">{{ t("settings.security.passwordTitle") }}</h2>
+                <p class="text-xs text-muted mt-1">{{ t("settings.security.passwordSubtitle") }}</p>
               </div>
 
               <div class="space-y-3 max-w-md">
                 <div class="space-y-1">
-                  <label class="text-xs font-medium text-ink block">Текущий пароль</label>
+                  <label class="text-xs font-medium text-ink block">{{ t("settings.security.currentPassword") }}</label>
                   <input
                     v-model="currentPassword"
                     type="password"
-                    placeholder="Если был установлен"
+                    :placeholder="t('settings.security.currentPasswordPlaceholder')"
                     class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink focus:outline-none focus:border-accent"
                   />
                 </div>
 
                 <div class="space-y-1">
-                  <label class="text-xs font-medium text-ink block">Новый пароль</label>
+                  <label class="text-xs font-medium text-ink block">{{ t("settings.security.newPassword") }}</label>
                   <input
                     v-model="newPassword"
                     type="password"
-                    placeholder="Минимум 8 символов"
+                    :placeholder="t('settings.security.newPasswordPlaceholder')"
                     class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink focus:outline-none focus:border-accent"
                   />
                 </div>
 
                 <div class="space-y-1">
-                  <label class="text-xs font-medium text-ink block">Повторите новый пароль</label>
+                  <label class="text-xs font-medium text-ink block">{{ t("settings.security.confirmPassword") }}</label>
                   <input
                     v-model="confirmPassword"
                     type="password"
-                    placeholder="Повторите пароль"
+                    :placeholder="t('settings.security.confirmPasswordPlaceholder')"
                     class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink focus:outline-none focus:border-accent"
                   />
                 </div>
 
                 <div v-if="passwordSuccess" class="rounded-lg bg-emerald-500/15 border border-emerald-500/30 p-2.5 text-xs text-emerald-300 flex items-center gap-2">
                   <span>✓</span>
-                  <span>Пароль успешно изменён!</span>
+                  <span>{{ t("settings.security.passwordChanged") }}</span>
                 </div>
                 <div v-if="passwordError" class="rounded-lg bg-red-500/15 border border-red-500/30 p-2.5 text-xs text-red-400">
                   {{ passwordError }}
@@ -851,7 +850,7 @@ onUnmounted(() => {
                   class="rounded-lg bg-accent text-white px-4 py-2 text-xs font-medium transition hover:bg-accent/90 disabled:opacity-50"
                   @click="changePassword"
                 >
-                  {{ passwordBusy ? "Обновление..." : "Обновить пароль" }}
+                  {{ passwordBusy ? t("settings.security.updating") : t("settings.security.updatePassword") }}
                 </button>
               </div>
             </div>
@@ -859,8 +858,8 @@ onUnmounted(() => {
             <!-- Export History -->
             <div class="rounded-xl border border-bd bg-surface/50 p-6 space-y-3">
               <div>
-                <h2 class="text-base font-semibold text-ink">Экспорт данных</h2>
-                <p class="text-xs text-muted mt-1">Скачать резервную копию всех ваших исследований в формате JSON</p>
+                <h2 class="text-base font-semibold text-ink">{{ t("settings.security.exportTitle") }}</h2>
+                <p class="text-xs text-muted mt-1">{{ t("settings.security.exportSubtitle") }}</p>
               </div>
               <button
                 :disabled="exportBusy"
@@ -868,7 +867,7 @@ onUnmounted(() => {
                 @click="exportHistoryJson"
               >
                 <span>📦</span>
-                <span>{{ exportBusy ? "Экспорт..." : "Скачать историю исследований (JSON)" }}</span>
+                <span>{{ exportBusy ? t("settings.security.exporting") : t("settings.security.exportButton") }}</span>
               </button>
               <p v-if="exportError" class="text-xs text-red-400">{{ exportError }}</p>
             </div>
@@ -876,15 +875,15 @@ onUnmounted(() => {
             <!-- Danger Zone: Delete Account -->
             <div class="rounded-xl border border-red-500/30 bg-red-500/5 p-6 space-y-3">
               <div>
-                <h2 class="text-base font-semibold text-red-400">Опасная зона</h2>
-                <p class="text-xs text-muted mt-1">Удаление аккаунта приведёт к безвозвратной очистке всех ваших отчетов и истории</p>
+                <h2 class="text-base font-semibold text-red-400">{{ t("settings.security.dangerTitle") }}</h2>
+                <p class="text-xs text-muted mt-1">{{ t("settings.security.dangerSubtitle") }}</p>
               </div>
 
               <button
                 class="rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 px-4 py-2 text-xs font-medium transition"
                 @click="showDeleteModal = true"
               >
-                Удалить мой аккаунт
+                {{ t("settings.security.deleteAccount") }}
               </button>
             </div>
           </section>
@@ -900,18 +899,18 @@ onUnmounted(() => {
       <div class="max-w-md w-full rounded-2xl border border-red-500/40 bg-surface p-6 shadow-2xl space-y-4">
         <h3 class="text-base font-bold text-red-400 flex items-center gap-2">
           <span>⚠️</span>
-          <span>Удаление аккаунта</span>
+          <span>{{ t("settings.security.deleteTitle") }}</span>
         </h3>
         <p class="text-xs text-muted leading-relaxed">
-          Это действие необратимо. Все ваши исследования, история диалогов и сгенерированные отчёты будут удалены навсегда.
+          {{ t("settings.security.deleteWarning") }}
         </p>
 
         <div class="space-y-1.5">
-          <label class="text-xs font-medium text-ink block">Введите пароль для подтверждения:</label>
+          <label class="text-xs font-medium text-ink block">{{ t("settings.security.deletePasswordLabel") }}</label>
           <input
             v-model="deletePassword"
             type="password"
-            placeholder="Ваш пароль"
+            :placeholder="t('settings.security.deletePasswordPlaceholder')"
             class="w-full rounded-lg border border-bd bg-bg/80 px-3 py-2 text-xs text-ink focus:outline-none focus:border-red-400"
           />
         </div>
@@ -925,14 +924,14 @@ onUnmounted(() => {
             class="px-3.5 py-1.5 rounded-lg border border-bd text-xs text-muted hover:text-ink"
             @click="showDeleteModal = false; deletePassword = ''; deleteError = null;"
           >
-            Отмена
+            {{ t("common.cancel") }}
           </button>
           <button
             :disabled="deleteBusy"
             class="px-3.5 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-medium transition disabled:opacity-50"
             @click="confirmDeleteAccount"
           >
-            {{ deleteBusy ? "Удаление..." : "Подтвердить удаление" }}
+            {{ deleteBusy ? t("settings.security.deleting") : t("settings.security.confirmDelete") }}
           </button>
         </div>
       </div>
