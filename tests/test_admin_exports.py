@@ -1,7 +1,11 @@
 """EXPORTS: admin CSV exports stream page by page (no 10k-row, blob-loading single
-request) and neutralize spreadsheet formula injection in every text cell."""
+request) and neutralize spreadsheet formula injection in every text cell.
+
+The app tests also run on the Postgres store over one shared database (postgres-smoke
+CI job), so each test checks only the rows it created."""
 import csv
 import io
+import uuid
 
 import pytest
 
@@ -52,9 +56,10 @@ def test_stream_csv_reads_the_first_page_before_the_response_starts():
 async def test_users_export_streams_every_page_and_quotes_a_formula_name(client, monkeypatch):
     monkeypatch.setattr("src.api.app.ADMIN_EXPORT_PAGE_SIZE", 2)
     store = client._transport.app.state.research_service.task_store
-    for index in range(5):
-        store.create_user(f"export-{index}", f"export-{index}@example.com", None)
-    store.update_user_profile("export-3", "=1+1", None)
+    ids = [f"export-{uuid.uuid4().hex[:8]}-{index}" for index in range(5)]
+    for user_id in ids:
+        store.create_user(user_id, f"{user_id}@example.com", None)
+    store.update_user_profile(ids[3], "=1+1", None)
     pages = []
     real_list = store.get_admin_users_list
 
@@ -71,9 +76,14 @@ async def test_users_export_streams_every_page_and_quotes_a_formula_name(client,
     assert "users_telemetry.csv" in response.headers["content-disposition"]
     rows = _rows(response.text)
     assert rows[0][:3] == ["user_id", "email", "name"]
-    assert sorted(row[0] for row in rows[1:]) == [f"export-{index}" for index in range(5)]
-    assert next(row for row in rows if row[0] == "export-3")[2] == "'=1+1"
-    assert pages == [(1, 2), (2, 2), (3, 2)]
+    exported = [row[0] for row in rows[1:]]
+    assert sorted(user_id for user_id in exported if user_id in ids) == sorted(ids)
+    assert len(exported) == len(set(exported))
+    assert next(row for row in rows if row[0] == ids[3])[2] == "'=1+1"
+    # Every page is a 2-row DB read, until the first short one: 5+ users take 3+ pages.
+    assert pages == [(page, 2) for page in range(1, len(pages) + 1)] and len(pages) >= 3
+    for user_id in ids:
+        store.delete_user(user_id)
 
 
 @pytest.mark.anyio
@@ -91,7 +101,7 @@ async def test_prompts_export_quotes_research_and_chat_prompts(client):
     response = await client.get("/v1/admin/prompts/export")
 
     assert response.status_code == 200
-    prompts = {row[1]: row[6] for row in _rows(response.text)[1:]}
+    prompts = {row[1]: row[6] for row in _rows(response.text)[1:] if row[2] == research.id}
     assert prompts == {"research": "'=cmd|' /C calc'!A0", "chat": "'@SUM(1+1)*cmd"}
 
 
@@ -99,12 +109,16 @@ async def test_prompts_export_quotes_research_and_chat_prompts(client):
 async def test_tokens_export_quotes_prompts_and_pages(client, monkeypatch):
     monkeypatch.setattr("src.api.app.ADMIN_EXPORT_PAGE_SIZE", 1)
     store = client._transport.app.state.research_service.task_store
-    for prompt in ("-2+3 is the prompt", "an ordinary prompt", "+SUM(A1:A9)"):
-        store.add_research(ResearchRequest(prompt=prompt, depth=SearchDepth.EASY), task_ids=[])
+    ids = {
+        store.add_research(ResearchRequest(prompt=prompt, depth=SearchDepth.EASY), task_ids=[]).id
+        for prompt in ("-2+3 is the prompt", "an ordinary prompt", "+SUM(A1:A9)")
+    }
 
     response = await client.get("/v1/admin/tokens/export")
 
     assert response.status_code == 200
     rows = _rows(response.text)
     assert rows[0] == ["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"]
-    assert sorted(row[1] for row in rows[1:]) == ["'+SUM(A1:A9)", "'-2+3 is the prompt", "an ordinary prompt"]
+    assert sorted(row[1] for row in rows[1:] if row[0] in ids) == [
+        "'+SUM(A1:A9)", "'-2+3 is the prompt", "an ordinary prompt",
+    ]
