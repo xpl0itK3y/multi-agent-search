@@ -1104,7 +1104,12 @@ def register_routes(app: FastAPI) -> None:
         return _public_record(get_research_service(request).get_research_status(research_id))
 
     @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary, dependencies=research_guard)
-    def get_research_summary(research_id: str, request: Request):
+    def get_research_summary(
+        research_id: str,
+        request: Request,
+        # May compute the LLM follow-up recommendations (then stored until the tasks change).
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return get_research_service(request).get_research_summary(research_id)
 
     @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary, dependencies=research_guard)

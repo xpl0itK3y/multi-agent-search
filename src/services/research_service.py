@@ -1,3 +1,4 @@
+import hashlib
 import inspect
 import logging
 import uuid
@@ -66,6 +67,7 @@ from src.domain import (
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchSourcePreview,
+    SourceCriticSummary,
     SearchTaskJob,
     SearchTaskSummary,
     SearchDepth,
@@ -861,12 +863,7 @@ class ResearchService(
         # has finished — skip them while the research is still in progress (AUD-022) so an
         # on-demand /summary fetch mid-run doesn't burn LLM calls on premature suggestions.
         replan_recommendations = (
-            self.replan_agent.suggest_follow_up(
-                research.prompt,
-                research.depth,
-                tasks,
-                source_summary=source_critic_summary,
-            )
+            self._summary_follow_up(research, tasks, source_critic_summary)
             if finalize_ready
             else []
         )
@@ -906,6 +903,48 @@ class ResearchService(
             tasks=task_summaries,
             llm_token_usage=(research.graph_state or {}).get("llm_token_usage", {}),
         )
+
+    # graph_state key for the /summary follow-ups. Not the graph's "replan_recommendations",
+    # which the finalize graph writes only when a replan branch is possible (else []).
+    _SUMMARY_FOLLOW_UP_KEY = "summary_follow_up"
+
+    @staticmethod
+    def _tasks_fingerprint(tasks: list[SearchTask]) -> str:
+        """Changes whenever a task is added or changes status — the inputs the follow-up
+        recommendations are derived from (results only change with the status)."""
+        digest = hashlib.sha256()
+        for task in sorted(tasks, key=lambda item: item.id):
+            digest.update(f"{task.id}:{task.status.value};".encode("utf-8"))
+        return digest.hexdigest()
+
+    def _summary_follow_up(
+        self,
+        research: ResearchRecord,
+        tasks: list[SearchTask],
+        source_summary: SourceCriticSummary,
+    ) -> list[ReplanRecommendation]:
+        """Compute the follow-up recommendations once per task set and store them (SUMMARY-LLM):
+        they cost up to three LLM calls, and /summary used to pay that on every GET."""
+        fingerprint = self._tasks_fingerprint(tasks)
+        stored = (research.graph_state or {}).get(self._SUMMARY_FOLLOW_UP_KEY) or {}
+        if stored.get("fingerprint") == fingerprint:
+            return [ReplanRecommendation.model_validate(item) for item in stored.get("recommendations") or []]
+        recommendations = self.replan_agent.suggest_follow_up(
+            research.prompt,
+            research.depth,
+            tasks,
+            source_summary=source_summary,
+        )
+        self.task_store.merge_research_graph_state(
+            research.id,
+            {
+                self._SUMMARY_FOLLOW_UP_KEY: {
+                    "fingerprint": fingerprint,
+                    "recommendations": [item.model_dump() for item in recommendations],
+                }
+            },
+        )
+        return recommendations
 
     def get_research_status_summary(self, research_id: str) -> ResearchStatusSummary:
         """Cheap status snapshot for polling — no source-critic/evidence/claim/replan/LLM."""

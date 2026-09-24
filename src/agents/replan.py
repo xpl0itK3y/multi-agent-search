@@ -17,6 +17,7 @@ Example: ["query one here", "query two here", "query three here"]"""
 
 
 class ReplanAgent:
+    MAX_FOLLOW_UP_RECOMMENDATIONS = 3
     MIN_SELECTED_SOURCES_BY_DEPTH = {
         SearchDepth.EASY: 4,
         SearchDepth.MEDIUM: 8,
@@ -168,7 +169,9 @@ class ReplanAgent:
                 )
             )
 
-        if domain_counter:
+        # Each recommendation costs an LLM call; once the cap is reached, a further gap
+        # would only be generated to be sliced off below.
+        if domain_counter and len(recommendations) < self.MAX_FOLLOW_UP_RECOMMENDATIONS:
             dominant_domain, dominant_count = domain_counter.most_common(1)[0]
             total_source_count = sum(domain_counter.values())
             if total_source_count and dominant_count / total_source_count >= 0.4:
@@ -186,7 +189,7 @@ class ReplanAgent:
                     )
                 )
 
-        return recommendations[:3]
+        return recommendations[: self.MAX_FOLLOW_UP_RECOMMENDATIONS]
 
     def suggest_tie_breakers(
         self,
