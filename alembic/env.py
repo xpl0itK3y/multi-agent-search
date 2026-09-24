@@ -10,7 +10,9 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.resolved_database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Keep the app's loggers: the test suite migrates in-process, and the default
+    # disable_existing_loggers=True silenced every src.* logger for the rest of the run.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
