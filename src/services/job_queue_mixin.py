@@ -153,8 +153,8 @@ class JobQueueMixin:
                 job.task_id,
                 TaskUpdate(status=TaskStatus.PENDING, log="Recovered stale running search job"),
             )
-            # Re-dispatch to Redis: in broker mode workers consume only from Redis (no Postgres
-            # poll fallback), so a reset-to-PENDING job would otherwise never be claimed.
+            # Re-dispatch to Redis so a broker-mode worker takes it right away; without the push
+            # it waits for a worker's lost-push DB claim, which runs only when a BLPOP is idle.
             if self.broker:
                 self.broker.push_search_job(job.id)
             logger.warning("search_job_recovered job_id=%s task_id=%s", job.id, job.task_id)

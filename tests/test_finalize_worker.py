@@ -158,3 +158,20 @@ def test_finalize_worker_postgres_mode_used_when_no_broker(mocker):
 
     assert processed_count == 1
     assert task_store.get_research(research.id).status == ResearchStatus.COMPLETED
+
+
+def test_finalize_worker_redis_mode_claims_a_pending_job_whose_push_was_lost(mocker):
+    task_store = InMemoryTaskStore()
+    research = _make_research_with_completed_task(task_store)
+    analyzer = mocker.Mock()
+    broker = MagicMock()
+    service = ResearchService(task_store=task_store, analyzer=analyzer, broker=broker)
+    _, job = service.enqueue_research_finalization(research.id)
+    # The push was lost: BLPOP times out now, and the id only shows up later.
+    broker.pop_finalize_job.side_effect = [None, job.id]
+    process_job = mocker.patch.object(service, "process_finalize_job")
+    worker = FinalizeWorker(service)
+
+    assert worker.run_once() == 1
+    assert worker.run_once() == 0
+    process_job.assert_called_once_with(job.id)

@@ -50,13 +50,19 @@ class SearchWorker:
 
         if broker is not None:
             # Redis mode: BLPOP for one job_id, then claim it specifically in Postgres.
+            task_store = self.research_service.task_store
             job_id = broker.pop_search_job()
-            if job_id is None:
-                return 0
-            job = self.research_service.task_store.claim_search_task_job_by_id(job_id)
-            if job is None:
+            job = task_store.claim_search_task_job_by_id(job_id) if job_id is not None else None
+            if job_id is not None and job is None:
                 logger.debug("search_job_skip_already_claimed job_id=%s", job_id)
-                return 0
+            if job is None:
+                # Nothing claimable was popped: also try the atomic SKIP LOCKED claim, so a
+                # PENDING job whose push was lost (Redis restart, failed push) is not
+                # stranded. Claims are exclusive; a later pop of its id finds it taken.
+                job = task_store.claim_next_search_task_job()
+                if job is None:
+                    return 0
+                logger.info("search_job_claimed_without_push job_id=%s", job.id)
             return self._process_job(job.id, processed)
 
         # Postgres polling mode: drain all pending jobs in one pass.
