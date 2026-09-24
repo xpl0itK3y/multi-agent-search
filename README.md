@@ -62,7 +62,47 @@ PROMETHEUS_METRICS_ENABLED=true
 # METRICS_TOKEN=change-me
 # Retention for finished researches; 0 keeps everything (default).
 # RESEARCH_RETENTION_SECONDS=0
+# Retention for admin telemetry: user_events rows and telemetry sessions
+# (user_sessions) older than this are deleted; default 7776000 (90 days).
+# USER_EVENTS_RETENTION_SECONDS=7776000
+# USER_SESSIONS_RETENTION_SECONDS=7776000
+# Retention for the admin audit log; 0 keeps it forever (default).
+# ADMIN_AUDIT_RETENTION_SECONDS=0
 ```
+
+## Authentication and Admins
+
+Auth is off by default (`AUTH_DISABLED=true`, single-tenant). For a public
+deployment set `AUTH_DISABLED=false`, a random `AUTH_SECRET_KEY` of at least 32
+characters and, behind HTTPS, `AUTH_COOKIE_SECURE=true` (see `.env.example`).
+Users register with email and password or sign in with Google. Google sign-in
+never merges into an existing password account with the same email: the login
+page shows `?error=oauth_conflict` for that case and `?error=oauth_failed` for
+any other callback failure.
+
+Admin rights follow `ADMIN_EMAILS` (comma-separated). Those addresses cannot
+self-register, and the login form never sets their first password; otherwise
+whoever typed the address first would own the admin account. An admin either
+signs in with Google and then sets a password in Settings, or is provisioned
+by the operator with `scripts/create_admin.py`:
+
+```bash
+# Prompts for the password twice; the email must be listed in ADMIN_EMAILS.
+docker compose exec api python scripts/create_admin.py ops@example.com
+# Non-interactive:
+printf '%s\n' "$ADMIN_PASSWORD" | docker compose exec -T api python scripts/create_admin.py ops@example.com --password-stdin
+```
+
+Running it for an existing account replaces the password and revokes that
+account's sessions. The password is never taken as a command-line argument, so
+it stays out of shell history and `ps`. Locally, run
+`python scripts/create_admin.py <email>` against the Postgres configured in
+`.env`.
+
+Usage telemetry (`POST /v1/telemetry/event`, which feeds the admin analytics)
+is accepted only from signed-in users with a valid CSRF token; the web UI sends
+it only while you are logged in, so anonymous visitors and public share-link
+viewers are not tracked.
 
 ## Requirements
 
@@ -74,7 +114,7 @@ Minimal `.env`:
 
 ```env
 DEEPSEEK_API_KEY=your_api_key_here
-DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_MODEL=deepseek-v4-pro
 TASK_STORE_BACKEND=postgres
 
 POSTGRES_USER=app
@@ -93,7 +133,11 @@ See [.env.example](./.env.example) for a full example.
 
 The repository now includes an optional Rust-backed text-processing module in `native/text_processing`.
 
-Python keeps a safe fallback path in `src/core/rust_accel.py`, so the app still runs if the native module is not built.
+It is a development-only accelerator: the Docker image does not build or ship
+it, so containers always run the pure-Python fallback in
+`src/core/rust_accel.py`. The fallback is the reference behaviour; the Rust
+code must match it (lengths are counted in characters, not UTF-8 bytes), and CI
+runs its unit tests with `cargo test`.
 
 To build the native module into the active virtualenv:
 
@@ -131,9 +175,11 @@ This starts:
 - `promtail`
 - `grafana`
 
-The API will be available at `http://localhost:8000`.
+The Vue web UI will be available at `http://localhost:8502` (`WEB_PORT`); its
+nginx proxies `/v1/` and `/health` to the API.
 
-The Vue web UI will be available at `http://localhost:8501`.
+The API will be available directly at `http://localhost:8001` (`API_PORT`,
+loopback only).
 
 Prometheus will be available at `http://localhost:9090`.
 
@@ -254,6 +300,10 @@ Still not implemented yet:
 - live production profiling on a real deployment
 
 ## Quick Check
+
+The examples below target the local API from "Run Locally" (port 8000).
+Against Docker Compose use `http://localhost:8001` instead (the API's loopback
+port on the Docker host).
 
 Health:
 
@@ -386,7 +436,7 @@ docker compose stop api worker worker_2 worker_3 pgbouncer
 ./scripts/restore_postgres.sh /srv/mas-backups/postgres-2026-09-09.dump --confirm
 docker compose run --rm migrate
 docker compose up -d pgbouncer api worker worker_2 worker_3
-curl http://localhost:8000/health
+curl http://localhost:8001/health   # API_PORT; the API binds to loopback on the Docker host
 ```
 
 Run a restore drill at least quarterly on an isolated host or maintenance
