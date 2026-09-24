@@ -159,6 +159,32 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+export interface ApiFile {
+  blob: Blob;
+  filename: string | null; // from Content-Disposition, when the server names it
+}
+
+function attachmentFilename(disposition: string | null): string | null {
+  const cd = disposition || "";
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// File downloads (report exports, admin CSVs) go through the same credentials,
+// bearer/CSRF headers and 401 recovery as request(); only the body differs.
+async function fetchFile(path: string): Promise<ApiFile> {
+  const hadToken = authToken !== null;
+  const res = await fetch(`${BASE}${path}`, {
+    credentials: "include",
+    headers: authHeaders("GET"),
+  });
+  if (!res.ok) {
+    if (res.status === 401) recoverFromExpiredSession(hadToken);
+    throw await apiErrorFromResponse(res);
+  }
+  return { blob: await res.blob(), filename: attachmentFilename(res.headers.get("Content-Disposition")) };
+}
+
 // Frequent HTTP statuses → `errors.api.*` i18n keys (see web/src/i18n/index.ts).
 const API_STATUS_KEYS: Record<number, string> = {
   401: "unauthorized",
@@ -353,6 +379,9 @@ export const api = {
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),
 
+  exportReport: (id: string, params: URLSearchParams) =>
+    fetchFile(`/v1/research/${id}/export?${params.toString()}`),
+
   deleteResearch: (id: string) =>
     request<void>(`/v1/research/${id}`, { method: "DELETE" }),
 
@@ -405,7 +434,7 @@ export const adminApi = {
     return request<AdminEventLogResponse>(url);
   },
 
-  exportUsersCsvUrl: () => `${BASE}/v1/admin/users/export`,
+  exportUsersCsv: () => fetchFile("/v1/admin/users/export"),
 
   getPrompts: (
     page: number = 1,
@@ -421,7 +450,7 @@ export const adminApi = {
     return request<AdminPromptsResponse>(url);
   },
 
-  exportPromptsCsvUrl: () => `${BASE}/v1/admin/prompts/export`,
+  exportPromptsCsv: () => fetchFile("/v1/admin/prompts/export"),
 
   deleteUser: (userId: string) =>
     request<{ status: string; deleted_user_id: string }>(`/v1/admin/users/${userId}`, {
@@ -433,7 +462,7 @@ export const adminApi = {
   getTokens: (page: number = 1, pageSize: number = 20) =>
     request<AdminTokenAnalyticsResponse>(`/v1/admin/tokens?page=${page}&page_size=${pageSize}`),
 
-  exportTokensCsvUrl: () => `${BASE}/v1/admin/tokens/export`,
+  exportTokensCsv: () => fetchFile("/v1/admin/tokens/export"),
 
   getAgents: () => request<AgentMetadataItem[]>("/v1/admin/agents"),
 

@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
-import { adminApi, apiErrorMessage } from "@/lib/api";
+import { adminApi, apiErrorMessage, type ApiFile } from "@/lib/api";
+import { saveFile } from "@/lib/download";
 import type {
   AdminEventLogItem,
   AdminPromptItem,
@@ -199,8 +200,26 @@ function closeUserDrawer() {
   selectedUserDetail.value = null;
 }
 
+// CSV exports need the bearer token too (window.open would send only the cookie),
+// and a failed export must be visible.
+const exporting = ref(false);
+const exportError = ref<string | null>(null);
+
+async function runExport(fetchCsv: () => Promise<ApiFile>, fallbackName: string) {
+  if (exporting.value) return;
+  exporting.value = true;
+  exportError.value = null;
+  try {
+    saveFile(await fetchCsv(), fallbackName);
+  } catch (err) {
+    exportError.value = apiErrorMessage(err, t);
+  } finally {
+    exporting.value = false;
+  }
+}
+
 function exportCsv() {
-  window.open(adminApi.exportUsersCsvUrl(), "_blank");
+  return runExport(adminApi.exportUsersCsv, "users_telemetry.csv");
 }
 
 async function loadPrompts() {
@@ -224,7 +243,7 @@ async function loadPrompts() {
 }
 
 function exportPromptsCsv() {
-  window.open(adminApi.exportPromptsCsvUrl(), "_blank");
+  return runExport(adminApi.exportPromptsCsv, "user_prompts.csv");
 }
 
 async function copyPromptText(item: AdminPromptItem) {
@@ -539,7 +558,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <button
           type="button"
-          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90"
+          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+          :disabled="exporting"
           @click="activeSubView === 'prompts' ? exportPromptsCsv() : exportCsv()"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -549,6 +569,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         </button>
       </div>
     </div>
+
+    <p v-if="exportError" class="text-right text-xs text-red-400">{{ exportError }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- VIEW 1: USER DIRECTORY                                                  -->

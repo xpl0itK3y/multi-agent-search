@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { api, apiErrorFromResponse, apiErrorMessage } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
+import { saveFile } from "@/lib/download";
 import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
@@ -385,7 +386,6 @@ function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
 const exportError = ref<string | null>(null);
 const exportMenuOpen = ref(false);
@@ -393,22 +393,6 @@ const siteMenuOpen = ref(false);
 const siteThemes = [
   "auto", "light", "dark", "midnight", "emerald", "rose", "sand",
 ] as const;
-
-function filenameFrom(res: Response, fallback: string): string {
-  const cd = res.headers.get("Content-Disposition") || "";
-  const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
-  return m ? decodeURIComponent(m[1]) : fallback;
-}
-function saveBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
 
 async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trail", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
@@ -418,11 +402,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     if (opts?.theme) params.set("theme", opts.theme);
     if (opts?.accent) params.set("accent", opts.accent);
     if (opts?.base) params.set("base", opts.base);
-    const res = await fetch(`${BASE}/v1/research/${props.id}/export?${params.toString()}`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw await apiErrorFromResponse(res);
-    saveBlob(await res.blob(), filenameFrom(res, fmt === "trail" ? "audit-trail.md" : `research.${fmt}`));
+    saveFile(await api.exportReport(props.id, params), fmt === "trail" ? "audit-trail.md" : `research.${fmt}`);
   } catch (e) {
     // Failed download must be visible — previously a non-2xx silently did nothing.
     exportError.value = apiErrorMessage(e, t);

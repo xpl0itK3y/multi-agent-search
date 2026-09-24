@@ -156,6 +156,51 @@ describe("account endpoints", () => {
   });
 });
 
+describe("file downloads", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("report export and admin CSVs send the bearer token and read the filename", async () => {
+    stubEnv("access", "/admin");
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response("a,b\n", {
+        status: 200,
+        headers: { "Content-Disposition": "attachment; filename=token_usage.csv" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api, adminApi } = await import("./api");
+    const report = await api.exportReport("r-1", new URLSearchParams({ format: "pdf" }));
+    const csv = await adminApi.exportTokensCsv();
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual(["/v1/research/r-1/export?format=pdf", "/v1/admin/tokens/export"]);
+    for (const [, init] of calls) {
+      expect(init).toMatchObject({ credentials: "include", headers: { Authorization: "Bearer access" } });
+    }
+    expect(report.filename).toBe("token_usage.csv");
+    expect(await csv.blob.text()).toBe("a,b\n");
+  });
+
+  it("a 401 on a download goes through the shared session recovery", async () => {
+    const { assign, removeItem } = stubEnv("stale-token", "/admin");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+    const { adminApi, ApiError } = await import("./api");
+    const err: unknown = await adminApi.exportUsersCsv().catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fadmin");
+  });
+});
+
 describe("admin API contract", () => {
   beforeEach(() => {
     vi.resetModules();
