@@ -714,8 +714,9 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 
     # ── Client Telemetry Ingestion ────────────────────────────────────────────
-    # Authenticated-only and CSRF-checked: anonymous callers get 401, each user a
-    # per-minute budget (telemetry_user_id).
+    # Authenticated-only and CSRF-checked: anonymous callers are refused (401, or 403 from
+    # the CSRF check when there is no credential at all); each user gets a per-minute
+    # budget (telemetry_user_id).
     @app.post("/v1/telemetry/event")
     def record_telemetry_event(
         payload: UserTelemetryEventInput,
