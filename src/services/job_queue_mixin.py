@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class JobQueueMixin:
+    @staticmethod
+    def _stale_before(job_timeout_seconds: int, stale_seconds: int | None) -> datetime:
+        """Cutoff for stale RUNNING jobs; a caller may widen it but never go below the job
+        timeout, since recovery re-dispatches (and for finalize, fences) a live job."""
+        seconds = max(stale_seconds or 0, job_timeout_seconds)
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
     def get_research_finalize_job(
         self,
         job_id: str,
@@ -63,8 +70,8 @@ class JobQueueMixin:
         logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)
         return requeued
 
-    def recover_stale_research_finalize_jobs(self) -> JobRecoveryResponse:
-        stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.finalize_job_timeout_seconds)
+    def recover_stale_research_finalize_jobs(self, stale_seconds: int | None = None) -> JobRecoveryResponse:
+        stale_before = self._stale_before(settings.finalize_job_timeout_seconds, stale_seconds)
         recovered_jobs = self.task_store.recover_stale_research_finalize_jobs(stale_before)
         for job in recovered_jobs:
             self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
@@ -90,8 +97,10 @@ class JobQueueMixin:
             recovered_count=len(recovered_jobs),
         )
 
-    def cleanup_old_research_finalize_jobs(self) -> JobCleanupResponse:
-        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.finalize_job_retention_seconds)
+    def cleanup_old_research_finalize_jobs(self, older_than: datetime | None = None) -> JobCleanupResponse:
+        older_than = older_than or datetime.now(timezone.utc) - timedelta(
+            seconds=settings.finalize_job_retention_seconds
+        )
         deleted_ids = self.task_store.cleanup_old_research_finalize_jobs(older_than)
         if deleted_ids:
             logger.info("finalize_jobs_cleaned deleted_count=%s", len(deleted_ids))
@@ -136,8 +145,8 @@ class JobQueueMixin:
         logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)
         return requeued
 
-    def recover_stale_search_task_jobs(self) -> JobRecoveryResponse:
-        stale_before = datetime.now(timezone.utc) - timedelta(seconds=settings.search_job_timeout_seconds)
+    def recover_stale_search_task_jobs(self, stale_seconds: int | None = None) -> JobRecoveryResponse:
+        stale_before = self._stale_before(settings.search_job_timeout_seconds, stale_seconds)
         recovered_jobs = self.task_store.recover_stale_search_task_jobs(stale_before)
         for job in recovered_jobs:
             self.task_store.update_task(
@@ -154,8 +163,10 @@ class JobQueueMixin:
             recovered_count=len(recovered_jobs),
         )
 
-    def cleanup_old_search_task_jobs(self) -> JobCleanupResponse:
-        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.search_job_retention_seconds)
+    def cleanup_old_search_task_jobs(self, older_than: datetime | None = None) -> JobCleanupResponse:
+        older_than = older_than or datetime.now(timezone.utc) - timedelta(
+            seconds=settings.search_job_retention_seconds
+        )
         deleted_ids = self.task_store.cleanup_old_search_task_jobs(older_than)
         if deleted_ids:
             logger.info("search_jobs_cleaned deleted_count=%s", len(deleted_ids))
@@ -175,8 +186,10 @@ class JobQueueMixin:
             )
         return compacted_worker_names, compacted_research_ids
 
-    def cleanup_search_cache(self) -> int:
-        older_than = datetime.now(timezone.utc) - timedelta(seconds=settings.search_cache_ttl_seconds)
+    def cleanup_search_cache(self, older_than: datetime | None = None) -> int:
+        older_than = older_than or datetime.now(timezone.utc) - timedelta(
+            seconds=settings.search_cache_ttl_seconds
+        )
         deleted = self.task_store.cleanup_search_cache(older_than)
         if deleted:
             logger.info("search_cache_cleaned deleted_count=%s", deleted)

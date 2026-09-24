@@ -40,6 +40,7 @@ from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     AdminAuditLogItem,
     AdminDryRunResult,
+    MaintenanceActionRequest,
     AdminEventLogResponse,
     AdminOverviewResponse,
     AdminPromptsResponse,
@@ -1025,21 +1026,19 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.post("/v1/admin/operations/preview", response_model=AdminDryRunResult, dependencies=admin_guard)
-    def admin_operations_preview(payload: dict, request: Request):
-        action = payload.get("action", "")
-        params = payload.get("params", {})
-        return get_research_service(request).preview_maintenance_action(action=action, params=params)
+    def admin_operations_preview(payload: MaintenanceActionRequest, request: Request):
+        return get_research_service(request).preview_maintenance_action(payload)
 
     @app.post("/v1/admin/operations/execute", response_model=AdminDryRunResult)
-    def admin_operations_execute(payload: dict, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
-        action = payload.get("action", "")
-        params = payload.get("params", {})
-        client_ip = extract_client_ip(request)
+    def admin_operations_execute(
+        payload: MaintenanceActionRequest,
+        request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
+    ):
         return get_research_service(request).execute_maintenance_action(
-            action=action,
+            payload,
             actor_email=admin_user.email,
-            params=params,
-            ip_address=client_ip,
+            ip_address=extract_client_ip(request),
         )
 
     @app.get("/v1/admin/stream")

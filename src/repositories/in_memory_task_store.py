@@ -1311,6 +1311,17 @@ class InMemoryTaskStore:
                 sample_affected_ids=sample,
                 summary=f"Would delete {tot} old jobs",
             )
+        elif action == "cleanup_search_cache":
+            days = int(params.get("days", 3))
+            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+            count = sum(1 for created, _ in self.search_cache.values() if created < cutoff)
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=count,
+                sample_affected_ids=[],
+                summary=f"Would delete {count} cached search entries older than {days} days",
+            )
         elif action in ("requeue_finalize_job", "requeue_search_job"):
             tid = params.get("target_id")
             return AdminDryRunResult(
@@ -1321,25 +1332,6 @@ class InMemoryTaskStore:
                 summary=f"Would requeue job {tid}",
             )
         return AdminDryRunResult(action=action, dry_run=True, affected_count=0, sample_affected_ids=[], summary="Unknown action")
-
-    def execute_maintenance_action(
-        self,
-        action: str,
-        actor_email: str,
-        params: dict | None = None,
-        ip_address: str | None = None,
-    ) -> AdminDryRunResult:
-        res = self.preview_maintenance_action(action, params)
-        res.dry_run = False
-        self.record_admin_audit(
-            actor_email=actor_email,
-            action=action,
-            target_type="maintenance",
-            target_id=(params or {}).get("target_id"),
-            details={"params": params, "affected_count": res.affected_count},
-            ip_address=ip_address,
-        )
-        return res
 
     # ── user telemetry & activity tracking ───────────────────────────────────
     def record_user_session(

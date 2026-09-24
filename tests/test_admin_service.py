@@ -2,6 +2,8 @@ import pytest
 
 from src.repositories.in_memory_task_store import InMemoryTaskStore
 from src.agents.catalog import AGENTS_CATALOG
+from src.domain import MaintenanceActionRequest
+from src.services import ResearchService
 
 
 def test_agents_catalog_integrity():
@@ -55,15 +57,15 @@ def test_in_memory_task_store_admin_methods():
     assert logs[0].action == "cleanup_old_jobs"
     assert logs[0].details["deleted"] == 5
 
-    # 3. Dry-run maintenance preview & execute
+    # 3. Dry-run maintenance preview; executing goes through the service job paths
+    # (ADMIN-MAINTENANCE), which then writes the audit row.
     preview = store.preview_maintenance_action("cleanup_old_jobs", {"days": 7})
     assert preview.dry_run is True
     assert preview.action == "cleanup_old_jobs"
 
-    executed = store.execute_maintenance_action(
-        "cleanup_old_jobs",
+    executed = ResearchService(task_store=store).execute_maintenance_action(
+        MaintenanceActionRequest(action="cleanup_old_jobs", params={"days": 7}),
         actor_email="admin@test.com",
-        params={"days": 7},
     )
     assert executed.dry_run is False
 

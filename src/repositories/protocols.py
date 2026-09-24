@@ -374,18 +374,12 @@ class TaskStore(Protocol):
 
     def get_admin_overview(self) -> AdminOverviewResponse: ...
 
+    # Dry-run counting only: executing an action goes through the service's job paths
+    # (broker re-dispatch, dead-letter guard, status resets), then record_admin_audit.
     def preview_maintenance_action(
         self,
         action: str,
         params: dict | None = None,
-    ) -> AdminDryRunResult: ...
-
-    def execute_maintenance_action(
-        self,
-        action: str,
-        actor_email: str,
-        params: dict | None = None,
-        ip_address: str | None = None,
     ) -> AdminDryRunResult: ...
 
     # ── user telemetry & activity tracking ───────────────────────────────────

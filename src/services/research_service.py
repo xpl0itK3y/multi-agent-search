@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from src.domain.errors import ConflictError, NotFoundError, ServiceUnavailableError
+from src.domain.errors import ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableError
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
@@ -36,6 +36,7 @@ from src.domain import (
     AdminOverviewResponse,
     AdminTokenAnalyticsResponse,
     AgentMetadataItem,
+    MaintenanceActionRequest,
     MaintenanceSummary,
     OperationalHealth,
     DecomposeResponse,
@@ -2576,25 +2577,87 @@ class ResearchService(
             actor_email=actor_email,
         )
 
-    def preview_maintenance_action(
-        self,
-        action: str,
-        params: dict | None = None,
-    ) -> AdminDryRunResult:
-        return self.task_store.preview_maintenance_action(action, params)
+    # Defaults when an admin action omits its window: the job timeouts for stale recovery,
+    # and the same age limits the admin panel offers for cleanup.
+    _MAINTENANCE_DEFAULT_DAYS = {"cleanup_old_jobs": 7, "cleanup_search_cache": 3}
+
+    def _resolve_maintenance_params(self, request: MaintenanceActionRequest) -> dict:
+        """Fill in defaults and refuse a stale window below the configured job timeout:
+        recovering a younger RUNNING job re-dispatches work that is still making progress
+        (and fences a live finalize runner)."""
+        params = request.params.model_dump(exclude_none=True)
+        timeout = {
+            "recover_stale_finalize_jobs": settings.finalize_job_timeout_seconds,
+            "recover_stale_search_jobs": settings.search_job_timeout_seconds,
+        }.get(request.action)
+        if timeout is not None:
+            params.setdefault("stale_seconds", timeout)
+            if params["stale_seconds"] < timeout:
+                raise UnprocessableError(
+                    f"stale_seconds must be at least the job timeout ({timeout} seconds)"
+                )
+        if request.action in self._MAINTENANCE_DEFAULT_DAYS:
+            params.setdefault("days", self._MAINTENANCE_DEFAULT_DAYS[request.action])
+        return params
+
+    def preview_maintenance_action(self, request: MaintenanceActionRequest) -> AdminDryRunResult:
+        params = self._resolve_maintenance_params(request)
+        return self.task_store.preview_maintenance_action(request.action, params)
 
     def execute_maintenance_action(
         self,
-        action: str,
+        request: MaintenanceActionRequest,
         actor_email: str,
-        params: dict | None = None,
         ip_address: str | None = None,
     ) -> AdminDryRunResult:
-        return self.task_store.execute_maintenance_action(
-            action=action,
+        """Run an admin maintenance action through the same service paths the workers use
+        (ADMIN-MAINTENANCE): recovery and requeue re-dispatch to the broker, keep the
+        dead-letter guard and reset task/research status; the store only counts and audits."""
+        params = self._resolve_maintenance_params(request)
+        action = request.action
+        sample_ids: list[str] = []
+        if action == "recover_stale_finalize_jobs":
+            recovery = self.recover_stale_research_finalize_jobs(stale_seconds=params["stale_seconds"])
+            affected, sample_ids = recovery.recovered_count, recovery.recovered_job_ids
+            summary = f"Recovered {affected} stale finalize jobs"
+        elif action == "recover_stale_search_jobs":
+            recovery = self.recover_stale_search_task_jobs(stale_seconds=params["stale_seconds"])
+            affected, sample_ids = recovery.recovered_count, recovery.recovered_job_ids
+            summary = f"Recovered {affected} stale search jobs"
+        elif action == "cleanup_old_jobs":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=params["days"])
+            finalize = self.cleanup_old_research_finalize_jobs(older_than=cutoff)
+            search = self.cleanup_old_search_task_jobs(older_than=cutoff)
+            sample_ids = finalize.deleted_job_ids + search.deleted_job_ids
+            affected = len(sample_ids)
+            summary = f"Deleted {finalize.deleted_count} finalize and {search.deleted_count} search jobs"
+        elif action == "cleanup_search_cache":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=params["days"])
+            affected = self.cleanup_search_cache(older_than=cutoff)
+            summary = f"Cleaned up {affected} search cache entries"
+        elif action == "requeue_finalize_job":
+            sample_ids = [self.requeue_research_finalize_job(params["target_id"]).id]
+            affected = 1
+            summary = f"Requeued finalize job {params['target_id']}"
+        else:  # requeue_search_job
+            sample_ids = [self.requeue_search_task_job(params["target_id"]).id]
+            affected = 1
+            summary = f"Requeued search job {params['target_id']}"
+
+        self.task_store.record_admin_audit(
             actor_email=actor_email,
-            params=params,
+            action=action,
+            target_type="maintenance",
+            target_id=params.get("target_id"),
+            details={"params": params, "affected_count": affected, "summary": summary},
             ip_address=ip_address,
+        )
+        return AdminDryRunResult(
+            action=action,
+            dry_run=False,
+            affected_count=affected,
+            sample_affected_ids=sample_ids[:10],
+            summary=summary,
         )
 
     def get_agents_catalog(self) -> list[AgentMetadataItem]:

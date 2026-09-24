@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 
 class SearchDepth(str, Enum):
@@ -1093,6 +1093,39 @@ class AdminTokenAnalyticsResponse(BaseModel):
     total_researches: int = 0
     page: int = 1
     page_size: int = 20
+
+
+MaintenanceAction = Literal[
+    "recover_stale_finalize_jobs",
+    "recover_stale_search_jobs",
+    "cleanup_old_jobs",
+    "cleanup_search_cache",
+    "requeue_finalize_job",
+    "requeue_search_job",
+]
+REQUEUE_MAINTENANCE_ACTIONS = ("requeue_finalize_job", "requeue_search_job")
+
+
+class MaintenanceParams(BaseModel):
+    """Admin maintenance parameters. Omitted values take the service defaults; the
+    service also refuses a stale_seconds below the configured job timeout."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stale_seconds: Optional[int] = Field(default=None, ge=1, le=30 * 86400)
+    days: Optional[int] = Field(default=None, ge=1, le=3650)
+    target_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+
+
+class MaintenanceActionRequest(BaseModel):
+    action: MaintenanceAction
+    params: MaintenanceParams = Field(default_factory=MaintenanceParams)
+
+    @model_validator(mode="after")
+    def _requeue_needs_a_target(self) -> "MaintenanceActionRequest":
+        if self.action in REQUEUE_MAINTENANCE_ACTIONS and not self.params.target_id:
+            raise ValueError(f"{self.action} requires params.target_id")
+        return self
 
 
 class AdminDryRunResult(BaseModel):
