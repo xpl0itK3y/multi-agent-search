@@ -134,19 +134,15 @@ def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
     return record.model_copy(update={"graph_state": cleaned})
 
 
-def extract_client_ip(request: Request) -> str:
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    x_real_ip = request.headers.get("x-real-ip")
-    if x_real_ip:
-        return x_real_ip.strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "127.0.0.1"
+def extract_client_ip(request: Request) -> str | None:
+    """The caller's address for audit rows, last_ip and telemetry.
+
+    Only the peer address uvicorn resolved (``--proxy-headers`` against the trusted nginx
+    hop, which overwrites X-Forwarded-For with $remote_addr) is used. Raw
+    CF-Connecting-IP / X-Forwarded-For / X-Real-IP headers are client-supplied and would
+    let any caller forge the IP recorded in the admin audit log."""
+    client = request.client
+    return client.host if client and client.host else None
 
 
 def parse_client_ua(ua_string: str | None) -> dict[str, str]:
@@ -962,7 +958,7 @@ def register_routes(app: FastAPI) -> None:
     def admin_operations_execute(payload: dict, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
         action = payload.get("action", "")
         params = payload.get("params", {})
-        client_ip = request.client.host if request.client else None
+        client_ip = extract_client_ip(request)
         return get_research_service(request).execute_maintenance_action(
             action=action,
             actor_email=admin_user.email,
