@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import and_, case, delete, false, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, false, func, literal, null, or_, select, text, true, union_all, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -75,6 +75,14 @@ def _parse_admin_emails() -> set[str]:
     if isinstance(raw, str):
         return {e.strip().lower() for e in raw.split(",") if e.strip()}
     return {str(e).strip().lower() for e in raw if str(e).strip()}
+
+
+
+def _contains_pattern(term: str) -> str:
+    """ILIKE pattern (with escape '\\') matching ``term`` as a plain substring: its % and _
+    are literal, as in the in-memory store's substring match."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 class SQLAlchemyTaskStore:
@@ -1690,7 +1698,7 @@ class SQLAlchemyTaskStore:
                     func.count(LLMUsageLogORM.id),
                 )
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), LLMUsageLogORM.model)
             )
             by_model = [
                 AdminTokenModelBreakdown(
@@ -1714,6 +1722,7 @@ class SQLAlchemyTaskStore:
                 )
                 .join(ResearchORM, LLMUsageLogORM.research_id == ResearchORM.id)
                 .group_by(ResearchORM.depth)
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), ResearchORM.depth)
             )
             by_depth = [
                 AdminTokenDepthBreakdown(
@@ -1725,7 +1734,9 @@ class SQLAlchemyTaskStore:
                 for row in session.execute(depth_stmt).all()
             ]
 
-            # 4. Researches list with pagination
+            # 4. Researches list with pagination: the page first, then usage for its ids
+            # only, and just graph_state's llm_token_usage (the legacy per-research figure),
+            # never the whole graph_state blob.
             total_researches_stmt = select(func.count()).select_from(ResearchORM)
             total_researches = session.execute(total_researches_stmt).scalar_one()
 
@@ -1737,26 +1748,21 @@ class SQLAlchemyTaskStore:
                     ResearchORM.depth,
                     ResearchORM.status,
                     ResearchORM.created_at,
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    ResearchORM.graph_state,
+                    ResearchORM.graph_state["llm_token_usage"],
                 )
-                .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
-                .group_by(ResearchORM.id)
-                .order_by(ResearchORM.created_at.desc())
+                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
                 .limit(page_size)
                 .offset(offset)
             )
+            page_rows = session.execute(researches_stmt).all()
+            usage_by_research = self._usage_by_research(session, [row[0] for row in page_rows])
             research_items: list[AdminTokenResearchUsageItem] = []
-            for row in session.execute(researches_stmt).all():
-                r_id, r_prompt, r_depth, r_status, r_created, r_tokens, r_cost, r_state = row
-                tokens = int(r_tokens)
-                cost = float(r_cost)
-                if tokens == 0 and isinstance(r_state, dict):
-                    legacy = r_state.get("llm_token_usage") or {}
-                    if legacy:
-                        tokens = int(legacy.get("total_tokens", 0) or 0)
-                        cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
+            for r_id, r_prompt, r_depth, r_status, r_created, legacy in page_rows:
+                tokens, cost, calls = usage_by_research.get(r_id, (0, 0.0, 0))
+                if calls == 0 and isinstance(legacy, dict):
+                    # Researches finalized before per-call usage rows existed.
+                    tokens = int(legacy.get("total_tokens", 0) or 0)
+                    cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
                 research_items.append(
                     AdminTokenResearchUsageItem(
                         research_id=r_id,
@@ -1781,6 +1787,23 @@ class SQLAlchemyTaskStore:
                 page=page,
                 page_size=page_size,
             )
+
+    @staticmethod
+    def _usage_by_research(session: Session, research_ids: list[str]) -> dict[str, tuple[int, float, int]]:
+        """(total_tokens, unrounded cost, calls) per research, for these ids only."""
+        if not research_ids:
+            return {}
+        rows = session.execute(
+            select(
+                LLMUsageLogORM.research_id,
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                func.count(LLMUsageLogORM.id),
+            )
+            .where(LLMUsageLogORM.research_id.in_(research_ids))
+            .group_by(LLMUsageLogORM.research_id)
+        ).all()
+        return {row[0]: (int(row[1]), float(row[2]), int(row[3])) for row in rows}
 
     def get_admin_overview(self) -> AdminOverviewResponse:
         from src.config import settings
@@ -2050,6 +2073,81 @@ class SQLAlchemyTaskStore:
                 .values(**values)
             )
 
+    @staticmethod
+    def _admin_users_select():
+        """Users with their research count, usage totals and latest session, in one
+        statement: each aggregate is a LATERAL subquery, so sorting by one of them orders
+        the whole filtered set in SQL before LIMIT/OFFSET (not just the current page)."""
+        research_stats = (
+            select(func.count().label("researches_count"))
+            .where(ResearchORM.user_id == UserORM.id)
+            .lateral("research_stats")
+        )
+        usage_stats = (
+            select(
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0).label("total_cost"),
+            )
+            .where(LLMUsageLogORM.user_id == UserORM.id)
+            .lateral("usage_stats")
+        )
+        last_session = (
+            select(
+                UserSessionORM.ip_address,
+                UserSessionORM.device_type,
+                UserSessionORM.browser,
+                UserSessionORM.os,
+            )
+            .where(UserSessionORM.user_id == UserORM.id)
+            .order_by(UserSessionORM.last_active_at.desc(), UserSessionORM.id.desc())
+            .limit(1)
+            .lateral("last_session")
+        )
+        statement = (
+            select(
+                UserORM.id,
+                UserORM.email,
+                UserORM.name,
+                UserORM.avatar_url,
+                UserORM.created_at,
+                UserORM.last_seen_at,
+                UserORM.last_ip,
+                UserORM.last_device,
+                research_stats.c.researches_count,
+                usage_stats.c.total_tokens,
+                usage_stats.c.total_cost,
+                last_session.c.ip_address.label("session_ip"),
+                last_session.c.device_type.label("session_device"),
+                last_session.c.browser.label("session_browser"),
+                last_session.c.os.label("session_os"),
+            )
+            .select_from(UserORM)
+            .join(research_stats, true())
+            .join(usage_stats, true())
+            .outerjoin(last_session, true())
+        )
+        return statement, research_stats, usage_stats
+
+    @staticmethod
+    def _admin_user_item(row, admin_emails: set[str], online_threshold: datetime) -> AdminUserListItem:
+        return AdminUserListItem(
+            id=row.id,
+            email=row.email,
+            name=row.name,
+            avatar_url=row.avatar_url,
+            is_admin=bool(row.email and row.email.lower() in admin_emails),
+            created_at=row.created_at.isoformat(),
+            last_seen_at=row.last_seen_at.isoformat() if row.last_seen_at else None,
+            is_online=bool(row.last_seen_at and row.last_seen_at >= online_threshold),
+            last_ip=row.last_ip or row.session_ip,
+            last_device=row.last_device or row.session_device,
+            last_browser=row.session_browser,
+            last_os=row.session_os,
+            researches_count=int(row.researches_count),
+            total_tokens=int(row.total_tokens),
+            total_cost_usd=round(float(row.total_cost), 4),
+        )
+
     def get_admin_users_list(
         self,
         page: int = 1,
@@ -2061,114 +2159,50 @@ class SQLAlchemyTaskStore:
     ) -> AdminUserListResponse:
         now = datetime.now(timezone.utc)
         online_threshold = now - timedelta(minutes=2)
+        admin_emails = _parse_admin_emails()
+
+        filters = []
+        term = (search or "").strip()
+        if term:
+            pattern = _contains_pattern(term)
+            filters.append(
+                or_(
+                    UserORM.email.ilike(pattern, escape="\\"),
+                    UserORM.name.ilike(pattern, escape="\\"),
+                    UserORM.last_ip.ilike(pattern, escape="\\"),
+                )
+            )
+        if role == "admin":
+            filters.append(func.lower(UserORM.email).in_(admin_emails) if admin_emails else false())
+        elif role == "user" and admin_emails:
+            filters.append(~func.lower(UserORM.email).in_(admin_emails))
+        if online_only:
+            filters.append(UserORM.last_seen_at >= online_threshold)
+
+        statement, research_stats, usage_stats = self._admin_users_select()
+        newest_first = (UserORM.created_at.desc(), UserORM.id.desc())
+        order_by = {
+            "tokens": (usage_stats.c.total_tokens.desc(), *newest_first),
+            "cost": (usage_stats.c.total_cost.desc(), *newest_first),
+            "researches": (research_stats.c.researches_count.desc(), *newest_first),
+            "registered": newest_first,
+        }.get(sort_by, (UserORM.last_seen_at.desc().nulls_last(), *newest_first))
 
         with self.session_scope() as session:
-            query = select(UserORM)
-
-            # Filtering
-            if search:
-                s = f"%{search.strip()}%"
-                query = query.where(
-                    or_(
-                        UserORM.email.ilike(s),
-                        UserORM.name.ilike(s),
-                        UserORM.last_ip.ilike(s),
-                    )
-                )
-
-            admin_emails = _parse_admin_emails()
-            if role:
-                if role == "admin":
-                    if not admin_emails:
-                        query = query.where(false())
-                    else:
-                        query = query.where(func.lower(UserORM.email).in_(admin_emails))
-                elif role == "user":
-                    if admin_emails:
-                        query = query.where(~func.lower(UserORM.email).in_(admin_emails))
-
-            if online_only:
-                query = query.where(UserORM.last_seen_at >= online_threshold)
-
-            # Total count before pagination
-            count_stmt = select(func.count()).select_from(query.subquery())
-            total_users = session.execute(count_stmt).scalar_one()
-
-            # Online count total
-            online_count_stmt = (
-                select(func.count())
-                .select_from(UserORM)
-                .where(UserORM.last_seen_at >= online_threshold)
-            )
-            online_users = session.execute(online_count_stmt).scalar_one()
-
-            # Sorting
-            if sort_by == "registered":
-                query = query.order_by(UserORM.created_at.desc())
-            else:
-                query = query.order_by(UserORM.last_seen_at.desc().nulls_last(), UserORM.created_at.desc())
-
-            offset = (page - 1) * page_size
-            users = list(session.execute(query.offset(offset).limit(page_size)).scalars().all())
-
-            items: list[AdminUserListItem] = []
-            for u in users:
-                is_admin = bool(u.email and u.email.lower() in admin_emails)
-                is_online = bool(u.last_seen_at and u.last_seen_at >= online_threshold)
-
-                # Researches count
-                r_cnt = session.execute(
-                    select(func.count()).select_from(ResearchORM).where(ResearchORM.user_id == u.id)
-                ).scalar_one()
-
-                # Tokens & Cost
-                usage_row = session.execute(
-                    select(
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    ).where(LLMUsageLogORM.user_id == u.id)
-                ).one()
-                tot_tokens = int(usage_row[0])
-                tot_cost = float(usage_row[1])
-
-                # Get latest session for browser/os
-                last_sess = session.execute(
-                    select(UserSessionORM)
-                    .where(UserSessionORM.user_id == u.id)
-                    .order_by(UserSessionORM.last_active_at.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-
-                items.append(
-                    AdminUserListItem(
-                        id=u.id,
-                        email=u.email,
-                        name=u.name,
-                        avatar_url=u.avatar_url,
-                        is_admin=is_admin,
-                        created_at=u.created_at.isoformat(),
-                        last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
-                        is_online=is_online,
-                        last_ip=u.last_ip or (last_sess.ip_address if last_sess else None),
-                        last_device=u.last_device or (last_sess.device_type if last_sess else None),
-                        last_browser=last_sess.browser if last_sess else None,
-                        last_os=last_sess.os if last_sess else None,
-                        researches_count=r_cnt,
-                        total_tokens=tot_tokens,
-                        total_cost_usd=round(tot_cost, 4),
-                    )
-                )
-
-            # In-memory post-sort for token/cost/research if requested
-            if sort_by == "tokens":
-                items.sort(key=lambda x: x.total_tokens, reverse=True)
-            elif sort_by == "cost":
-                items.sort(key=lambda x: x.total_cost_usd, reverse=True)
-            elif sort_by == "researches":
-                items.sort(key=lambda x: x.researches_count, reverse=True)
-
+            total_users = session.execute(
+                select(func.count()).select_from(UserORM).where(*filters)
+            ).scalar_one()
+            online_users = session.execute(
+                select(func.count()).select_from(UserORM).where(UserORM.last_seen_at >= online_threshold)
+            ).scalar_one()
+            rows = session.execute(
+                statement.where(*filters)
+                .order_by(*order_by)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
             return AdminUserListResponse(
-                users=items,
+                users=[self._admin_user_item(row, admin_emails, online_threshold) for row in rows],
                 total_users=total_users,
                 online_users=online_users,
                 page=page,
@@ -2176,40 +2210,22 @@ class SQLAlchemyTaskStore:
             )
 
     def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
+        online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
+        admin_emails = _parse_admin_emails()
+        statement, _research_stats, _usage_stats = self._admin_users_select()
+
         with self.session_scope() as session:
-            u = session.get(UserORM, user_id)
-            if not u:
+            row = session.execute(statement.where(UserORM.id == user_id)).one_or_none()
+            if row is None:
                 return None
+            user_item = self._admin_user_item(row, admin_emails, online_threshold)
 
-            admin_emails = _parse_admin_emails()
-            is_admin = bool(u.email and u.email.lower() in admin_emails)
-
-            now = datetime.now(timezone.utc)
-            online_threshold = now - timedelta(minutes=2)
-            is_online = bool(u.last_seen_at and u.last_seen_at >= online_threshold)
-
-            r_cnt = session.execute(
-                select(func.count()).select_from(ResearchORM).where(ResearchORM.user_id == u.id)
-            ).scalar_one()
-
-            usage_row = session.execute(
-                select(
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                ).where(LLMUsageLogORM.user_id == u.id)
-            ).one()
-            tot_tokens = int(usage_row[0])
-            tot_cost = float(usage_row[1])
-
-            # Sessions
-            sessions_orm = list(
-                session.execute(
-                    select(UserSessionORM)
-                    .where(UserSessionORM.user_id == u.id)
-                    .order_by(UserSessionORM.last_active_at.desc())
-                    .limit(10)
-                ).scalars().all()
-            )
+            sessions = session.execute(
+                select(UserSessionORM)
+                .where(UserSessionORM.user_id == user_id)
+                .order_by(UserSessionORM.last_active_at.desc(), UserSessionORM.id.desc())
+                .limit(10)
+            ).scalars().all()
             sessions_data = [
                 {
                     "id": s.id,
@@ -2226,99 +2242,70 @@ class SQLAlchemyTaskStore:
                     "started_at": s.started_at.isoformat(),
                     "last_active_at": s.last_active_at.isoformat(),
                 }
-                for s in sessions_orm
+                for s in sessions
             ]
 
-            # Recent researches
-            researches_orm = list(
-                session.execute(
-                    select(ResearchORM)
-                    .where(ResearchORM.user_id == u.id)
-                    .order_by(ResearchORM.created_at.desc())
-                    .limit(20)
-                ).scalars().all()
-            )
-            r_ids = [r.id for r in researches_orm]
-            usage_by_res = {}
-            if r_ids:
-                u_rows = session.execute(
-                    select(
-                        LLMUsageLogORM.research_id,
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    )
-                    .where(LLMUsageLogORM.research_id.in_(r_ids))
-                    .group_by(LLMUsageLogORM.research_id)
-                ).all()
-                usage_by_res = {
-                    row[0]: {"tokens": int(row[1]), "cost_usd": round(float(row[2]), 4)}
-                    for row in u_rows
-                }
-
+            # Recent researches: listing columns only, never the report or graph_state.
+            research_rows = session.execute(
+                select(
+                    ResearchORM.id,
+                    ResearchORM.prompt,
+                    ResearchORM.depth,
+                    ResearchORM.status,
+                    ResearchORM.created_at,
+                )
+                .where(ResearchORM.user_id == user_id)
+                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
+                .limit(20)
+            ).all()
+            usage_by_research = self._usage_by_research(session, [r.id for r in research_rows])
             researches_data = [
                 {
                     "id": r.id,
                     "prompt": r.prompt,
                     "depth": r.depth,
                     "status": r.status,
-                    "total_tokens": usage_by_res.get(r.id, {}).get("tokens", 0),
-                    "cost_usd": usage_by_res.get(r.id, {}).get("cost_usd", 0.0),
+                    "total_tokens": usage_by_research.get(r.id, (0, 0.0, 0))[0],
+                    "cost_usd": round(usage_by_research.get(r.id, (0, 0.0, 0))[1], 4),
                     "created_at": r.created_at.isoformat(),
                 }
-                for r in researches_orm
+                for r in research_rows
             ]
 
-            # Recent events
-            events_orm = list(
-                session.execute(
-                    select(UserEventORM)
-                    .where(UserEventORM.user_id == u.id)
-                    .order_by(UserEventORM.created_at.desc())
-                    .limit(20)
-                ).scalars().all()
-            )
+            event_rows = session.execute(
+                select(
+                    UserEventORM.id,
+                    UserEventORM.event_name,
+                    UserEventORM.event_category,
+                    UserEventORM.details,
+                    UserEventORM.created_at,
+                )
+                .where(UserEventORM.user_id == user_id)
+                .order_by(UserEventORM.created_at.desc(), UserEventORM.id.desc())
+                .limit(20)
+            ).all()
             events_data = [
                 {
                     "id": e.id,
                     "event_name": e.event_name,
                     "event_category": e.event_category,
-                    "details": e.details,
+                    "details": e.details or {},
                     "created_at": e.created_at.isoformat(),
                 }
-                for e in events_orm
+                for e in event_rows
             ]
 
-            # Tokens by model
             model_rows = session.execute(
                 select(
                     LLMUsageLogORM.model,
                     func.sum(LLMUsageLogORM.total_tokens),
                     func.sum(LLMUsageLogORM.estimated_cost_usd),
                 )
-                .where(LLMUsageLogORM.user_id == u.id)
+                .where(LLMUsageLogORM.user_id == user_id)
                 .group_by(LLMUsageLogORM.model)
+                .order_by(LLMUsageLogORM.model)
             ).all()
             by_model = {row[0]: {"tokens": int(row[1]), "cost_usd": round(float(row[2]), 4)} for row in model_rows}
-
-            last_sess = sessions_orm[0] if sessions_orm else None
-
-            user_item = AdminUserListItem(
-                id=u.id,
-                email=u.email,
-                name=u.name,
-                avatar_url=u.avatar_url,
-                is_admin=is_admin,
-                created_at=u.created_at.isoformat(),
-                last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
-                is_online=is_online,
-                last_ip=u.last_ip or (last_sess.ip_address if last_sess else None),
-                last_device=u.last_device or (last_sess.device_type if last_sess else None),
-                last_browser=last_sess.browser if last_sess else None,
-                last_os=last_sess.os if last_sess else None,
-                researches_count=r_cnt,
-                total_tokens=tot_tokens,
-                total_cost_usd=round(tot_cost, 4),
-            )
 
             return AdminUserDetailResponse(
                 user=user_item,
@@ -2501,127 +2488,113 @@ class SQLAlchemyTaskStore:
         user_id: str | None = None,
         prompt_type: str | None = None,
     ) -> AdminPromptsResponse:
-        with self.session_scope() as session:
-            items: list[AdminPromptItem] = []
-
-            # 1. Researches
-            if not prompt_type or prompt_type in ("all", "research"):
-                usage_sub = (
-                    select(
-                        LLMUsageLogORM.research_id,
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0).label("tokens"),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0).label("cost"),
-                    )
-                    .group_by(LLMUsageLogORM.research_id)
-                    .subquery()
+        """Research prompts and chat follow-up prompts (chat_prompt events) as one list,
+        newest first. Paginated in SQL: a UNION ALL of the two sources ordered and sliced
+        by the database, a separate COUNT, and usage summed for the page's researches only."""
+        term = (search or "").strip()
+        pattern = _contains_pattern(term) if term else None
+        branches = []
+        if not prompt_type or prompt_type in ("all", "research"):
+            research_branch = (
+                select(
+                    literal("research").label("prompt_type"),
+                    func.concat("res_", ResearchORM.id).label("item_id"),
+                    ResearchORM.prompt.label("prompt"),
+                    ResearchORM.id.label("research_id"),
+                    ResearchORM.user_id.label("user_id"),
+                    UserORM.email.label("user_email"),
+                    UserORM.name.label("user_name"),
+                    ResearchORM.depth.label("depth"),
+                    ResearchORM.status.label("status"),
+                    ResearchORM.created_at.label("created_at"),
                 )
-                q_res = (
-                    select(
-                        ResearchORM.id,
-                        ResearchORM.prompt,
-                        ResearchORM.depth,
-                        ResearchORM.status,
-                        ResearchORM.created_at,
-                        ResearchORM.user_id,
-                        UserORM.email,
-                        UserORM.name,
-                        func.coalesce(usage_sub.c.tokens, 0),
-                        func.coalesce(usage_sub.c.cost, 0.0),
-                    )
-                    .outerjoin(UserORM, ResearchORM.user_id == UserORM.id)
-                    .outerjoin(usage_sub, ResearchORM.id == usage_sub.c.research_id)
-                )
-                if user_id:
-                    q_res = q_res.where(ResearchORM.user_id == user_id)
-                if search:
-                    term = f"%{search.strip()}%"
-                    q_res = q_res.where(
-                        or_(
-                            ResearchORM.prompt.ilike(term),
-                            UserORM.email.ilike(term),
-                            UserORM.name.ilike(term),
-                        )
-                    )
-
-                res_rows = session.execute(q_res).all()
-                for r_id, prompt, depth, status, created_at, u_id, email, name, tokens, cost in res_rows:
-                    items.append(
-                        AdminPromptItem(
-                            id=f"res_{r_id}",
-                            prompt_type="research",
-                            prompt=prompt,
-                            research_id=r_id,
-                            user_id=u_id,
-                            user_email=email,
-                            user_name=name,
-                            depth=depth,
-                            status=status,
-                            total_tokens=int(tokens),
-                            cost_usd=round(float(cost), 4),
-                            created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
-                        )
-                    )
-
-            # 2. Chat follow-up prompts from user_events
-            if not prompt_type or prompt_type in ("all", "chat"):
-                q_chat = (
-                    select(
-                        UserEventORM.id,
-                        UserEventORM.details,
-                        UserEventORM.created_at,
-                        UserEventORM.user_id,
-                        UserORM.email,
-                        UserORM.name,
-                    )
-                    .outerjoin(UserORM, UserEventORM.user_id == UserORM.id)
-                    .where(UserEventORM.event_name == "chat_prompt")
-                )
-                if user_id:
-                    q_chat = q_chat.where(UserEventORM.user_id == user_id)
-
-                chat_rows = session.execute(q_chat).all()
-                for e_id, details, created_at, u_id, email, name in chat_rows:
-                    det = details or {}
-                    prompt_txt = str(det.get("prompt") or "")
-                    res_id = str(det.get("research_id") or "")
-                    if search:
-                        term_lower = search.strip().lower()
-                        matches = (
-                            term_lower in prompt_txt.lower()
-                            or (email and term_lower in email.lower())
-                            or (name and term_lower in name.lower())
-                        )
-                        if not matches:
-                            continue
-                    items.append(
-                        AdminPromptItem(
-                            id=f"chat_{e_id}",
-                            prompt_type="chat",
-                            prompt=prompt_txt,
-                            research_id=res_id,
-                            user_id=u_id,
-                            user_email=email,
-                            user_name=name,
-                            depth=None,
-                            status=None,
-                            total_tokens=0,
-                            cost_usd=0.0,
-                            created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
-                        )
-                    )
-
-            # Sort all items descending by created_at
-            items.sort(key=lambda x: x.created_at, reverse=True)
-            total_count = len(items)
-            start = (page - 1) * page_size
-            paged = items[start : start + page_size]
-
-            return AdminPromptsResponse(
-                prompts=paged,
-                total_count=total_count,
-                page=page,
-                page_size=page_size,
+                .select_from(ResearchORM)
+                .outerjoin(UserORM, ResearchORM.user_id == UserORM.id)
             )
+            if user_id:
+                research_branch = research_branch.where(ResearchORM.user_id == user_id)
+            if pattern:
+                research_branch = research_branch.where(
+                    or_(
+                        ResearchORM.prompt.ilike(pattern, escape="\\"),
+                        UserORM.email.ilike(pattern, escape="\\"),
+                        UserORM.name.ilike(pattern, escape="\\"),
+                    )
+                )
+            branches.append(research_branch)
+        if not prompt_type or prompt_type in ("all", "chat"):
+            chat_prompt = func.coalesce(UserEventORM.details["prompt"].astext, "")
+            chat_branch = (
+                select(
+                    literal("chat").label("prompt_type"),
+                    func.concat("chat_", UserEventORM.id).label("item_id"),
+                    chat_prompt.label("prompt"),
+                    func.coalesce(UserEventORM.details["research_id"].astext, "").label("research_id"),
+                    UserEventORM.user_id.label("user_id"),
+                    UserORM.email.label("user_email"),
+                    UserORM.name.label("user_name"),
+                    null().label("depth"),
+                    null().label("status"),
+                    UserEventORM.created_at.label("created_at"),
+                )
+                .select_from(UserEventORM)
+                .outerjoin(UserORM, UserEventORM.user_id == UserORM.id)
+                .where(UserEventORM.event_name == "chat_prompt")
+            )
+            if user_id:
+                chat_branch = chat_branch.where(UserEventORM.user_id == user_id)
+            if pattern:
+                chat_branch = chat_branch.where(
+                    or_(
+                        chat_prompt.ilike(pattern, escape="\\"),
+                        UserORM.email.ilike(pattern, escape="\\"),
+                        UserORM.name.ilike(pattern, escape="\\"),
+                    )
+                )
+            branches.append(chat_branch)
+        if not branches:  # an unknown prompt_type matches nothing
+            return AdminPromptsResponse(prompts=[], total_count=0, page=page, page_size=page_size)
+
+        prompts = (union_all(*branches) if len(branches) > 1 else branches[0]).subquery("prompts")
+        with self.session_scope() as session:
+            total_count = session.execute(select(func.count()).select_from(prompts)).scalar_one()
+            rows = session.execute(
+                select(prompts)
+                .order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc())
+                .offset(max(0, (page - 1) * page_size))
+                .limit(page_size)
+            ).all()
+            usage_by_research = self._usage_by_research(
+                session, [row.research_id for row in rows if row.prompt_type == "research"]
+            )
+
+        items: list[AdminPromptItem] = []
+        for row in rows:
+            tokens, cost = 0, 0.0
+            if row.prompt_type == "research":
+                tokens, cost, _calls = usage_by_research.get(row.research_id, (0, 0.0, 0))
+            items.append(
+                AdminPromptItem(
+                    id=row.item_id,
+                    prompt_type=row.prompt_type,
+                    prompt=row.prompt,
+                    research_id=row.research_id,
+                    user_id=row.user_id,
+                    user_email=row.user_email,
+                    user_name=row.user_name,
+                    depth=row.depth,
+                    status=row.status,
+                    total_tokens=tokens,
+                    cost_usd=round(cost, 4),
+                    created_at=row.created_at.isoformat(),
+                )
+            )
+        return AdminPromptsResponse(
+            prompts=items,
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+        )
 
     def get_user_token_analytics(self, user_id: str) -> dict:
         with self.session_scope() as session:

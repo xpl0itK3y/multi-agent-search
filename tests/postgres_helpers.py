@@ -87,11 +87,13 @@ def require_postgres(session_factory) -> None:
 
 
 def truncate_runtime_tables(session_factory) -> None:
+    # users and llm_usage_logs too: the admin views count and sort every account and
+    # usage row, so rows left by an earlier test would change their results.
     with session_factory() as session:
         session.execute(
             text(
                 "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches, "
-                "user_events, user_sessions, admin_audit_logs RESTART IDENTITY CASCADE"
+                "user_events, user_sessions, admin_audit_logs, llm_usage_logs, users RESTART IDENTITY CASCADE"
             )
         )
         session.commit()
