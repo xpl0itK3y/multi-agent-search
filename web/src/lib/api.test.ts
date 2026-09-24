@@ -99,6 +99,32 @@ describe("api request error handling", () => {
   });
 });
 
+describe("account endpoints", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("deleteAccount sends the password together with confirm=true", async () => {
+    stubEnv("token", "/settings");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "deleted" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api } = await import("./api");
+    await api.deleteAccount("secret123");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/auth/account");
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(init.body as string)).toEqual({ current_password: "secret123", confirm: true });
+  });
+});
+
 describe("apiErrorMessage", () => {
   it("maps frequent statuses to errors.api.* keys", async () => {
     stubEnv(null, "/");

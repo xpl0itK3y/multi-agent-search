@@ -214,10 +214,12 @@ export const api = {
 
   getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
 
+  // The server requires an explicit confirm flag (DATA-LIFECYCLE); callers invoke
+  // this only after the user confirmed in the Settings delete modal.
   deleteAccount: async (currentPassword?: string) => {
     return await request<{ status: string }>("/v1/auth/account", {
       method: "DELETE",
-      body: JSON.stringify({ current_password: currentPassword }),
+      body: JSON.stringify({ current_password: currentPassword, confirm: true }),
     });
   },
 
