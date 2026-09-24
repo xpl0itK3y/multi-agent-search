@@ -711,6 +711,36 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None:
+        """Append to a graph_state list under the row lock. A merge of a list computed
+        from an earlier read would drop whatever another writer appended meanwhile."""
+        with self.session_scope() as session:
+            row = session.execute(
+                select(ResearchORM.graph_state)
+                .where(ResearchORM.id == research_id)
+                .with_for_update()
+            ).one_or_none()
+            if row is None:
+                return None
+            graph_state = dict(row.graph_state or {})
+            items = [*(graph_state.get(key) or []), item]
+            if max_items is not None:
+                items = items[-max_items:]
+            graph_state[key] = items
+            session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(graph_state=graph_state, updated_at=datetime.now(timezone.utc))
+            )
+            return items
+
     def save_partial_report(self, research_id: str, partial: str) -> None:
         with self.session_scope() as session:
             outcome = session.execute(

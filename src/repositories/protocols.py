@@ -127,6 +127,18 @@ class TaskStore(Protocol):
         remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None: ...
 
+    # Append `item` to the graph_state list under `key` (keeping the last `max_items`)
+    # under the same row lock as merges, so concurrent appends cannot drop each other.
+    # Returns the new list, or None when the research does not exist.
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None: ...
+
     def save_partial_report(self, research_id: str, partial: str) -> None: ...
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None: ...

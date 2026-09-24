@@ -535,6 +535,25 @@ class InMemoryTaskStore:
                 research.updated_at = datetime.now(timezone.utc)
             return research
 
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            items = [*((research.graph_state or {}).get(key) or []), item]
+            if max_items is not None:
+                items = items[-max_items:]
+            research.graph_state = {**(research.graph_state or {}), key: items}
+            research.updated_at = datetime.now(timezone.utc)
+            return items
+
     def save_partial_report(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
         if research is None:

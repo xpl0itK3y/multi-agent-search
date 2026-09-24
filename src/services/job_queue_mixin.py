@@ -71,12 +71,11 @@ class JobQueueMixin:
             research = self.task_store.get_research(job.research_id)
             graph_state = (research.graph_state if research else None) or {}
             resume_step = graph_state.get("step") or "unknown"
+            # Patch only the flag: merging the snapshot read above back would rewrite every
+            # key with its pre-read value, racing the fenced runner that may still write.
             self.checkpoint_graph_state(
                 job.research_id,
-                {
-                    **graph_state,
-                    "resume_after_stale_recovery": True,
-                },
+                {"resume_after_stale_recovery": True},
                 {
                     "step": "stale_recovered",
                     "detail": f"Finalize job {job.id} recovered after timeout; resume_from={resume_step}",

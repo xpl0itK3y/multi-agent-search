@@ -156,6 +156,21 @@ def test_merge_graph_state_patches_and_removes_keys(store):
     assert state["b"] == 3 and state["c"] == 4
 
 
+def test_graph_state_list_append_keeps_other_keys_and_caps(store):
+    record = _research(store)
+    store.merge_research_graph_state(record.id, {"title": "kept"})
+
+    assert store.append_research_graph_state_item(record.id, "messages", {"n": 1}) == [{"n": 1}]
+    store.append_research_graph_state_item(record.id, "messages", {"n": 2}, max_items=2)
+    capped = store.append_research_graph_state_item(record.id, "messages", {"n": 3}, max_items=2)
+
+    assert capped == [{"n": 2}, {"n": 3}]
+    state = store.get_research(record.id).graph_state
+    assert state["messages"] == [{"n": 2}, {"n": 3}]
+    assert state["title"] == "kept"
+    assert store.append_research_graph_state_item("missing-research", "messages", {"n": 1}) is None
+
+
 def test_graph_events_append_to_trail(store):
     record = _research(store)
     store.append_research_graph_event(record.id, {"step": "analyze", "detail": "one"})

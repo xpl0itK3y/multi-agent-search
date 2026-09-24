@@ -1035,6 +1035,8 @@ class ResearchService(
         messages = (research.graph_state or {}).get("messages") or []
         return [ChatMessage.model_validate(message) for message in messages]
 
+    _CHAT_HISTORY_LIMIT = 40  # cap conversation history
+
     def append_research_message(
         self,
         research_id: str,
@@ -1042,15 +1044,13 @@ class ResearchService(
         content: str,
         sources: list[SearchSourcePreview] | None = None,
     ) -> None:
-        research = self.task_store.get_research(research_id)
-        if not research:
-            return
-        messages = list((research.graph_state or {}).get("messages") or [])
-        messages.append(
-            ChatMessage(role=role, content=content, sources=sources or []).model_dump()
-        )
-        self.task_store.merge_research_graph_state(
-            research_id, {"messages": messages[-40:]}  # cap conversation history
+        # Appended under the row lock: two concurrent chat turns each computing the list
+        # from their own earlier read would drop one another's message.
+        self.task_store.append_research_graph_state_item(
+            research_id,
+            "messages",
+            ChatMessage(role=role, content=content, sources=sources or []).model_dump(),
+            max_items=self._CHAT_HISTORY_LIMIT,
         )
 
     _CHAT_STOPWORDS = {
