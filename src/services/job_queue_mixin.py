@@ -196,6 +196,28 @@ class JobQueueMixin:
             logger.info("researches_cleaned deleted_count=%s", len(deleted_ids))
         return deleted_ids
 
+    def cleanup_old_telemetry(self) -> dict[str, int]:
+        """Retention for user_events, user_sessions and admin_audit_logs; a table whose
+        *_retention_seconds is 0 is kept forever. Returns deleted counts per swept table."""
+        now = datetime.now(timezone.utc)
+        sweeps = (
+            ("user_events", settings.user_events_retention_seconds, self.task_store.cleanup_old_user_events),
+            ("user_sessions", settings.user_sessions_retention_seconds, self.task_store.cleanup_old_user_sessions),
+            (
+                "admin_audit_logs",
+                settings.admin_audit_retention_seconds,
+                self.task_store.cleanup_old_admin_audit_logs,
+            ),
+        )
+        deleted: dict[str, int] = {}
+        for table, retention_seconds, cleanup in sweeps:
+            if retention_seconds <= 0:
+                continue
+            deleted[table] = cleanup(now - timedelta(seconds=retention_seconds))
+            if deleted[table]:
+                logger.info("telemetry_cleaned table=%s deleted_count=%s", table, deleted[table])
+        return deleted
+
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         self.recover_pending_decompositions()
         search_recovery = self.recover_stale_search_task_jobs()
@@ -204,6 +226,7 @@ class JobQueueMixin:
         finalize_cleanup = self.cleanup_old_research_finalize_jobs()
         self.cleanup_search_cache()
         self.cleanup_old_researches()
+        self.cleanup_old_telemetry()
         compacted_worker_names, compacted_research_ids = self.compact_graph_operational_data()
 
         recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count

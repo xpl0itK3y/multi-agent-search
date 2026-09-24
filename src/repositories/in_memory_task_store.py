@@ -335,6 +335,21 @@ class InMemoryTaskStore:
             self.delete_research(research_id)
         return deleted_ids
 
+    def cleanup_old_user_events(self, older_than: datetime) -> int:
+        kept = [e for e in self.user_events if e["created_at"] >= older_than]
+        deleted, self.user_events = len(self.user_events) - len(kept), kept
+        return deleted
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int:
+        kept = [s for s in self.user_sessions if s["last_active_at"] >= older_than]
+        deleted, self.user_sessions = len(self.user_sessions) - len(kept), kept
+        return deleted
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int:
+        kept = [entry for entry in self.admin_audit_logs if entry.created_at >= older_than]
+        deleted, self.admin_audit_logs = len(self.admin_audit_logs) - len(kept), kept
+        return deleted
+
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         records = self.researches.values()
         if user_id is not None:

@@ -450,6 +450,34 @@ class SQLAlchemyTaskStore:
                 session.execute(self._delete_prompt_events(list(research_ids)))
             return list(research_ids)
 
+    # Telemetry retention: one short transaction per batch, so the first sweep over a
+    # large table never becomes one huge delete holding locks and WAL.
+    _RETENTION_BATCH_SIZE = 1000
+
+    def _delete_in_batches(self, model, predicate) -> int:
+        deleted = 0
+        while True:
+            with self.session_scope() as session:
+                batch = select(model.id).where(predicate).limit(self._RETENTION_BATCH_SIZE)
+                result = session.execute(
+                    delete(model)
+                    .where(model.id.in_(batch.scalar_subquery()))
+                    .execution_options(synchronize_session=False)
+                )
+            count = result.rowcount or 0
+            deleted += count
+            if count < self._RETENTION_BATCH_SIZE:
+                return deleted
+
+    def cleanup_old_user_events(self, older_than: datetime) -> int:
+        return self._delete_in_batches(UserEventORM, UserEventORM.created_at < older_than)
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int:
+        return self._delete_in_batches(UserSessionORM, UserSessionORM.last_active_at < older_than)
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int:
+        return self._delete_in_batches(AdminAuditLogORM, AdminAuditLogORM.created_at < older_than)
+
     @staticmethod
     def _research_history_select():
         return select(

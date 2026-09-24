@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     # Terminal researches older than this are cascade-deleted by maintenance.
     # 0 (default) keeps researches forever — existing deployments are unchanged.
     research_retention_seconds: int = 0
+    # Telemetry retention, swept by the same maintenance pass (0 keeps a table forever):
+    # user_events by created_at (this also ages chat prompts out of the admin Prompt log),
+    # user_sessions by last activity. The admin audit trail is kept by default.
+    user_events_retention_seconds: int = 7776000  # 90 days
+    user_sessions_retention_seconds: int = 7776000  # 90 days
+    admin_audit_retention_seconds: int = 0
     search_extraction_concurrency: int = 4
     search_extraction_timeout_seconds: int = 12
     search_extraction_max_redirects: int = 1

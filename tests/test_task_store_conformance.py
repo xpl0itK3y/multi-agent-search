@@ -592,3 +592,33 @@ def test_research_retention_removes_its_prompt_copies(store):
 
     assert deleted == [expired.id]
     assert store.get_admin_event_logs(user_id="retention-owner").events == []
+
+
+def test_telemetry_retention_deletes_rows_past_the_cutoff(store):
+    user = _user(store)
+    store.record_user_event("tab_focus", "ui", user_id=user.id)
+    store.record_user_session(user.id, "retention-sess")
+    store.record_admin_audit("admin@example.com", "delete_user", "user", target_id="gone")
+
+    def sweep(older_than):
+        return (
+            store.cleanup_old_user_events(older_than),
+            store.cleanup_old_user_sessions(older_than),
+            store.cleanup_old_admin_audit_logs(older_than),
+        )
+
+    assert sweep(datetime.now(timezone.utc) - timedelta(days=1)) == (0, 0, 0)
+    assert sweep(datetime.now(timezone.utc) + timedelta(minutes=1)) == (1, 1, 1)
+    assert store.get_admin_event_logs(user_id=user.id).events == []
+    assert store.get_admin_user_detail(user.id).sessions == []
+    assert store.get_admin_audit_logs() == []
+
+
+def test_telemetry_retention_deletes_across_batches(store):
+    store._RETENTION_BATCH_SIZE = 2  # the SQL store deletes in batches of this size
+    user = _user(store)
+    for _ in range(5):
+        store.record_user_event("tab_blur", "ui", user_id=user.id)
+
+    assert store.cleanup_old_user_events(datetime.now(timezone.utc) + timedelta(minutes=1)) == 5
+    assert store.get_admin_event_logs(user_id=user.id).total_count == 0

@@ -310,6 +310,14 @@ class TaskStore(Protocol):
     # Retention: cascade-delete terminal researches past the retention window (OPS-RETENTION).
     def cleanup_old_researches(self, older_than: datetime) -> list[str]: ...
 
+    # Telemetry retention: delete rows older than the cutoff (events and audit rows by
+    # created_at, sessions by last_active_at) in short batches; returns how many went.
+    def cleanup_old_user_events(self, older_than: datetime) -> int: ...
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int: ...
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int: ...
+
     # ── admin & token tracking ────────────────────────────────────────────────
     def record_llm_usage(
         self,

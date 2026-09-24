@@ -162,3 +162,40 @@ def test_store_cleanup_old_researches_cascades_tasks():
 
     assert deleted == [research.id]
     assert store.get_task("task-cascade") is None
+
+
+def test_maintenance_sweeps_telemetry_per_retention_setting(monkeypatch):
+    from src.config import Settings, settings
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    store.create_user("u-ret", "u-ret@example.com", None)
+    long_ago = datetime.now(timezone.utc) - timedelta(days=100)
+    for when in (long_ago, datetime.now(timezone.utc)):
+        store.record_user_event("tab_focus", "ui", user_id="u-ret")
+        store.user_events[-1]["created_at"] = when
+        store.record_user_session("u-ret", f"sess-{when.timestamp()}")
+        store.user_sessions[-1]["last_active_at"] = when
+        store.record_admin_audit("admin@example.com", "delete_user", "user")
+        store.admin_audit_logs[-1].created_at = when
+
+    # The defaults: 90 days for events and sessions, the admin audit trail kept forever.
+    assert Settings.model_fields["user_events_retention_seconds"].default == 90 * 86400
+    assert Settings.model_fields["user_sessions_retention_seconds"].default == 90 * 86400
+    assert Settings.model_fields["admin_audit_retention_seconds"].default == 0
+    monkeypatch.setattr(settings, "user_events_retention_seconds", 90 * 86400)
+    monkeypatch.setattr(settings, "user_sessions_retention_seconds", 90 * 86400)
+    monkeypatch.setattr(settings, "admin_audit_retention_seconds", 0)
+    assert service.cleanup_old_telemetry() == {"user_events": 1, "user_sessions": 1}
+    assert len(store.user_events) == len(store.user_sessions) == 1
+    assert len(store.admin_audit_logs) == 2
+
+    monkeypatch.setattr(settings, "admin_audit_retention_seconds", 30 * 86400)
+    monkeypatch.setattr(settings, "user_events_retention_seconds", 0)
+    store.record_user_event("tab_blur", "ui", user_id="u-ret")
+    store.user_events[-1]["created_at"] = long_ago
+
+    service.run_queue_maintenance()
+
+    assert len(store.admin_audit_logs) == 1
+    assert len(store.user_events) == 2  # 0 = keep forever
