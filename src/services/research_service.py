@@ -1908,30 +1908,35 @@ class ResearchService(
                     report,
                 )
 
-            self._emit_finalize_progress(
-                research_id, "completed", finalize_job_id, lease_epoch
+            # The commit above was the last fenced write; the job is no longer RUNNING, so
+            # a lease renewal from here on could only fail (LEASE-COMPLETED). Post-commit
+            # work is best-effort and must never reach the caller's failure or lease-lost
+            # handling for a finalization that has already been committed.
+            try:
+                return self._after_finalize_commit(research_id, research)
+            except Exception as exc:
+                logger.warning("finalize_post_commit_failed error=%s", exc)
+                return research
+
+    def _after_finalize_commit(self, research_id: str, research: ResearchRecord) -> ResearchRecord:
+        finalized_research = self.task_store.get_research(research_id) or research
+        if finalized_research.status == ResearchStatus.CANCELLED:
+            logger.info("finalize_discarded_cancelled research_id=%s", research_id)
+            return finalized_research
+
+        self._emit_finalize_progress(research_id, "completed")
+        logger.info("research_finalize_completed")
+
+        # fire webhook if configured (F-1)
+        webhook_url = (research.graph_state or {}).get("webhook_url")
+        if webhook_url:
+            self._fire_webhook(
+                webhook_url,
+                research_id,
+                {"research_id": research_id, "status": "completed"},
             )
 
-            finalized_research = self.task_store.get_research(research_id)
-            if finalized_research is None:
-                raise NotFoundError("Research not found")
-            if finalized_research.status == ResearchStatus.CANCELLED:
-                logger.info("finalize_discarded_cancelled research_id=%s", research_id)
-                return finalized_research
-
-            logger.info("research_finalize_completed")
-
-            # fire webhook if configured (F-1)
-            gs = (research.graph_state or {})
-            webhook_url = gs.get("webhook_url")
-            if webhook_url:
-                self._fire_webhook(
-                    webhook_url,
-                    research_id,
-                    {"research_id": research_id, "status": "completed"},
-                )
-
-            return finalized_research
+        return finalized_research
 
     @staticmethod
     def _failure_message(exc: Exception) -> str:
