@@ -2373,11 +2373,6 @@ class ResearchService(
                 extraction_timeout_seconds=settings.search_extraction_timeout_seconds,
             )
             agent.run_task(task_id)
-            # Auto-finalize once every search task for this research is done — nothing
-            # else triggers it, so without this the research stalls in 'processing'.
-            task = self.task_store.get_task(task_id)
-            if task and task.research_id:
-                self._maybe_enqueue_finalization(task.research_id)
 
     def _maybe_enqueue_finalization(self, research_id: str) -> None:
         research = self.task_store.get_research(research_id)
@@ -2405,20 +2400,30 @@ class ResearchService(
                 SearchJobStatus.FAILED,
                 "Task not found",
             )
+        task_id, research_id = task.id, task.research_id
 
-        with bind_observability_context(job_id=job.id, task_id=task.id, research_id=task.research_id):
+        with bind_observability_context(job_id=job.id, task_id=task_id, research_id=research_id):
             # If the user cancelled (or the research otherwise ended) while this job sat in
             # the queue, don't spend search/extraction on it — drain the job and move on.
-            research = self.task_store.get_research(task.research_id) if task.research_id else None
-            if research is not None and research.status in self._TERMINAL_STATUSES:
+            # Once finalization has begun (ANALYZING) a late retry would only run alongside
+            # it and its results would never be used, so it is drained the same way.
+            research = self.task_store.get_research(research_id) if research_id else None
+            if research is not None and (
+                research.status in self._TERMINAL_STATUSES
+                or research.status == ResearchStatus.ANALYZING
+            ):
                 logger.info("search_job_skipped_terminal status=%s", research.status.value)
                 return self.task_store.update_search_task_job(
                     job_id, SearchJobStatus.COMPLETED, "Research no longer active — search skipped"
                 )
+            # Auto-finalize runs only after the retry decision (JOB-RETRY-ORDER): SearchAgent
+            # records a failure as a FAILED task without raising, and finalizing on that
+            # before the job is rescheduled would finish the research without the retry.
+            # Nothing else triggers finalization, so every settled outcome below calls it.
             try:
                 logger.info("search_job_processing depth=%s", job.depth.value)
-                self.run_search_task(task.id, job.depth)
-                task = self.task_store.get_task(task.id)
+                self.run_search_task(task_id, job.depth)
+                task = self.task_store.get_task(task_id)
                 if task is not None and task.status == TaskStatus.FAILED:
                     failed_job = self.task_store.record_search_task_job_failure(
                         job_id,
@@ -2429,22 +2434,17 @@ class ResearchService(
                         failed_job.status.value if failed_job else "missing",
                     )
                     if failed_job and failed_job.status == SearchJobStatus.PENDING:
-                        self.task_store.update_task(
-                            task.id,
-                            TaskUpdate(
-                                status=TaskStatus.PENDING,
-                                log="Search job scheduled for retry",
-                            ),
-                        )
-                        if self.broker:
-                            self.broker.push_search_job(failed_job.id)
-                        logger.info("search_job_retry_scheduled")
+                        self._schedule_search_retry(task_id, failed_job)
                     if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                         logger.error("search_job_dead_letter")
+                        # Out of retries: the FAILED task is settled and the research can
+                        # finalize on what the other tasks found.
+                        self._maybe_finalize_after_search(research_id)
                     return failed_job
 
                 completed_job = self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
                 logger.info("search_job_completed")
+                self._maybe_finalize_after_search(research_id)
                 return completed_job
             except Exception as exc:
                 failed_job = self.task_store.record_search_task_job_failure(job_id, str(exc))
@@ -2454,19 +2454,36 @@ class ResearchService(
                     failed_job.status.value if failed_job else "missing",
                 )
                 if failed_job and failed_job.status == SearchJobStatus.PENDING:
-                    self.task_store.update_task(
-                        task.id,
-                        TaskUpdate(
-                            status=TaskStatus.PENDING,
-                            log="Search job scheduled for retry",
-                        ),
-                    )
-                    if self.broker:
-                        self.broker.push_search_job(failed_job.id)
-                    logger.info("search_job_retry_scheduled")
+                    self._schedule_search_retry(task_id, failed_job)
                 if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                     logger.error("search_job_dead_letter")
+                    # The exception can leave the task RUNNING; settle it as FAILED first,
+                    # or the research would wait on it in 'processing' forever.
+                    self.task_store.update_task(
+                        task_id,
+                        TaskUpdate(
+                            status=TaskStatus.FAILED,
+                            log="Search job failed after all retries",
+                        ),
+                    )
+                    self._maybe_finalize_after_search(research_id)
                 return failed_job
+
+    def _schedule_search_retry(self, task_id: str, job: SearchTaskJob) -> None:
+        self.task_store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.PENDING,
+                log="Search job scheduled for retry",
+            ),
+        )
+        if self.broker:
+            self.broker.push_search_job(job.id)
+        logger.info("search_job_retry_scheduled")
+
+    def _maybe_finalize_after_search(self, research_id: str | None) -> None:
+        if research_id:
+            self._maybe_enqueue_finalization(research_id)
 
     # ── Admin Panel Methods ───────────────────────────────────────────────────
     def get_admin_overview(self) -> AdminOverviewResponse:
