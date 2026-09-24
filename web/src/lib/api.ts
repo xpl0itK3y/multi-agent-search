@@ -390,17 +390,18 @@ export const adminApi = {
   getTelemetrySummary: () =>
     request<AdminTelemetrySummaryResponse>("/v1/admin/users/analytics/summary"),
 
+  // Offset-paginated (the route takes limit/offset/category, not page/page_size).
   getUserEvents: (
-    page: number = 1,
-    pageSize: number = 50,
+    limit: number = 50,
+    offset: number = 0,
     userId?: string,
     eventName?: string,
-    eventCategory?: string
+    category?: string
   ) => {
-    let url = `/v1/admin/users/events?page=${page}&page_size=${pageSize}`;
+    let url = `/v1/admin/users/events?limit=${limit}&offset=${offset}`;
     if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
     if (eventName) url += `&event_name=${encodeURIComponent(eventName)}`;
-    if (eventCategory) url += `&event_category=${encodeURIComponent(eventCategory)}`;
+    if (category) url += `&category=${encodeURIComponent(category)}`;
     return request<AdminEventLogResponse>(url);
   },
 

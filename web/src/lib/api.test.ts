@@ -156,6 +156,37 @@ describe("account endpoints", () => {
   });
 });
 
+describe("admin API contract", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("getUserEvents sends limit/offset/category and reads total_count", async () => {
+    stubEnv("token", "/admin");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ events: [], total_count: 7, page: 1, page_size: 40 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { adminApi } = await import("./api");
+    const resp = await adminApi.getUserEvents(40, 80, "u-1", undefined, "research");
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string, "http://host");
+    expect(url.pathname).toBe("/v1/admin/users/events");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: "40",
+      offset: "80",
+      user_id: "u-1",
+      category: "research",
+    });
+    expect(resp.total_count).toBe(7);
+  });
+});
+
 describe("apiErrorMessage", () => {
   it("maps frequent statuses to errors.api.* keys", async () => {
     stubEnv(null, "/");

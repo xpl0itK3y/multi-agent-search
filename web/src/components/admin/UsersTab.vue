@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import type {
   AdminEventLogItem,
   AdminPromptItem,
@@ -51,6 +51,7 @@ const copiedPromptId = ref<string | null>(null);
 const events = ref<AdminEventLogItem[]>([]);
 const eventsTotal = ref(0);
 const eventsLoading = ref(false);
+const eventsError = ref<string | null>(null);
 const eventCategory = ref("");
 const autoRefresh = ref(true);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -161,16 +162,17 @@ async function loadEvents() {
   try {
     eventsLoading.value = true;
     const resp = await adminApi.getUserEvents(
-      1,
       40,
+      0,
       undefined,
       undefined,
       eventCategory.value || undefined
     );
     events.value = resp.events;
-    eventsTotal.value = resp.total;
-  } catch {
-    // ignore
+    eventsTotal.value = resp.total_count;
+    eventsError.value = null;
+  } catch (err) {
+    eventsError.value = apiErrorMessage(err, t);
   } finally {
     eventsLoading.value = false;
   }
@@ -1144,7 +1146,11 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
       <!-- Events List -->
       <div class="rounded-xl border border-bd bg-surface/40 overflow-hidden divide-y divide-bd">
-        <div v-if="eventsLoading && events.length === 0" class="p-12 text-center text-xs text-muted">
+        <div v-if="eventsError" class="p-4 text-center text-xs text-red-400">
+          {{ eventsError }}
+        </div>
+
+        <div v-else-if="eventsLoading && events.length === 0" class="p-12 text-center text-xs text-muted">
           {{ t("common.loading") }}
         </div>
 

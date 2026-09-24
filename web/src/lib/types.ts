@@ -600,7 +600,7 @@ export interface AdminEventLogItem {
 
 export interface AdminEventLogResponse {
   events: AdminEventLogItem[];
-  total: number;
+  total_count: number;
   page: number;
   page_size: number;
 }
