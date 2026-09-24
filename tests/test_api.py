@@ -1377,7 +1377,64 @@ async def test_google_callback_rejects_bad_state(client, mocker):
     mocker.patch("src.config.settings.google_client_id", "cid")
     mocker.patch("src.config.settings.google_client_secret", "sec")
     cb = await client.get("/v1/auth/google/callback?code=abc&state=wrong", follow_redirects=False)
-    assert cb.status_code == 400
+    # A full-page navigation: back to the login page with a code, and no session issued.
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/login?error=oauth_failed"
+    assert client.cookies.get("access_token") is None
+
+
+async def _start_google_login(client) -> str:
+    import urllib.parse as _up
+
+    login = await client.get("/v1/auth/google/login", follow_redirects=False)
+    return _up.parse_qs(_up.urlsplit(login.headers["location"]).query)["state"][0]
+
+
+@pytest.mark.anyio
+async def test_google_callback_hides_provider_error_text(client, mocker, caplog):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    mocker.patch("src.config.settings.google_client_id", "cid")
+    mocker.patch("src.config.settings.google_client_secret", "sec")
+    state = await _start_google_login(client)
+    mocker.patch(
+        "src.api.app.fetch_userinfo",
+        side_effect=RuntimeError("token endpoint said: client_secret=sec-LEAKED"),
+    )
+
+    with caplog.at_level("ERROR", logger="src.api.app"):
+        cb = await client.get(
+            f"/v1/auth/google/callback?code=abc&state={state}", follow_redirects=False
+        )
+
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/login?error=oauth_failed"
+    assert "LEAKED" not in cb.text and "LEAKED" not in cb.headers["location"]
+    assert client.cookies.get("access_token") is None
+    # The operator still gets the real cause, with its traceback, in the logs.
+    assert any(record.exc_info and "LEAKED" in str(record.exc_info[1]) for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_google_callback_redirects_conflict_for_unlinked_local_account(client, mocker):
+    mocker.patch("src.api.dependencies.settings.auth_disabled", False)
+    mocker.patch("src.config.settings.google_client_id", "cid")
+    mocker.patch("src.config.settings.google_client_secret", "sec")
+    service = client._transport.app.state.research_service
+    service.register_user("local-first@example.com", "localpass1")
+    state = await _start_google_login(client)
+    mocker.patch(
+        "src.api.app.fetch_userinfo",
+        return_value={"email": "local-first@example.com", "email_verified": True, "sub": "g-999"},
+    )
+
+    cb = await client.get(
+        f"/v1/auth/google/callback?code=abc&state={state}", follow_redirects=False
+    )
+
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/login?error=oauth_conflict"
+    assert client.cookies.get("access_token") is None
+    assert service.task_store.get_user_by_google_subject("g-999") is None
 
 
 @pytest.mark.anyio

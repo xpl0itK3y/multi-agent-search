@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hmac
 import json
+import logging
 import secrets
 import uuid
 import time
@@ -14,7 +15,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-from src.domain.errors import ServiceError
+from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
@@ -100,6 +101,8 @@ from src.bootstrap import lifespan
 from src.config import settings
 from src.observability import bind_observability_context, metric_route_template, observe_api_request, render_metrics
 
+
+logger = logging.getLogger(__name__)
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register", "/v1/telemetry/event"})
@@ -378,27 +381,46 @@ def register_routes(app: FastAPI) -> None:
         )
         return redirect
 
+    def _oauth_failure(reason: str) -> RedirectResponse:
+        # The callback is a full-page navigation: send the browser back to the SPA's login
+        # page with a stable code instead of a raw JSON error (or provider exception text).
+        redirect = RedirectResponse(f"/login?error={reason}", status_code=302)
+        redirect.delete_cookie("oauth_state", path="/")
+        return redirect
+
     @app.get("/v1/auth/google/callback")
     def google_callback(request: Request, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         cookie_state = request.cookies.get("oauth_state")
         if not code or decode_token(state) is None or not cookie_state or cookie_state != state:
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+            logger.warning("google_oauth_invalid_state")
+            return _oauth_failure("oauth_failed")
         try:
             userinfo = fetch_userinfo(code)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Google sign-in failed: {exc}")
+        except Exception:
+            logger.exception("google_oauth_userinfo_failed")
+            return _oauth_failure("oauth_failed")
         email = userinfo.get("email")
         verified = userinfo.get("email_verified")
         if not email or verified not in (True, "true"):
-            raise HTTPException(status_code=400, detail="Google account email is not verified")
-        user, created = get_research_service(request).get_or_create_oauth_user(
-            email,
-            google_subject=userinfo.get("sub") or "",
-            name=userinfo.get("name"),
-            avatar_url=userinfo.get("picture"),
-        )
+            logger.warning("google_oauth_email_unverified")
+            return _oauth_failure("oauth_failed")
+        try:
+            user, created = get_research_service(request).get_or_create_oauth_user(
+                email,
+                google_subject=userinfo.get("sub") or "",
+                name=userinfo.get("name"),
+                avatar_url=userinfo.get("picture"),
+            )
+        except ConflictError:
+            # The email already belongs to a local account that is not linked to this Google
+            # identity; it is never merged silently (SEC-ACCOUNT).
+            logger.warning("google_oauth_conflict_unlinked_local_account")
+            return _oauth_failure("oauth_conflict")
+        except Exception:
+            logger.exception("google_oauth_account_resolution_failed")
+            return _oauth_failure("oauth_failed")
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
