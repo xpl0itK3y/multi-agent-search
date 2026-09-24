@@ -885,16 +885,22 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
   return [...forwardEdges, ...returnEdges];
 });
 
-// ── Simulation Walkthrough Steps ("Как они работают") ────────────────────────
+// ── Simulation Walkthrough Steps ("How they work") ───────────────────────────
 interface SimulationStep {
   stepNumber: number;
   stageName: string;
   stageColor: string;
   agentIds: string[];
   activeEdges: string[];
-  title: string;
-  description: string;
   payloadInfo: string;
+}
+
+// Step texts live in i18n (admin.agents.walkthroughSteps.s<N>) so they follow the UI locale.
+function stepTitle(step: SimulationStep): string {
+  return t(`admin.agents.walkthroughSteps.s${step.stepNumber}.title`);
+}
+function stepDescription(step: SimulationStep): string {
+  return t(`admin.agents.walkthroughSteps.s${step.stepNumber}.description`);
 }
 
 const SIMULATION_STEPS: SimulationStep[] = [
@@ -904,9 +910,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-orange-400 border-orange-500/30 bg-orange-500/10",
     agentIds: ["trigger_start", "clarifier"],
     activeEdges: ["trigger_start->clarifier"],
-    title: "1. Trigger ➔ ClarifierAgent: Оценка однозначности запроса",
-    description:
-      "Пользователь отправляет запрос на исследование. ClarifierAgent оценивает входящий текст на неполноту или двусмысленность и при необходимости запрашивает уточнения.",
     payloadInfo: "user_query ➔ clarification_needed, suggested_followups",
   },
   {
@@ -915,9 +918,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
     agentIds: ["optimizer"],
     activeEdges: ["clarifier->optimizer"],
-    title: "2. PromptOptimizerAgent: Обогащение контекстом и гипотезами",
-    description:
-      "Преобразует пользовательский запрос в развёрнутый аналитический бриф: добавляет академические термины, отраслевые контексты и формулирует проверяемые гипотезы.",
     payloadInfo: "clarified_intent ➔ optimized_prompt, angles, hypotheses",
   },
   {
@@ -926,9 +926,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
     agentIds: ["orchestrator", "cross_language"],
     activeEdges: ["optimizer->orchestrator", "orchestrator->cross_language"],
-    title: "3. Orchestrator & CrossLanguage: Декомпозиция и языковая экспансия",
-    description:
-      "Orchestrator декомпозирует тему на граф подзадач, а CrossLanguageAgent генерирует поисковые запросы на нативных языках (русский, китайский, немецкий) для доступа к региональным источникам.",
     payloadInfo: "optimized_prompt ➔ subtasks, translated_queries",
   },
   {
@@ -937,9 +934,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
     agentIds: ["search"],
     activeEdges: ["orchestrator->search", "cross_language->search"],
-    title: "4. SearchAgent: Параллельный веб-поиск и Rust-экстракция",
-    description:
-      "Воркеры распределяют запросы по Tavily, SearXNG и DuckDuckGo, а высокоскоростной Rust/Trafilatura экстрактор потоково скачивает веб-страницы и PDF-документы.",
     payloadInfo: "primary_queries + translated_queries ➔ scraped_pages, raw_snippets",
   },
   {
@@ -953,9 +947,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
       "source_reputation->source_independence",
       "source_critic->search",
     ],
-    title: "5. Фильтрация источников, оценка репутации и дедупликация",
-    description:
-      "SourceCritic отсекает спам-фермы и дорвеи (при необходимости возвращает на повторный поиск). SourceReputation взвешивает домены. SourceIndependence удаляет синдицированные копии.",
     payloadInfo: "scraped_pages ➔ trusted_domains, canonical_sources / ↩ spam_retry",
   },
   {
@@ -964,9 +955,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
     agentIds: ["evidence_mapper"],
     activeEdges: ["source_independence->evidence_mapper"],
-    title: "6. EvidenceMapperAgent: Привязка доказательств к гипотезам",
-    description:
-      "Нарезает тексты на смысловые фрагменты и сопоставляет каждый абзац с конкретной подзадачей и целевой гипотезой, формируя фактологическую матрицу исследования.",
     payloadInfo: "canonical_sources ➔ evidence_blocks, coverage_matrix",
   },
   {
@@ -975,10 +963,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
     agentIds: ["replan", "search"],
     activeEdges: ["evidence_mapper->replan", "replan->search"],
-    title: "7. ReplanAgent: Поиск пробелов (LangGraph Gap Analysis Loop)",
-    description:
-      "Анализирует матрицу фактов. Если обнаружены белые пятна или нехватка доказательств, динамически возвращает воркеры на дополнительный целевой цикл сбора источников.",
-    payloadInfo: "evidence_blocks ➔ gap_detected, ↩ gap_queries (на SearchAgent)",
+    payloadInfo: "evidence_blocks ➔ gap_detected, ↩ gap_queries ➔ SearchAgent",
   },
   {
     stepNumber: 8,
@@ -986,9 +971,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
     agentIds: ["analyzer"],
     activeEdges: ["replan->analyzer"],
-    title: "8. AnalyzerAgent (DeepSeek-Reasoner): Глубокий синтез аргументов",
-    description:
-      "Флагманская reasoning-модель DeepSeek выполняет глубокий логический синтез, генерируя черновик детального отчёта со сквозной цепочкой рассуждений (Chain-of-Thought).",
     payloadInfo: "verified_evidence ➔ draft_report, reasoning_steps, key_findings",
   },
   {
@@ -997,9 +979,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
     agentIds: ["numeric_check", "claim_verifier"],
     activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier", "claim_verifier->analyzer"],
-    title: "9. NumericCheck & ClaimVerifier: Сверка чисел и фактов",
-    description:
-      "NumericCheck сверяет проценты, даты и финансовые суммы. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации и возвращая сомнительные фрагменты на правку.",
     payloadInfo: "draft_report ➔ verified_numbers, verified_claims / ↩ fact_fix",
   },
   {
@@ -1013,9 +992,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
       "citation_audit->retraction",
       "red_team->stance",
     ],
-    title: "10. RedTeam, Stance & Integrity: Стресс-тестирование и аудит ссылок",
-    description:
-      "RedTeam атакует гипотезы выводами «адвоката дьявола». Stance формирует баланс мнений меньшинств. CitationAudit и Retraction сверяют DOI со списком отозванных научных статей.",
     payloadInfo: "verified_claims ➔ counter_arguments, consensus_matrix, clean_sources",
   },
   {
@@ -1029,10 +1005,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
       "report_critic->analyzer",
       "report_critic->replan",
     ],
-    title: "11. ReportCritic: Контроль качества и возврат на доработку (Feedback Loop)",
-    description:
-      "ReportCritic оценивает черновик. При обнаружении логических пробелов или слабых аргументов он возвращает задачу назад: в AnalyzerAgent (на пересинтез) или в ReplanAgent (на добор фактов).",
-    payloadInfo: "draft_review ➔ ↩ draft_revision (в Analyzer) / ↩ tie_break (в Replan)",
+    payloadInfo: "draft_review ➔ ↩ draft_revision ➔ Analyzer / ↩ tie_break ➔ Replan",
   },
   {
     stepNumber: 12,
@@ -1042,9 +1015,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     activeEdges: [
       "report_critic->confidence",
     ],
-    title: "12. ConfidenceAgent: Калибровка достоверности и скоринг",
-    description:
-      "После одобрения критиками ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и формирует бейдж прозрачности отчёта.",
     payloadInfo: "approved_draft ➔ calibrated_trust_score, trust_indicators",
   },
   {
@@ -1053,9 +1023,6 @@ const SIMULATION_STEPS: SimulationStep[] = [
     stageColor: "text-amber-400 border-amber-500/30 bg-amber-500/10",
     agentIds: ["chat"],
     activeEdges: ["confidence->chat"],
-    title: "13. ChatAgent: Интерактивный эксперт по доказательной базе",
-    description:
-      "Отчёт доставлен. ChatAgent готов отвечать на любые последующие вопросы пользователя, строго опираясь на собранную базу цитат и проверенных фактов.",
     payloadInfo: "final_report + trust_badge ➔ grounded_interactive_answers",
   },
 ];
@@ -1771,7 +1738,7 @@ function isNodeDimmed(nodeId: string): boolean {
       </div>
     </div>
 
-    <!-- Floating Simulation Walkthrough Banner ("Как они работают") -->
+    <!-- Floating Simulation Walkthrough Banner ("How they work") -->
     <div
       v-if="isSimulating || currentStepIndex > 0"
       class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
@@ -1784,7 +1751,7 @@ function isNodeDimmed(nodeId: string): boolean {
           >
             {{ currentStep.stageName }}
           </span>
-          <h4 class="text-sm font-bold text-ink">{{ currentStep.title }}</h4>
+          <h4 class="text-sm font-bold text-ink">{{ stepTitle(currentStep) }}</h4>
         </div>
 
         <!-- Step dots timeline and navigator controls -->
@@ -1801,7 +1768,7 @@ function isNodeDimmed(nodeId: string): boolean {
                   ? 'bg-emerald-500/70 w-2.5'
                   : 'bg-muted/40 hover:bg-muted w-2',
               ]"
-              :title="t('admin.agents.stepTitle', { n: step.stepNumber, title: step.title })"
+              :title="t('admin.agents.stepTitle', { n: step.stepNumber, title: stepTitle(step) })"
               @click="goToStep(idx)"
             />
           </div>
@@ -1836,7 +1803,7 @@ function isNodeDimmed(nodeId: string): boolean {
 
       <div class="mt-3 flex flex-wrap items-center justify-between gap-4 text-xs">
         <p class="max-w-3xl leading-relaxed text-ink/90">
-          {{ currentStep.description }}
+          {{ stepDescription(currentStep) }}
         </p>
 
         <div class="flex items-center gap-2 rounded-lg border border-bd/80 bg-bg/80 px-3 py-1.5 font-mono text-[11px]">

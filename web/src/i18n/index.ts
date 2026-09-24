@@ -666,6 +666,60 @@ const ru = {
       invocation: "Вызов",
       tracing: "Трейсинг",
       stepTitle: "Шаг {n}: {title}",
+      walkthroughSteps: {
+        s1: {
+          title: "1. Trigger ➔ ClarifierAgent: Оценка однозначности запроса",
+          description: "Пользователь отправляет запрос на исследование. ClarifierAgent оценивает входящий текст на неполноту или двусмысленность и при необходимости запрашивает уточнения.",
+        },
+        s2: {
+          title: "2. PromptOptimizerAgent: Обогащение контекстом и гипотезами",
+          description: "Преобразует пользовательский запрос в развёрнутый аналитический бриф: добавляет академические термины, отраслевые контексты и формулирует проверяемые гипотезы.",
+        },
+        s3: {
+          title: "3. Orchestrator & CrossLanguage: Декомпозиция и языковая экспансия",
+          description: "Orchestrator декомпозирует тему на граф подзадач, а CrossLanguageAgent генерирует поисковые запросы на нативных языках (русский, китайский, немецкий) для доступа к региональным источникам.",
+        },
+        s4: {
+          title: "4. SearchAgent: Параллельный веб-поиск и Rust-экстракция",
+          description: "Воркеры распределяют запросы по Tavily, SearXNG и DuckDuckGo, а высокоскоростной Rust/Trafilatura экстрактор потоково скачивает веб-страницы и PDF-документы.",
+        },
+        s5: {
+          title: "5. Фильтрация источников, оценка репутации и дедупликация",
+          description: "SourceCritic отсекает спам-фермы и дорвеи (при необходимости возвращает на повторный поиск). SourceReputation взвешивает домены. SourceIndependence удаляет синдицированные копии.",
+        },
+        s6: {
+          title: "6. EvidenceMapperAgent: Привязка доказательств к гипотезам",
+          description: "Нарезает тексты на смысловые фрагменты и сопоставляет каждый абзац с конкретной подзадачей и целевой гипотезой, формируя фактологическую матрицу исследования.",
+        },
+        s7: {
+          title: "7. ReplanAgent: Поиск пробелов (LangGraph Gap Analysis Loop)",
+          description: "Анализирует матрицу фактов. Если обнаружены белые пятна или нехватка доказательств, динамически возвращает воркеры на дополнительный целевой цикл сбора источников.",
+        },
+        s8: {
+          title: "8. AnalyzerAgent (DeepSeek-Reasoner): Глубокий синтез аргументов",
+          description: "Флагманская reasoning-модель DeepSeek выполняет глубокий логический синтез, генерируя черновик детального отчёта со сквозной цепочкой рассуждений (Chain-of-Thought).",
+        },
+        s9: {
+          title: "9. NumericCheck & ClaimVerifier: Сверка чисел и фактов",
+          description: "NumericCheck сверяет проценты, даты и финансовые суммы. ClaimVerifier проверяет каждый ключевой факт отчёта, исключая галлюцинации и возвращая сомнительные фрагменты на правку.",
+        },
+        s10: {
+          title: "10. RedTeam, Stance & Integrity: Стресс-тестирование и аудит ссылок",
+          description: "RedTeam атакует гипотезы выводами «адвоката дьявола». Stance формирует баланс мнений меньшинств. CitationAudit и Retraction сверяют DOI со списком отозванных научных статей.",
+        },
+        s11: {
+          title: "11. ReportCritic: Контроль качества и возврат на доработку (Feedback Loop)",
+          description: "ReportCritic оценивает черновик. При обнаружении логических пробелов или слабых аргументов он возвращает задачу назад: в AnalyzerAgent (на пересинтез) или в ReplanAgent (на добор фактов).",
+        },
+        s12: {
+          title: "12. ConfidenceAgent: Калибровка достоверности и скоринг",
+          description: "После одобрения критиками ConfidenceAgent рассчитывает калиброванный индекс достоверности (0-100%) и формирует бейдж прозрачности отчёта.",
+        },
+        s13: {
+          title: "13. ChatAgent: Интерактивный эксперт по доказательной базе",
+          description: "Отчёт доставлен. ChatAgent готов отвечать на любые последующие вопросы пользователя, строго опираясь на собранную базу цитат и проверенных фактов.",
+        },
+      },
       prevStep: "Назад",
       nextStep: "Вперёд",
       stepProgress: "Шаг {current} из {total}",
@@ -1730,6 +1784,60 @@ const en: typeof ru = {
       invocation: "Invocation",
       tracing: "Tracing",
       stepTitle: "Step {n}: {title}",
+      walkthroughSteps: {
+        s1: {
+          title: "1. Trigger ➔ ClarifierAgent: Checking the request for ambiguity",
+          description: "The user submits a research request. ClarifierAgent checks the text for gaps or ambiguity and asks follow-up questions when needed.",
+        },
+        s2: {
+          title: "2. PromptOptimizerAgent: Enriching with context and hypotheses",
+          description: "Turns the user request into a detailed analytical brief: adds academic terms and industry context and formulates testable hypotheses.",
+        },
+        s3: {
+          title: "3. Orchestrator & CrossLanguage: Decomposition and language expansion",
+          description: "Orchestrator breaks the topic into a graph of subtasks, and CrossLanguageAgent writes search queries in native languages (Russian, Chinese, German) to reach regional sources.",
+        },
+        s4: {
+          title: "4. SearchAgent: Parallel web search and Rust extraction",
+          description: "Workers spread the queries across Tavily, SearXNG and DuckDuckGo, while a fast Rust/Trafilatura extractor streams web pages and PDF documents.",
+        },
+        s5: {
+          title: "5. Source filtering, reputation scoring and deduplication",
+          description: "SourceCritic drops spam farms and doorway pages (sending the search back for another pass if needed). SourceReputation weighs domains. SourceIndependence removes syndicated copies.",
+        },
+        s6: {
+          title: "6. EvidenceMapperAgent: Mapping evidence to hypotheses",
+          description: "Splits the texts into meaningful fragments and matches each paragraph to a subtask and a target hypothesis, building the research evidence matrix.",
+        },
+        s7: {
+          title: "7. ReplanAgent: Finding gaps (LangGraph gap-analysis loop)",
+          description: "Analyzes the evidence matrix. When it finds blind spots or thin evidence, it sends the workers back for another targeted round of source collection.",
+        },
+        s8: {
+          title: "8. AnalyzerAgent (DeepSeek-Reasoner): In-depth synthesis of arguments",
+          description: "DeepSeek's flagship reasoning model performs deep logical synthesis and drafts a detailed report with an end-to-end chain of reasoning (chain-of-thought).",
+        },
+        s9: {
+          title: "9. NumericCheck & ClaimVerifier: Checking numbers and facts",
+          description: "NumericCheck verifies percentages, dates and amounts. ClaimVerifier checks every key claim in the report, weeding out hallucinations and sending doubtful passages back for correction.",
+        },
+        s10: {
+          title: "10. RedTeam, Stance & Integrity: Stress tests and citation audit",
+          description: "RedTeam attacks the hypotheses with devil's-advocate arguments. Stance brings in minority views. CitationAudit and Retraction check DOIs against the list of retracted papers.",
+        },
+        s11: {
+          title: "11. ReportCritic: Quality control and send-back (feedback loop)",
+          description: "ReportCritic reviews the draft. When it finds logical gaps or weak arguments it sends the task back: to AnalyzerAgent (to re-synthesize) or to ReplanAgent (to gather more facts).",
+        },
+        s12: {
+          title: "12. ConfidenceAgent: Confidence calibration and scoring",
+          description: "Once the critics approve, ConfidenceAgent computes a calibrated confidence index (0-100%) and builds the report's transparency badge.",
+        },
+        s13: {
+          title: "13. ChatAgent: An interactive expert on the evidence",
+          description: "The report is delivered. ChatAgent answers any follow-up questions, strictly grounded in the collected citations and verified facts.",
+        },
+      },
       prevStep: "Back",
       nextStep: "Forward",
       stepProgress: "Step {current} of {total}",
@@ -2794,6 +2902,60 @@ const es: typeof ru = {
       invocation: "Invocación",
       tracing: "Trazas",
       stepTitle: "Paso {n}: {title}",
+      walkthroughSteps: {
+        s1: {
+          title: "1. Trigger ➔ ClarifierAgent: Evaluación de la ambigüedad de la consulta",
+          description: "El usuario envía una solicitud de investigación. ClarifierAgent evalúa si el texto es incompleto o ambiguo y, si hace falta, pide aclaraciones.",
+        },
+        s2: {
+          title: "2. PromptOptimizerAgent: Enriquecimiento con contexto e hipótesis",
+          description: "Convierte la consulta del usuario en un informe analítico detallado: añade términos académicos y contexto sectorial y formula hipótesis verificables.",
+        },
+        s3: {
+          title: "3. Orchestrator & CrossLanguage: Descomposición y expansión lingüística",
+          description: "Orchestrator descompone el tema en un grafo de subtareas y CrossLanguageAgent genera consultas en idiomas nativos (ruso, chino, alemán) para acceder a fuentes regionales.",
+        },
+        s4: {
+          title: "4. SearchAgent: Búsqueda web en paralelo y extracción con Rust",
+          description: "Los workers reparten las consultas entre Tavily, SearXNG y DuckDuckGo, y un extractor rápido Rust/Trafilatura descarga en streaming páginas web y documentos PDF.",
+        },
+        s5: {
+          title: "5. Filtrado de fuentes, reputación y deduplicación",
+          description: "SourceCritic descarta granjas de spam y páginas puerta (y, si hace falta, repite la búsqueda). SourceReputation pondera los dominios. SourceIndependence elimina las copias sindicadas.",
+        },
+        s6: {
+          title: "6. EvidenceMapperAgent: Vinculación de evidencias con hipótesis",
+          description: "Divide los textos en fragmentos con sentido y asocia cada párrafo con una subtarea y una hipótesis, formando la matriz de hechos de la investigación.",
+        },
+        s7: {
+          title: "7. ReplanAgent: Búsqueda de lagunas (bucle de gap analysis de LangGraph)",
+          description: "Analiza la matriz de hechos. Si detecta lagunas o falta de evidencia, devuelve a los workers a una nueva ronda dirigida de recopilación de fuentes.",
+        },
+        s8: {
+          title: "8. AnalyzerAgent (DeepSeek-Reasoner): Síntesis profunda de argumentos",
+          description: "El modelo de razonamiento insignia de DeepSeek realiza una síntesis lógica profunda y redacta un borrador detallado con una cadena de razonamiento completa (chain-of-thought).",
+        },
+        s9: {
+          title: "9. NumericCheck & ClaimVerifier: Verificación de cifras y hechos",
+          description: "NumericCheck comprueba porcentajes, fechas e importes. ClaimVerifier verifica cada afirmación clave del informe, elimina alucinaciones y devuelve los fragmentos dudosos para corregirlos.",
+        },
+        s10: {
+          title: "10. RedTeam, Stance & Integrity: Pruebas de estrés y auditoría de citas",
+          description: "RedTeam ataca las hipótesis con argumentos de «abogado del diablo». Stance incorpora las opiniones minoritarias. CitationAudit y Retraction cotejan los DOI con la lista de artículos retractados.",
+        },
+        s11: {
+          title: "11. ReportCritic: Control de calidad y devolución (feedback loop)",
+          description: "ReportCritic evalúa el borrador. Si detecta lagunas lógicas o argumentos débiles, devuelve la tarea: a AnalyzerAgent (para rehacer la síntesis) o a ReplanAgent (para reunir más hechos).",
+        },
+        s12: {
+          title: "12. ConfidenceAgent: Calibración de la confianza y puntuación",
+          description: "Tras la aprobación de los críticos, ConfidenceAgent calcula un índice de confianza calibrado (0-100%) y genera la insignia de transparencia del informe.",
+        },
+        s13: {
+          title: "13. ChatAgent: Experto interactivo en la base de evidencias",
+          description: "El informe está entregado. ChatAgent responde a cualquier pregunta posterior del usuario, apoyándose estrictamente en las citas recopiladas y los hechos verificados.",
+        },
+      },
       prevStep: "Atrás",
       nextStep: "Adelante",
       stepProgress: "Paso {current} de {total}",
