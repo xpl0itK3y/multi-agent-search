@@ -553,18 +553,20 @@ class InMemoryTaskStore:
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        normalized_event = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **event,
-        }
-        research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
-        research.updated_at = datetime.now(timezone.utc)
+    ) -> list[dict] | None:
+        # Same lock as graph_state merges, mirroring the SQL store's row lock: concurrent
+        # appenders must not overwrite each other's events.
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            now = datetime.now(timezone.utc)
+            normalized_event = {"timestamp": now.isoformat(), **event}
+            research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
+            research.updated_at = now
+            trail = research.graph_trail
         self._emit_change(research_id)
-        return research
+        return trail
 
     def compact_research_graph_trails(self) -> list[str]:
         compacted_ids: list[str] = []

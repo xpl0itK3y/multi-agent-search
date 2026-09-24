@@ -115,7 +115,7 @@ def test_sqlalchemy_task_store_persists_graph_state_and_trail(postgres_session_f
     assert updated_state is not None
     assert updated_state.graph_state["step"] == "collect_context"
     assert appended is not None
-    assert appended.graph_trail[0]["detail"] == "Collected 5 sources"
+    assert appended[0]["detail"] == "Collected 5 sources"  # the new trail, not the full row
     assert fetched_research is not None
     assert fetched_research.graph_state["step"] == "collect_context"
     assert "partial_report" not in fetched_research.graph_state

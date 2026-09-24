@@ -131,11 +131,12 @@ class TaskStore(Protocol):
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None: ...
 
+    # Atomic under the research row lock; returns the new trail, not the whole record.
     def append_research_graph_event(
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None: ...
+    ) -> list[dict] | None: ...
 
     def compact_research_graph_trails(self) -> list[str]: ...
 

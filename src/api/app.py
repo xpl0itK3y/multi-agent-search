@@ -232,6 +232,43 @@ def parse_client_ua(ua_string: str | None) -> dict[str, str]:
     return {"browser": browser, "os": os_name, "device_type": device_type}
 
 
+# Research SSE trail cursor: (timestamp of the last streamed entry, how many entries with
+# that timestamp were streamed). The stored trail is sorted by timestamp and capped at
+# graph_trail_history_limit, so a positional cursor stops moving once the cap is reached.
+TrailCursor = tuple[str, int]
+
+
+def unsent_trail_entries(
+    trail: list[dict], cursor: TrailCursor | None
+) -> list[tuple[dict, TrailCursor]]:
+    """Trail entries after `cursor`, each with the cursor that points at it."""
+    fresh: list[tuple[dict, TrailCursor]] = []
+    current_timestamp, same_timestamp_count = None, 0
+    for entry in trail:
+        timestamp = str(entry.get("timestamp") or "")
+        if timestamp == current_timestamp:
+            same_timestamp_count += 1
+        else:
+            current_timestamp, same_timestamp_count = timestamp, 1
+        if cursor is not None and (
+            timestamp < cursor[0] or (timestamp == cursor[0] and same_timestamp_count <= cursor[1])
+        ):
+            continue
+        fresh.append((entry, (timestamp, same_timestamp_count)))
+    return fresh
+
+
+def format_trail_cursor(cursor: TrailCursor) -> str:
+    return f"{cursor[0]}|{cursor[1]}"
+
+
+def parse_trail_cursor(value: str | None) -> TrailCursor | None:
+    timestamp, _, count = (value or "").rpartition("|")
+    if not timestamp or not count.isdigit():
+        return None
+    return timestamp, int(count)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
@@ -1330,15 +1367,18 @@ def register_routes(app: FastAPI) -> None:
         pub/sub wait runs on redis.asyncio, so each open stream costs zero
         threadpool tokens — /health stays responsive under many viewers."""
         service = get_research_service(request)
+        # A reconnecting EventSource resends the id of the last trace step it received.
+        resume_cursor = parse_trail_cursor(request.headers.get("last-event-id"))
 
-        def sse(event: str, data: dict) -> str:
-            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        def sse(event: str, data: dict, event_id: str | None = None) -> str:
+            id_line = f"id: {event_id}\n" if event_id else ""
+            return f"{id_line}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
         async def event_stream():
             last_status: str | None = None
             last_report: str | None = None
             last_reasoning: str | None = None
-            last_trail_len = 0
+            trail_cursor = resume_cursor
             # Sized for long deep-research workloads (HARD can take 30-45+ minutes);
             # dynamically bumped whenever new steps/reasoning/reports arrive.
             deadline = time.monotonic() + 3600
@@ -1370,20 +1410,20 @@ def register_routes(app: FastAPI) -> None:
                         last_status = status
                         yield sse("status_change", {"status": status})
 
-                    trail = research.graph_trail or []
-                    if len(trail) > last_trail_len:
-                        for entry in trail[last_trail_len:]:
-                            yield sse("trace_step", {
-                                "step": entry.get("step"),
-                                "detail": entry.get("detail"),
-                                "sources": entry.get("sources") or [],
-                                "agent": entry.get("agent"),
-                                "phase": entry.get("phase"),
-                                "action": entry.get("action"),
-                                "metrics": entry.get("metrics"),
-                                "timestamp": entry.get("timestamp"),
-                            })
-                        last_trail_len = len(trail)
+                    fresh_entries = unsent_trail_entries(research.graph_trail or [], trail_cursor)
+                    for entry, entry_cursor in fresh_entries:
+                        trail_cursor = entry_cursor
+                        yield sse("trace_step", {
+                            "step": entry.get("step"),
+                            "detail": entry.get("detail"),
+                            "sources": entry.get("sources") or [],
+                            "agent": entry.get("agent"),
+                            "phase": entry.get("phase"),
+                            "action": entry.get("action"),
+                            "metrics": entry.get("metrics"),
+                            "timestamp": entry.get("timestamp"),
+                        }, event_id=format_trail_cursor(trail_cursor))
+                    if fresh_entries:
                         deadline = max(deadline, time.monotonic() + 1800)
 
                     reasoning = research.partial_reasoning

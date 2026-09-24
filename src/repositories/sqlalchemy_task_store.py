@@ -737,23 +737,31 @@ class SQLAlchemyTaskStore:
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None:
+    ) -> list[dict] | None:
+        """Append one trail event under the research row lock, reading and writing only
+        graph_trail — parallel search workers append to the same research, and the old
+        unlocked read-modify-write dropped events. The timestamp is taken inside the
+        lock, so trail order follows commit order (the SSE cursor relies on it).
+        Returns the new trail (None when the research is gone)."""
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            row = session.execute(
+                select(ResearchORM.graph_trail)
+                .where(ResearchORM.id == research_id)
+                .with_for_update()
+            ).one_or_none()
+            if row is None:
                 return None
 
-            normalized_event = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                **event,
-            }
-            research.graph_trail = compact_graph_trail(research.graph_trail or [], [normalized_event])
-            research.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(research)
-            result = research_orm_to_record(research)
+            now = datetime.now(timezone.utc)
+            normalized_event = {"timestamp": now.isoformat(), **event}
+            trail = compact_graph_trail(row.graph_trail or [], [normalized_event])
+            session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(graph_trail=trail, updated_at=now)
+            )
         self._emit_change(research_id)
-        return result
+        return trail
 
     def compact_research_graph_trails(self) -> list[str]:
         # Bounded working set (OPS-RETENTION): only recently-active researches still grow a
