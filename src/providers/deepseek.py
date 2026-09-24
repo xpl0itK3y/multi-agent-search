@@ -55,7 +55,9 @@ def calculate_deepseek_cost(
 ) -> float:
     """Calculate the estimated USD cost of an LLM call according to DeepSeek's model-specific pricing and context caching."""
     m = (model or "").lower()
-    if "pro" in m:
+    # A reasoner (e.g. DEEPSEEK_REASONER_MODEL=deepseek-reasoner) is a reasoning model:
+    # bill it at the pro tier rather than whichever tier the base model happens to use.
+    if "pro" in m or "reasoner" in m:
         tier = "pro"
     elif "flash" in m or "chat" in m:
         tier = "flash"
@@ -154,6 +156,18 @@ class DeepSeekProvider(LLMProvider):
 
     # ── generate ──────────────────────────────────────────────────────────────
 
+    def _trusted_model_ids(self) -> set[str]:
+        """Operator-configured models an internal call may name besides the user catalog
+        (the reasoner, repair and red-team models). Read at call time, not import time."""
+        configured = (
+            self.model,
+            settings.deepseek_model,
+            settings.deepseek_reasoner_model,
+            settings.deepseek_repair_model,
+            settings.red_team_model,
+        )
+        return {model_id for model_id in configured if model_id}
+
     def generate(
         self,
         system_prompt: str,
@@ -164,10 +178,15 @@ class DeepSeekProvider(LLMProvider):
     ) -> str:
         # Per-call model override (e.g. a reasoner for planning); pop so it doesn't
         # collide with the explicit model= below.
-        from src.model_catalog import resolve_model_id
+        from src.model_catalog import resolve_trusted_model_id
 
-        raw_model = kwargs.pop("model", None) or self.model
-        model = resolve_model_id(raw_model, self.model)
+        requested = kwargs.pop("model", None) or self.model
+        model = resolve_trusted_model_id(requested, self._trusted_model_ids())
+        if model is None:
+            # Neither selectable nor operator-configured (e.g. an id stored before the
+            # request boundary validated it): never send it raw, but say so.
+            logger.warning("deepseek_model_override_rejected requested=%r using=%s", requested, self.model)
+            model = self.model
         # Streaming is also needed when we only want reasoning tokens.
         use_stream = streaming_callback is not None or reasoning_callback is not None
         if use_stream:

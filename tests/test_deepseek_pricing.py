@@ -59,3 +59,12 @@ def test_extract_usage():
     assert pt == 1200
     assert ct == 800
     assert cht == 900
+
+
+def test_reasoner_is_billed_at_the_pro_tier_whatever_the_base_model(monkeypatch):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "deepseek_model", "deepseek-flash")
+    offpeak = datetime(2026, 9, 23, 14, 0, tzinfo=timezone.utc)
+    cost = calculate_deepseek_cost("deepseek-reasoner", 1_000_000, 1_000_000, at_time=offpeak)
+    assert cost == pytest.approx(2.64)  # pro off-peak: 0.66 + 1.98, not flash's 0.75

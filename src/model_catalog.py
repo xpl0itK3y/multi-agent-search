@@ -82,3 +82,16 @@ def resolve_model_id(model_id: str | None, fallback: str) -> str:
         return fallback
     canonical_id = _ALIASES.get(model_id, model_id)
     return canonical_id if canonical_id in _BY_ID else fallback
+
+
+def resolve_trusted_model_id(model_id: str, trusted: set[str]) -> str | None:
+    """Canonical id for a model the server itself picked, or None when it is not allowed.
+
+    Like ``resolve_model_id`` but also accepts ``trusted`` ids (operator-configured models
+    such as the reasoner or repair model, which are not user-selectable). For the provider
+    only: client input is validated with ``resolve_model_id`` at the request boundary.
+    """
+    canonical_id = _ALIASES.get(model_id, model_id)
+    if canonical_id in _BY_ID or canonical_id in trusted or model_id in trusted:
+        return canonical_id
+    return None
