@@ -2635,7 +2635,7 @@ class SQLAlchemyTaskStore:
                 )
                 .where(LLMUsageLogORM.user_id == user_id)
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), LLMUsageLogORM.model)
             )
             by_model = [
                 {
@@ -2662,7 +2662,7 @@ class SQLAlchemyTaskStore:
                 .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
                 .where(ResearchORM.user_id == user_id)
                 .group_by(ResearchORM.id, ResearchORM.prompt, ResearchORM.depth, ResearchORM.status, ResearchORM.created_at)
-                .order_by(ResearchORM.created_at.desc())
+                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
                 .limit(10)
             )
             recent = [

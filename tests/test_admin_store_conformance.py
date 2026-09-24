@@ -332,3 +332,26 @@ def test_token_analytics_selects_only_the_legacy_usage_key(store):
         store.get_admin_token_analytics()
     if statements is not None:
         assert not [s for s in statements if re.search(_WHOLE_BLOB, s)]
+
+
+# ── per-user token stats (/v1/auth/token-stats) ───────────────────────────────
+
+
+def test_user_token_analytics_orders_models_by_tokens(store):
+    _user(store, "stats-user")
+    research = _research(store, "stats-user", "stats topic", T0)
+    _usage(store, research.id, "stats-user", 5, 0.01, model="deepseek-v4-pro")
+    _usage(store, research.id, "stats-user", 30, 0.02, model="deepseek-chat")
+    _usage(store, None, "stats-user", 30, 0.03, model="deepseek-flash")
+
+    stats = store.get_user_token_analytics("stats-user")
+
+    assert [(m["model"], m["total_tokens"], m["calls_count"]) for m in stats["by_model"]] == [
+        ("deepseek-chat", 30, 1),
+        ("deepseek-flash", 30, 1),
+        ("deepseek-v4-pro", 5, 1),
+    ]
+    assert (stats["total_tokens"], stats["calls_count"], stats["researches_count"]) == (65, 3, 1)
+    assert [(r["prompt"], r["total_tokens"], r["depth"], r["status"]) for r in stats["recent"]] == [
+        ("stats topic", 35, "easy", "processing"),
+    ]

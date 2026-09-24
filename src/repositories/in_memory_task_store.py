@@ -1900,13 +1900,13 @@ class InMemoryTaskStore:
             {
                 "id": r.id,
                 "prompt": r.prompt,
-                "depth": r.depth,
-                "status": r.status,
+                "depth": r.depth.value,
+                "status": r.status.value,
                 "total_tokens": sum(u.get("total_tokens", 0) for u in logs if u.get("research_id") == r.id),
                 "estimated_cost_usd": round(sum(u.get("estimated_cost_usd", 0.0) for u in logs if u.get("research_id") == r.id), 4),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
-            for r in sorted(researches, key=lambda x: x.created_at or datetime.min, reverse=True)[:10]
+            for r in sorted(researches, key=lambda x: (x.created_at, x.id), reverse=True)[:10]
         ]
 
         return {
@@ -1916,6 +1916,7 @@ class InMemoryTaskStore:
             "estimated_cost_usd": total_cost,
             "calls_count": len(logs),
             "researches_count": len(researches),
-            "by_model": list(models_map.values()),
+            # The SQL order: most tokens first, then model name.
+            "by_model": sorted(models_map.values(), key=lambda m: (-m["total_tokens"], m["model"])),
             "recent": recent,
         }
