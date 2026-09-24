@@ -1298,26 +1298,43 @@ class InMemoryTaskStore:
     ) -> str:
         ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
         user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
-        record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        self.user_sessions.append({
-            "id": record_id,
-            "user_id": user_id,
-            "session_id": session_id,
-            "ip_address": ip_address,
-            "user_agent": user_agent,
-            "device_type": device_type,
-            "browser": browser,
-            "os": os,
-            "screen_res": screen_res,
-            "viewport": viewport,
-            "language": language,
-            "timezone": client_timezone,
-            "country": country,
-            "city": city,
-            "started_at": now,
-            "last_active_at": now,
-        })
+        # Mirrors the SQL upsert on (session_id, user_id): a repeat bumps the caller's own
+        # row; another account's row with the same client-chosen id is left alone.
+        existing = next(
+            (
+                s for s in self.user_sessions
+                if s.get("session_id") == session_id and s.get("user_id") == user_id
+            ),
+            None,
+        )
+        if existing is not None:
+            existing["last_active_at"] = now
+            if ip_address:
+                existing["ip_address"] = ip_address
+            if user_agent:
+                existing["user_agent"] = user_agent
+            record_id = existing["id"]
+        else:
+            record_id = str(uuid.uuid4())
+            self.user_sessions.append({
+                "id": record_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "device_type": device_type,
+                "browser": browser,
+                "os": os,
+                "screen_res": screen_res,
+                "viewport": viewport,
+                "language": language,
+                "timezone": client_timezone,
+                "country": country,
+                "city": city,
+                "started_at": now,
+                "last_active_at": now,
+            })
         self.touch_user_activity(
             user_id,
             ip_address=ip_address,
@@ -1428,7 +1445,8 @@ class InMemoryTaskStore:
             tot_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in user_logs)
 
             user_sessions = [s for s in self.user_sessions if s.get("user_id") == uid]
-            last_sess = user_sessions[-1] if user_sessions else {}
+            # Most recently active, as the SQL store orders it (upserts bump old rows).
+            last_sess = max(user_sessions, key=lambda s: s["last_active_at"], default={})
 
             items.append(
                 AdminUserListItem(

@@ -510,3 +510,33 @@ def test_telemetry_writes_clip_ip_and_user_agent(store):
     detail = store.get_admin_user_detail(user.id)
     assert len(detail.sessions[0]["ip_address"]) == 64
     assert len(detail.user.last_ip) == 64
+
+
+def test_user_session_upsert_is_scoped_to_its_user(store):
+    """session_id is client-chosen (and survived sign-out in the SPA): a second account
+    reporting the same id gets its own row and never updates the first account's."""
+    first, second = _user(store), _user(store)
+
+    first_id = store.record_user_session(first.id, "shared-sid", ip_address="10.0.0.1", browser="Firefox")
+    second_id = store.record_user_session(second.id, "shared-sid", ip_address="10.0.0.2", browser="Chrome")
+
+    assert first_id != second_id
+    first_sessions = store.get_admin_user_detail(first.id).sessions
+    second_sessions = store.get_admin_user_detail(second.id).sessions
+    assert [(s["ip_address"], s["browser"]) for s in first_sessions] == [("10.0.0.1", "Firefox")]
+    assert [(s["ip_address"], s["browser"]) for s in second_sessions] == [("10.0.0.2", "Chrome")]
+
+
+def test_user_session_repeat_bumps_the_same_row(store):
+    user = _user(store)
+    first_id = store.record_user_session(user.id, "repeat-sid", ip_address="10.0.0.1", browser="Firefox")
+    before = store.get_admin_user_detail(user.id).sessions[0]["last_active_at"]
+
+    again_id = store.record_user_session(user.id, "repeat-sid", ip_address="10.0.0.9", browser="Other")
+
+    sessions = store.get_admin_user_detail(user.id).sessions
+    assert again_id == first_id
+    assert len(sessions) == 1
+    assert sessions[0]["ip_address"] == "10.0.0.9"
+    assert sessions[0]["browser"] == "Firefox"  # device details stay from the first report
+    assert str(sessions[0]["last_active_at"]) >= str(before)

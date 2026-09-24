@@ -347,13 +347,15 @@ class UserSessionORM(Base):
     __table_args__ = (
         Index("ix_user_sessions_started_at", "started_at"),
         Index("ix_user_sessions_last_active", "last_active_at"),
+        # One row per client session id per account: the upsert's ON CONFLICT arbiter.
+        Index("uq_user_sessions_session_user", "session_id", "user_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     device_type: Mapped[str] = mapped_column(

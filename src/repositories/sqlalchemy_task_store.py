@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import and_, case, delete, false, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -1923,40 +1924,38 @@ class SQLAlchemyTaskStore:
     ) -> str:
         ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
         user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
-        record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
+        # One row per (session_id, user_id). session_id is client-chosen, so the key must
+        # include the caller: another account's session is never updated. The unique
+        # index arbitrates concurrent session_starts instead of a check-then-insert.
+        insert_stmt = pg_insert(UserSessionORM).values(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            session_id=session_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_type=device_type,
+            browser=browser,
+            os=os,
+            screen_res=screen_res,
+            viewport=viewport,
+            language=language,
+            timezone=client_timezone,
+            country=country,
+            city=city,
+            started_at=now,
+            last_active_at=now,
+        )
+        upsert = insert_stmt.on_conflict_do_update(
+            index_elements=[UserSessionORM.session_id, UserSessionORM.user_id],
+            set_={
+                "last_active_at": insert_stmt.excluded.last_active_at,
+                "ip_address": func.coalesce(insert_stmt.excluded.ip_address, UserSessionORM.ip_address),
+                "user_agent": func.coalesce(insert_stmt.excluded.user_agent, UserSessionORM.user_agent),
+            },
+        ).returning(UserSessionORM.id)
         with self.session_scope() as session:
-            # Check if session already exists
-            existing = session.execute(
-                select(UserSessionORM).where(UserSessionORM.session_id == session_id)
-            ).scalar_one_or_none()
-            if existing:
-                existing.last_active_at = now
-                if ip_address:
-                    existing.ip_address = ip_address
-                if user_agent:
-                    existing.user_agent = user_agent
-                return existing.id
-
-            session_orm = UserSessionORM(
-                id=record_id,
-                user_id=user_id,
-                session_id=session_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                device_type=device_type,
-                browser=browser,
-                os=os,
-                screen_res=screen_res,
-                viewport=viewport,
-                language=language,
-                timezone=client_timezone,
-                country=country,
-                city=city,
-                started_at=now,
-                last_active_at=now,
-            )
-            session.add(session_orm)
+            record_id = session.execute(upsert).scalar_one()
 
         self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent, device=device_type)
         return record_id
