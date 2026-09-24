@@ -1764,6 +1764,58 @@ class ResearchService(
         except Exception:
             pass
 
+    def _raise_if_cancelled(self, research_id: str) -> None:
+        research = self.task_store.get_research(research_id)
+        if research is not None and research.status == ResearchStatus.CANCELLED:
+            raise FinalizeCancelled(research_id)
+
+    def _finalize_stopped_cancelled(self, research_id: str) -> ResearchRecord:
+        latest = self.task_store.get_research(research_id)
+        if latest is None:
+            raise NotFoundError("Research not found")
+        logger.info("finalize_stopped_cancelled research_id=%s", research_id)
+        return latest
+
+    def _run_trust_suite(
+        self,
+        report: str,
+        research: ResearchRecord,
+        tasks: list[SearchTask],
+        aggregated: list[dict] | None,
+        finalize_job_id: str | None,
+        lease_epoch: int | None,
+    ) -> str:
+        """Red-team, audits and viewpoint passes over the finished draft. A cancel is
+        checked before every step (CANCEL-TRUST-SUITE), so a research cancelled during the
+        last graph step stops spending here too; FinalizeCancelled ends the suite."""
+        research_id = research.id
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "redteam", finalize_job_id, lease_epoch)
+        report = self._maybe_red_team(report, research, tasks)
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "audit", finalize_job_id, lease_epoch)
+        # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
+        # fall back to the persisted canonical table or deterministic reconstruction.
+        if aggregated is None:
+            aggregated = self._aggregated_sources(research, tasks)
+        audit_steps = (
+            lambda: self._audit_citations(report, research, tasks, aggregated=aggregated),
+            lambda: self._analyze_source_independence(research, tasks, aggregated=aggregated),
+            lambda: self._assess_source_reputation(research, tasks, aggregated=aggregated),
+            lambda: self._check_numbers(report, research, tasks, aggregated=aggregated),
+            lambda: self._check_retractions(research, tasks, aggregated=aggregated),
+            lambda: self._maybe_build_comparison(report, research),
+        )
+        for step in audit_steps:
+            self._raise_if_cancelled(research_id)
+            step()
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "viewpoints", finalize_job_id, lease_epoch)
+        self._maybe_assess_stance(research, tasks, aggregated=aggregated)
+        self._raise_if_cancelled(research_id)
+        self._analyze_cross_language(research, tasks, aggregated=aggregated)
+        return report
+
     def complete_research_finalization(
         self,
         research_id: str,
@@ -1810,11 +1862,7 @@ class ResearchService(
                     effective_prompt = research.prompt
                     final_tasks = tasks
             except FinalizeCancelled:
-                latest = self.task_store.get_research(research_id)
-                if latest is None:
-                    raise NotFoundError("Research not found")
-                logger.info("finalize_stopped_cancelled research_id=%s", research_id)
-                return latest
+                return self._finalize_stopped_cancelled(research_id)
 
             tasks = final_tasks
             source_state: dict[str, Any] = {
@@ -1827,28 +1875,12 @@ class ResearchService(
             self.task_store.merge_research_graph_state(research_id, source_state)
             research = self.task_store.get_research(research_id) or research
 
-            self._emit_finalize_progress(
-                research_id, "redteam", finalize_job_id, lease_epoch
-            )
-            report = self._maybe_red_team(report, research, tasks)
-            self._emit_finalize_progress(
-                research_id, "audit", finalize_job_id, lease_epoch
-            )
-            # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
-            # fall back to the persisted canonical table or deterministic reconstruction.
-            if aggregated is None:
-                aggregated = self._aggregated_sources(research, tasks)
-            self._audit_citations(report, research, tasks, aggregated=aggregated)
-            self._analyze_source_independence(research, tasks, aggregated=aggregated)
-            self._assess_source_reputation(research, tasks, aggregated=aggregated)
-            self._check_numbers(report, research, tasks, aggregated=aggregated)
-            self._check_retractions(research, tasks, aggregated=aggregated)
-            self._maybe_build_comparison(report, research)
-            self._emit_finalize_progress(
-                research_id, "viewpoints", finalize_job_id, lease_epoch
-            )
-            self._maybe_assess_stance(research, tasks, aggregated=aggregated)
-            self._analyze_cross_language(research, tasks, aggregated=aggregated)
+            try:
+                report = self._run_trust_suite(
+                    report, research, tasks, aggregated, finalize_job_id, lease_epoch
+                )
+            except FinalizeCancelled:
+                return self._finalize_stopped_cancelled(research_id)
             report = self._inject_graph_execution_trail(report, research_id)
             # The "Report Notes" / "Примечания к отчёту" section is an INTERNAL quality
             # signal (the finalize graph re-drafts while it's present). It must never

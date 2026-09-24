@@ -86,3 +86,76 @@ def test_result_previews_dedupe_domains_and_cap():
     ])
     assert [p["domain"] for p in out] == ["example.com", "other.org"]
     assert out[0]["title"] == "A"
+
+
+def _finalize_ready_service(mocker):
+    store = InMemoryTaskStore()
+    rec = store.add_research(ResearchRequest(prompt="cancel during trust suite", depth=SearchDepth.EASY), task_ids=["t1"])
+    store.add_task(
+        {
+            "id": "t1",
+            "research_id": rec.id,
+            "description": "done",
+            "queries": ["q"],
+            "status": "completed",
+            "result": [{"url": "https://example.com", "title": "Example", "content": "Body"}],
+        }
+    )
+    analyzer = mocker.Mock()
+    analyzer.llm = None
+    analyzer.run_analysis.return_value = "draft report [S1]"
+    svc = ResearchService(task_store=store, analyzer=analyzer)
+    return store, rec, svc
+
+
+def test_cancel_during_the_trust_suite_stops_the_remaining_steps(mocker):
+    # CANCEL-TRUST-SUITE: the graph already returned; a cancel that lands during the
+    # red-team pass must stop every later audit/viewpoint step and the commit.
+    store, rec, svc = _finalize_ready_service(mocker)
+
+    def red_team_then_cancel(report, research, tasks):
+        store.update_research_status(rec.id, ResearchStatus.CANCELLED, "Cancelled by user.")
+        return report
+
+    mocker.patch.object(svc, "_maybe_red_team", side_effect=red_team_then_cancel)
+    later_steps = [
+        mocker.patch.object(svc, name)
+        for name in (
+            "_audit_citations",
+            "_analyze_source_independence",
+            "_assess_source_reputation",
+            "_check_numbers",
+            "_check_retractions",
+            "_maybe_build_comparison",
+            "_maybe_assess_stance",
+            "_analyze_cross_language",
+        )
+    ]
+    _, job = svc.enqueue_research_finalization(rec.id)
+
+    processed = svc.process_finalize_job(job.id)
+
+    for step in later_steps:
+        step.assert_not_called()
+    current = store.get_research(rec.id)
+    assert current.status == ResearchStatus.CANCELLED
+    assert current.final_report == "Cancelled by user."
+    assert processed.status.value == "completed"  # the cancelled job is closed, not retried
+    assert "viewpoints" not in [entry.get("step") for entry in current.graph_trail]
+
+
+def test_cancel_between_audit_steps_stops_the_next_one(mocker):
+    store, rec, svc = _finalize_ready_service(mocker)
+
+    def independence_then_cancel(*args, **kwargs):
+        store.update_research_status(rec.id, ResearchStatus.CANCELLED, "Cancelled by user.")
+
+    mocker.patch.object(svc, "_analyze_source_independence", side_effect=independence_then_cancel)
+    reputation = mocker.patch.object(svc, "_assess_source_reputation")
+    stance = mocker.patch.object(svc, "_maybe_assess_stance")
+
+    result = svc.finalize_research(rec.id)
+
+    assert result.status == ResearchStatus.CANCELLED
+    reputation.assert_not_called()
+    stance.assert_not_called()
