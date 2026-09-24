@@ -6,6 +6,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import { saveFile } from "@/lib/download";
+import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
 import type { Depth, UserTokenStats } from "@/lib/types";
 
 const router = useRouter();
@@ -366,12 +367,12 @@ onUnmounted(() => {
               <div class="flex items-center gap-4">
                 <div class="h-16 w-16 rounded-2xl bg-surface border-2 border-bd flex items-center justify-center text-2xl shadow-inner shrink-0 overflow-hidden">
                   <img
-                    v-if="avatarUrl && (avatarUrl.startsWith('http') || avatarUrl.startsWith('/'))"
+                    v-if="isAvatarImage(avatarUrl)"
                     :src="avatarUrl"
                     alt=""
                     class="h-full w-full object-cover"
                   />
-                  <span v-else>{{ avatarUrl || (name ? name.charAt(0).toUpperCase() : '👤') }}</span>
+                  <span v-else>{{ avatarGlyph(avatarUrl, name, '👤') }}</span>
                 </div>
 
                 <div class="space-y-2 flex-1">

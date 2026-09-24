@@ -7,6 +7,7 @@ import { useResearchStore } from "@/stores/research";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { confirm } from "@/lib/confirm";
+import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
 import SparkLogo from "@/components/SparkLogo.vue";
 
 const ui = useUiStore();
@@ -17,7 +18,7 @@ const displayName = computed(() => {
   if (!user) return ui.userName || "";
   return user.name?.trim() || user.email?.split("@")[0] || ui.userName || "";
 });
-const avatarUrl = computed(() => auth.user?.avatar_url || null);
+const avatarUrl = computed(() => auth.user?.avatar_url || undefined);
 
 async function logout() {
   await auth.logout();
@@ -180,14 +181,14 @@ function openSettings() {
       @click="openSettings"
     >
       <img
-        v-if="avatarUrl"
+        v-if="isAvatarImage(avatarUrl)"
         :src="avatarUrl"
         alt=""
         referrerpolicy="no-referrer"
         class="h-9 w-9 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
       />
       <div v-else class="grid h-9 w-9 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
-        {{ displayName.charAt(0).toUpperCase() }}
+        {{ avatarGlyph(avatarUrl, displayName) }}
       </div>
     </button>
   </aside>
@@ -349,14 +350,14 @@ function openSettings() {
       @click="openSettings"
     >
       <img
-        v-if="avatarUrl"
+        v-if="isAvatarImage(avatarUrl)"
         :src="avatarUrl"
         alt=""
         referrerpolicy="no-referrer"
         class="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
       />
       <div v-else class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
-        {{ displayName.charAt(0).toUpperCase() }}
+        {{ avatarGlyph(avatarUrl, displayName) }}
       </div>
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-medium text-ink group-hover:text-accent transition-colors">{{ displayName }}</div>
