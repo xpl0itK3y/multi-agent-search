@@ -68,11 +68,9 @@ const defaultModel = ref<string>(
 const planFirst = ref<boolean>(
   typeof localStorage !== "undefined" ? localStorage.getItem("research.plan_first") !== "false" : true
 );
+// Read by AgentActivityConsole for its initial open state.
 const autoExpandConsole = ref<boolean>(
   typeof localStorage !== "undefined" ? localStorage.getItem("research.auto_expand_console") === "true" : false
-);
-const defaultLanguage = ref<string>(
-  (typeof localStorage !== "undefined" && localStorage.getItem("research.default_language")) || "auto"
 );
 const researchSuccess = ref(false);
 
@@ -82,7 +80,6 @@ function saveResearchPreferences() {
     localStorage.setItem("research.default_model", defaultModel.value);
     localStorage.setItem("research.plan_first", String(planFirst.value));
     localStorage.setItem("research.auto_expand_console", String(autoExpandConsole.value));
-    localStorage.setItem("research.default_language", defaultLanguage.value);
   }
   researchSuccess.value = true;
   setTimeout(() => (researchSuccess.value = false), 3000);

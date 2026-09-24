@@ -18,15 +18,20 @@ const props = withDefaults(
 
 const { t, te } = useI18n();
 
-// Persist open/collapse state across visits (defaults to collapsed if completed)
+// Persist open/collapse state across visits (defaults to collapsed if completed).
+// The Settings preference "auto-expand the agent console" always starts it open.
 const CONSOLE_OPEN_KEY = "activity_console.open";
-const open = ref(
-  props.status === "completed"
-    ? false
-    : typeof localStorage !== "undefined"
-    ? localStorage.getItem(CONSOLE_OPEN_KEY) !== "0"
-    : true
-);
+const AUTO_EXPAND_KEY = "research.auto_expand_console";
+function initialOpen(): boolean {
+  try {
+    if (localStorage.getItem(AUTO_EXPAND_KEY) === "true") return true;
+    if (props.status === "completed") return false;
+    return localStorage.getItem(CONSOLE_OPEN_KEY) !== "0";
+  } catch {
+    return props.status !== "completed"; // storage unavailable
+  }
+}
+const open = ref(initialOpen());
 
 watch(
   () => props.status,
