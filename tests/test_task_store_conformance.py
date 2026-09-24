@@ -33,10 +33,12 @@ from tests.postgres_helpers import truncate_runtime_tables
         pytest.param("postgres", marks=pytest.mark.postgres),
     ]
 )
-def store(request, _postgres_test_db):
+def store(request):
     if request.param == "memory":
         return InMemoryTaskStore()
-    engine, session_factory = _postgres_test_db
+    # Resolved lazily: requesting the DB fixture in the signature made its "Postgres
+    # unreachable" skip hit the memory leg too, so no-DB runs executed neither leg.
+    engine, session_factory = request.getfixturevalue("_postgres_test_db")
     truncate_runtime_tables(session_factory)  # fresh runtime tables per test
     return SQLAlchemyTaskStore(session_factory)
 
@@ -488,3 +490,4 @@ def test_search_cache_put_get_and_cleanup(store):
 
 def test_ping_is_alive(store):
     assert store.ping() is True
+
