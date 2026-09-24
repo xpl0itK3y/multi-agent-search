@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
+import { createTraceDeduper, reconnectDelayMs, traceFromGraph } from "@/lib/trace";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "./AgentActivityConsole.vue";
 import type { TraceEntry } from "@/lib/stream";
@@ -26,6 +27,17 @@ const done = ref(false);
 const usage = ref<Record<string, number> | null>(null);
 const errorMsg = ref<string | null>(null);
 const streamLost = ref(false);
+
+// Every (re)connect replays the whole trail — show each step once.
+const traceSeen = createTraceDeduper();
+function addTrace(entry: TraceEntry) {
+  if (traceSeen.accept(entry)) trace.value.push(entry);
+}
+function resetTrace() {
+  traceSeen.reset();
+  trace.value = [];
+  reasoning.value = "";
+}
 
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
@@ -63,6 +75,10 @@ function notifyDone(s: string) {
 }
 let close: (() => void) | undefined;
 let queuePoll: number | undefined;
+// Pending auto-reconnect after a stream error; consecutive failures back off.
+let reconnectTimer: number | undefined;
+let reconnectAttempt = 0;
+let unmounted = false;
 
 function statusLabel(s: string): string {
   return te(`status.${s}`) ? t(`status.${s}`) : s;
@@ -163,16 +179,7 @@ async function syncStatus(): Promise<boolean> {
       try {
         const g = await api.getGraph(props.id);
         if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
-          trace.value = g.graph_trail.map((entry) => ({
-            step: entry.step ?? "",
-            detail: entry.detail ?? "",
-            sources: entry.sources ?? [],
-            agent: entry.agent,
-            phase: entry.phase,
-            action: entry.action,
-            metrics: entry.metrics,
-            timestamp: entry.timestamp,
-          }));
+          traceFromGraph(g.graph_trail).forEach(addTrace);
         }
       } catch {
         /* non-fatal */
@@ -202,12 +209,43 @@ async function syncStatus(): Promise<boolean> {
   return false;
 }
 
+function clearReconnect() {
+  if (reconnectTimer !== undefined) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+}
+
+// Catch up and reopen the stream after a delay that grows with each consecutive
+// failure. Only one reconnect is ever pending, and none survives unmount.
+function scheduleReconnect() {
+  clearReconnect();
+  reconnectTimer = window.setTimeout(async () => {
+    reconnectTimer = undefined;
+    if (unmounted || done.value) return;
+    const terminal = await syncStatus();
+    if (!terminal) connect();
+  }, reconnectDelayMs(reconnectAttempt++));
+}
+
+// The stream delivered data again: drop the pending reconnect and the error it showed.
+function streamRecovered() {
+  clearReconnect();
+  reconnectAttempt = 0;
+  if (streamLost.value) {
+    streamLost.value = false;
+    errorMsg.value = null;
+  }
+}
+
 // (Re)open the live SSE stream. Re-callable so a dropped connection can be resumed.
 function connect() {
+  if (unmounted) return;
+  clearReconnect();
   close?.();
-  streamLost.value = false;
   close = openResearchStream(props.id, {
     onStatus: (s) => {
+      streamRecovered();
       status.value = s;
       if (s === "queued") startQueuePoll();
       else if (queuePos.value !== null) queuePos.value = null;
@@ -220,7 +258,7 @@ function connect() {
         emit("done", s); // ensure the thread learns of completion even without onDone
       }
     },
-    onTrace: (entry) => trace.value.push(entry),
+    onTrace: addTrace,
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       const wasEmpty = !report.value;
@@ -231,11 +269,8 @@ function connect() {
     onDone: async (s) => {
       if (s === "timeout" || s === "failed") {
         const terminal = await syncStatus();
-        if (!terminal) {
-          // Research is still processing or analyzing on the server — reconnect stream!
-          connect();
-          return;
-        }
+        // Research is still processing or analyzing on the server — reconnect stream.
+        if (!terminal) scheduleReconnect();
         return;
       }
       status.value = s;
@@ -251,13 +286,7 @@ function connect() {
       errorMsg.value = m;
       if (!done.value) {
         streamLost.value = true; // offer a resume button
-        // Auto-reconnect attempt after 3s to catch up or continue
-        setTimeout(async () => {
-          if (!done.value && status.value !== "completed") {
-            const terminal = await syncStatus();
-            if (!terminal) connect();
-          }
-        }, 3000);
+        scheduleReconnect(); // …and try to catch up / continue on our own
       }
     },
   });
@@ -265,6 +294,7 @@ function connect() {
 
 async function resume() {
   errorMsg.value = null;
+  reconnectAttempt = 0;
   const terminal = await syncStatus(); // catch up on anything missed while disconnected
   if (!terminal) connect();
 }
@@ -280,6 +310,8 @@ async function retry() {
     done.value = false;
     report.value = "";
     isFinal.value = false;
+    resetTrace(); // the retried run streams its own trail
+    reconnectAttempt = 0;
     connect();
   } catch (e) {
     errorMsg.value = apiErrorMessage(e, t);
@@ -294,6 +326,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  unmounted = true;
+  clearReconnect();
   close?.();
   stopQueuePoll();
 });

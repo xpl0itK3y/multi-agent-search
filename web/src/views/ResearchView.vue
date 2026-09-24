@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
+import { createTraceDeduper, traceFromGraph } from "@/lib/trace";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
 import type { TraceEntry } from "@/lib/stream";
@@ -22,6 +23,11 @@ const status = ref<string>("processing");
 const report = ref<string>("");
 const isFinal = ref(false);
 const trace = ref<TraceEntry[]>([]);
+// The stream replays the whole trail on (re)connect, after the /graph pre-fill.
+const traceSeen = createTraceDeduper();
+function addTrace(entry: TraceEntry) {
+  if (traceSeen.accept(entry)) trace.value.push(entry);
+}
 const reasoning = ref<string>("");
 const errorMsg = ref<string | null>(null);
 const done = ref(false);
@@ -169,16 +175,7 @@ onMounted(async () => {
       try {
         const g = await api.getGraph(props.id);
         if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
-          trace.value = g.graph_trail.map((entry) => ({
-            step: entry.step ?? "",
-            detail: entry.detail ?? "",
-            sources: entry.sources ?? [],
-            agent: entry.agent,
-            phase: entry.phase,
-            action: entry.action,
-            metrics: entry.metrics,
-            timestamp: entry.timestamp,
-          }));
+          traceFromGraph(g.graph_trail).forEach(addTrace);
         }
       } catch {
         /* non-fatal */
@@ -202,7 +199,7 @@ onMounted(async () => {
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
-    onTrace: (entry) => trace.value.push(entry),
+    onTrace: addTrace,
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;

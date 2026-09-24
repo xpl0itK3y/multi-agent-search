@@ -80,7 +80,9 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
       phase: d.phase,
       action: d.action,
       metrics: d.metrics,
-      timestamp: d.timestamp || new Date().toISOString(),
+      // The server timestamp is part of the de-duplication key (lib/trace) — never
+      // synthesize one, or every replay of the same step would look new.
+      timestamp: d.timestamp || undefined,
     };
     h.onTrace?.(entry);
   });
