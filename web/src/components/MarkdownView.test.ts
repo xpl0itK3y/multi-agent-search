@@ -47,4 +47,18 @@ describe("MarkdownView citations", () => {
 
     expect(citationHrefs(wrapper)).toEqual({ "[S3]": "https://legacy.example/page" });
   });
+
+  it("keeps the explicit map authoritative; report lines only fill missing ids", () => {
+    // A body sentence that cites [S1] next to an unrelated URL must not re-point S1.
+    const wrapper = render(
+      "Per the vendor blog (https://vendor.example/post) the figure grew [S1].\n\n" +
+        "## Sources\n\n- [S1] Official stats — https://stale.example/old\n- [S2] Extra — https://two.example/b",
+      [{ source_id: "S1", url: "https://stats.example/table" }],
+    );
+
+    expect(citationHrefs(wrapper)).toMatchObject({
+      "[S1]": "https://stats.example/table",
+      "[S2]": "https://two.example/b",
+    });
+  });
 });

@@ -49,7 +49,9 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 };
 
 // Map Sn -> url from the explicit API map, with the report's Sources section as
-// a backward-compatible fallback for older stored reports.
+// a backward-compatible fallback for older stored reports. The explicit map is
+// authoritative: any report line mentioning [Sn] next to a URL (body text, not
+// just the Sources section) may only fill ids the map does not have.
 function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Map<string, string> {
   const map = new Map<string, string>();
   for (const source of explicitSources) {
@@ -58,7 +60,7 @@ function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Ma
   }
   for (const line of source.split("\n")) {
     const idMatch = line.match(/\[S(\d+)\\?\]/);
-    if (!idMatch) continue;
+    if (!idMatch || map.has(idMatch[1])) continue;
     const urlMatch = line.match(/\((https?:\/\/[^)\s]+)\)/) || line.match(/(https?:\/\/[^)\s]+)/);
     if (urlMatch) map.set(idMatch[1], urlMatch[1]);
   }
