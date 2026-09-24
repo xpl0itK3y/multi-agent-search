@@ -2304,7 +2304,7 @@ class ResearchService(
                 event_type = "resolved"
                 event_note = resolution_note
             maintenance_summary["recent_operational_recommendations"] = recommendations
-            maintenance_summary["recent_operational_recommendation_events"] = self._append_operational_recommendation_event(
+            events = self._append_operational_recommendation_event(
                 maintenance_summary.get("recent_operational_recommendation_events") or [],
                 code=str(updated_recommendation.get("code") or code),
                 event_type=event_type,
@@ -2312,6 +2312,11 @@ class ResearchService(
                 timestamp=current_timestamp,
                 note=event_note,
             )
+            # JSON-ready: the SQL store writes this dict straight into a JSONB column, where
+            # the RecommendationEvent models raised TypeError (ack/resolve were a 500).
+            maintenance_summary["recent_operational_recommendation_events"] = [
+                event.model_dump(mode="json") for event in events
+            ]
         self.touch_worker_heartbeat(
             "maintenance",
             heartbeat.processed_jobs,

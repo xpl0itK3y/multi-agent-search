@@ -1,6 +1,11 @@
 """ADMIN-AUDIT: every admin mutation (every non-GET admin route) and every bulk PII export
 writes an admin_audit_logs row and goes through enforce_admin_rate_limit. The route list
-is enumerated from the app, so a new admin mutation without an entry here fails."""
+is enumerated from the app, so a new admin mutation without an entry here fails.
+
+The app tests also run on the Postgres store (postgres-smoke CI job), over one database
+for the whole run: ids are unique per test and assertions only look at this test's rows."""
+import uuid
+
 import pytest
 from fastapi.routing import APIRoute
 
@@ -55,11 +60,16 @@ def _recommendation(service, code):
     )
 
 
+def _uid(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
 def _dead_search_job(service):
     store = service.task_store
-    store.add_task({"id": "audit-task", "description": "d", "queries": ["q"], "status": TaskStatus.FAILED})
-    job = store.add_search_task_job("audit-task", SearchDepth.EASY.value, max_attempts=1)
-    store.claim_next_search_task_job()
+    task_id = _uid("audit-task")
+    store.add_task({"id": task_id, "description": "d", "queries": ["q"], "status": TaskStatus.FAILED})
+    job = store.add_search_task_job(task_id, SearchDepth.EASY.value, max_attempts=1)
+    store.claim_search_task_job_by_id(job.id)
     store.record_search_task_job_failure(job.id, "boom")
     return job.id
 
@@ -70,9 +80,15 @@ def _dead_finalize_job(service):
     research = store.add_research(ResearchRequest(prompt="audit topic", depth=SearchDepth.EASY), task_ids=[])
     store.update_research_status(research.id, ResearchStatus.FAILED, "analysis failed")
     job = store.add_research_finalize_job(research.id, max_attempts=1)
-    store.claim_next_research_finalize_job()
+    store.claim_research_finalize_job_by_id(job.id)
     store.record_research_finalize_job_failure(job.id, "boom")
     return job.id
+
+
+def _doomed_user(service):
+    user_id = _uid("audit-doomed")
+    service.task_store.create_user(user_id, f"{user_id}@example.com", None)
+    return f"/v1/admin/users/{user_id}"
 
 
 # (method, route path) -> (setup(service) -> (url, json body), expected audit action)
@@ -101,10 +117,7 @@ AUDITED_ROUTES = {
         lambda service: ("/v1/research/finalize-jobs/recover-stale", None), "recover_stale_finalize_jobs"),
     ("POST", "/v1/research/finalize-jobs/cleanup"): (
         lambda service: ("/v1/research/finalize-jobs/cleanup", None), "cleanup_finalize_jobs"),
-    ("DELETE", "/v1/admin/users/{user_id}"): (
-        lambda service: (service.task_store.create_user("audit-doomed", "doomed@example.com", None)
-                         and "/v1/admin/users/audit-doomed", None),
-        "delete_user"),
+    ("DELETE", "/v1/admin/users/{user_id}"): (lambda service: (_doomed_user(service), None), "delete_user"),
     ("POST", "/v1/admin/operations/execute"): (
         lambda service: ("/v1/admin/operations/execute", {"action": "cleanup_old_jobs", "params": {}}),
         "cleanup_old_jobs"),
@@ -152,46 +165,77 @@ async def test_admin_mutations_share_the_admin_rate_limit(client, monkeypatch):
     assert statuses == [200, 200, 429, 429]
 
 
+def _delete_audits(store, user_id):
+    return [e for e in store.get_admin_audit_logs(limit=200, action="delete_user") if e.target_id == user_id]
+
+
 @pytest.mark.anyio
 async def test_user_deletion_audit_names_the_account_and_is_written_first(client, mocker):
     store = client._transport.app.state.research_service.task_store
-    store.create_user("audit-victim", "victim@example.com", None)
+    victim = _uid("audit-victim")
+    store.create_user(victim, f"{victim}@example.com", None)
     mocker.patch.object(store, "delete_user", side_effect=RuntimeError("db went away"))
 
     with pytest.raises(RuntimeError):
-        await client.delete("/v1/admin/users/audit-victim")
+        await client.delete(f"/v1/admin/users/{victim}")
 
-    audit = store.get_admin_audit_logs(action="delete_user")
-    assert [(e.target_id, e.details) for e in audit] == [
-        ("audit-victim", {"deleted_user_id": "audit-victim", "deleted_email": "victim@example.com"})
+    assert [e.details for e in _delete_audits(store, victim)] == [
+        {"deleted_user_id": victim, "deleted_email": f"{victim}@example.com"}
     ]
+    mocker.stopall()
+    store.delete_user(victim)
 
 
 @pytest.mark.anyio
 async def test_missing_user_is_404_without_an_audit_row(client):
     store = client._transport.app.state.research_service.task_store
+    missing = _uid("nobody")
 
-    response = await client.delete("/v1/admin/users/nobody-here")
+    response = await client.delete(f"/v1/admin/users/{missing}")
 
     assert response.status_code == 404
-    assert store.get_admin_audit_logs(action="delete_user") == []
+    assert _delete_audits(store, missing) == []
 
 
 @pytest.mark.anyio
 async def test_an_admin_cannot_delete_another_admin(client, monkeypatch):
     monkeypatch.setattr(settings, "auth_disabled", False)
     monkeypatch.setattr(settings, "auth_secret_key", "s" * 48)
-    monkeypatch.setattr(settings, "admin_emails", "boss@example.com, Deputy@example.com")
+    boss, deputy, member = _uid("boss"), _uid("deputy"), _uid("member")
+    monkeypatch.setattr(settings, "admin_emails", f"{boss}@example.com, {deputy.upper()}@EXAMPLE.com")
     store = client._transport.app.state.research_service.task_store
-    store.create_user("boss", "boss@example.com", None)
-    store.create_user("deputy", "deputy@example.com", None)
-    store.create_user("member", "member@example.com", None)
-    headers = {"Authorization": f"Bearer {create_token('boss', email='boss@example.com')}"}
+    for user_id in (boss, deputy, member):
+        store.create_user(user_id, f"{user_id}@example.com", None)
+    headers = {"Authorization": f"Bearer {create_token(boss, email=f'{boss}@example.com')}"}
 
-    refused = await client.delete("/v1/admin/users/deputy", headers=headers)
-    allowed = await client.delete("/v1/admin/users/member", headers=headers)
+    refused = await client.delete(f"/v1/admin/users/{deputy}", headers=headers)
+    allowed = await client.delete(f"/v1/admin/users/{member}", headers=headers)
 
     assert refused.status_code == 403
-    assert store.get_user_by_id("deputy") is not None
+    assert store.get_user_by_id(deputy) is not None
+    assert _delete_audits(store, deputy) == []
     assert allowed.status_code == 200
-    assert [e.target_id for e in store.get_admin_audit_logs(action="delete_user")] == ["member"]
+    assert len(_delete_audits(store, member)) == 1
+    store.delete_user(boss)
+    store.delete_user(deputy)
+
+
+@pytest.mark.postgres
+def test_acknowledging_a_recommendation_persists_on_postgres(postgres_session_factory):
+    """The ack/resolve writes stored RecommendationEvent models in the heartbeat's JSONB,
+    which the SQL store could not serialize (TypeError, a 500 on Postgres)."""
+    from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
+    from src.services import ResearchService
+
+    service = ResearchService(task_store=SQLAlchemyTaskStore(postgres_session_factory))
+    _recommendation(service, "reduce_queue_backlog")
+
+    service.acknowledge_operational_recommendation("reduce_queue_backlog")
+    resolved = service.resolve_operational_recommendation("reduce_queue_backlog", "scaled workers")
+
+    assert resolved.resolved is True
+    summary = service.task_store.get_worker_heartbeat("maintenance").maintenance_summary
+    assert [(e.event_type, e.note) for e in summary.recent_operational_recommendation_events] == [
+        ("acknowledged", None),
+        ("resolved", "scaled workers"),
+    ]
