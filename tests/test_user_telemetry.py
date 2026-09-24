@@ -279,3 +279,55 @@ async def test_revoked_token_is_rejected_when_auth_enabled(client, monkeypatch):
     assert event.status_code == 401
     assert service.task_store.user_events == []
     service.task_store.delete_user(session["user"]["id"])
+
+
+@pytest.mark.anyio
+async def test_heartbeat_bumps_the_session_instead_of_adding_an_event(client):
+    store = client._transport.app.state.research_service.task_store
+    session = await _register(client, "heartbeat")
+    user_id = session["user"]["id"]
+    headers = {
+        "Authorization": f"Bearer {session['access_token']}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36",
+    }
+    await client.post(
+        "/v1/telemetry/event",
+        json={
+            "session_id": "hb-sess",
+            "event_name": "session_start",
+            "event_category": "system",
+            "device_info": {"browser": "Chrome", "os": "Windows", "screen_res": "1920x1080"},
+        },
+        headers=headers,
+    )
+    started = next(s for s in store.user_sessions if s["user_id"] == user_id)
+    started_active_at = started["last_active_at"]
+    events_before = len(store.user_events)
+
+    beats = [
+        await client.post(
+            "/v1/telemetry/event",
+            json={"session_id": "hb-sess", "event_name": "heartbeat", "event_category": "system"},
+            headers=headers,
+        )
+        for _ in range(3)
+    ]
+
+    assert [b.status_code for b in beats] == [200, 200, 200]
+    assert len(store.user_events) == events_before  # no heartbeat rows
+    sessions = [s for s in store.user_sessions if s["user_id"] == user_id]
+    assert len(sessions) == 1
+    assert sessions[0]["last_active_at"] >= started_active_at
+    assert sessions[0]["screen_res"] == "1920x1080"  # session_start details kept
+
+    # A heartbeat whose session_start never arrived still records the session.
+    await client.post(
+        "/v1/telemetry/event",
+        json={"session_id": "hb-orphan", "event_name": "heartbeat", "event_category": "system"},
+        headers=headers,
+    )
+    orphan = next(s for s in store.user_sessions if s["session_id"] == "hb-orphan")
+    assert (orphan["user_id"], orphan["browser"], orphan["os"]) == (user_id, "Chrome", "Windows")
+    assert len(store.user_events) == events_before
+
+    store.delete_user(user_id)

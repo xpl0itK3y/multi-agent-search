@@ -707,6 +707,23 @@ def register_routes(app: FastAPI) -> None:
         c_ip = extract_client_ip(request)
         u_agent = request.headers.get("user-agent")
 
+        if payload.event_name == "heartbeat":
+            # "Still here" only: bump the caller's session (created from the User-Agent if
+            # its session_start was lost) instead of adding a user_events row per tab every
+            # 30 s. users.last_seen_at is kept fresh by the activity middleware.
+            if payload.session_id:
+                ua_parsed = parse_client_ua(u_agent)
+                service.task_store.record_user_session(
+                    user_id=user_id,
+                    session_id=payload.session_id,
+                    ip_address=c_ip,
+                    user_agent=u_agent,
+                    device_type=ua_parsed["device_type"],
+                    browser=ua_parsed["browser"],
+                    os=ua_parsed["os"],
+                )
+            return {"status": "ok", "event_id": None}
+
         if payload.device_info:
             dev = payload.device_info
             ua_parsed = parse_client_ua(u_agent)
