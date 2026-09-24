@@ -33,17 +33,11 @@ scrape_configs:
       - json:
           expressions:
             level: level
-            logger: name
-            msg: message
-            request_id: request_id
-            research_id: research_id
             worker_name: worker_name
-            job_id: job_id
-            task_id: task_id
-      # Promote extracted fields to Loki labels (indexed, filterable)
+      # Promote low-cardinality fields to Loki labels (indexed, filterable). The line
+      # itself stays the full JSON record: research_id/task_id/job_id are unbounded, so
+      # they are filtered at query time (`| json | research_id="..."`, see the Research
+      # Operations dashboard) instead of becoming labels or being dropped.
       - labels:
           level:
           worker_name:
-      # Replace the log line with the parsed "message" field when present
-      - output:
-          source: msg

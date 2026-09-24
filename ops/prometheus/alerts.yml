@@ -19,14 +19,44 @@ groups:
           summary: "API is down"
           description: "Prometheus has been unable to scrape the API /metrics endpoint at {{ $labels.instance }} for more than 1 minute."
 
+      # mas_queue_jobs is a gauge refreshed by each worker's maintenance loop. Use the
+      # worker series only: the API sets it just when /health/queues is hit, and with
+      # several uvicorn processes each scrape reads a different, possibly stale, registry.
+      # delta() (not increase(), which is for counters) so cleanup that deletes old
+      # dead-letter rows lowers the value instead of looking like a counter reset.
       - alert: DeadLetterQueueGrowth
-        expr: max by (job_type) (increase(mas_queue_jobs{status="dead_letter"}[30m])) > 0
+        expr: max by (job_type) (delta(mas_queue_jobs{job="multi-agent-search-workers", status="dead_letter"}[30m])) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Dead-letter {{ $labels.job_type }} queue is growing"
           description: "Dead-letter {{ $labels.job_type }} jobs had a net increase over the last 30 minutes and the condition has held for 5 minutes."
+
+      - alert: WorkerJobFailureRate
+        expr: >
+          sum by (job_type) (rate(mas_worker_jobs_total{status="failure"}[15m]))
+            / clamp_min(sum by (job_type) (rate(mas_worker_jobs_total[15m])), 1e-9) > 0.2
+          and sum by (job_type) (increase(mas_worker_jobs_total{status="failure"}[15m])) >= 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_type }} jobs are failing"
+          description: "More than 20% of {{ $labels.job_type }} worker jobs failed over the last 15 minutes (currently {{ $value | humanizePercentage }})."
+
+      - alert: FinalizeQueueBacklog
+        expr: >
+          max(mas_queue_jobs{job="multi-agent-search-workers", job_type="finalize", status="pending"}) > 0
+          and
+          max(mas_queue_jobs{job="multi-agent-search-workers", job_type="finalize", status="pending"})
+            >= max(mas_queue_jobs{job="multi-agent-search-workers", job_type="finalize", status="pending"} offset 15m)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Finalize queue is not draining"
+          description: "{{ $value }} finalize jobs are pending and the backlog has not shrunk for 15 minutes; workers may be stuck or saturated."
 
       - alert: APIHighErrorRate
         expr: >

@@ -1,0 +1,95 @@
+# Unit tests for alerts.yml. Run from the repository root:
+#   promtool test rules ops/prometheus/alerts.test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Retention cleanup deletes old dead-letter rows (5 -> 2). On a gauge that is not
+  # growth; increase() used to read it as a counter reset and fire. A stale API process
+  # jumping to another value must not count either.
+  - interval: 1m
+    input_series:
+      - series: 'mas_queue_jobs{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", job_type="search", status="dead_letter"}'
+        values: '5x20 2x40'
+      - series: 'mas_queue_jobs{job="multi-agent-search-api", instance="api:8000", job_type="search", status="dead_letter"}'
+        values: '0x20 4x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DeadLetterQueueGrowth
+        exp_alerts: []
+
+  # A new dead-letter job appears at minute 11.
+  - interval: 1m
+    input_series:
+      - series: 'mas_queue_jobs{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", job_type="finalize", status="dead_letter"}'
+        values: '0x10 1x50'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DeadLetterQueueGrowth
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job_type: finalize
+            exp_annotations:
+              summary: "Dead-letter finalize queue is growing"
+              description: "Dead-letter finalize jobs had a net increase over the last 30 minutes and the condition has held for 5 minutes."
+
+  # Half of the search jobs fail.
+  - interval: 1m
+    input_series:
+      - series: 'mas_worker_jobs_total{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", worker_name="job-worker", job_type="search", status="failure"}'
+        values: '0+1x40'
+      - series: 'mas_worker_jobs_total{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", worker_name="job-worker", job_type="search", status="success"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WorkerJobFailureRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job_type: search
+            exp_annotations:
+              summary: "search jobs are failing"
+              description: "More than 20% of search worker jobs failed over the last 15 minutes (currently 50%)."
+
+  # A single failure on an idle queue is 100% of jobs but not worth paging on.
+  - interval: 1m
+    input_series:
+      - series: 'mas_worker_jobs_total{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", worker_name="job-worker", job_type="finalize", status="failure"}'
+        values: '0x30 1x10'
+      - series: 'mas_worker_jobs_total{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", worker_name="job-worker", job_type="finalize", status="success"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: WorkerJobFailureRate
+        exp_alerts: []
+
+  # Three finalize jobs get stuck in pending from minute 11.
+  - interval: 1m
+    input_series:
+      - series: 'mas_queue_jobs{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", job_type="finalize", status="pending"}'
+        values: '0x10 3x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: FinalizeQueueBacklog
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: FinalizeQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Finalize queue is not draining"
+              description: "3 finalize jobs are pending and the backlog has not shrunk for 15 minutes; workers may be stuck or saturated."
+
+  # A long backlog that keeps shrinking is load, not a stall.
+  - interval: 1m
+    input_series:
+      - series: 'mas_queue_jobs{job="multi-agent-search-workers", instance="worker:9101", worker="job-worker", job_type="finalize", status="pending"}'
+        values: '40-1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: FinalizeQueueBacklog
+        exp_alerts: []

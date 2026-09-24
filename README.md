@@ -26,7 +26,21 @@ The project now supports:
   (`WORKER_METRICS_PORT`, internal network only)
 - Docker Compose services for `prometheus` and `grafana`, with provisioned
   dashboards (Platform Overview, Research Operations) and alert rules
-  (`WorkerDown`, `APIDown`, `DeadLetterQueueGrowth`, `APIHighErrorRate`)
+  (`WorkerDown`, `APIDown`, `DeadLetterQueueGrowth`, `APIHighErrorRate`,
+  `WorkerJobFailureRate`, `FinalizeQueueBacklog`); test the rules with
+  `promtool test rules ops/prometheus/alerts.test.yml`
+- `loki` + `promtail` collecting every container's stdout. JSON log lines are
+  stored whole, so the Research Operations dashboard's Logs panel shows the API
+  and worker logs of one research (type its id into the Research ID box)
+
+Metrics caveat: the API runs `uvicorn --workers $API_WORKERS` (2 in Compose)
+without `prometheus_client` multiprocess mode, so each API process keeps its own
+counters and every scrape reads one of them at random. API request rates,
+latency and `APIHighErrorRate` are therefore approximate (process switches look
+like counter resets). Set `API_WORKERS: "1"` on the `api` service in
+`docker-compose.yml` when you need exact API metrics. The workers are
+single-process and unaffected, which is why the queue alerts use the worker
+series.
 
 Health endpoints: `GET /health` is the cheap readiness probe (status +
 dependency pings); `GET /health/detail` (admin) returns the full operational

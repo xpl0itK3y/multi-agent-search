@@ -35,6 +35,15 @@
         "includeAll": true,
         "multi": true,
         "sort": 1
+      },
+      {
+        "name": "research_id",
+        "label": "Research ID",
+        "description": "Research id to show API and worker logs for (Logs row).",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" },
+        "hide": 0
       }
     ]
   },
@@ -223,7 +232,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "LLM cost per hour by model",
-      "description": "Estimated spend rate (USD/hour) derived from mas_llm_cost_usd.",
+      "description": "Estimated spend rate (USD/hour) derived from mas_llm_cost_usd_total.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": {
@@ -241,7 +250,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (model) (rate(mas_llm_cost_usd[5m])) * 3600",
+          "expr": "sum by (model) (rate(mas_llm_cost_usd_total[5m])) * 3600",
           "legendFormat": "{{model}}"
         }
       ]
@@ -249,8 +258,8 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "Total LLM cost (USD)",
-      "description": "Cumulative estimated LLM spend since process start.",
+      "title": "LLM cost in time range by model (USD)",
+      "description": "Estimated LLM spend per model over the selected time range (increase() tolerates process restarts, unlike the raw counter).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
@@ -279,10 +288,44 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(mas_llm_cost_usd)",
-          "legendFormat": "cost",
+          "expr": "sum by (model) (increase(mas_llm_cost_usd_total[$__range]))",
+          "legendFormat": "{{model}}",
           "instant": true,
           "range": false
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "Logs for research $research_id",
+      "description": "API and worker JSON logs (LOG_FORMAT=json) whose research_id matches the Research ID box above; empty until an id is entered.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 27 },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{service=~\"api|worker.*\"} |= \"$research_id\" | json | __error__=\"\" | research_id=\"$research_id\" | line_format \"{{.level}} {{.logger}} {{.message}}\"",
+          "queryType": "range"
         }
       ]
     }
