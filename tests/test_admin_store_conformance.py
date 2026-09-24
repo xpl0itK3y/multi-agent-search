@@ -318,6 +318,9 @@ def test_token_analytics_breakdowns_and_legacy_fallback(store):
     ]
     tail = store.get_admin_token_analytics(page=2, page_size=2).researches
     assert [(r.prompt, r.total_tokens, r.depth, r.status) for r in tail] == [("logged topic", 50, "hard", "processing")]
+    # The export pages through the same rows without the totals and breakdowns.
+    assert store.get_admin_token_research_usage(page=2, page_size=2) == tail
+    assert store.get_admin_token_research_usage(page=1, page_size=2) == analytics.researches
     assert empty.id != legacy.id
 
 

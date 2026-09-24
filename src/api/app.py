@@ -1,12 +1,14 @@
 import asyncio
 import contextlib
+import csv
 import hmac
+import io
 import json
 import logging
 import secrets
 import uuid
 import time
-from typing import List
+from typing import Callable, Iterator, List
 
 from starlette.concurrency import run_in_threadpool
 from urllib.parse import quote
@@ -155,6 +157,59 @@ def _owner_job_view(job):
     if job is None or not job.error:
         return job
     return job.model_copy(update={"error": ResearchService._failure_message(RuntimeError(job.error))})
+
+
+# Cells a spreadsheet would evaluate as a formula (OWASP CSV injection): = + - @, tab, CR.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+# Rows per DB page while streaming an admin CSV export.
+ADMIN_EXPORT_PAGE_SIZE = 500
+
+
+def csv_safe(value: object) -> object:
+    """A text cell that starts like a formula gets a leading single quote, so Excel or
+    Sheets show it as text instead of running it (a user-chosen name or prompt such as
+    '=HYPERLINK(...)' in an admin export). Numbers pass through."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def stream_csv(
+    header: list[str],
+    fetch_page: Callable[[int], list],
+    to_row: Callable[[object], list],
+    key: Callable[[object], str],
+) -> Iterator[str]:
+    """CSV text one DB page at a time, so an export never holds every row in memory.
+    A row already written is skipped: one pushed onto the next page by a row inserted
+    while the export runs is not repeated."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    written: set[str] = set()
+    page = 1
+    while True:
+        items = fetch_page(page)
+        for item in items:
+            if key(item) in written:
+                continue
+            written.add(key(item))
+            writer.writerow([csv_safe(cell) for cell in to_row(item)])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        if len(items) < ADMIN_EXPORT_PAGE_SIZE:
+            return
+        page += 1
+
+
+def _csv_attachment(rows: Iterator[str], filename: str) -> StreamingResponse:
+    # A sync iterator: Starlette pulls it in the threadpool, so the DB pages stay off the loop.
+    return StreamingResponse(
+        rows,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 def extract_client_ip(request: Request) -> str | None:
@@ -861,18 +916,18 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/admin/users/export", dependencies=admin_guard)
     def admin_users_export(request: Request):
-        import csv
-        import io
-        users_resp = get_research_service(request).task_store.get_admin_users_list(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "user_id", "email", "name", "role", "is_online", "last_seen_at",
-            "last_ip", "last_device", "last_browser", "last_os",
-            "researches_count", "total_tokens", "total_cost_usd", "created_at"
-        ])
-        for u in users_resp.users:
-            writer.writerow([
+        store = get_research_service(request).task_store
+        rows = stream_csv(
+            [
+                "user_id", "email", "name", "role", "is_online", "last_seen_at",
+                "last_ip", "last_device", "last_browser", "last_os",
+                "researches_count", "total_tokens", "total_cost_usd", "created_at",
+            ],
+            # Registration order: unlike last_seen, it does not move while we page.
+            lambda page: store.get_admin_users_list(
+                page=page, page_size=ADMIN_EXPORT_PAGE_SIZE, sort_by="registered"
+            ).users,
+            lambda u: [
                 u.id,
                 u.email,
                 u.name or "",
@@ -887,13 +942,10 @@ def register_routes(app: FastAPI) -> None:
                 u.total_tokens,
                 u.total_cost_usd,
                 u.created_at,
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=users_telemetry.csv"},
+            ],
+            key=lambda u: u.id,
         )
+        return _csv_attachment(rows, "users_telemetry.csv")
 
     @app.get("/v1/admin/prompts", response_model=AdminPromptsResponse, dependencies=admin_guard)
     def admin_prompts(
@@ -914,17 +966,14 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/admin/prompts/export", dependencies=admin_guard)
     def admin_prompts_export(request: Request):
-        import csv
-        import io
-        resp = get_research_service(request).task_store.get_admin_prompts(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
-            "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at"
-        ])
-        for p in resp.prompts:
-            writer.writerow([
+        store = get_research_service(request).task_store
+        rows = stream_csv(
+            [
+                "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
+                "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at",
+            ],
+            lambda page: store.get_admin_prompts(page=page, page_size=ADMIN_EXPORT_PAGE_SIZE).prompts,
+            lambda p: [
                 p.id,
                 p.prompt_type,
                 p.research_id,
@@ -937,13 +986,10 @@ def register_routes(app: FastAPI) -> None:
                 p.total_tokens,
                 p.cost_usd,
                 p.created_at,
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=user_prompts.csv"},
+            ],
+            key=lambda p: p.id,
         )
+        return _csv_attachment(rows, "user_prompts.csv")
 
     @app.get("/v1/admin/users/{user_id}", response_model=AdminUserDetailResponse, dependencies=admin_guard)
     def admin_user_detail(user_id: str, request: Request):
@@ -989,29 +1035,22 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/admin/tokens/export", dependencies=admin_guard)
     def admin_tokens_export(request: Request):
-        import csv
-        import io
-        analytics = get_research_service(request).get_admin_token_analytics(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"])
-        for item in analytics.researches:
-            clean_prompt = item.prompt.replace("\n", " ").replace("\r", "")
-            writer.writerow([
+        store = get_research_service(request).task_store
+        rows = stream_csv(
+            ["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"],
+            lambda page: store.get_admin_token_research_usage(page=page, page_size=ADMIN_EXPORT_PAGE_SIZE),
+            lambda item: [
                 item.research_id,
-                clean_prompt,
+                item.prompt.replace("\n", " ").replace("\r", ""),
                 item.depth,
                 item.status,
                 item.total_tokens,
                 item.estimated_cost_usd,
                 item.created_at.isoformat(),
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=token_usage.csv"},
+            ],
+            key=lambda item: item.research_id,
         )
+        return _csv_attachment(rows, "token_usage.csv")
 
     @app.get("/v1/admin/agents", response_model=List[AgentMetadataItem], dependencies=admin_guard)
     def admin_agents(request: Request):

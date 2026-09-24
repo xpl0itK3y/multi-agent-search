@@ -1734,46 +1734,10 @@ class SQLAlchemyTaskStore:
                 for row in session.execute(depth_stmt).all()
             ]
 
-            # 4. Researches list with pagination: the page first, then usage for its ids
-            # only, and just graph_state's llm_token_usage (the legacy per-research figure),
-            # never the whole graph_state blob.
+            # 4. Researches list with pagination
             total_researches_stmt = select(func.count()).select_from(ResearchORM)
             total_researches = session.execute(total_researches_stmt).scalar_one()
-
-            offset = max(0, (page - 1) * page_size)
-            researches_stmt = (
-                select(
-                    ResearchORM.id,
-                    ResearchORM.prompt,
-                    ResearchORM.depth,
-                    ResearchORM.status,
-                    ResearchORM.created_at,
-                    ResearchORM.graph_state["llm_token_usage"],
-                )
-                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
-                .limit(page_size)
-                .offset(offset)
-            )
-            page_rows = session.execute(researches_stmt).all()
-            usage_by_research = self._usage_by_research(session, [row[0] for row in page_rows])
-            research_items: list[AdminTokenResearchUsageItem] = []
-            for r_id, r_prompt, r_depth, r_status, r_created, legacy in page_rows:
-                tokens, cost, calls = usage_by_research.get(r_id, (0, 0.0, 0))
-                if calls == 0 and isinstance(legacy, dict):
-                    # Researches finalized before per-call usage rows existed.
-                    tokens = int(legacy.get("total_tokens", 0) or 0)
-                    cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
-                research_items.append(
-                    AdminTokenResearchUsageItem(
-                        research_id=r_id,
-                        prompt=r_prompt,
-                        depth=r_depth,
-                        status=r_status,
-                        total_tokens=tokens,
-                        estimated_cost_usd=round(cost, 4),
-                        created_at=r_created,
-                    )
-                )
+            research_items = self._token_research_page(session, page, page_size)
 
             return AdminTokenAnalyticsResponse(
                 total_prompt_tokens=total_prompt,
@@ -1787,6 +1751,51 @@ class SQLAlchemyTaskStore:
                 page=page,
                 page_size=page_size,
             )
+
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]:
+        with self.session_scope() as session:
+            return self._token_research_page(session, page, page_size)
+
+    def _token_research_page(self, session: Session, page: int, page_size: int) -> list[AdminTokenResearchUsageItem]:
+        """The page first, then usage for its ids only, and just graph_state's
+        llm_token_usage (the legacy per-research figure), never the whole graph_state."""
+        page_rows = session.execute(
+            select(
+                ResearchORM.id,
+                ResearchORM.prompt,
+                ResearchORM.depth,
+                ResearchORM.status,
+                ResearchORM.created_at,
+                ResearchORM.graph_state["llm_token_usage"],
+            )
+            .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
+            .limit(page_size)
+            .offset(max(0, (page - 1) * page_size))
+        ).all()
+        usage_by_research = self._usage_by_research(session, [row[0] for row in page_rows])
+        items: list[AdminTokenResearchUsageItem] = []
+        for r_id, r_prompt, r_depth, r_status, r_created, legacy in page_rows:
+            tokens, cost, calls = usage_by_research.get(r_id, (0, 0.0, 0))
+            if calls == 0 and isinstance(legacy, dict):
+                # Researches finalized before per-call usage rows existed.
+                tokens = int(legacy.get("total_tokens", 0) or 0)
+                cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
+            items.append(
+                AdminTokenResearchUsageItem(
+                    research_id=r_id,
+                    prompt=r_prompt,
+                    depth=r_depth,
+                    status=r_status,
+                    total_tokens=tokens,
+                    estimated_cost_usd=round(cost, 4),
+                    created_at=r_created,
+                )
+            )
+        return items
 
     @staticmethod
     def _usage_by_research(session: Session, research_ids: list[str]) -> dict[str, tuple[int, float, int]]:

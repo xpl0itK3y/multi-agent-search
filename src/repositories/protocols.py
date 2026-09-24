@@ -9,6 +9,7 @@ from src.domain import (
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
+    AdminTokenResearchUsageItem,
     AdminUserDetailResponse,
     AdminUserListResponse,
     FinalizeJobStatus,
@@ -374,6 +375,14 @@ class TaskStore(Protocol):
         page: int = 1,
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse: ...
+
+    # Just the per-research page of get_admin_token_analytics (newest first), without the
+    # totals and breakdowns: what the streamed CSV export pages through.
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]: ...
 
     def get_admin_overview(self) -> AdminOverviewResponse: ...
 

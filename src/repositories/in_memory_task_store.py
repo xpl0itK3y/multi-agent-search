@@ -1230,20 +1230,35 @@ class InMemoryTaskStore:
             for depth, d in sorted(depths_map.items(), key=lambda item: (-item[1]["tok"], item[0]))
         ]
 
-        all_researches = sorted(self.researches.values(), key=lambda r: (r.created_at, r.id), reverse=True)
-        total_researches = len(all_researches)
-        offset = max(0, (page - 1) * page_size)
-        paged_researches = all_researches[offset : offset + page_size]
+        return AdminTokenAnalyticsResponse(
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_comp,
+            total_tokens=total_tok,
+            total_cost_usd=round(total_cost, 4),
+            by_model=by_model,
+            by_depth=by_depth,
+            researches=self.get_admin_token_research_usage(page=page, page_size=page_size),
+            total_researches=len(self.researches),
+            page=page,
+            page_size=page_size,
+        )
 
-        research_items: list[AdminTokenResearchUsageItem] = []
-        for r in paged_researches:
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]:
+        newest_first = sorted(self.researches.values(), key=lambda r: (r.created_at, r.id), reverse=True)
+        offset = max(0, (page - 1) * page_size)
+        items: list[AdminTokenResearchUsageItem] = []
+        for r in newest_first[offset : offset + page_size]:
             tok, cost, calls = self._usage_by_research(r.id)
             if calls == 0:
                 # Researches finalized before per-call usage rows existed.
                 legacy = (r.graph_state or {}).get("llm_token_usage") or {}
                 tok = int(legacy.get("total_tokens", 0) or 0)
                 cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
-            research_items.append(
+            items.append(
                 AdminTokenResearchUsageItem(
                     research_id=r.id,
                     prompt=r.prompt,
@@ -1254,19 +1269,7 @@ class InMemoryTaskStore:
                     created_at=r.created_at,
                 )
             )
-
-        return AdminTokenAnalyticsResponse(
-            total_prompt_tokens=total_prompt,
-            total_completion_tokens=total_comp,
-            total_tokens=total_tok,
-            total_cost_usd=round(total_cost, 4),
-            by_model=by_model,
-            by_depth=by_depth,
-            researches=research_items,
-            total_researches=total_researches,
-            page=page,
-            page_size=page_size,
-        )
+        return items
 
     def _usage_by_research(self, research_id: str) -> tuple[int, float, int]:
         """(total_tokens, unrounded cost, calls) logged for one research."""
