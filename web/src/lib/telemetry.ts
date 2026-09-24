@@ -1,17 +1,44 @@
 /**
  * Client Telemetry Collector & Tracker
  * Captures non-sensitive browser & device metrics, tracks user events and keeps sessions alive.
+ *
+ * The ingest endpoint is authenticated-only and CSRF-checked, so nothing is sent while
+ * signed out: the auth store calls startTelemetry() once a user is known (sign-in,
+ * registration, restored session) and stopTelemetry() on sign-out.
  */
 
 import { authHeaders } from "./api";
 
-function getSessionId(): string {
-  let sid = sessionStorage.getItem("telemetry_session_id");
-  if (!sid) {
-    sid = "sess_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
-    sessionStorage.setItem("telemetry_session_id", sid);
+// Same API prefix as api.ts / stream.ts (empty => same origin via the dev proxy).
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const SESSION_KEY = "telemetry_session_id";
+const HEARTBEAT_MS = 30_000;
+
+// The server accepts exactly these names (UserTelemetryEventInput); others get a 422.
+export type TelemetryEventName = "session_start" | "session_end" | "heartbeat" | "tab_focus" | "tab_blur";
+export type TelemetryCategory = "system" | "ui";
+
+let activeUserId: string | null = null;
+let listenersInstalled = false;
+
+function mintSessionId(): string {
+  const sid = "sess_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
+  try {
+    sessionStorage.setItem(SESSION_KEY, sid);
+  } catch {
+    // Storage blocked: the id just won't survive a reload.
   }
   return sid;
+}
+
+function getSessionId(): string {
+  let sid: string | null = null;
+  try {
+    sid = sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    // fall through to a fresh id
+  }
+  return sid || mintSessionId();
 }
 
 export function getClientDeviceInfo(): Record<string, any> {
@@ -51,12 +78,13 @@ export function getClientDeviceInfo(): Record<string, any> {
   };
 }
 
-export async function trackEvent(
-  eventName: string,
-  eventCategory: string = "ui",
+export function trackEvent(
+  eventName: TelemetryEventName,
+  eventCategory: TelemetryCategory = "ui",
   details: Record<string, any> = {},
   includeDeviceInfo: boolean = false
-): Promise<void> {
+): void {
+  if (!activeUserId) return;
   try {
     const payload: Record<string, any> = {
       session_id: getSessionId(),
@@ -69,65 +97,60 @@ export async function trackEvent(
       payload.device_info = getClientDeviceInfo();
     }
 
-    const body = JSON.stringify(payload);
-    const url = "/v1/telemetry/event";
-
-    // Non-blocking fetch with keepalive & auth headers
-    if (typeof fetch === "function") {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        ...authHeaders("POST"),
-      };
-      if (!headers["Authorization"]) {
-        const token = typeof localStorage !== "undefined" ? localStorage.getItem("access_token") : null;
-        if (token) headers["Authorization"] = `Bearer ${token}`;
-      }
-
-      fetch(url, {
-        method: "POST",
-        headers,
-        body,
-        keepalive: true,
-        credentials: "include",
-      }).catch(() => {
-        // Telemetry errors should never disrupt user experience
-      });
-    } else if (typeof navigator !== "undefined" && navigator.sendBeacon) {
-      const blob = new Blob([body], { type: "application/json" });
-      navigator.sendBeacon(url, blob);
-    }
+    // keepalive lets session_end on pagehide outlive the page; the bearer/CSRF headers
+    // are why this is a fetch and not navigator.sendBeacon (which cannot carry them).
+    fetch(`${BASE}/v1/telemetry/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders("POST") },
+      body: JSON.stringify(payload),
+      keepalive: true,
+      credentials: "include",
+    }).catch(() => {
+      // Telemetry errors should never disrupt user experience
+    });
   } catch {
     // Silently ignore telemetry transmission failures
   }
 }
 
-let initialized = false;
-
-export function initTelemetry(): void {
-  if (initialized || typeof window === "undefined") return;
-  initialized = true;
-
-  // Send initial session / page view with full device info
-  trackEvent("session_start", "system", { path: window.location.pathname }, true);
+function installListeners(): void {
+  if (listenersInstalled) return;
+  listenersInstalled = true;
 
   // Periodic heartbeat every 30 seconds while tab is active/visible
   setInterval(() => {
-    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+    if (document.visibilityState === "visible") {
       trackEvent("heartbeat", "system", { active: true });
     }
-  }, 30_000);
+  }, HEARTBEAT_MS);
 
   // Track visibility change (focus / blur)
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      trackEvent("tab_focus", "ui");
-    } else {
-      trackEvent("tab_blur", "ui");
-    }
+    trackEvent(document.visibilityState === "visible" ? "tab_focus" : "tab_blur", "ui");
   });
 
   // Track page hide / window closing
   window.addEventListener("pagehide", () => {
     trackEvent("session_end", "system");
   });
+}
+
+/**
+ * Begin (or resume) telemetry for a signed-in user and announce the session with its
+ * device info. `newSession` mints a fresh session id — on an explicit sign-in, so a
+ * tab never reuses the id of whoever was signed in before.
+ */
+export function startTelemetry(userId: string, { newSession = false }: { newSession?: boolean } = {}): void {
+  if (typeof window === "undefined") return;
+  if (activeUserId === userId && !newSession) return;
+  if (newSession) mintSessionId();
+  activeUserId = userId;
+  installListeners();
+  trackEvent("session_start", "system", { path: window.location.pathname }, true);
+}
+
+/** Stop sending (signed out) and rotate the session id for whoever signs in next. */
+export function stopTelemetry(): void {
+  activeUserId = null;
+  mintSessionId();
 }
