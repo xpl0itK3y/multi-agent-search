@@ -19,12 +19,14 @@ from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
+    request_token_subject,
     require_admin,
     resolve_request_user_id,
     scope_user_id,
     verify_research_access,
 )
 from src.auth.login_rate_limit import (
+    SlidingWindowLimiter,
     enforce_auth_rate_limit,
     enforce_login_account_rate_limit,
     enforce_password_check_rate_limit,
@@ -47,6 +49,7 @@ from src.api.schemas import (
     AdminUserListResponse,
     AgentMetadataItem,
     UserTelemetryEventInput,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     AuthUser,
     UpdateProfileRequest,
     AuthSession,
@@ -161,6 +164,33 @@ def extract_client_ip(request: Request) -> str | None:
     return client.host if client and client.host else None
 
 
+# In-process "touched recently" gate for request activity: one allowance per user per
+# interval, checked on the token's subject before any DB work (the stores repeat the
+# check in SQL for the other API workers).
+_activity_touch_gate = SlidingWindowLimiter(window_seconds=USER_ACTIVITY_TOUCH_INTERVAL_SECONDS)
+
+
+def reset_activity_touch_gate() -> None:
+    """Test hook: forget which users were touched recently."""
+    _activity_touch_gate.reset()
+
+
+def _touch_request_activity(request: Request) -> None:
+    """Refresh last_seen/last_ip/UA for the request's (unrevoked) user. Blocking DB I/O:
+    run it in the threadpool, never on the event loop."""
+    user_id = resolve_request_user_id(request)
+    service = getattr(request.app.state, "research_service", None)
+    if not user_id or service is None:
+        return
+    user_agent = request.headers.get("user-agent")
+    service.task_store.touch_user_activity(
+        user_id=user_id,
+        ip_address=extract_client_ip(request),
+        user_agent=user_agent,
+        device=parse_client_ua(user_agent)["device_type"],
+    )
+
+
 def parse_client_ua(ua_string: str | None) -> dict[str, str]:
     if not ua_string:
         return {"browser": "Unknown", "os": "Unknown", "device_type": "desktop"}
@@ -240,26 +270,18 @@ def create_app() -> FastAPI:
         )
         response.headers["X-Request-ID"] = request_id
 
-        # Automatic server-side user activity telemetry
+        # Automatic server-side user activity telemetry: at most once a minute per user
+        # (gated on the token subject, so repeat requests skip the DB entirely), and the
+        # identity lookup + UPDATE run in the threadpool, never on the event loop.
+        # Revoked tokens (password changed) attribute nothing, same rule as auth.
         path_str = str(request.url.path)
         if not path_str.startswith("/metrics") and not path_str.startswith("/health"):
-            try:
-                # Revoked tokens (password changed) attribute nothing, same rule as auth.
-                uid = await run_in_threadpool(resolve_request_user_id, request)
-                if uid:
-                    service = getattr(request.app.state, "research_service", None)
-                    if service and hasattr(service, "task_store"):
-                        c_ip = extract_client_ip(request)
-                        u_agent = request.headers.get("user-agent")
-                        dev_info = parse_client_ua(u_agent)
-                        service.task_store.touch_user_activity(
-                            user_id=uid,
-                            ip_address=c_ip,
-                            user_agent=u_agent,
-                            device=dev_info["device_type"],
-                        )
-            except Exception:
-                logger.warning("user_activity_touch_failed", exc_info=True)
+            subject = request_token_subject(request)
+            if subject and _activity_touch_gate.allow(subject, 1):
+                try:
+                    await run_in_threadpool(_touch_request_activity, request)
+                except Exception:
+                    logger.warning("user_activity_touch_failed", exc_info=True)
         # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
         # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -1214,7 +1236,9 @@ def register_routes(app: FastAPI) -> None:
         service = get_research_service(request)
         question = payload.question
         try:
-            service.task_store.record_user_event(
+            # Blocking DB write inside an async route: keep it off the event loop.
+            await run_in_threadpool(
+                service.task_store.record_user_event,
                 event_name="chat_prompt",
                 event_category="prompt",
                 details={

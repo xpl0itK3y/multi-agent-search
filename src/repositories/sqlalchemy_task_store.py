@@ -34,6 +34,7 @@ from src.domain import (
     SearchTaskJob,
     TELEMETRY_IP_MAX_LENGTH,
     TELEMETRY_USER_AGENT_MAX_LENGTH,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
@@ -1955,10 +1956,7 @@ class SQLAlchemyTaskStore:
             },
         ).returning(UserSessionORM.id)
         with self.session_scope() as session:
-            record_id = session.execute(upsert).scalar_one()
-
-        self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent, device=device_type)
-        return record_id
+            return session.execute(upsert).scalar_one()
 
     def record_user_event(
         self,
@@ -1987,9 +1985,8 @@ class SQLAlchemyTaskStore:
                 created_at=now,
             )
             session.add(event_orm)
-
-        if user_id:
-            self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent)
+        # users.last_seen_at is the activity middleware's job (throttled); touching it here
+        # too cost a second users UPDATE per event.
         return record_id
 
     def touch_user_activity(
@@ -2002,16 +1999,26 @@ class SQLAlchemyTaskStore:
         ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
         user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
+        values: dict = {"last_seen_at": now}
+        if ip_address:
+            values["last_ip"] = ip_address
+        if user_agent:
+            values["last_user_agent"] = user_agent
+        if device:
+            values["last_device"] = device
+        # Throttled in SQL as well as by the caller's in-process gate (other API workers
+        # have their own): a user seen within the interval is not rewritten, sparing a
+        # users-row UPDATE per request.
+        stale_before = now - timedelta(seconds=USER_ACTIVITY_TOUCH_INTERVAL_SECONDS)
         with self.session_scope() as session:
-            user = session.get(UserORM, user_id)
-            if user:
-                user.last_seen_at = now
-                if ip_address:
-                    user.last_ip = ip_address
-                if user_agent:
-                    user.last_user_agent = user_agent
-                if device:
-                    user.last_device = device
+            session.execute(
+                update(UserORM)
+                .where(
+                    UserORM.id == user_id,
+                    or_(UserORM.last_seen_at.is_(None), UserORM.last_seen_at < stale_before),
+                )
+                .values(**values)
+            )
 
     def get_admin_users_list(
         self,

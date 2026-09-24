@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from src.api.app import create_app
+from src.api.app import create_app, reset_activity_touch_gate
 from src.core.llm import LLMProvider
 from tests.postgres_helpers import truncate_runtime_tables
 
@@ -31,10 +31,12 @@ def _isolate_auth_settings(monkeypatch):
     monkeypatch.setattr(settings, "google_client_id", "", raising=False)
     monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
     # The auth limiters are process-wide: without a reset, one test's login/register hits
-    # (all from the same test client address) push a later test over the limit.
+    # (all from the same test client address) push a later test over the limit. The
+    # activity gate likewise would skip a later test's first touch for a reused user id.
     reset_auth_rate_limiter()
     reset_admin_rate_limiter()
     reset_telemetry_rate_limiter()
+    reset_activity_touch_gate()
 
 
 @pytest.fixture

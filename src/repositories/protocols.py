@@ -363,6 +363,8 @@ class TaskStore(Protocol):
     ) -> AdminDryRunResult: ...
 
     # ── user telemetry & activity tracking ───────────────────────────────────
+    # Upsert keyed on (session_id, user_id): a repeat bumps last_active_at (and IP/UA);
+    # another user's row with the same client-chosen session_id is never touched.
     def record_user_session(
         self,
         user_id: str,
@@ -391,6 +393,8 @@ class TaskStore(Protocol):
         user_agent: str | None = None,
     ) -> str: ...
 
+    # users.last_seen_at/last_ip/...; skipped when the user was seen less than
+    # USER_ACTIVITY_TOUCH_INTERVAL_SECONDS ago. Events and sessions do not call it.
     def touch_user_activity(
         self,
         user_id: str,

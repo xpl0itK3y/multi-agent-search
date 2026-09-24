@@ -35,6 +35,7 @@ from src.domain import (
     TELEMETRY_IP_MAX_LENGTH,
     TELEMETRY_USER_AGENT_MAX_LENGTH,
     TaskUpdate,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     UserRecord,
     clip_text,
 )
@@ -1335,14 +1336,6 @@ class InMemoryTaskStore:
                 "started_at": now,
                 "last_active_at": now,
             })
-        self.touch_user_activity(
-            user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            device=device_type,
-            browser=browser,
-            os=os,
-        )
         return record_id
 
     def record_user_event(
@@ -1370,8 +1363,7 @@ class InMemoryTaskStore:
             "user_agent": user_agent,
             "created_at": now,
         })
-        if user_id:
-            self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent)
+        # Like SQL: users activity is the middleware's (throttled) job, not every event's.
         return record_id
 
     def touch_user_activity(
@@ -1380,13 +1372,17 @@ class InMemoryTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
         device: str | None = None,
-        browser: str | None = None,
-        os: str | None = None,
     ) -> None:
         ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
         user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
+        if user_id not in self.users:
+            return  # SQL updates no row for an unknown user
         entry = self.user_telemetry.setdefault(user_id, {})
+        # Same throttle as the SQL WHERE clause: seen within the interval -> no rewrite.
+        last_seen = entry.get("last_seen_at")
+        if last_seen is not None and (now - last_seen).total_seconds() < USER_ACTIVITY_TOUCH_INTERVAL_SECONDS:
+            return
         entry["last_seen_at"] = now
         if ip_address:
             entry["last_ip"] = ip_address
@@ -1394,10 +1390,6 @@ class InMemoryTaskStore:
             entry["last_user_agent"] = user_agent
         if device:
             entry["last_device"] = device
-        if browser:
-            entry["last_browser"] = browser
-        if os:
-            entry["last_os"] = os
 
     def get_admin_users_list(
         self,
@@ -1460,8 +1452,8 @@ class InMemoryTaskStore:
                     is_online=is_online,
                     last_ip=telem.get("last_ip") or last_sess.get("ip_address"),
                     last_device=telem.get("last_device") or last_sess.get("device_type"),
-                    last_browser=telem.get("last_browser") or last_sess.get("browser"),
-                    last_os=telem.get("last_os") or last_sess.get("os"),
+                    last_browser=last_sess.get("browser"),
+                    last_os=last_sess.get("os"),
                     researches_count=len(user_researches),
                     total_tokens=tot_tokens,
                     total_cost_usd=round(tot_cost, 4),

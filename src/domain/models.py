@@ -1144,6 +1144,10 @@ TELEMETRY_DETAILS_MAX_BYTES = 2048
 # User-Agent must not make the write fail.
 TELEMETRY_IP_MAX_LENGTH = 64
 TELEMETRY_USER_AGENT_MAX_LENGTH = 255
+# users.last_seen_at/last_ip are refreshed at most this often per user (in-process gate in
+# the API middleware, plus a WHERE clause in the stores for the other workers). The admin
+# "online" window is 2 minutes, so presence stays accurate.
+USER_ACTIVITY_TOUCH_INTERVAL_SECONDS = 60
 
 
 def clip_text(value: Optional[str], max_length: int) -> Optional[str]:

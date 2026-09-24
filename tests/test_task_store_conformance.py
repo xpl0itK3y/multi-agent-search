@@ -540,3 +540,18 @@ def test_user_session_repeat_bumps_the_same_row(store):
     assert sessions[0]["ip_address"] == "10.0.0.9"
     assert sessions[0]["browser"] == "Firefox"  # device details stay from the first report
     assert str(sessions[0]["last_active_at"]) >= str(before)
+
+
+def test_user_activity_is_throttled_and_not_touched_by_events(store):
+    user = _user(store)
+    store.record_user_event("tab_focus", "ui", user_id=user.id)
+    store.record_user_session(user.id, "touch-sess", ip_address="10.0.0.5")
+    # Events and sessions leave users activity to the (throttled) request middleware.
+    assert store.get_admin_user_detail(user.id).user.last_seen_at is None
+
+    store.touch_user_activity(user.id, ip_address="10.0.0.1")
+    store.touch_user_activity(user.id, ip_address="10.0.0.2")  # within the interval: skipped
+
+    touched = store.get_admin_user_detail(user.id).user
+    assert touched.last_seen_at is not None
+    assert touched.last_ip == "10.0.0.1"

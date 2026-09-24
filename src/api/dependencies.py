@@ -56,6 +56,16 @@ def resolve_request_user_id(request: Request) -> str | None:
     return user.id if user else None
 
 
+def request_token_subject(request: Request) -> str | None:
+    """The 'sub' of the request's token after the signature and expiry check only: no DB
+    read and no revocation check. A cheap per-user key (e.g. to throttle work before a
+    lookup); never use it to attribute or authorize anything."""
+    token = _extract_token(request)
+    claims = decode_token(token) if token else None
+    subject = claims.get("sub") if claims else None
+    return subject if isinstance(subject, str) and subject else None
+
+
 def get_current_user(request: Request) -> AuthUser:
     """Authenticated user from a Bearer JWT or session cookie. Local user when auth is off."""
     if settings.auth_disabled:
