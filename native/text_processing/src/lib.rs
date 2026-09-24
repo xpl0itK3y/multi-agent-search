@@ -549,7 +549,7 @@ fn score_search_candidates_impl(payload_json: &str) -> Result<String, String> {
             score += 40;
         }
         if !normalized_snippet.is_empty() {
-            score += std::cmp::min(normalized_snippet.len(), 240) as i64;
+            score += std::cmp::min(normalized_snippet.chars().count(), 240) as i64;
         }
         if contains_any(&normalized_title, &payload.config.strong_result_tokens) {
             score += 60;
@@ -750,7 +750,7 @@ fn select_analyzer_sources_impl(payload_json: &str) -> Result<String, String> {
         if source_quality == Some("low") && penalty >= 160 && trusted_score <= 0 {
             return true;
         }
-        if source_quality == Some("low") && normalized_content.len() < 220 && penalty >= 80 {
+        if source_quality == Some("low") && normalized_content.chars().count() < 220 && penalty >= 80 {
             return true;
         }
         if !payload.topics.is_empty() {
@@ -758,7 +758,7 @@ fn select_analyzer_sources_impl(payload_json: &str) -> Result<String, String> {
             if topic_score <= -180 && trusted_score <= 0 && source_quality != Some("high") {
                 return true;
             }
-            if topic_score <= -120 && source_quality == Some("low") && normalized_content.len() < 1200 {
+            if topic_score <= -120 && source_quality == Some("low") && normalized_content.chars().count() < 1200 {
                 return true;
             }
         }
@@ -769,7 +769,7 @@ fn select_analyzer_sources_impl(payload_json: &str) -> Result<String, String> {
         let title = candidate.title.as_deref().unwrap_or("");
         let content = candidate.content.as_str();
         let domain = normalized_domain(&candidate.url);
-        let mut score = normalize_text_impl(content).len() as i64;
+        let mut score = normalize_text_impl(content).chars().count() as i64;
         if !normalize_text_impl(title).is_empty() {
             score += 100;
         }
@@ -1267,5 +1267,135 @@ mod tests {
     fn split_sentences_splits_on_terminators_and_normalizes() {
         let out = split_sentences("First one. Second  two!  Third three?");
         assert_eq!(out, vec!["First one.", "Second two!", "Third three?"]);
+    }
+
+    // Length parity with the Python fallback: len() there counts characters, while
+    // str::len() counts UTF-8 bytes, which doubles every Cyrillic length.
+
+    fn empty_search_config() -> serde_json::Value {
+        serde_json::json!({
+            "trusted_domain_exact_matches": [],
+            "trusted_domain_suffixes": [],
+            "low_value_domain_exact_matches": [],
+            "low_value_domain_substrings": [],
+            "low_signal_title_tokens": [],
+            "low_signal_url_tokens": [],
+            "low_signal_result_tokens": [],
+            "strong_result_tokens": [],
+            "topic_policies": [],
+            "docs_url_positive_tokens": [],
+            "docs_title_positive_tokens": [],
+            "docs_title_negative_tokens": [],
+            "docs_snippet_negative_tokens": [],
+            "global_url_positive_tokens": [],
+            "global_url_negative_tokens": [],
+            "global_snippet_negative_phrases": []
+        })
+    }
+
+    fn analyzer_candidate(url: &str, source_quality: &str, content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "task_description": null,
+            "url": url,
+            "domain": null,
+            "source_quality": source_quality,
+            "title": null,
+            "content": content
+        })
+    }
+
+    fn selected_analyzer_urls(
+        candidates: Vec<serde_json::Value>,
+        topics: serde_json::Value,
+        topic_policies: serde_json::Value,
+        max_sources: usize,
+    ) -> Vec<String> {
+        let payload = serde_json::json!({
+            "candidates": candidates,
+            "topics": topics,
+            "config": {
+                "trusted_domain_exact_matches": [],
+                "trusted_domain_suffixes": [],
+                "low_value_domain_exact_matches": [],
+                "low_value_domain_substrings": [],
+                "speculative_title_tokens": [],
+                "speculative_content_tokens": [],
+                "topic_policies": topic_policies,
+                "docs_url_positive_tokens": [],
+                "docs_title_positive_tokens": [],
+                "docs_title_negative_tokens": [],
+                "docs_content_negative_tokens": [],
+                "global_url_negative_tokens": []
+            },
+            "max_sources": max_sources,
+            "max_sources_per_domain": 5,
+            "max_sources_per_task": 5
+        });
+        let output = select_analyzer_sources_impl(&payload.to_string()).unwrap();
+        let selected: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+        selected
+            .iter()
+            .map(|item| item["url"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn search_snippet_score_counts_characters() {
+        // 150 Cyrillic characters are 300 bytes: min(len, 240) must add 150, not 240.
+        let snippet = "я".repeat(150);
+        let payload = serde_json::json!({
+            "candidates": [{"url": "http://example.com/a", "title": null, "snippet": snippet, "score": 0}],
+            "topics": [],
+            "config": empty_search_config(),
+            "limit": 10
+        });
+        let output = score_search_candidates_impl(&payload.to_string()).unwrap();
+        let scored: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0]["score"].as_i64(), Some(150));
+    }
+
+    #[test]
+    fn analyzer_short_content_cutoff_counts_characters() {
+        // Low quality (+45) and a speculative URL (+35) make the penalty exactly 80, so
+        // only the length check decides: 150 characters is under 220 even at 300 bytes.
+        let content = "я".repeat(150);
+        let candidates = vec![analyzer_candidate("http://example.com/prediction", "low", &content)];
+        let urls = selected_analyzer_urls(candidates, serde_json::json!([]), serde_json::json!([]), 5);
+        assert!(urls.is_empty(), "short low-quality source was kept: {:?}", urls);
+    }
+
+    #[test]
+    fn analyzer_off_topic_cutoff_counts_characters() {
+        // A weak-domain match (-120) plus low quality (-40) puts the topic score under
+        // -120, so a low-quality source under 1200 characters is dropped; 700 Cyrillic
+        // characters are 1400 bytes.
+        let content = "я".repeat(700);
+        let policies = serde_json::json!([{
+            "name": "news",
+            "premium_domains": [],
+            "secondary_domains": [],
+            "weak_domains": [],
+            "weak_domain_substrings": ["weak"],
+            "strong_editorial_tokens": [],
+            "weak_signal_tokens": [],
+            "generic_listicle_tokens": []
+        }]);
+        let candidates = vec![analyzer_candidate("http://weak.example/z", "low", &content)];
+        let urls = selected_analyzer_urls(candidates, serde_json::json!(["news"]), policies, 5);
+        assert!(urls.is_empty(), "off-topic low-quality source was kept: {:?}", urls);
+    }
+
+    #[test]
+    fn analyzer_content_score_counts_characters() {
+        // 400 Cyrillic characters (800 bytes) must score below 500 ASCII characters.
+        let cyrillic = "я".repeat(400);
+        let ascii = "b".repeat(500);
+        let candidates = vec![
+            analyzer_candidate("http://a.example/x", "high", &cyrillic),
+            analyzer_candidate("http://b.example/y", "high", &ascii),
+        ];
+        let urls = selected_analyzer_urls(candidates, serde_json::json!([]), serde_json::json!([]), 1);
+        assert_eq!(urls, vec!["http://b.example/y".to_string()]);
     }
 }
