@@ -84,30 +84,96 @@ def test_require_admin_allows_admin(monkeypatch):
     assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
 
 
-def test_admin_initial_password_and_oauth_login(monkeypatch):
-    from src.services import ResearchService
+def _admin_service(monkeypatch, admin_email="owner-admin@example.com"):
     from src.repositories.in_memory_task_store import InMemoryTaskStore
+    from src.services import ResearchService
 
+    monkeypatch.setattr(settings, "admin_emails", admin_email, raising=False)
     store = InMemoryTaskStore()
-    service = ResearchService(task_store=store)
+    return store, ResearchService(task_store=store)
 
-    monkeypatch.setattr(settings, "admin_emails", "latundenis55@gmail.com", raising=False)
 
-    # 1. User created via OAuth without password
-    user, created = service.get_or_create_oauth_user("latundenis55@gmail.com", google_subject="sub123")
+def test_admin_initial_password_and_oauth_login(monkeypatch):
+    """A Google-created admin account never takes a first password from the login form.
+
+    This used to assert the opposite: any 6+ character password typed for a passwordless
+    ADMIN_EMAILS account was saved and returned an admin session (account takeover)."""
+    from src.domain.errors import UnauthorizedError
+
+    store, service = _admin_service(monkeypatch)
+
+    # 1. Admin onboards through Google: passwordless account, admin by email.
+    user, created = service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub123")
     assert created is True
     assert user.is_admin is True
 
-    # 2. Subsequent OAuth login recognizes is_admin
-    user_again, created_again = service.get_or_create_oauth_user("latundenis55@gmail.com", google_subject="sub123")
+    # 2. Subsequent Google sign-in still resolves the same admin account.
+    user_again, created_again = service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub123")
     assert created_again is False
-    assert user_again.is_admin is True
+    assert user_again.id == user.id and user_again.is_admin is True
 
-    # 3. Setting initial password for admin on first password login succeeds and grants admin
-    auth_user = service.authenticate_user("latundenis55@gmail.com", "supersecret123")
-    assert auth_user.is_admin is True
+    # 3. Anyone typing the admin email with an arbitrary password is refused, and nothing is stored.
+    with pytest.raises(UnauthorizedError):
+        service.authenticate_user("owner-admin@example.com", "supersecret123")
+    stored = store.get_user_by_id(user.id)
+    assert stored.password_hash is None
+    assert stored.token_version == user.token_version  # the real admin's sessions survive
 
-    # 4. Subsequent login with same password succeeds
-    auth_user_again = service.authenticate_user("latundenis55@gmail.com", "supersecret123")
-    assert auth_user_again.is_admin is True
 
+@pytest.mark.anyio
+async def test_login_with_arbitrary_password_for_passwordless_admin_is_401(client, monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "owner-admin@example.com", raising=False)
+    service = client._transport.app.state.research_service
+    admin, _ = service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-admin")
+
+    response = await client.post(
+        "/v1/auth/login", json={"email": "owner-admin@example.com", "password": "hunter22"}
+    )
+
+    assert response.status_code == 401
+    assert "access_token" not in response.json()
+    assert service.task_store.get_user_by_id(admin.id).password_hash is None
+
+
+def test_register_refuses_admin_email(monkeypatch):
+    from src.domain.errors import ForbiddenError
+
+    store, service = _admin_service(monkeypatch)
+
+    with pytest.raises(ForbiddenError) as exc:
+        service.register_user("Owner-Admin@Example.com", "secret123")
+
+    assert exc.value.status_code == 403
+    assert "scripts/create_admin.py" in exc.value.detail
+    assert store.get_user_by_email("owner-admin@example.com") is None
+
+
+@pytest.mark.anyio
+async def test_register_endpoint_refuses_admin_email(client, monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "owner-admin@example.com", raising=False)
+
+    response = await client.post(
+        "/v1/auth/register", json={"email": "owner-admin@example.com", "password": "secret123"}
+    )
+
+    assert response.status_code == 403
+    assert "Google" in response.json()["detail"]
+    assert client.cookies.get(settings.auth_cookie_name) is None
+
+
+def test_google_sign_in_for_existing_local_admin_email_account_conflicts(monkeypatch):
+    """A local row for an admin email (e.g. squatted before registration was blocked) is never
+    silently handed to the Google identity."""
+    from src.domain.errors import ConflictError
+
+    store, service = _admin_service(monkeypatch)
+    squatter = store.create_user("squatter", "owner-admin@example.com", "pbkdf2_sha256$1$00$00")
+
+    with pytest.raises(ConflictError) as exc:
+        service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-real-admin")
+
+    assert exc.value.status_code == 409
+    assert store.get_user_by_id(squatter.id).google_subject is None
+    assert store.get_user_by_google_subject("sub-real-admin") is None

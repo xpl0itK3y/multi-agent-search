@@ -21,12 +21,16 @@ def _isolate_auth_settings(monkeypatch):
     """Pin auth settings to test defaults so a developer's local .env (which may set
     AUTH_DISABLED=false or Google OAuth creds) cannot change test behavior. Tests that
     need auth enabled / OAuth configured override these via mocker.patch."""
+    from src.auth.login_rate_limit import reset_auth_rate_limiter
     from src.config import settings
 
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
     monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     monkeypatch.setattr(settings, "google_client_id", "", raising=False)
     monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
+    # The auth limiters are process-wide: without a reset, one test's login/register hits
+    # (all from the same test client address) push a later test over the limit.
+    reset_auth_rate_limiter()
 
 
 @pytest.fixture

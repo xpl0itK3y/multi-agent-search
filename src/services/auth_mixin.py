@@ -4,7 +4,14 @@ Composed into ResearchService; relies on self.task_store (set in ResearchService
 """
 import uuid
 
-from src.domain.errors import BadRequestError, ConflictError, UnauthorizedError, UnprocessableError
+from src.domain.errors import (
+    BadRequestError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+    UnprocessableError,
+)
 
 from src.domain import AuthUser
 
@@ -16,26 +23,29 @@ class AuthMixin:
         normalized = email.strip().lower()
         if "@" not in normalized or "." not in normalized.split("@")[-1]:
             raise UnprocessableError("Invalid email address")
+        # Admin rights follow the email and sign-up verifies nothing, so a local account for
+        # an ADMIN_EMAILS address would make whoever registers it first an admin.
+        if normalized in self._admin_emails():
+            raise ForbiddenError(
+                "This email is reserved for an administrator: sign in with Google, or ask the "
+                "operator to provision it with scripts/create_admin.py"
+            )
         if self.task_store.get_user_by_email(normalized) is not None:
             raise ConflictError("Email already registered")
         user = self.task_store.create_user(str(uuid.uuid4()), normalized, hash_password(password))
         return self._to_auth_user(user)
 
     def authenticate_user(self, email: str, password: str) -> AuthUser:
-        from src.auth.security import hash_password, verify_password
-        from src.config import settings
+        from src.auth.security import verify_password
 
         normalized = email.strip().lower()
         user = self.task_store.get_user_by_email(normalized)
         if user is None:
             raise UnauthorizedError("Invalid email or password")
-
-        allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        # A passwordless (Google-created) account never takes a password from the login form,
+        # admin or not: the first one is set from an authenticated session (set-password) or
+        # by the operator (scripts/create_admin.py). Accepting it here let anyone claim it.
         if user.password_hash is None:
-            if normalized in allowed and len(password or "") >= 6:
-                updated = self.task_store.update_user_password(user.id, hash_password(password))
-                if updated:
-                    return self._to_auth_user(updated)
             raise UnauthorizedError("This account was registered via Google Sign-In. Please sign in with Google.")
 
         if not verify_password(password, user.password_hash):
@@ -65,15 +75,10 @@ class AuthMixin:
             self.task_store.update_user_profile(linked.id, name, avatar_url)  # keep fresh
             return self._to_auth_user(linked), False
 
-        # Never silently attach a verified OAuth identity to an existing local account,
-        # unless it is a designated admin account being linked.
-        existing = self.task_store.get_user_by_email(normalized)
-        if existing is not None:
-            from src.config import settings
-            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-            if normalized in allowed:
-                self.task_store.update_user_profile(existing.id, name, avatar_url)
-                return self._to_auth_user(existing), False
+        # Never silently attach a verified OAuth identity to an existing local account — admin
+        # emails included: sign-up verifies no email, so that row may belong to whoever
+        # claimed the address first.
+        if self.task_store.get_user_by_email(normalized) is not None:
             raise ConflictError("An account with this email already exists")
 
         # New OAuth accounts are explicitly passwordless until the user sets one.
@@ -109,6 +114,29 @@ class AuthMixin:
         if updated is None:
             raise UnauthorizedError("User not found")
         return self._to_auth_user(updated)
+
+    def provision_admin_account(self, email: str, password: str) -> tuple[AuthUser, bool]:
+        """Operator path (scripts/create_admin.py): create an ADMIN_EMAILS account or replace
+        its password. Returns (user, created).
+
+        Every password write bumps token_version, so replacing one revokes all sessions
+        minted before it — including any held by whoever registered the address first.
+        """
+        from src.auth.security import hash_password
+
+        normalized = (email or "").strip().lower()
+        if normalized not in self._admin_emails():
+            raise ForbiddenError(f"{normalized or 'email'} is not listed in ADMIN_EMAILS")
+        if len(password or "") < 6:
+            raise UnprocessableError("Password must be at least 6 characters")
+        existing = self.task_store.get_user_by_email(normalized)
+        if existing is None:
+            user = self.task_store.create_user(str(uuid.uuid4()), normalized, hash_password(password))
+            return self._to_auth_user(user), True
+        updated = self.task_store.update_user_password(existing.id, hash_password(password))
+        if updated is None:
+            raise NotFoundError("User not found")
+        return self._to_auth_user(updated), False
 
     def get_auth_user(self, user_id: str) -> AuthUser | None:
         user = self.task_store.get_user_by_id(user_id)
@@ -149,14 +177,16 @@ class AuthMixin:
         return self._to_auth_user(user)
 
     @staticmethod
-    def _to_auth_user(user) -> AuthUser:
+    def _admin_emails() -> set[str]:
         from src.config import settings
 
         if isinstance(settings.admin_emails, str):
-            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-        else:
-            allowed = {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
-        is_admin = bool(user.email and user.email.lower() in allowed)
+            return {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        return {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
+
+    @classmethod
+    def _to_auth_user(cls, user) -> AuthUser:
+        is_admin = bool(user.email and user.email.lower() in cls._admin_emails())
         return AuthUser(
             id=user.id,
             email=user.email,

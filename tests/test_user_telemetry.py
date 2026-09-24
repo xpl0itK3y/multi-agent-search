@@ -64,9 +64,10 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     admin_email = f"admin_{uuid.uuid4().hex[:8]}@example.com"
     monkeypatch.setattr(settings, "admin_emails", [admin_email])
 
-    # Register admin
+    # Provision the admin out of band (sign-up refuses ADMIN_EMAILS), then log in.
+    client._transport.app.state.research_service.provision_admin_account(admin_email, "AdminPassword123!")
     admin_reg = await client.post(
-        "/v1/auth/register",
+        "/v1/auth/login",
         json={"email": admin_email, "password": "AdminPassword123!"},
     )
     assert admin_reg.status_code == 200
