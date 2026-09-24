@@ -146,6 +146,25 @@ other over the Compose network.
   passed to `GF_SECURITY_ADMIN_PASSWORD`) and change the Postgres credentials
   (`POSTGRES_USER` / `POSTGRES_PASSWORD`, which PgBouncer uses too) in `.env`.
 
+### Workers and the Redis broker
+
+The API and all three workers run with `USE_REDIS_BROKER=true`; the workers
+share one `x-worker-env` block in `docker-compose.yml`. The LLM concurrency
+limit (`LLM_MAX_CONCURRENT`, default 16) is therefore enforced through Redis
+across the API and every worker together, not per process; raise it if worker
+throughput drops.
+
+Older Compose files silently dropped the Redis settings from the workers, which
+then polled Postgres while the API kept pushing job ids that nobody popped. When
+upgrading such a deployment, clear the stale Redis lists before starting the
+new workers:
+
+```bash
+docker compose stop worker worker_2 worker_3
+docker compose exec redis redis-cli DEL mas:search_jobs mas:finalize_jobs
+docker compose up -d worker worker_2 worker_3
+```
+
 Stop everything:
 
 ```bash

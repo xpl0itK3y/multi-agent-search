@@ -1,3 +1,14 @@
+# Shared worker environment. A YAML merge key (<<) is shallow: a service that sets its
+# own `environment:` replaces the base's mapping wholesale instead of extending it. So
+# each worker merges this anchor *inside* its environment block rather than relying on
+# x-worker-base to carry it.
+x-worker-env: &worker-env
+  POSTGRES_HOST: pgbouncer
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  USE_REDIS_BROKER: "true"
+  LOG_FORMAT: json
+
 x-worker-base: &worker-base
   build:
     context: .
@@ -11,12 +22,7 @@ x-worker-base: &worker-base
       condition: service_healthy
   env_file:
     - .env
-  environment:
-    POSTGRES_HOST: pgbouncer
-    POSTGRES_PORT: 5432
-    REDIS_URL: redis://redis:6379/0
-    USE_REDIS_BROKER: "true"
-    LOG_FORMAT: json
+  environment: *worker-env
   volumes:
     - ./src:/app/src
   command: ["python", "scripts/run_finalize_worker.py"]
@@ -89,8 +95,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker
       # Prometheus scrape port; reachable only inside the Docker network.
       WORKER_METRICS_PORT: "9101"
@@ -99,8 +104,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-2
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker-2
       WORKER_METRICS_PORT: "9102"
 
@@ -108,8 +112,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-3
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker-3
       WORKER_METRICS_PORT: "9103"
 
