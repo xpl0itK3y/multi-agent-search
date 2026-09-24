@@ -182,19 +182,25 @@ def stream_csv(
     key: Callable[[object], str],
 ) -> Iterator[str]:
     """CSV text one DB page at a time, so an export never holds every row in memory.
-    A row already written is skipped: one pushed onto the next page by a row inserted
-    while the export runs is not repeated."""
+    The first page is read before the response starts, so a failing DB is a 500 rather
+    than a truncated 200 file."""
+    return _csv_chunks(header, fetch_page(1), fetch_page, to_row, key)
+
+
+def _csv_chunks(header, first_page, fetch_page, to_row, key) -> Iterator[str]:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(header)
+    # A row already written is skipped: one pushed onto the next page by a row inserted
+    # while the export runs is not repeated.
     written: set[str] = set()
-    page = 1
+    page, items = 1, first_page
     while True:
-        items = fetch_page(page)
         for item in items:
-            if key(item) in written:
+            item_key = key(item)
+            if item_key in written:
                 continue
-            written.add(key(item))
+            written.add(item_key)
             writer.writerow([csv_safe(cell) for cell in to_row(item)])
         yield buffer.getvalue()
         buffer.seek(0)
@@ -202,6 +208,7 @@ def stream_csv(
         if len(items) < ADMIN_EXPORT_PAGE_SIZE:
             return
         page += 1
+        items = fetch_page(page)
 
 
 def _csv_attachment(rows: Iterator[str], filename: str) -> StreamingResponse:

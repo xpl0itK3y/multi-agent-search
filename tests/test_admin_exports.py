@@ -39,6 +39,15 @@ def test_stream_csv_pages_until_a_short_page_and_skips_repeats(monkeypatch):
     assert _rows("".join(chunks)) == [["id"], ["a"], ["b"], ["c"], ["d"]]
 
 
+def test_stream_csv_reads_the_first_page_before_the_response_starts():
+    def failing_fetch(page):
+        raise RuntimeError("db down")
+
+    # Raised by the route itself (a 500), not half-way through a 200 response body.
+    with pytest.raises(RuntimeError):
+        stream_csv(["id"], failing_fetch, lambda item: [item], key=lambda item: item)
+
+
 @pytest.mark.anyio
 async def test_users_export_streams_every_page_and_quotes_a_formula_name(client, monkeypatch):
     monkeypatch.setattr("src.api.app.ADMIN_EXPORT_PAGE_SIZE", 2)
