@@ -103,6 +103,7 @@ from src.api.schemas import (
     WorkerHeartbeat,
 )
 from src.bootstrap import lifespan
+from src.services import ResearchService
 from src.config import settings
 from src.observability import bind_observability_context, metric_route_template, observe_api_request, render_metrics
 
@@ -137,6 +138,15 @@ def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
         return record
     cleaned = {k: v for k, v in record.graph_state.items() if k not in _SENSITIVE_GRAPH_STATE_KEYS}
     return record.model_copy(update={"graph_state": cleaned})
+
+
+def _owner_job_view(job):
+    """Owner-facing copy of a search/finalize job. The stored ``error`` is the raw worker
+    exception (kept for the admin dead-letter views), which may carry provider or DB
+    details; owners get the same classified reason the research itself reports."""
+    if job is None or not job.error:
+        return job
+    return job.model_copy(update={"error": ResearchService._failure_message(RuntimeError(job.error))})
 
 
 def extract_client_ip(request: Request) -> str | None:
@@ -569,7 +579,7 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_latest_search_task_job(task_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob, dependencies=auth_required)
     def get_search_job(
@@ -580,7 +590,7 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_search_task_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=admin_guard)
     def list_search_jobs(status: str, request: Request):
@@ -658,14 +668,14 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_research_finalize_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob, dependencies=research_guard)
     def get_latest_finalize_job(research_id: str, request: Request):
         job = get_research_service(request).get_latest_research_finalize_job(research_id)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob, dependencies=admin_guard)
     def requeue_finalize_job(job_id: str, request: Request):
@@ -1218,8 +1228,10 @@ def register_routes(app: FastAPI) -> None:
                     emit("final", answer)
                 except ServiceError as exc:
                     emit("error", str(exc.detail))
-                except Exception as exc:  # pragma: no cover - defensive
-                    emit("error", str(exc))
+                except Exception:
+                    # Raw exception text can carry provider/DB details: log it, send a generic reason.
+                    logger.exception("chat_stream_answer_failed research_id=%s", research_id)
+                    emit("error", "Answer failed. Please try again.")
 
             threading.Thread(target=worker, daemon=True, name=f"chat-{research_id[:8]}").start()
             yield ": connected\n\n"
