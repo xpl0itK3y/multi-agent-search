@@ -9,11 +9,9 @@ from src.config import settings
 # revision (e.g. an unfinished feature branch), which breaks migrations and leaks
 # test data into real work.
 POSTGRES_TEST_DATABASE = "mas_postgres_tests"
-
-
-def create_postgres_session_factory():
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
+# A host that drops packets (rather than refusing) otherwise stalls the first
+# connection for minutes before the "server unreachable" skip.
+_PROBE_CONNECT_ARGS = {"connect_timeout": 5}
 
 
 def server_base_url() -> str:
@@ -47,7 +45,10 @@ def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
     base_url = server_base_url()
     try:
         server = create_engine(
-            f"{base_url}/postgres", isolation_level="AUTOCOMMIT", pool_pre_ping=True
+            f"{base_url}/postgres",
+            isolation_level="AUTOCOMMIT",
+            pool_pre_ping=True,
+            connect_args=_PROBE_CONNECT_ARGS,
         )
         with server.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))

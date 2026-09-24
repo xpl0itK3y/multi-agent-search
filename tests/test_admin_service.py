@@ -78,20 +78,12 @@ def test_in_memory_task_store_admin_methods():
     assert "overall" in overview.system_health
 
 
-def test_sqlalchemy_task_store_admin_methods():
-    from sqlalchemy.orm import sessionmaker
-    from src.db import create_engine_from_settings
+@pytest.mark.postgres
+def test_sqlalchemy_task_store_admin_methods(postgres_session_factory):
+    # The throwaway test database, never the developer's DATABASE_URL.
     from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
 
-    try:
-        engine = create_engine_from_settings()
-        with engine.connect():
-            pass
-    except Exception:
-        pytest.skip("PostgreSQL not available")
-
-    factory = sessionmaker(bind=engine)
-    store = SQLAlchemyTaskStore(factory)
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     # 1. Audit log
     audit_id = store.record_admin_audit(
