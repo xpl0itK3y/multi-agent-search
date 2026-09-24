@@ -23,7 +23,11 @@ from src.api.dependencies import (
     scope_user_id,
     verify_research_access,
 )
-from src.auth.login_rate_limit import enforce_auth_rate_limit
+from src.auth.login_rate_limit import (
+    enforce_auth_rate_limit,
+    enforce_login_account_rate_limit,
+    enforce_password_check_rate_limit,
+)
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.security import create_token, decode_token
@@ -324,6 +328,7 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/auth/login", response_model=AuthSession, dependencies=auth_rate_limit)
     def login(payload: LoginRequest, response: Response, request: Request):
+        enforce_login_account_rate_limit(payload.email)  # per-account, on top of per-IP
         user = get_research_service(request).authenticate_user(payload.email, payload.password)
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
@@ -429,7 +434,7 @@ def register_routes(app: FastAPI) -> None:
         payload: SetPasswordRequest,
         response: Response,
         request: Request,
-        user: AuthUser = Depends(get_current_user),
+        user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
         updated_user = get_research_service(request).set_user_password(
             user.id,
@@ -444,13 +449,12 @@ def register_routes(app: FastAPI) -> None:
         payload: DeleteAccountRequest,
         response: Response,
         request: Request,
-        user: AuthUser = Depends(get_current_user),
+        user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
         """Delete the account and all owned data (researches, results, share links).
 
-        No login-rate-limit here on purpose: this is not a credential-guessing
-        surface — it requires an authenticated session, the current password,
-        and passes through the CSRF middleware like every other mutation."""
+        Throttled per user like set-password: whoever holds a stolen session could
+        otherwise guess current_password here without limit."""
         get_research_service(request).delete_user_account(
             user.id,
             current_password=payload.current_password,
