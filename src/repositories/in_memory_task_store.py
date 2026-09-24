@@ -441,21 +441,23 @@ class InMemoryTaskStore:
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research:
-            research.status = status
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != expected_status:
+                return None
             research.final_report = None
             research.partial_report = None
             research.partial_reasoning = None
-            gs = dict(research.graph_state or {})
-            gs.pop("error", None)
-            gs.pop("report", None)
-            gs.pop("step", None)
-            research.graph_state = gs
+            research.graph_state = {
+                key: value
+                for key, value in (research.graph_state or {}).items()
+                if key not in remove_graph_state_keys
+            }
             research.updated_at = datetime.now(timezone.utc)
-            self._emit_change(research_id)
+        self._emit_change(research_id)
         return research
 
     def try_claim_queued_research(

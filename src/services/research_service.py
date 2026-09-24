@@ -656,16 +656,53 @@ class ResearchService(
         logger.info("research_cancelled research_id=%s", research_id)
         return updated or research
 
+    # What a failed finalization leaves in graph_state: its graph checkpoint (a retry runs
+    # a fresh pass rather than resuming the attempt that failed) and the trust artifacts
+    # the panels would otherwise keep serving. decompose_pending goes too: queue
+    # maintenance would re-run a decomposition the retry has already started.
+    _RETRY_RESET_GRAPH_STATE_KEYS = (
+        "error",
+        "report",
+        "step",
+        "resume_after_stale_recovery",
+        "analyze_attempts",
+        "replan_attempts",
+        "tie_break_attempts",
+        "should_replan",
+        "should_tie_break",
+        "should_retry_analysis",
+        "branch_stalled",
+        "finalize_deadline",
+        "replan_recommendations",
+        "tie_break_recommendations",
+        "detected_conflicts",
+        "source_summary",
+        "evidence_summary",
+        "red_team",
+        "citation_audit",
+        "source_integrity",
+        "source_independence",
+        "source_reputation",
+        "numeric_check",
+        "comparison",
+        "stance_balance",
+        "cross_language",
+        "decompose_pending",
+    )
+
     def retry_research(
         self,
         research_id: str,
         user_id: str | None = None,
         background_tasks: Any | None = None,
     ) -> ResearchRecord:
-        """Retry a failed or timed-out research.
-        If all search tasks are completed, retries finalization.
-        If some tasks failed, requeues them.
-        If no tasks were created, re-runs decomposition."""
+        """Retry a failed research from where it failed: finalization when every search
+        task completed, the failed/stalled search tasks otherwise, and decomposition when
+        no tasks were ever created.
+
+        The retry is admitted like any activation (ADMIT-ATOMIC): FAILED -> PROCESSING is a
+        CAS under the admission lock that counts against the per-user and global limits,
+        so of two concurrent retries exactly one wins and the other gets 409."""
         research = (
             self._ensure_research_access(research_id, user_id)
             if user_id is not None
@@ -673,64 +710,93 @@ class ResearchService(
         )
         if not research:
             raise NotFoundError("Research not found")
-        if research.status not in (ResearchStatus.FAILED, ResearchStatus.TIMEOUT):
-            raise ConflictError("Only failed or timed out research can be retried")
+        if research.status != ResearchStatus.FAILED:
+            raise ConflictError("Only failed research can be retried")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        finalize_job = self.task_store.get_latest_research_finalize_job(research_id)
+        finalize_only = bool(tasks) and all(task.status == TaskStatus.COMPLETED for task in tasks)
+        # Fail fast, before taking a capacity slot, when the retry path cannot run here.
+        if not tasks:
+            self.require_agent(self.orchestrator, "Orchestrator")
+        elif finalize_only:
+            self.require_agent(self.analyzer, "Analyzer")
 
-        # Case 1: Tasks exist and all completed -> retry finalization
-        completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
-        if tasks and len(completed_tasks) == len(tasks):
-            updated = self.task_store.reset_research_for_retry(
-                research_id, status=ResearchStatus.ANALYZING
-            )
-            if finalize_job is not None:
-                requeued = self.task_store.requeue_research_finalize_job(finalize_job.id)
-                if requeued and self.broker:
-                    self.broker.push_finalize_job(requeued.id)
-            else:
-                self.enqueue_research_finalization(research_id)
-            logger.info("research_retry_finalization research_id=%s", research_id)
-            return updated or research
-
-        # Case 2: Tasks exist but some failed/pending -> requeue tasks
-        updated = self.task_store.reset_research_for_retry(
-            research_id, status=ResearchStatus.PROCESSING
+        self._admit_or_raise(research_id, ResearchStatus.FAILED)
+        reset = self.task_store.reset_research_for_retry(
+            research_id,
+            ResearchStatus.PROCESSING,
+            list(self._RETRY_RESET_GRAPH_STATE_KEYS),
         )
-        if tasks:
+        if reset is None:
+            raise ConflictError("Research state changed. Please retry.")
+
+        if not tasks:
+            self._retry_decomposition(reset, background_tasks)
+        elif finalize_only:
+            self._retry_finalization(research_id)
+        else:
             for task in tasks:
                 if task.status in (TaskStatus.FAILED, TaskStatus.PENDING):
-                    self.task_store.update_task_status(
-                        task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried")
-                    )
-                    search_job = self.task_store.get_latest_search_task_job(task.id)
-                    if search_job:
-                        requeued_job = self.task_store.requeue_search_task_job(search_job.id)
-                        if requeued_job and self.broker:
-                            self.broker.push_search_job(requeued_job.id)
-                    elif self.broker:
-                        job = self.task_store.add_search_task_job(
-                            research_id, task.id, settings.job_max_attempts
-                        )
-                        self.broker.push_search_job(job.id)
-        else:
-            # Case 3: Failed before decomposition
-            from src.domain.models import ResearchRequest
+                    self._redispatch_search_task(task, reset.depth)
+        logger.info(
+            "research_retried research_id=%s path=%s",
+            research_id,
+            "decompose" if not tasks else "finalize" if finalize_only else "search",
+        )
+        return self.task_store.get_research(research_id) or reset
 
-            payload = ResearchRequest(
+    def _retry_finalization(self, research_id: str) -> None:
+        # The CAS is taken from PROCESSING (the admission state); pre-setting ANALYZING
+        # would make try_begin_finalization refuse and leave no job at all.
+        if not self.task_store.try_begin_finalization(research_id):
+            return  # cancelled between the admission and here
+        latest = self.task_store.get_latest_research_finalize_job(research_id)
+        job = None
+        if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
+            job = latest  # still queued or held by a runner; do not add a second job
+        elif latest is not None:
+            # A dead-lettered/failed job is reused (store-guarded, lease bumped); a
+            # completed one is not requeueable and gets a fresh job below.
+            job = self.task_store.requeue_research_finalize_job(latest.id)
+        if job is None:
+            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+        if self.broker and job.status == FinalizeJobStatus.PENDING:
+            self.broker.push_finalize_job(job.id)
+        logger.info("research_retry_finalization finalize_job_id=%s", job.id)
+
+    def _redispatch_search_task(self, task: SearchTask, depth: SearchDepth) -> None:
+        job = self.task_store.get_latest_search_task_job(task.id)
+        if job is not None and job.status == SearchJobStatus.RUNNING:
+            return  # a worker still holds it; its outcome settles the task
+        self.task_store.update_task(task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried"))
+        # The job row always exists (Postgres-polling workers claim from it); the broker
+        # push is only the wake-up for Redis-mode workers.
+        if job is None or job.status == SearchJobStatus.COMPLETED:
+            job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+        elif job.status != SearchJobStatus.PENDING:
+            job = self.task_store.requeue_search_task_job(job.id) or job
+        if self.broker:
+            self.broker.push_search_job(job.id)
+
+    def _retry_decomposition(self, research: ResearchRecord, background_tasks: Any | None) -> None:
+        # Replay the original request (plan_first, model, thread) when it is still stored.
+        graph_state = research.graph_state or {}
+        payload = graph_state.get("decompose_payload")
+        try:
+            request = ResearchRequest.model_validate(payload) if payload else None
+        except ValueError:
+            request = None
+        if request is None:
+            request = ResearchRequest(
                 prompt=research.prompt,
                 depth=research.depth,
-                model=(research.graph_state or {}).get("model"),
-                thread_id=(research.graph_state or {}).get("thread_id"),
+                model=graph_state.get("model"),
+                thread_id=graph_state.get("thread_id"),
             )
-            if background_tasks is not None:
-                background_tasks.add_task(self.decompose_and_enqueue, research_id, payload)
-            else:
-                self.decompose_and_enqueue(research_id, payload)
-
-        logger.info("research_retried research_id=%s", research_id)
-        return updated or research
+        if background_tasks is not None:
+            background_tasks.add_task(self.decompose_and_enqueue, research.id, request)
+        else:
+            self.decompose_and_enqueue(research.id, request)
 
     def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
         research = self._ensure_research_access(research_id, user_id)

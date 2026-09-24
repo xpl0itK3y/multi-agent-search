@@ -577,22 +577,26 @@ class SQLAlchemyTaskStore:
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None:
+        """Clear a failed attempt's report and graph_state keys under the row lock, only
+        while the research is still in `expected_status` (a retry resets right after its
+        admission CAS; a cancel landing in between wins). None when the guard fails."""
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None or research.status != expected_status.value:
                 return None
 
-            research.status = status.value
             research.final_report = None
             research.partial_report = None
             research.partial_reasoning = None
-            gs = dict(research.graph_state or {})
-            gs.pop("error", None)
-            gs.pop("report", None)
-            gs.pop("step", None)
-            research.graph_state = gs
+            graph_state = dict(research.graph_state or {})
+            for key in remove_graph_state_keys:
+                graph_state.pop(key, None)
+            research.graph_state = graph_state
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)

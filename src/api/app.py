@@ -1085,6 +1085,7 @@ def register_routes(app: FastAPI) -> None:
         research_id: str,
         request: Request,
         background_tasks: BackgroundTasks,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
         owner: str | None = Depends(scope_user_id),
     ):
         return _public_record(

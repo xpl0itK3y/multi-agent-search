@@ -171,6 +171,25 @@ def test_graph_state_list_append_keeps_other_keys_and_caps(store):
     assert store.append_research_graph_state_item("missing-research", "messages", {"n": 1}) is None
 
 
+def test_reset_for_retry_is_status_guarded_and_drops_only_the_given_keys(store):
+    record = _research(store)
+    store.merge_research_graph_state(record.id, {"step": "verify", "red_team": {}, "title": "kept"})
+    store.update_research_status(record.id, ResearchStatus.FAILED, "Research failed.")
+
+    # Not in the expected (just-admitted) status: nothing changes.
+    assert store.reset_research_for_retry(record.id, ResearchStatus.PROCESSING, ["step"]) is None
+    assert store.get_research(record.id).final_report == "Research failed."
+
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    reset = store.reset_research_for_retry(record.id, ResearchStatus.PROCESSING, ["step", "red_team"])
+
+    assert reset is not None and reset.status == ResearchStatus.PROCESSING
+    current = store.get_research(record.id)
+    assert current.final_report is None
+    assert current.graph_state == {"title": "kept"}
+    assert store.reset_research_for_retry("missing-research", ResearchStatus.PROCESSING, []) is None
+
+
 def test_graph_events_append_to_trail(store):
     record = _research(store)
     store.append_research_graph_event(record.id, {"step": "analyze", "detail": "one"})

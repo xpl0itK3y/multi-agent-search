@@ -89,10 +89,13 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
+    # Status-guarded reset for a retry, under the row lock: clears the reports and drops
+    # `remove_graph_state_keys`, only while the research is in `expected_status`.
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None: ...
 
     def try_admit_research(
