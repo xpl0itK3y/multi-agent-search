@@ -20,6 +20,7 @@ from src.api.dependencies import (
     get_current_user,
     get_research_service,
     require_admin,
+    resolve_request_user_id,
     scope_user_id,
     verify_research_access,
 )
@@ -231,31 +232,23 @@ def create_app() -> FastAPI:
         # Automatic server-side user activity telemetry
         path_str = str(request.url.path)
         if not path_str.startswith("/metrics") and not path_str.startswith("/health"):
-            auth_header = request.headers.get("authorization")
-            token_str = None
-            if auth_header and auth_header.startswith("Bearer "):
-                token_str = auth_header.split(" ", 1)[1]
-            elif settings.auth_cookie_name in request.cookies:
-                token_str = request.cookies[settings.auth_cookie_name]
-
-            if token_str:
-                try:
-                    dec = decode_token(token_str)
-                    uid = dec.get("sub")
-                    if uid:
-                        service = getattr(request.app.state, "research_service", None)
-                        if service and hasattr(service, "task_store"):
-                            c_ip = extract_client_ip(request)
-                            u_agent = request.headers.get("user-agent")
-                            dev_info = parse_client_ua(u_agent)
-                            service.task_store.touch_user_activity(
-                                user_id=uid,
-                                ip_address=c_ip,
-                                user_agent=u_agent,
-                                device=dev_info["device_type"],
-                            )
-                except Exception:
-                    pass
+            try:
+                # Revoked tokens (password changed) attribute nothing, same rule as auth.
+                uid = await run_in_threadpool(resolve_request_user_id, request)
+                if uid:
+                    service = getattr(request.app.state, "research_service", None)
+                    if service and hasattr(service, "task_store"):
+                        c_ip = extract_client_ip(request)
+                        u_agent = request.headers.get("user-agent")
+                        dev_info = parse_client_ua(u_agent)
+                        service.task_store.touch_user_activity(
+                            user_id=uid,
+                            ip_address=c_ip,
+                            user_agent=u_agent,
+                            device=dev_info["device_type"],
+                        )
+            except Exception:
+                pass
         # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
         # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -696,21 +689,7 @@ def register_routes(app: FastAPI) -> None:
         c_ip = extract_client_ip(request)
         u_agent = request.headers.get("user-agent")
 
-        user_id = None
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ", 1)[1]
-            try:
-                decoded = decode_token(token)
-                user_id = decoded.get("sub")
-            except Exception:
-                pass
-        elif settings.auth_cookie_name in request.cookies:
-            try:
-                decoded = decode_token(request.cookies[settings.auth_cookie_name])
-                user_id = decoded.get("sub")
-            except Exception:
-                pass
+        user_id = resolve_request_user_id(request)
 
         if payload.device_info and user_id:
             dev = payload.device_info

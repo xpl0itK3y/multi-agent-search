@@ -181,3 +181,34 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     client._transport.app.state.research_service.task_store.delete_user(admin_id)
 
 
+
+
+@pytest.mark.anyio
+async def test_revoked_token_attributes_no_activity_or_telemetry(client):
+    service = client._transport.app.state.research_service
+    store = service.task_store
+    reg = await client.post(
+        "/v1/auth/register",
+        json={"email": f"revoked_{uuid.uuid4().hex[:8]}@example.com", "password": "secret123"},
+    )
+    user_id = reg.json()["user"]["id"]
+    stale = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+    # A password change bumps token_version, revoking every token minted before it.
+    service.set_user_password(user_id, "rotated-pass1", current_password="secret123")
+
+    await client.get("/v1/auth/config", headers=stale)
+    event = await client.post(
+        "/v1/telemetry/event",
+        json={
+            "session_id": "stale-sess",
+            "event_name": "page_view",
+            "event_category": "ui",
+            "device_info": {"browser": "Firefox"},
+        },
+        headers=stale,
+    )
+
+    assert event.status_code == 200
+    assert user_id not in store.user_telemetry
+    assert store.user_events[-1]["user_id"] is None
+    assert not [s for s in store.user_sessions if s["user_id"] == user_id]

@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from src.api.dependencies import LOCAL_USER, require_admin
+from src.api.dependencies import LOCAL_USER, require_admin, resolve_request_user_id
 from src.api.schemas import AuthUser
 from src.auth.security import create_token
 from src.config import settings
@@ -54,6 +54,31 @@ def test_require_admin_allows_admin_when_auth_disabled_but_admin_emails_set(monk
     user = AuthUser(id="a1", email="admin@example.com")
     token = create_token("a1", email="admin@example.com")
     assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
+
+
+def test_require_admin_rejects_revoked_token_when_auth_disabled_but_admin_emails_set(monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
+    # The password changed after this token was minted, so the stored version moved on.
+    user = AuthUser(id="a1", email="admin@example.com", token_version=1)
+    token = create_token("a1", email="admin@example.com", token_version=0)
+    with pytest.raises(HTTPException) as exc:
+        require_admin(_request({"Authorization": f"Bearer {token}"}, user))
+    assert exc.value.status_code == 401
+
+
+def test_resolve_request_user_id_only_accepts_current_tokens(monkeypatch):
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
+    user = AuthUser(id="u1", email="user@example.com", token_version=2)
+    current = create_token("u1", token_version=2)
+    revoked = create_token("u1", token_version=1)
+
+    assert resolve_request_user_id(_request({"Authorization": f"Bearer {current}"}, user)) == "u1"
+    assert resolve_request_user_id(_request({"Authorization": f"Bearer {revoked}"}, user)) is None
+    assert resolve_request_user_id(_request({"Authorization": "Bearer not-a-jwt"}, user)) is None
+    assert resolve_request_user_id(_request({}, user)) is None
+    assert resolve_request_user_id(_request({"Authorization": f"Bearer {current}"}, None)) is None
 
 
 def test_require_admin_rejects_anonymous(monkeypatch):

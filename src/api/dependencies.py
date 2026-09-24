@@ -32,21 +32,36 @@ def _get_admin_emails() -> set[str]:
     return {str(e).strip().lower() for e in raw if str(e).strip()}
 
 
+def _user_from_token(request: Request, token: str | None) -> AuthUser | None:
+    """The account a token belongs to, or None when the token is missing, invalid, expired
+    or revoked (its 'ver' no longer matches token_version, e.g. after a password change)."""
+    claims = decode_token(token) if token else None
+    user_id = claims.get("sub") if claims else None
+    if not user_id:
+        return None
+    user = get_research_service(request).get_auth_user(user_id)
+    try:
+        token_version = int(claims.get("ver", 0))
+    except (TypeError, ValueError):
+        return None
+    if user is None or token_version != user.token_version:
+        return None
+    return user
+
+
+def resolve_request_user_id(request: Request) -> str | None:
+    """Non-raising identity for attribution (activity, telemetry): the id behind the
+    request's current, unrevoked token, else None. Independent of auth_disabled."""
+    user = _user_from_token(request, _extract_token(request))
+    return user.id if user else None
+
+
 def get_current_user(request: Request) -> AuthUser:
     """Authenticated user from a Bearer JWT or session cookie. Local user when auth is off."""
     if settings.auth_disabled:
         return LOCAL_USER
-    token = _extract_token(request)
-    claims = decode_token(token) if token else None
-    user_id = claims.get("sub") if claims else None
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    user = get_research_service(request).get_auth_user(user_id)
-    try:
-        token_version = int(claims.get("ver", 0)) if claims is not None else -1
-    except (TypeError, ValueError):
-        token_version = -1
-    if user is None or token_version != user.token_version:
+    user = _user_from_token(request, _extract_token(request))
+    if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     allowed = _get_admin_emails()
     if user.email.lower() in allowed:
@@ -78,12 +93,12 @@ def require_admin(request: Request) -> AuthUser:
         token = _extract_token(request)
         if not token:
             raise HTTPException(status_code=401, detail="Admin authentication required")
-        claims = decode_token(token)
-        user_id = claims.get("sub") if claims else None
-        if not user_id:
+        # Same revocation rule as get_current_user: a token minted before a password
+        # change must not keep admin access just because auth is otherwise off.
+        user = _user_from_token(request, token)
+        if user is None:
             raise HTTPException(status_code=401, detail="Invalid admin token")
-        user = get_research_service(request).get_auth_user(user_id)
-        if not user or user.email.lower() not in allowed:
+        if user.email.lower() not in allowed:
             raise HTTPException(status_code=403, detail="Admin privileges required")
         user.is_admin = True
         return user
