@@ -119,10 +119,8 @@ def _admin_service(monkeypatch, admin_email="owner-admin@example.com"):
 
 
 def test_admin_initial_password_and_oauth_login(monkeypatch):
-    """A Google-created admin account never takes a first password from the login form.
-
-    This used to assert the opposite: any 6+ character password typed for a passwordless
-    ADMIN_EMAILS account was saved and returned an admin session (account takeover)."""
+    """A Google-created admin account never takes a first password from the login form:
+    otherwise whoever knows the admin email sets one and gets an admin session."""
     from src.domain.errors import UnauthorizedError
 
     store, service = _admin_service(monkeypatch)

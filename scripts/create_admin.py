@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None, service=None) -> int:
         help="read the password from the first line of stdin instead of prompting",
     )
     args = parser.parse_args(argv)
+    if service is None:
+        service = _create_service()  # refuse an unusable backend before prompting
     password = _read_password(args.password_stdin)
     try:
         user, created = create_admin(args.email, password, service=service)

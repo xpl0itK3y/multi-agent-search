@@ -113,3 +113,15 @@ def test_create_admin_refuses_memory_store(monkeypatch):
 
     with pytest.raises(SystemExit):
         script.create_admin(ADMIN, "whatever-pass1")
+
+
+def test_main_refuses_memory_store_before_prompting(monkeypatch):
+    script = _load_script()
+    monkeypatch.setattr(settings, "task_store_backend", "memory", raising=False)
+    prompted = []
+    monkeypatch.setattr(script.getpass, "getpass", lambda prompt="": prompted.append(prompt) or "x")
+
+    with pytest.raises(SystemExit):
+        script.main([ADMIN])
+
+    assert prompted == []
