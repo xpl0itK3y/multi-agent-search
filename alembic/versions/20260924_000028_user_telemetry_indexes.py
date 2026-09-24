@@ -1,4 +1,4 @@
-"""key user_sessions on (session_id, user_id)
+"""key user_sessions on (session_id, user_id); index prompt events by research
 
 Revision ID: 20260924_000028
 Revises: 20260921_000027
@@ -14,6 +14,10 @@ Existing duplicate (session_id, user_id) rows are collapsed first, keeping the m
 recently active one. If the index build still fails (a duplicate raced in between),
 CONCURRENTLY leaves an INVALID index that IF NOT EXISTS would then skip: drop it
 (DROP INDEX CONCURRENTLY uq_user_sessions_session_user) and upgrade again.
+
+The research_prompt/chat_prompt rows copy prompt text into user_events, which has no
+FK to researches; they are now deleted with their research (delete_research and the
+retention sweep). The partial expression index finds them by details->>'research_id'.
 """
 
 from alembic import op
@@ -40,10 +44,16 @@ def upgrade() -> None:
             "ON user_sessions (session_id, user_id)"
         )
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_user_sessions_session_id")
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_user_events_prompt_research_id "
+            "ON user_events ((details ->> 'research_id')) "
+            "WHERE event_name IN ('chat_prompt', 'research_prompt')"
+        )
 
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_user_events_prompt_research_id")
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_user_sessions_session_id "
             "ON user_sessions (session_id)"

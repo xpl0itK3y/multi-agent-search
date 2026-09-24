@@ -1136,7 +1136,10 @@ class AgentMetadataItem(BaseModel):
 # admin Prompt log trusts as real research and chat prompts.
 CLIENT_TELEMETRY_EVENTS = frozenset({"session_start", "session_end", "heartbeat", "tab_focus", "tab_blur"})
 CLIENT_TELEMETRY_CATEGORIES = frozenset({"general", "system", "ui"})
-SERVER_TELEMETRY_EVENTS = frozenset({"research_prompt", "chat_prompt"})
+# The server's copies of research/chat prompt text (details: research_id, prompt). They
+# are deleted with their research; user_events has no FK to researches to cascade.
+PROMPT_EVENT_NAMES = ("chat_prompt", "research_prompt")
+SERVER_TELEMETRY_EVENTS = frozenset(PROMPT_EVENT_NAMES)
 TELEMETRY_DETAILS_MAX_KEYS = 20
 TELEMETRY_DETAILS_MAX_BYTES = 2048
 # Server-captured values the stores clip before writing telemetry, session and activity

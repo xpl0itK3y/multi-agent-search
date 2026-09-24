@@ -22,6 +22,7 @@ from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
+    PROMPT_EVENT_NAMES,
     QueueMetrics,
     ResearchFinalizeJob,
     ResearchHistoryItem,
@@ -307,6 +308,14 @@ class InMemoryTaskStore:
         task_ids = [tid for tid, t in self.tasks.items() if t.research_id == research_id]
         for tid in task_ids:
             del self.tasks[tid]
+        # Like SQL: the prompt copies in user_events go with their research.
+        self.user_events = [
+            e for e in self.user_events
+            if not (
+                e.get("event_name") in PROMPT_EVENT_NAMES
+                and (e.get("details") or {}).get("research_id") == research_id
+            )
+        ]
         return True
 
     _TERMINAL_RESEARCH_STATUSES = (

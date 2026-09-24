@@ -406,3 +406,12 @@ class UserEventORM(Base):
         default=utcnow,
         index=True,
     )
+
+
+# Finds a research's prompt copies when it is deleted or expires (delete_research,
+# cleanup_old_researches); partial, so the other event rows do not pay for it.
+Index(
+    "ix_user_events_prompt_research_id",
+    UserEventORM.details["research_id"].astext,
+    postgresql_where=text("event_name IN ('chat_prompt', 'research_prompt')"),
+)

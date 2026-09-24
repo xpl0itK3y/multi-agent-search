@@ -555,3 +555,40 @@ def test_user_activity_is_throttled_and_not_touched_by_events(store):
     touched = store.get_admin_user_detail(user.id).user
     assert touched.last_seen_at is not None
     assert touched.last_ip == "10.0.0.1"
+
+
+def _prompt_copy(store, name, research_id, prompt, user_id):
+    store.record_user_event(
+        name, "prompt", user_id=user_id, details={"research_id": research_id, "prompt": prompt}
+    )
+
+
+def test_deleting_a_research_removes_its_prompt_copies(store):
+    doomed = _research(store, user_id="prompt-owner", prompt="sensitive research topic")
+    kept = store.add_research(_request("kept research topic"), task_ids=[], user_id="prompt-owner")
+    _prompt_copy(store, "research_prompt", doomed.id, "sensitive research topic", "prompt-owner")
+    _prompt_copy(store, "chat_prompt", doomed.id, "sensitive follow-up", "prompt-owner")
+    _prompt_copy(store, "chat_prompt", kept.id, "kept follow-up", "prompt-owner")
+    store.record_user_event("tab_focus", "ui", user_id="prompt-owner", details={"research_id": doomed.id})
+
+    assert store.delete_research(doomed.id) is True
+
+    remaining = store.get_admin_event_logs(user_id="prompt-owner").events
+    assert sorted((e.event_name, e.details.get("prompt")) for e in remaining) == [
+        ("chat_prompt", "kept follow-up"),
+        ("tab_focus", None),  # only the prompt copies are tied to the research
+    ]
+    chat_log = store.get_admin_prompts(prompt_type="chat", user_id="prompt-owner").prompts
+    assert [item.prompt for item in chat_log] == ["kept follow-up"]
+
+
+def test_research_retention_removes_its_prompt_copies(store):
+    expired = _research(store, user_id="retention-owner", prompt="expired research topic")
+    store.update_research_status(expired.id, ResearchStatus.COMPLETED, "done")
+    _prompt_copy(store, "research_prompt", expired.id, "expired research topic", "retention-owner")
+    _prompt_copy(store, "chat_prompt", expired.id, "expired follow-up", "retention-owner")
+
+    deleted = store.cleanup_old_researches(datetime.now(timezone.utc) + timedelta(minutes=1))
+
+    assert deleted == [expired.id]
+    assert store.get_admin_event_logs(user_id="retention-owner").events == []

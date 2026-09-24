@@ -29,6 +29,7 @@ from src.domain import (
     GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
+    PROMPT_EVENT_NAMES,
     ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
@@ -410,7 +411,22 @@ class SQLAlchemyTaskStore:
             if research is None:
                 return False
             session.delete(research)
+            session.execute(self._delete_prompt_events([research_id]))
             return True
+
+    @staticmethod
+    def _delete_prompt_events(research_ids: list[str]):
+        """The research/chat prompt copies in user_events, which has no FK to researches:
+        deleted explicitly, in the same transaction as their research. The IN list keeps
+        the ix_user_events_prompt_research_id partial index usable."""
+        return (
+            delete(UserEventORM)
+            .where(
+                UserEventORM.event_name.in_(PROMPT_EVENT_NAMES),
+                UserEventORM.details["research_id"].astext.in_(research_ids),
+            )
+            .execution_options(synchronize_session=False)
+        )
 
     # Retention (OPS-RETENTION): terminal researches past the window are removed
     # with their tasks/results via the existing ON DELETE CASCADEs.
@@ -431,6 +447,7 @@ class SQLAlchemyTaskStore:
             ).scalars().all()
             if research_ids:
                 session.execute(delete(ResearchORM).where(ResearchORM.id.in_(research_ids)))
+                session.execute(self._delete_prompt_events(list(research_ids)))
             return list(research_ids)
 
     @staticmethod
