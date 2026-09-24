@@ -491,3 +491,22 @@ def test_search_cache_put_get_and_cleanup(store):
 def test_ping_is_alive(store):
     assert store.ping() is True
 
+
+# ── user telemetry ────────────────────────────────────────────────────────────
+
+
+def test_telemetry_writes_clip_ip_and_user_agent(store):
+    """user_events.user_agent is VARCHAR(255) and every ip column VARCHAR(64): an odd
+    header must be clipped, not raise a DataError that drops the row."""
+    user = _user(store)
+    long_ip, long_ua = "2001:db8:" + "f" * 100, "Mozilla/5.0 " + "x" * 400
+
+    store.record_user_event("tab_focus", "ui", user_id=user.id, ip_address=long_ip, user_agent=long_ua)
+    store.record_user_session(user.id, "clip-sess", ip_address=long_ip, user_agent=long_ua)
+    store.touch_user_activity(user.id, ip_address=long_ip, user_agent=long_ua)
+
+    event = store.get_admin_event_logs(user_id=user.id).events[0]
+    assert (len(event.ip_address), len(event.user_agent)) == (64, 255)
+    detail = store.get_admin_user_detail(user.id)
+    assert len(detail.sessions[0]["ip_address"]) == 64
+    assert len(detail.user.last_ip) == 64

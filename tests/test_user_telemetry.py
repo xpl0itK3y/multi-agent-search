@@ -134,9 +134,9 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
         "/v1/telemetry/event",
         json={
             "session_id": f"sess-{user_id}",
-            "event_name": "theme_toggle",
-            "event_category": "ui",
-            "details": {"theme": "midnight"},
+            "event_name": "session_start",
+            "event_category": "system",
+            "details": {"path": "/"},
             "device_info": {
                 "device_type": "desktop",
                 "browser": "Safari",
@@ -167,7 +167,7 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     assert detail_data["user"]["is_online"] is True
     assert len(detail_data["sessions"]) >= 1
     assert len(detail_data["recent_events"]) >= 1
-    assert detail_data["recent_events"][0]["event_name"] == "theme_toggle"
+    assert detail_data["recent_events"][0]["event_name"] == "session_start"
 
     # 3. GET /v1/admin/users/analytics/summary
     summary_resp = await client.get("/v1/admin/users/analytics/summary", headers=admin_headers)

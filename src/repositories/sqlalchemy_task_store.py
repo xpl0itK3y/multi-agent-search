@@ -31,6 +31,8 @@ from src.domain import (
     ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
+    TELEMETRY_IP_MAX_LENGTH,
+    TELEMETRY_USER_AGENT_MAX_LENGTH,
     WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
@@ -38,6 +40,7 @@ from src.domain import (
     SearchTask,
     TaskUpdate,
     UserRecord,
+    clip_text,
 )
 from src.db.models import (
     AdminAuditLogORM,
@@ -1918,6 +1921,8 @@ class SQLAlchemyTaskStore:
         country: str | None = None,
         city: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         with self.session_scope() as session:
@@ -1966,6 +1971,8 @@ class SQLAlchemyTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         with self.session_scope() as session:
@@ -1993,6 +2000,8 @@ class SQLAlchemyTaskStore:
         user_agent: str | None = None,
         device: str | None = None,
     ) -> None:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)

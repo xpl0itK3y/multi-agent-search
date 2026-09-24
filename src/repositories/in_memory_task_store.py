@@ -32,8 +32,11 @@ from src.domain import (
     ResearchRequest,
     ResearchStatus,
     SearchTask,
+    TELEMETRY_IP_MAX_LENGTH,
+    TELEMETRY_USER_AGENT_MAX_LENGTH,
     TaskUpdate,
     UserRecord,
+    clip_text,
 )
 
 
@@ -1293,6 +1296,8 @@ class InMemoryTaskStore:
         country: str | None = None,
         city: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         self.user_sessions.append({
@@ -1333,6 +1338,8 @@ class InMemoryTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         self.user_events.append({
@@ -1359,6 +1366,8 @@ class InMemoryTaskStore:
         browser: str | None = None,
         os: str | None = None,
     ) -> None:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
         entry = self.user_telemetry.setdefault(user_id, {})
         entry["last_seen_at"] = now

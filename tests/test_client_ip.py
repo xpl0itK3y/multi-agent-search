@@ -67,7 +67,7 @@ async def test_telemetry_and_last_ip_record_peer_ip(client):
     await client.get("/v1/auth/me", headers=headers)
     await client.post(
         "/v1/telemetry/event",
-        json={"session_id": "ip-sess", "event_name": "page_view", "event_category": "ui"},
+        json={"session_id": "ip-sess", "event_name": "tab_focus", "event_category": "ui"},
         headers=headers,
     )
 

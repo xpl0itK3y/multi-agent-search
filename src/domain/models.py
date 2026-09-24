@@ -1,6 +1,7 @@
+import json
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -1129,12 +1130,72 @@ class AgentMetadataItem(BaseModel):
 
 
 
+# ── client telemetry (POST /v1/telemetry/event) ──────────────────────────────
+# Event names the SPA telemetry client (web/src/lib/telemetry.ts) sends; anything else is
+# a 422. Above all a client must never write the server's own prompt copies, which the
+# admin Prompt log trusts as real research and chat prompts.
+CLIENT_TELEMETRY_EVENTS = frozenset({"session_start", "session_end", "heartbeat", "tab_focus", "tab_blur"})
+CLIENT_TELEMETRY_CATEGORIES = frozenset({"general", "system", "ui"})
+SERVER_TELEMETRY_EVENTS = frozenset({"research_prompt", "chat_prompt"})
+TELEMETRY_DETAILS_MAX_KEYS = 20
+TELEMETRY_DETAILS_MAX_BYTES = 2048
+# Server-captured values the stores clip before writing telemetry, session and activity
+# rows (user_events.user_agent is VARCHAR(255), every ip column VARCHAR(64)): an odd
+# User-Agent must not make the write fail.
+TELEMETRY_IP_MAX_LENGTH = 64
+TELEMETRY_USER_AGENT_MAX_LENGTH = 255
+
+
+def clip_text(value: Optional[str], max_length: int) -> Optional[str]:
+    """``value`` cut to at most ``max_length`` characters; None stays None."""
+    return value[:max_length] if value else value
+
+
+class TelemetryDeviceInfo(BaseModel):
+    """What getClientDeviceInfo() reports; lengths match the user_sessions columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_type: Optional[str] = Field(None, max_length=32)
+    browser: Optional[str] = Field(None, max_length=64)
+    os: Optional[str] = Field(None, max_length=64)
+    screen_res: Optional[str] = Field(None, max_length=32)
+    viewport: Optional[str] = Field(None, max_length=32)
+    language: Optional[str] = Field(None, max_length=16)
+    timezone: Optional[str] = Field(None, max_length=64)
+
+
 class UserTelemetryEventInput(BaseModel):
-    session_id: Optional[str] = None
-    event_name: str
-    event_category: str = "general"
+    session_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    event_name: str = Field(..., max_length=64)
+    event_category: str = Field("general", max_length=32)
     details: Dict[str, Any] = Field(default_factory=dict)
-    device_info: Optional[Dict[str, Any]] = None
+    device_info: Optional[TelemetryDeviceInfo] = None
+
+    @field_validator("event_name")
+    @classmethod
+    def _client_event_name(cls, value: str) -> str:
+        if value in SERVER_TELEMETRY_EVENTS:
+            raise ValueError(f"{value!r} is recorded by the server and cannot be sent by clients")
+        if value not in CLIENT_TELEMETRY_EVENTS:
+            raise ValueError(f"unknown telemetry event {value!r}")
+        return value
+
+    @field_validator("event_category")
+    @classmethod
+    def _client_event_category(cls, value: str) -> str:
+        if value not in CLIENT_TELEMETRY_CATEGORIES:
+            raise ValueError(f"unknown telemetry category {value!r}")
+        return value
+
+    @field_validator("details")
+    @classmethod
+    def _bounded_details(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if len(value) > TELEMETRY_DETAILS_MAX_KEYS:
+            raise ValueError(f"details may have at most {TELEMETRY_DETAILS_MAX_KEYS} keys")
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > TELEMETRY_DETAILS_MAX_BYTES:
+            raise ValueError(f"details may be at most {TELEMETRY_DETAILS_MAX_BYTES} bytes of JSON")
+        return value
 
 
 class AdminUserListItem(BaseModel):

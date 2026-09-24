@@ -259,7 +259,7 @@ def create_app() -> FastAPI:
                             device=dev_info["device_type"],
                         )
             except Exception:
-                pass
+                logger.warning("user_activity_touch_failed", exc_info=True)
         # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
         # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -646,7 +646,8 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            # The research itself is already accepted; only the admin prompt log misses it.
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
         # LLM decompose runs after response is sent — user gets research_id instantly
         background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
         return response
@@ -709,20 +710,20 @@ def register_routes(app: FastAPI) -> None:
         if payload.device_info:
             dev = payload.device_info
             ua_parsed = parse_client_ua(u_agent)
+            # No country/city: the only source would be client-sent CF-IP* headers (there
+            # is no Cloudflare in front of this stack), which anyone can forge.
             service.task_store.record_user_session(
                 user_id=user_id,
                 session_id=payload.session_id or str(uuid.uuid4()),
                 ip_address=c_ip,
                 user_agent=u_agent,
-                device_type=dev.get("device_type") or ua_parsed["device_type"],
-                browser=dev.get("browser") or ua_parsed["browser"],
-                os=dev.get("os") or ua_parsed["os"],
-                screen_res=dev.get("screen_res"),
-                viewport=dev.get("viewport"),
-                language=dev.get("language"),
-                client_timezone=dev.get("timezone"),
-                country=request.headers.get("cf-ipcountry"),
-                city=request.headers.get("cf-ipcity"),
+                device_type=dev.device_type or ua_parsed["device_type"],
+                browser=dev.browser or ua_parsed["browser"],
+                os=dev.os or ua_parsed["os"],
+                screen_res=dev.screen_res,
+                viewport=dev.viewport,
+                language=dev.language,
+                client_timezone=dev.timezone,
             )
 
         event_id = service.task_store.record_user_event(
@@ -1171,7 +1172,7 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
         answer = service.generate_research_answer(research_id, payload.question)
         service.append_research_message(research_id, "user", payload.question)
         service.append_research_message(
@@ -1208,7 +1209,7 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
 
         def sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
