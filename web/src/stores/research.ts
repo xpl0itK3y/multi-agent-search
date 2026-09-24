@@ -1,7 +1,10 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
+import { i18n } from "@/i18n";
 import type { Depth, ModelOption, ResearchHistoryItem } from "@/lib/types";
+
+const t = (key: string): string => i18n.global.t(key);
 
 export const useResearchStore = defineStore("research", () => {
   const models = ref<ModelOption[]>([]);
@@ -18,7 +21,7 @@ export const useResearchStore = defineStore("research", () => {
       models.value = await api.listModels();
     } catch (e) {
       // Non-fatal: composer falls back to a single default option.
-      error.value = (e as Error).message;
+      error.value = apiErrorMessage(e, t);
     }
   }
 
@@ -27,7 +30,7 @@ export const useResearchStore = defineStore("research", () => {
     try {
       history.value = await api.listResearch(30);
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = apiErrorMessage(e, t);
     } finally {
       loadingHistory.value = false;
     }

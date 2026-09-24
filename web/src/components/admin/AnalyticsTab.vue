@@ -38,8 +38,8 @@ async function fetchAnalytics() {
     loading.value = true;
     error.value = null;
     analytics.value = await adminApi.getTokens(page.value, pageSize.value);
-  } catch (err: any) {
-    error.value = err.message || "Failed to load token analytics";
+  } catch (err) {
+    error.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }

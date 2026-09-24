@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
 
@@ -1138,8 +1138,8 @@ async function fetchAgents() {
     loading.value = true;
     error.value = null;
     agents.value = await adminApi.getAgents();
-  } catch (err: any) {
-    error.value = err.message || "Failed to load agent catalog";
+  } catch (err) {
+    error.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }

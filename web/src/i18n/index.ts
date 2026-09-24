@@ -396,7 +396,6 @@ const ru = {
     authNotAdminError: "Пользователь {email} успешно авторизован, но не имеет прав администратора.",
     authDefaultError: "Ошибка авторизации администратора",
     loginPrompt: "Для доступа к панели администратора выполните вход в систему.",
-    loadOverviewError: "Не удалось загрузить данные панели",
     tabs: {
       overview: "Обзор системы",
       users: "Пользователи и телеметрия",
@@ -785,6 +784,7 @@ const ru = {
       dryRunAffectedLabel: "Затронутые записи",
       dryRunSampleIdsLabel: "Примеры ID",
       confirmAndExecuteBtn: "Подтвердить и выполнить",
+      executed: "Операция {action} выполнена",
     },
     users: {
       kpiTotalUsers: "Всего пользователей",
@@ -867,8 +867,6 @@ const ru = {
       lastActiveAt: "Последняя активность",
       noSessions: "История сессий пуста",
       noResearches: "Пользователь пока не запускал исследования",
-      loadError: "Не удалось загрузить список пользователей",
-      detailError: "Не удалось загрузить данные пользователя",
       justNow: "только что",
       secAgo: "сек. назад",
       minAgo: "мин. назад",
@@ -892,6 +890,13 @@ const ru = {
       server: "Внутренняя ошибка сервера. Мы уже разбираемся",
       network: "Нет связи с сервером — проверьте подключение",
       unexpected: "Что-то пошло не так. Попробуйте ещё раз",
+    },
+    stream: {
+      connectionLost: "Соединение с сервером прервано",
+      timeout: "Поток обновлений закрыт по таймауту — переподключаемся",
+      incomplete: "Соединение прервалось до завершения ответа",
+      failed: "Не удалось получить обновления исследования",
+      chatFailed: "Не удалось получить ответ — попробуйте ещё раз",
     },
   },
 };
@@ -1285,7 +1290,6 @@ const en: typeof ru = {
     authNotAdminError: "User {email} signed in successfully, but lacks administrator privileges.",
     authDefaultError: "Administrator authorization error",
     loginPrompt: "Sign in to access the administrator panel.",
-    loadOverviewError: "Failed to load admin overview",
     tabs: {
       overview: "System Overview",
       users: "Users & Telemetry",
@@ -1674,6 +1678,7 @@ const en: typeof ru = {
       dryRunAffectedLabel: "Affected Records",
       dryRunSampleIdsLabel: "Sample IDs",
       confirmAndExecuteBtn: "Confirm & Execute",
+      executed: "Operation {action} completed",
     },
     users: {
       kpiTotalUsers: "Total Users",
@@ -1756,8 +1761,6 @@ const en: typeof ru = {
       lastActiveAt: "Last Active At",
       noSessions: "No recorded sessions",
       noResearches: "No researches launched yet",
-      loadError: "Failed to load user directory",
-      detailError: "Failed to load user profile",
       justNow: "just now",
       secAgo: "s ago",
       minAgo: "m ago",
@@ -1781,6 +1784,13 @@ const en: typeof ru = {
       server: "Internal server error. We're on it",
       network: "Can't reach the server — check your connection",
       unexpected: "Something went wrong. Please try again",
+    },
+    stream: {
+      connectionLost: "Lost the connection to the server",
+      timeout: "The update stream timed out — reconnecting",
+      incomplete: "The connection dropped before the answer finished",
+      failed: "Could not get research updates",
+      chatFailed: "Could not get an answer — please try again",
     },
   },
 };
@@ -2174,7 +2184,6 @@ const es: typeof ru = {
     authNotAdminError: "El usuario {email} ha iniciado sesión, pero no tiene privilegios de administrador.",
     authDefaultError: "Error de autorización de administrador",
     loginPrompt: "Inicie sesión para acceder al panel de administración.",
-    loadOverviewError: "Error al cargar los datos del panel",
     tabs: {
       overview: "Resumen del sistema",
       users: "Usuarios y telemetría",
@@ -2563,6 +2572,7 @@ const es: typeof ru = {
       dryRunAffectedLabel: "Registros afectados",
       dryRunSampleIdsLabel: "IDs de muestra",
       confirmAndExecuteBtn: "Confirmar y ejecutar",
+      executed: "Operación {action} ejecutada",
     },
     users: {
       kpiTotalUsers: "Usuarios totales",
@@ -2645,8 +2655,6 @@ const es: typeof ru = {
       lastActiveAt: "Última actividad",
       noSessions: "Sin historial de sesiones",
       noResearches: "Aún no ha iniciado investigaciones",
-      loadError: "Error al cargar la lista de usuarios",
-      detailError: "Error al cargar el perfil de usuario",
       justNow: "ahora mismo",
       secAgo: "seg. atrás",
       minAgo: "min. atrás",
@@ -2670,6 +2678,13 @@ const es: typeof ru = {
       server: "Error interno del servidor. Estamos en ello",
       network: "No se puede conectar con el servidor — revisa tu conexión",
       unexpected: "Algo salió mal. Inténtalo de nuevo",
+    },
+    stream: {
+      connectionLost: "Se perdió la conexión con el servidor",
+      timeout: "El flujo de actualizaciones expiró — reconectando",
+      incomplete: "La conexión se cortó antes de terminar la respuesta",
+      failed: "No se pudieron obtener las actualizaciones de la investigación",
+      chatFailed: "No se pudo obtener una respuesta — inténtalo de nuevo",
     },
   },
 };

@@ -152,8 +152,8 @@ async function loadUsers() {
     users.value = resp.users;
     totalUsers.value = resp.total_users;
     onlineUsers.value = resp.online_users;
-  } catch (err: any) {
-    usersError.value = err.message || t("admin.users.loadError");
+  } catch (err) {
+    usersError.value = apiErrorMessage(err, t);
   } finally {
     usersLoading.value = false;
   }
@@ -187,8 +187,8 @@ async function openUserDrawer(userId: string) {
   drawerTab.value = "profile";
   try {
     selectedUserDetail.value = await adminApi.getUserDetail(userId);
-  } catch (err: any) {
-    drawerError.value = err.message || t("admin.users.detailError");
+  } catch (err) {
+    drawerError.value = apiErrorMessage(err, t);
   } finally {
     drawerLoading.value = false;
   }
@@ -200,19 +200,19 @@ function closeUserDrawer() {
   selectedUserDetail.value = null;
 }
 
-// CSV exports need the bearer token too (window.open would send only the cookie),
-// and a failed export must be visible.
+// CSV exports need the bearer token too (window.open would send only the cookie).
+// A failed export or user deletion is shown inline, not in a blocking dialog.
 const exporting = ref(false);
-const exportError = ref<string | null>(null);
+const actionError = ref<string | null>(null);
 
 async function runExport(fetchCsv: () => Promise<ApiFile>, fallbackName: string) {
   if (exporting.value) return;
   exporting.value = true;
-  exportError.value = null;
+  actionError.value = null;
   try {
     saveFile(await fetchCsv(), fallbackName);
   } catch (err) {
-    exportError.value = apiErrorMessage(err, t);
+    actionError.value = apiErrorMessage(err, t);
   } finally {
     exporting.value = false;
   }
@@ -235,8 +235,8 @@ async function loadPrompts() {
     );
     prompts.value = res.prompts;
     promptsTotal.value = res.total_count;
-  } catch (err: any) {
-    promptsError.value = err.message || "Failed to load prompts";
+  } catch (err) {
+    promptsError.value = apiErrorMessage(err, t);
   } finally {
     promptsLoading.value = false;
   }
@@ -259,8 +259,9 @@ async function copyPromptText(item: AdminPromptItem) {
 }
 
 async function handleDeleteUser(user: AdminUserListItem) {
+  actionError.value = null;
   if (user.id === auth.user?.id || (auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase())) {
-    alert(t("admin.users.cannotDeleteSelf"));
+    actionError.value = t("admin.users.cannotDeleteSelf");
     return;
   }
   const confirmed = window.confirm(
@@ -276,8 +277,8 @@ async function handleDeleteUser(user: AdminUserListItem) {
     }
     await loadUsers();
     await loadSummary();
-  } catch (err: any) {
-    alert(err.message || "Failed to delete user");
+  } catch (err) {
+    actionError.value = apiErrorMessage(err, t);
   } finally {
     deletingUserId.value = null;
   }
@@ -570,7 +571,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
     </div>
 
-    <p v-if="exportError" class="text-right text-xs text-red-400">{{ exportError }}</p>
+    <p v-if="actionError" class="text-right text-xs text-red-400">{{ actionError }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- VIEW 1: USER DIRECTORY                                                  -->
@@ -1265,6 +1266,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             </button>
           </div>
         </div>
+
+        <p v-if="actionError" class="mt-3 text-xs text-red-400">{{ actionError }}</p>
 
         <div v-if="drawerLoading && !selectedUserDetail" class="mt-8 space-y-4 animate-pulse">
           <div class="grid grid-cols-3 gap-3">

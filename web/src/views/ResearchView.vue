@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
@@ -78,7 +78,7 @@ async function loadPlan() {
   try {
     plan.value = await api.getPlan(props.id);
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   }
 }
 
@@ -86,7 +86,7 @@ async function loadClarifications() {
   try {
     clarification.value = await api.getClarifications(props.id);
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   }
 }
 
@@ -98,7 +98,7 @@ async function onSubmitClarify(answers: string[]) {
     clarification.value = null;
     status.value = "processing";
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     clarifyBusy.value = false;
   }
@@ -113,7 +113,7 @@ async function onApprove(items: PlanItem[]) {
     plan.value = null;
     status.value = "processing";
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     planBusy.value = false;
   }

@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
@@ -42,8 +42,8 @@ async function loadOverview() {
     loading.value = true;
     error.value = null;
     overview.value = await adminApi.getOverview();
-  } catch (err: any) {
-    error.value = err.message || t("admin.loadOverviewError");
+  } catch (err) {
+    error.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }

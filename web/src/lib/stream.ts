@@ -1,10 +1,25 @@
 // SSE client for the live research stream (F1).
 // In dev the Vite proxy serves /v1 from the same origin, so EventSource works directly.
 
-import { authHeaders } from "./api";
+import { i18n } from "@/i18n";
+import { apiErrorFromResponse, apiErrorMessage, authHeaders } from "./api";
 import type { SourcePreview } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+
+const t = (key: string): string => i18n.global.t(key);
+
+// A server `stream_error` detail is a code ("stream_timeout") or internal text —
+// never shown raw. Known ones get their own message, the rest a per-stream one.
+const SERVER_STREAM_ERRORS: Record<string, string> = {
+  stream_timeout: "errors.stream.timeout",
+  "Research not found": "errors.api.notFound",
+};
+
+function streamErrorMessage(detail: unknown, fallbackKey: string): string {
+  const key = typeof detail === "string" ? SERVER_STREAM_ERRORS[detail] : undefined;
+  return t(key ?? fallbackKey);
+}
 
 export interface TraceSource {
   domain: string;
@@ -77,7 +92,7 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
   // The server's named error is not terminal for this connection — it keeps
   // listening (the connection may still recover and deliver "done").
   es.addEventListener("stream_error", (e) => {
-    if (!terminated) h.onError?.(parse(e).detail ?? "stream error");
+    if (!terminated) h.onError?.(streamErrorMessage(parse(e).detail, "errors.stream.failed"));
   });
   es.addEventListener("done", (e) => {
     done(parse(e).status ?? "completed");
@@ -86,7 +101,7 @@ export function openResearchStream(id: string, h: StreamHandlers): () => void {
   // Connection-level failures (not the server's named "stream_error").
   // readyState CONNECTING is a transient drop — EventSource retries on its own.
   es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) fail("Соединение со стримом разорвано");
+    if (es.readyState === EventSource.CLOSED) fail(t("errors.stream.connectionLost"));
   };
 
   return () => {
@@ -136,11 +151,15 @@ export async function streamChatAnswer(
       body: JSON.stringify({ question }),
     });
   } catch (e) {
-    fail((e as Error).message);
+    fail(apiErrorMessage(e, t)); // fetch rejects only on network failure
     return;
   }
-  if (!res.ok || !res.body) {
-    fail(`${res.status} ${await res.text().catch(() => res.statusText)}`);
+  if (!res.ok) {
+    fail(apiErrorMessage(await apiErrorFromResponse(res), t));
+    return;
+  }
+  if (!res.body) {
+    fail(t("errors.stream.incomplete"));
     return;
   }
 
@@ -175,7 +194,7 @@ export async function streamChatAnswer(
           done(parsed.answer ?? "", parsed.sources ?? []);
           return;
         } else if (event === "stream_error") {
-          fail(parsed.detail ?? "stream error");
+          fail(streamErrorMessage(parsed.detail, "errors.stream.chatFailed"));
           return;
         }
       }
@@ -183,8 +202,8 @@ export async function streamChatAnswer(
     // The body ended without a terminal `done`/`stream_error` event (server
     // crash, proxy timeout, truncated response) — fire a terminal error
     // ourselves so the UI never stays stuck in "streaming".
-    fail("Соединение прервано до завершения ответа");
-  } catch (e) {
-    fail((e as Error).message);
+    fail(t("errors.stream.incomplete"));
+  } catch {
+    fail(t("errors.stream.incomplete")); // body read aborted mid-stream
   }
 }

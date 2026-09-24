@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
+import { saveFile } from "@/lib/download";
 import type { Depth, UserTokenStats } from "@/lib/types";
 
 const router = useRouter();
@@ -50,7 +51,7 @@ async function saveProfile() {
     profileSuccess.value = true;
     setTimeout(() => (profileSuccess.value = false), 3000);
   } catch (e) {
-    profileError.value = (e as Error).message;
+    profileError.value = apiErrorMessage(e, t);
   } finally {
     profileBusy.value = false;
   }
@@ -106,7 +107,7 @@ async function loadTokenStats(silent = false) {
     lastUpdated.value = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch (e) {
     if (!tokenStats.value) {
-      statsError.value = (e as Error).message;
+      statsError.value = apiErrorMessage(e, t);
     }
   } finally {
     if (!silent) {
@@ -196,19 +197,16 @@ async function changePassword() {
 
 // Data Export
 const exportBusy = ref(false);
+const exportError = ref<string | null>(null);
 async function exportHistoryJson() {
   exportBusy.value = true;
+  exportError.value = null;
   try {
     const list = await api.listResearch(100);
     const blob = new Blob([JSON.stringify(list, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `research-history-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveFile({ blob, filename: null }, `research-history-${new Date().toISOString().slice(0, 10)}.json`);
   } catch (e) {
-    alert("Ошибка при экспорте: " + (e as Error).message);
+    exportError.value = apiErrorMessage(e, t);
   } finally {
     exportBusy.value = false;
   }
@@ -874,6 +872,7 @@ onUnmounted(() => {
                 <span>📦</span>
                 <span>{{ exportBusy ? "Экспорт..." : "Скачать историю исследований (JSON)" }}</span>
               </button>
+              <p v-if="exportError" class="text-xs text-red-400">{{ exportError }}</p>
             </div>
 
             <!-- Danger Zone: Delete Account -->

@@ -54,7 +54,7 @@ async function ensureSources() {
   try {
     sources.value = await api.getSources(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -67,7 +67,7 @@ async function ensureTrail() {
   try {
     trail.value = (await api.getGraph(props.id)).graph_trail;
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -80,7 +80,7 @@ async function ensureConflicts() {
   try {
     conflicts.value = await api.getConflicts(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -93,7 +93,7 @@ async function ensureVerification() {
   try {
     verification.value = await api.getVerification(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -106,7 +106,7 @@ async function ensureRedTeam() {
   try {
     redTeam.value = await api.getRedTeam(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -330,7 +330,7 @@ async function toggleShareMenu() {
     try {
       share.value = await api.createShare(props.id);
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = apiErrorMessage(e, t);
     }
   }
 }
@@ -349,7 +349,7 @@ async function revokeShare() {
     share.value = await api.revokeShare(props.id);
     shareMenuOpen.value = false;
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   }
 }
 

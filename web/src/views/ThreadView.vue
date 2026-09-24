@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
 import { streamChatAnswer } from "@/lib/stream";
 import { useResearchStore } from "@/stores/research";
 import ResearchTurn from "@/components/ResearchTurn.vue";
@@ -95,7 +95,7 @@ async function loadThread() {
     });
     items.value = built;
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   }
 }
 
@@ -121,7 +121,7 @@ async function onSubmit(payload: { prompt: string; depth: Depth; model: string; 
     composerPrompt.value = "";
     await scrollToBottom();
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     busy.value = false;
   }

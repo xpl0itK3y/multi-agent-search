@@ -1,4 +1,12 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// stream.ts localizes its errors through vue-i18n, which needs a real DOM at
+// import time — so set the CSRF cookie on jsdom's document instead of stubbing it.
+function setCsrfCookie(value: string | null) {
+  document.cookie =
+    value === null ? "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT" : `csrf_token=${value}`;
+}
 
 describe("streamChatAnswer", () => {
   beforeEach(() => {
@@ -8,7 +16,7 @@ describe("streamChatAnswer", () => {
       setItem: vi.fn(),
       removeItem: vi.fn(),
     });
-    vi.stubGlobal("document", { cookie: "csrf_token=csrf%20value" });
+    setCsrfCookie("csrf%20value");
   });
 
   afterEach(() => {
@@ -78,13 +86,41 @@ describe("streamChatAnswer", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
 
     const { streamChatAnswer } = await import("./stream");
+    const { i18n } = await import("@/i18n");
     const onError = vi.fn();
     const onDone = vi.fn();
     await streamChatAnswer("research-id", "question", { onError, onDone });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith("aborted");
+    expect(onError).toHaveBeenCalledWith(i18n.global.t("errors.stream.incomplete"));
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("never surfaces raw server or HTTP error text", async () => {
+    stubEnv();
+    const { streamChatAnswer } = await import("./stream");
+    const { i18n } = await import("@/i18n");
+    const t = (key: string) => i18n.global.t(key);
+
+    // stream_error carrying an internal exception string → generic chat text.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response('event: stream_error\ndata: {"detail":"KeyError: \'report\'"}\n\n', { status: 200 }),
+      ),
+    );
+    const onStreamError = vi.fn();
+    await streamChatAnswer("research-id", "question", { onError: onStreamError });
+    expect(onStreamError).toHaveBeenCalledWith(t("errors.stream.chatFailed"));
+
+    // A non-2xx response goes through the errors.api.* mapping.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "slow down" }), { status: 429 })),
+    );
+    const onHttpError = vi.fn();
+    await streamChatAnswer("research-id", "question", { onError: onHttpError });
+    expect(onHttpError).toHaveBeenCalledWith(t("errors.api.rateLimited"));
   });
 });
 
@@ -124,7 +160,7 @@ describe("openResearchStream", () => {
       setItem: vi.fn(),
       removeItem: vi.fn(),
     });
-    vi.stubGlobal("document", { cookie: "" });
+    setCsrfCookie(null);
     const cls = class extends FakeEventSource {
       constructor(url: string) {
         super(url);
@@ -174,17 +210,37 @@ describe("openResearchStream", () => {
   it("keeps stream_error non-terminal — a later done still fires onDone", async () => {
     stubEnv();
     const { openResearchStream } = await import("./stream");
+    const { i18n } = await import("@/i18n");
     const onDone = vi.fn();
     const onError = vi.fn();
     openResearchStream("research-id", { onDone, onError });
 
     es.emit("stream_error", { detail: "worker hiccup" });
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith("worker hiccup");
+    // Internal detail text is never shown raw.
+    expect(onError).toHaveBeenCalledWith(i18n.global.t("errors.stream.failed"));
 
     // The connection recovered and completed — the UI must reach the done state.
     es.emit("done", { status: "completed" });
     expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it("maps server stream codes and connection loss to localized messages", async () => {
+    stubEnv();
+    const { openResearchStream } = await import("./stream");
+    const { i18n } = await import("@/i18n");
+    const onError = vi.fn();
+    openResearchStream("research-id", { onError });
+
+    es.emit("stream_error", { detail: "stream_timeout" });
+    es.readyState = FakeEventSource.CLOSED;
+    es.onerror?.();
+
+    expect(onError.mock.calls).toEqual([
+      [i18n.global.t("errors.stream.timeout")],
+      [i18n.global.t("errors.stream.connectionLost")],
+    ]);
+    expect(onError.mock.calls.flat()).not.toContain("stream_timeout");
   });
 
   it("parses and forwards trace_step events with full agent metadata", async () => {
@@ -221,5 +277,5 @@ function stubEnv() {
     setItem: vi.fn(),
     removeItem: vi.fn(),
   });
-  vi.stubGlobal("document", { cookie: "csrf_token=csrf%20value" });
+  setCsrfCookie("csrf%20value");
 }

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { api } from "@/lib/api";
+import { useI18n } from "vue-i18n";
+import { api, apiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import SparkLogo from "@/components/SparkLogo.vue";
 
@@ -9,6 +10,7 @@ import SparkLogo from "@/components/SparkLogo.vue";
 // they can also log in with email + password next time (optional — skippable).
 const router = useRouter();
 const auth = useAuthStore();
+const { t } = useI18n();
 
 const password = ref("");
 const confirm = ref("");
@@ -31,7 +33,7 @@ async function submit() {
     await api.setPassword(password.value);
     router.push("/");
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     busy.value = false;
   }

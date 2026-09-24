@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "./AgentActivityConsole.vue";
@@ -45,7 +45,7 @@ async function onCancel() {
     done.value = true;
     emit("done", "cancelled");
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     cancelling.value = false;
   }
@@ -124,10 +124,10 @@ const costTooltip = computed(() => {
 });
 
 async function loadPlan() {
-  try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = apiErrorMessage(e, t); }
 }
 async function loadClarifications() {
-  try { clarification.value = await api.getClarifications(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { clarification.value = await api.getClarifications(props.id); emit("grow"); } catch (e) { errorMsg.value = apiErrorMessage(e, t); }
 }
 
 async function onSubmitClarify(answers: string[]) {
@@ -137,7 +137,7 @@ async function onSubmitClarify(answers: string[]) {
     await api.submitClarify(props.id, answers);
     clarification.value = null;
     status.value = "processing";
-  } catch (e) { errorMsg.value = (e as Error).message; } finally { clarifyBusy.value = false; }
+  } catch (e) { errorMsg.value = apiErrorMessage(e, t); } finally { clarifyBusy.value = false; }
 }
 
 async function onApprove(items: PlanItem[]) {
@@ -148,7 +148,7 @@ async function onApprove(items: PlanItem[]) {
     await api.approvePlan(props.id);
     plan.value = null;
     status.value = "processing";
-  } catch (e) { errorMsg.value = (e as Error).message; } finally { planBusy.value = false; }
+  } catch (e) { errorMsg.value = apiErrorMessage(e, t); } finally { planBusy.value = false; }
 }
 
 // Fetch the current status/report (also used to catch up after a dropped stream). Returns
@@ -282,7 +282,7 @@ async function retry() {
     isFinal.value = false;
     connect();
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     retrying.value = false;
   }
