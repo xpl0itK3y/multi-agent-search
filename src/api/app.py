@@ -21,6 +21,7 @@ from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
+    is_admin_email,
     request_token_subject,
     require_admin,
     resolve_request_user_id,
@@ -209,6 +210,28 @@ def _csv_attachment(rows: Iterator[str], filename: str) -> StreamingResponse:
         rows,
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def record_admin_action(
+    request: Request,
+    admin_user: AuthUser,
+    action: str,
+    *,
+    target_type: str,
+    target_id: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """admin_audit_logs row for an admin mutation or bulk PII export (ADMIN-AUDIT). Every
+    non-GET admin route writes one and is throttled by enforce_admin_rate_limit; the
+    maintenance service (execute_maintenance_action) records its own."""
+    get_research_service(request).task_store.record_admin_audit(
+        actor_email=admin_user.email,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        details=details or {},
+        ip_address=extract_client_ip(request),
     )
 
 
@@ -606,29 +629,59 @@ def register_routes(app: FastAPI) -> None:
     def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
 
-    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse, dependencies=admin_guard)
-    def run_queue_maintenance(request: Request):
-        return get_research_service(request).run_queue_maintenance()
+    # Admin mutations: enforce_admin_rate_limit (admin check + per-admin budget) and an
+    # audit row each (record_admin_action). tests/test_admin_audit.py enumerates them.
+    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse)
+    def run_queue_maintenance(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        result = get_research_service(request).run_queue_maintenance()
+        record_admin_action(
+            request,
+            admin_user,
+            "run_queue_maintenance",
+            target_type="maintenance",
+            details={
+                "recovered_count": result.recovered_count,
+                "deleted_count": result.deleted_count,
+                "compacted_count": result.compacted_count,
+            },
+        )
+        return result
 
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/ack",
         response_model=OperationalHealth.RecommendationEntry,
-        dependencies=admin_guard,
     )
-    def acknowledge_operational_recommendation(code: str, request: Request):
-        return get_research_service(request).acknowledge_operational_recommendation(code)
+    def acknowledge_operational_recommendation(
+        code: str,
+        request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
+    ):
+        entry = get_research_service(request).acknowledge_operational_recommendation(code)
+        record_admin_action(
+            request, admin_user, "acknowledge_recommendation", target_type="recommendation", target_id=code
+        )
+        return entry
 
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/resolve",
         response_model=OperationalHealth.RecommendationEntry,
-        dependencies=admin_guard,
     )
     def resolve_operational_recommendation(
         code: str,
         payload: OperationalRecommendationResolveRequest,
         request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
-        return get_research_service(request).resolve_operational_recommendation(code, payload.note)
+        entry = get_research_service(request).resolve_operational_recommendation(code, payload.note)
+        record_admin_action(
+            request,
+            admin_user,
+            "resolve_recommendation",
+            target_type="recommendation",
+            target_id=code,
+            details={"note": entry.resolution_note},
+        )
+        return entry
 
     @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=auth_required)
     def worker_health(worker_name: str, request: Request):
@@ -720,17 +773,35 @@ def register_routes(app: FastAPI) -> None:
             return service.list_dead_letter_search_task_jobs()
         raise HTTPException(status_code=422, detail="Unsupported search job status filter")
 
-    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob, dependencies=admin_guard)
-    def requeue_search_job(job_id: str, request: Request):
-        return get_research_service(request).requeue_search_task_job(job_id)
+    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob)
+    def requeue_search_job(job_id: str, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        job = get_research_service(request).requeue_search_task_job(job_id)
+        record_admin_action(request, admin_user, "requeue_search_job", target_type="maintenance", target_id=job_id)
+        return job
 
-    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    def recover_stale_search_jobs(request: Request):
-        return get_research_service(request).recover_stale_search_task_jobs()
+    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse)
+    def recover_stale_search_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        recovery = get_research_service(request).recover_stale_search_task_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "recover_stale_search_jobs",
+            target_type="maintenance",
+            details={"affected_count": recovery.recovered_count, "job_ids": recovery.recovered_job_ids[:10]},
+        )
+        return recovery
 
-    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    def cleanup_search_jobs(request: Request):
-        return get_research_service(request).cleanup_old_search_task_jobs()
+    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse)
+    def cleanup_search_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        cleanup = get_research_service(request).cleanup_old_search_task_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "cleanup_search_jobs",
+            target_type="maintenance",
+            details={"affected_count": cleanup.deleted_count},
+        )
+        return cleanup
 
     @app.get("/v1/research", response_model=List[ResearchHistoryItem])
     def list_researches(request: Request, limit: int = Query(20, ge=1, le=200), owner: str | None = Depends(scope_user_id)):
@@ -797,17 +868,35 @@ def register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Finalize job not found")
         return _owner_job_view(job)
 
-    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob, dependencies=admin_guard)
-    def requeue_finalize_job(job_id: str, request: Request):
-        return get_research_service(request).requeue_research_finalize_job(job_id)
+    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob)
+    def requeue_finalize_job(job_id: str, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        job = get_research_service(request).requeue_research_finalize_job(job_id)
+        record_admin_action(request, admin_user, "requeue_finalize_job", target_type="maintenance", target_id=job_id)
+        return job
 
-    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    def recover_stale_finalize_jobs(request: Request):
-        return get_research_service(request).recover_stale_research_finalize_jobs()
+    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse)
+    def recover_stale_finalize_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        recovery = get_research_service(request).recover_stale_research_finalize_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "recover_stale_finalize_jobs",
+            target_type="maintenance",
+            details={"affected_count": recovery.recovered_count, "job_ids": recovery.recovered_job_ids[:10]},
+        )
+        return recovery
 
-    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    def cleanup_finalize_jobs(request: Request):
-        return get_research_service(request).cleanup_old_research_finalize_jobs()
+    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse)
+    def cleanup_finalize_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        cleanup = get_research_service(request).cleanup_old_research_finalize_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "cleanup_finalize_jobs",
+            target_type="maintenance",
+            details={"affected_count": cleanup.deleted_count},
+        )
+        return cleanup
 
     # ── Client Telemetry Ingestion ────────────────────────────────────────────
     # Authenticated-only and CSRF-checked: anonymous callers are refused (401, or 403 from
@@ -914,8 +1003,10 @@ def register_routes(app: FastAPI) -> None:
             user_id=user_id,
         )
 
-    @app.get("/v1/admin/users/export", dependencies=admin_guard)
-    def admin_users_export(request: Request):
+    # Bulk exports carry every user's email, IP and prompts: audited and throttled too.
+    @app.get("/v1/admin/users/export")
+    def admin_users_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_users", target_type="export")
         store = get_research_service(request).task_store
         rows = stream_csv(
             [
@@ -964,8 +1055,9 @@ def register_routes(app: FastAPI) -> None:
             prompt_type=prompt_type,
         )
 
-    @app.get("/v1/admin/prompts/export", dependencies=admin_guard)
-    def admin_prompts_export(request: Request):
+    @app.get("/v1/admin/prompts/export")
+    def admin_prompts_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_prompts", target_type="export")
         store = get_research_service(request).task_store
         rows = stream_csv(
             [
@@ -1002,23 +1094,28 @@ def register_routes(app: FastAPI) -> None:
     def admin_delete_user(
         user_id: str,
         request: Request,
-        admin_user: AuthUser = Depends(require_admin),
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
         if admin_user.id == user_id:
             raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
         service = get_research_service(request)
-        deleted = service.task_store.delete_user(user_id)
-        if not deleted:
+        target = service.task_store.get_user_by_id(user_id)
+        if target is None:
             raise HTTPException(status_code=404, detail="User not found")
-        client_ip = extract_client_ip(request)
-        service.task_store.record_admin_audit(
-            actor_email=admin_user.email,
-            action="delete_user",
+        if is_admin_email(target.email):
+            raise HTTPException(status_code=403, detail="Admin accounts cannot be deleted from the admin panel")
+        # Audit before deleting: afterwards the account's email is gone, and a failed
+        # audit write must not leave a deletion nobody recorded.
+        record_admin_action(
+            request,
+            admin_user,
+            "delete_user",
             target_type="user",
             target_id=user_id,
-            details={"deleted_user_id": user_id},
-            ip_address=client_ip,
+            details={"deleted_user_id": user_id, "deleted_email": target.email},
         )
+        if not service.task_store.delete_user(user_id):
+            raise HTTPException(status_code=404, detail="User not found")
         return {"status": "ok", "deleted_user_id": user_id}
 
     @app.get("/v1/admin/overview", response_model=AdminOverviewResponse, dependencies=admin_guard)
@@ -1033,8 +1130,9 @@ def register_routes(app: FastAPI) -> None:
     ):
         return get_research_service(request).get_admin_token_analytics(page=page, page_size=page_size)
 
-    @app.get("/v1/admin/tokens/export", dependencies=admin_guard)
-    def admin_tokens_export(request: Request):
+    @app.get("/v1/admin/tokens/export")
+    def admin_tokens_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_tokens", target_type="export")  # has prompt text
         store = get_research_service(request).task_store
         rows = stream_csv(
             ["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"],

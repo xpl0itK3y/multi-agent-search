@@ -32,6 +32,11 @@ def _get_admin_emails() -> set[str]:
     return {str(e).strip().lower() for e in raw if str(e).strip()}
 
 
+def is_admin_email(email: str | None) -> bool:
+    """Whether the address is one of ADMIN_EMAILS (case-insensitive)."""
+    return bool(email) and email.lower() in _get_admin_emails()
+
+
 def _user_from_token(request: Request, token: str | None) -> AuthUser | None:
     """The account a token belongs to, or None when the token is missing, invalid, expired
     or revoked (its 'ver' no longer matches token_version, e.g. after a password change)."""
