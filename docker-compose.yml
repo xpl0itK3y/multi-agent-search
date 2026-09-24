@@ -116,8 +116,12 @@ services:
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: multi-agent-search-redis
+    # Infrastructure ports are published on loopback only (see "Exposed ports" in
+    # README.md): containers talk over the Compose network, and a bare
+    # "HOST:CONTAINER" mapping binds 0.0.0.0, which Docker exposes past host
+    # firewalls. Local dev and tests rely on localhost:6379 and localhost:5433.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -135,7 +139,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: ${POSTGRES_DB:-multi_agent_search}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -165,7 +169,7 @@ services:
       DEFAULT_POOL_SIZE: "25"
       MIN_POOL_SIZE: "5"
     ports:
-      - "6432:5432"  # edoburu/pgbouncer listens on 5432 inside the container
+      - "127.0.0.1:6432:5432"  # edoburu/pgbouncer listens on 5432 inside the container
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-app} || exit 1"]
       interval: 10s
@@ -200,14 +204,14 @@ services:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     restart: unless-stopped
 
   loki:
     image: grafana/loki:3.3.2@sha256:8af2de1abbdd7aa92b27c9bcc96f0f4140c9096b507c77921ffddf1c6ad6c48f
     container_name: multi-agent-search-loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./ops/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
@@ -240,12 +244,14 @@ services:
       loki:
         condition: service_healthy
     environment:
+      # admin/admin is a local-dev default only: set GRAFANA_ADMIN_PASSWORD (and the
+      # POSTGRES_* credentials) in .env for any real deployment.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     restart: unless-stopped
 
 volumes:

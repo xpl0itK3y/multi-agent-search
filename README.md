@@ -127,6 +127,25 @@ Loki will be available at `http://localhost:3100`.
 
 Grafana will be available at `http://localhost:3001` (Prometheus and Loki are pre-provisioned as datasources).
 
+### Exposed ports
+
+Only the web UI listens on all interfaces. The API, Postgres (`5433`),
+PgBouncer (`6432`), Redis (`6379`), Prometheus (`9090`), Loki (`3100`) and
+Grafana (`3001`) are published on `127.0.0.1` only; the containers reach each
+other over the Compose network.
+
+- To reach them from another machine, use an SSH tunnel
+  (`ssh -L 3001:127.0.0.1:3001 user@host`) or an authenticated reverse proxy.
+  Do not rebind them to `0.0.0.0`: Redis, Prometheus and Loki have no
+  authentication at all.
+- Docker-published ports bypass host firewalls: Docker forwards them through
+  its own iptables rules, which UFW/firewalld input rules never see. Firewalling
+  the host does not replace the loopback binding.
+- The credentials in the Compose file are local-development defaults. For any
+  real deployment set a strong Grafana admin password (`GRAFANA_ADMIN_PASSWORD`,
+  passed to `GF_SECURITY_ADMIN_PASSWORD`) and change the Postgres credentials
+  (`POSTGRES_USER` / `POSTGRES_PASSWORD`, which PgBouncer uses too) in `.env`.
+
 Stop everything:
 
 ```bash
