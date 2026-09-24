@@ -1261,8 +1261,8 @@ class InMemoryTaskStore:
                 )
             )
 
+        # system_health is the service's: it adds the LLM/broker probes to these counters.
         return AdminOverviewResponse(
-            system_health={"overall": "healthy"},
             active_researches_count=active_count,
             pending_tasks_count=pending_count,
             failed_tasks_count=failed_count,

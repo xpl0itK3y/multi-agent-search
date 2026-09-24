@@ -73,8 +73,8 @@ def test_in_memory_task_store_admin_methods():
     logs2 = store.get_admin_audit_logs()
     assert len(logs2) == 2
 
-    # 4. Overview
-    overview = store.get_admin_overview()
+    # 4. Overview: health is the service's (it adds the LLM/broker probes)
+    overview = ResearchService(task_store=store).get_admin_overview()
     assert "overall" in overview.system_health
 
 
@@ -98,7 +98,7 @@ def test_sqlalchemy_task_store_admin_methods(postgres_session_factory):
     assert any(entry.id == audit_id for entry in logs)
 
     # 2. Overview
-    overview = store.get_admin_overview()
+    overview = ResearchService(task_store=store).get_admin_overview()
     assert overview.system_health.get("postgres") == "ok"
 
     # 3. Dry-run preview

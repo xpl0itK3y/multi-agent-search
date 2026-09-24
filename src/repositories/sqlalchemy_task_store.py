@@ -1830,13 +1830,8 @@ class SQLAlchemyTaskStore:
                     )
                 )
 
-            system_health = {
-                "postgres": "ok",
-                "overall": "healthy" if failed_tasks == 0 else "degraded",
-            }
-
+            # system_health is the service's: it adds the LLM/broker probes to these counters.
             return AdminOverviewResponse(
-                system_health=system_health,
                 active_researches_count=active_researches,
                 pending_tasks_count=pending_tasks,
                 failed_tasks_count=failed_tasks,

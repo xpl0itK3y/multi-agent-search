@@ -2585,7 +2585,19 @@ class ResearchService(
 
     # ── Admin Panel Methods ───────────────────────────────────────────────────
     def get_admin_overview(self) -> AdminOverviewResponse:
-        return self.task_store.get_admin_overview()
+        """Store counters plus the dependency probes /health uses (OPS-BOOT-HEALTH): the
+        store sees neither the LLM nor the broker, so it must not decide overall health."""
+        overview = self.task_store.get_admin_overview()
+        health = self.get_health_summary()
+        dependencies = health["dependencies"]
+        healthy = health["status"] == "ok" and overview.failed_tasks_count == 0
+        system_health = {
+            "postgres": dependencies["database"],
+            "redis": dependencies["redis"],
+            "llm": dependencies["llm"],
+            "overall": "healthy" if healthy else "degraded",
+        }
+        return overview.model_copy(update={"system_health": system_health})
 
     def get_admin_token_analytics(
         self,

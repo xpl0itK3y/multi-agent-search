@@ -115,6 +115,9 @@ from src.observability import bind_observability_context, metric_route_template,
 
 logger = logging.getLogger(__name__)
 
+# Seconds between admin overview pushes on /v1/admin/stream (and admin re-checks).
+ADMIN_STREAM_INTERVAL_SECONDS = 2.0
+
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
 
@@ -1043,21 +1046,33 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/admin/stream")
     async def admin_stream(request: Request):
-        require_admin(request)
+        # Both the admin check (a users lookup) and the overview hit the DB: threadpool.
+        await run_in_threadpool(require_admin, request)
         service = get_research_service(request)
 
         async def event_generator():
-            import asyncio
             while True:
                 if await request.is_disconnected():
                     break
+                # Re-authorize every tick: an expired or revoked token (token_version) or an
+                # email dropped from ADMIN_EMAILS ends the stream instead of keeping it live.
                 try:
-                    overview = service.get_admin_overview()
-                    data = overview.model_dump_json()
-                    yield f"event: overview\ndata: {data}\n\n"
-                except Exception as err:
-                    yield f"event: error\ndata: {json.dumps({'error': str(err)})}\n\n"
-                await asyncio.sleep(2.0)
+                    await run_in_threadpool(require_admin, request)
+                except HTTPException:
+                    yield f"event: error\ndata: {json.dumps({'error': 'unauthorized'})}\n\n"
+                    break
+                except Exception:
+                    logger.exception("admin_stream_authorization_failed")
+                    yield f"event: error\ndata: {json.dumps({'error': 'overview_unavailable'})}\n\n"
+                    break
+                try:
+                    overview = await run_in_threadpool(service.get_admin_overview)
+                    yield f"event: overview\ndata: {overview.model_dump_json()}\n\n"
+                except Exception:
+                    # Never the exception text: DB errors carry SQL and connection details.
+                    logger.exception("admin_stream_overview_failed")
+                    yield f"event: error\ndata: {json.dumps({'error': 'overview_unavailable'})}\n\n"
+                await asyncio.sleep(ADMIN_STREAM_INTERVAL_SECONDS)
 
         return StreamingResponse(
             event_generator(),
