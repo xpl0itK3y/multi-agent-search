@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     auth_rate_limit_per_minute: int = 10
     # Per-admin mutations allowed per minute on admin endpoints (0 disables).
     admin_rate_limit_per_minute: int = 10
+    # Per-user client telemetry events accepted per minute (0 disables). The SPA sends
+    # about 2 a minute per open tab (heartbeat + focus/blur), so this only stops floods.
+    telemetry_rate_limit_per_minute: int = 120
     # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""

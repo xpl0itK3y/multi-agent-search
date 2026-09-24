@@ -31,6 +31,7 @@ from src.auth.login_rate_limit import (
 )
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
+from src.auth.telemetry_rate_limit import telemetry_user_id
 from src.auth.security import create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
@@ -111,7 +112,7 @@ from src.observability import bind_observability_context, metric_route_template,
 logger = logging.getLogger(__name__)
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register", "/v1/telemetry/event"})
+_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
 
 
 def _is_csrf_violation(request: Request) -> bool:
@@ -690,18 +691,22 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).cleanup_old_research_finalize_jobs()
 
     # ── Client Telemetry Ingestion ────────────────────────────────────────────
+    # Authenticated-only and CSRF-checked: anonymous callers get 401, each user a
+    # per-minute budget (telemetry_user_id).
     @app.post("/v1/telemetry/event")
     def record_telemetry_event(
         payload: UserTelemetryEventInput,
         request: Request,
+        user_id: str | None = Depends(telemetry_user_id),
     ):
+        if not user_id:
+            # Auth disabled and no real account behind the request: nothing to attribute.
+            return {"status": "ignored", "event_id": None}
         service = get_research_service(request)
         c_ip = extract_client_ip(request)
         u_agent = request.headers.get("user-agent")
 
-        user_id = resolve_request_user_id(request)
-
-        if payload.device_info and user_id:
+        if payload.device_info:
             dev = payload.device_info
             ua_parsed = parse_client_ua(u_agent)
             service.task_store.record_user_session(

@@ -23,6 +23,7 @@ def _isolate_auth_settings(monkeypatch):
     need auth enabled / OAuth configured override these via mocker.patch."""
     from src.auth.admin_rate_limit import reset_admin_rate_limiter
     from src.auth.login_rate_limit import reset_auth_rate_limiter
+    from src.auth.telemetry_rate_limit import reset_telemetry_rate_limiter
     from src.config import settings
 
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
@@ -33,6 +34,7 @@ def _isolate_auth_settings(monkeypatch):
     # (all from the same test client address) push a later test over the limit.
     reset_auth_rate_limiter()
     reset_admin_rate_limiter()
+    reset_telemetry_rate_limiter()
 
 
 @pytest.fixture

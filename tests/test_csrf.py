@@ -47,6 +47,11 @@ def test_login_register_exempt(auth_on):
     assert _is_csrf_violation(_req(path="/v1/auth/register")) is False
 
 
+def test_telemetry_ingest_is_not_exempt(auth_on):
+    # Authenticated-only ingestion: a cookie-riding cross-site POST must carry the token.
+    assert _is_csrf_violation(_req(path="/v1/telemetry/event", cookies={"csrf_token": "tok123"})) is True
+
+
 def test_cookie_auth_with_matching_token_passes(auth_on):
     req = _req(headers={"X-CSRF-Token": "tok123"}, cookies={"csrf_token": "tok123"})
     assert _is_csrf_violation(req) is False
