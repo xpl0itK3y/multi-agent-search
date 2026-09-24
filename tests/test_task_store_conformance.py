@@ -488,6 +488,11 @@ def test_search_cache_put_get_and_cleanup(store):
     assert store.get_cached_search("conf-key", max_age_seconds=3600) is None
 
 
+def test_search_cache_zero_max_age_is_always_expired(store):
+    store.put_cached_search("conf-zero", [{"url": "https://example.com"}])
+    assert store.get_cached_search("conf-zero", max_age_seconds=0) is None
+
+
 def test_ping_is_alive(store):
     assert store.ping() is True
 

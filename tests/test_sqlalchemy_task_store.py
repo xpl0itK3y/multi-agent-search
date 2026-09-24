@@ -478,3 +478,37 @@ def test_sqlalchemy_task_store_cleans_up_old_terminal_jobs(postgres_session_fact
     assert deleted_finalize == [old_finalize.id]
     assert store.get_search_task_job(old_search.id) is None
     assert store.get_research_finalize_job(old_finalize.id) is None
+
+
+@pytest.mark.postgres
+def test_sqlalchemy_latest_jobs_break_created_at_ties_deterministically(postgres_session_factory):
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    research = store.add_research(
+        ResearchRequest(prompt="tie topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    task_id = str(uuid.uuid4())
+    store.add_task({"id": task_id, "research_id": research.id, "description": "d", "queries": ["q"]})
+    first_finalize = store.add_research_finalize_job(research.id)
+    second_finalize = store.add_research_finalize_job(research.id)
+    first_search = store.add_search_task_job(task_id, SearchDepth.EASY.value)
+    second_search = store.add_search_task_job(task_id, SearchDepth.EASY.value)
+
+    tick = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with postgres_session_factory() as session:
+        for table in ("research_finalize_jobs", "search_task_jobs"):
+            session.execute(text(f"UPDATE {table} SET created_at = :t, updated_at = :t"), {"t": tick})
+        # On a created_at tie the more recently updated job is the latest one.
+        session.execute(
+            text("UPDATE research_finalize_jobs SET updated_at = :t WHERE id = :id"),
+            {"t": tick + timedelta(seconds=1), "id": first_finalize.id},
+        )
+        session.execute(
+            text("UPDATE search_task_jobs SET updated_at = :t WHERE id = :id"),
+            {"t": tick + timedelta(seconds=1), "id": second_search.id},
+        )
+        session.commit()
+
+    assert store.get_latest_research_finalize_job(research.id).id == first_finalize.id
+    assert store.get_latest_search_task_job(task_id).id == second_search.id
+    assert second_finalize.id != first_finalize.id and first_search.id != second_search.id

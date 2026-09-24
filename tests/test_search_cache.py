@@ -79,3 +79,18 @@ def test_search_agent_skips_cache_when_disabled(mocker):
     agent.run_task("task-2")
 
     assert search.call_count == 2  # no cache → each task searches
+
+
+def test_in_memory_cache_zero_ttl_misses_within_the_same_clock_tick(mocker):
+    # Pin the clock so the read happens in the same tick as the write: an entry exactly
+    # max_age old is expired, so max_age_seconds=0 must miss.
+    import src.repositories.in_memory_task_store as module
+
+    tick = module.datetime(2026, 1, 1, tzinfo=module.timezone.utc)
+    frozen = mocker.patch.object(module, "datetime", wraps=module.datetime)
+    frozen.now.return_value = tick
+    store = InMemoryTaskStore()
+    store.put_cached_search("k", [{"url": "https://a.com"}])
+
+    assert store.get_cached_search("k", 0) is None
+    assert store.get_cached_search("k", 1) == [{"url": "https://a.com"}]

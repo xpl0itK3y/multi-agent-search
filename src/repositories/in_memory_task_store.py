@@ -75,7 +75,9 @@ class InMemoryTaskStore:
         if entry is None:
             return None
         created_at, payload = entry
-        if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
+        # An entry exactly max_age old is already expired, so max_age_seconds=0 always
+        # misses even when the clock has not ticked since the write.
+        if (datetime.now(timezone.utc) - created_at).total_seconds() >= max_age_seconds:
             return None
         return [dict(item) for item in payload]
 
@@ -594,6 +596,17 @@ class InMemoryTaskStore:
             return None
         return job
 
+    @staticmethod
+    def _latest_job(jobs: list):
+        """Newest job by created_at, then updated_at, like the SQL ordering. Jobs created
+        in the same clock tick (common on Windows) tie on both; the last inserted wins."""
+        if not jobs:
+            return None
+        return max(
+            enumerate(jobs),
+            key=lambda pair: (pair[1].created_at, pair[1].updated_at, pair[0]),
+        )[1]
+
     def get_latest_research_finalize_job(
         self,
         research_id: str,
@@ -606,9 +619,7 @@ class InMemoryTaskStore:
             for job in self.finalize_jobs.values()
             if job.research_id == research_id
         ]
-        if not matching_jobs:
-            return None
-        return max(matching_jobs, key=lambda item: item.created_at)
+        return self._latest_job(matching_jobs)
 
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         return [
@@ -809,9 +820,7 @@ class InMemoryTaskStore:
             for job in self.search_jobs.values()
             if job.task_id == task_id
         ]
-        if not matching_jobs:
-            return None
-        return max(matching_jobs, key=lambda item: item.created_at)
+        return self._latest_job(matching_jobs)
 
     def get_pending_search_task_jobs(self) -> list[SearchTaskJob]:
         return [

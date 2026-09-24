@@ -384,7 +384,7 @@ class SQLAlchemyTaskStore:
             if row is None:
                 return None
             age = (datetime.now(timezone.utc) - row.created_at).total_seconds()
-            if age > max_age_seconds:
+            if age >= max_age_seconds:  # same boundary as the in-memory store
                 return None
             return [dict(item) for item in (row.payload or [])]
 
@@ -829,7 +829,12 @@ class SQLAlchemyTaskStore:
             statement = (
                 select(ResearchFinalizeJobORM)
                 .where(ResearchFinalizeJobORM.research_id == research_id)
-                .order_by(ResearchFinalizeJobORM.created_at.desc())
+                # Secondary keys keep a created_at tie deterministic.
+                .order_by(
+                    ResearchFinalizeJobORM.created_at.desc(),
+                    ResearchFinalizeJobORM.updated_at.desc(),
+                    ResearchFinalizeJobORM.id.desc(),
+                )
             )
             if user_id is not None:
                 statement = statement.join(
@@ -1128,7 +1133,11 @@ class SQLAlchemyTaskStore:
             statement = (
                 select(SearchTaskJobORM)
                 .where(SearchTaskJobORM.task_id == task_id)
-                .order_by(SearchTaskJobORM.created_at.desc())
+                .order_by(
+                    SearchTaskJobORM.created_at.desc(),
+                    SearchTaskJobORM.updated_at.desc(),
+                    SearchTaskJobORM.id.desc(),
+                )
             )
             if user_id is not None:
                 statement = (
