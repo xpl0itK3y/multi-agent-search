@@ -20,6 +20,14 @@ const busy = ref(false);
 const error = ref<string | null>(null);
 const googleEnabled = ref(false);
 
+// A failed Google callback redirects here as /login?error=<code>. Keep the key
+// (not the text) so the message follows a language switch on this page.
+const OAUTH_ERRORS: Record<string, string> = {
+  oauth_conflict: "auth.oauthConflict",
+  oauth_failed: "auth.oauthFailed",
+};
+const oauthErrorKey = ref<string | null>(OAUTH_ERRORS[String(route.query.error ?? "")] ?? null);
+
 async function loadAuthConfig(retries = 2) {
   try {
     googleEnabled.value = Boolean((await api.authConfig())?.google_oauth);
@@ -42,6 +50,7 @@ async function submit() {
   if (busy.value) return;
   busy.value = true;
   error.value = null;
+  oauthErrorKey.value = null;
   try {
     if (mode.value === "login") await auth.login(email.value.trim(), password.value);
     else await auth.register(email.value.trim(), password.value);
@@ -77,10 +86,13 @@ async function submit() {
       <!-- Admin redirect notification -->
       <div
         v-if="route.query.redirect === '/admin'"
-        class="mb-5 flex items-center gap-2.5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-xs text-accent"
+        class="mb-5 space-y-1.5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-xs text-accent"
       >
-        <span class="text-base">🛡️</span>
-        <span class="font-medium">{{ $t("admin.loginPrompt") }}</span>
+        <div class="flex items-center gap-2.5">
+          <span class="text-base">🛡️</span>
+          <span class="font-medium">{{ $t("admin.loginPrompt") }}</span>
+        </div>
+        <p class="leading-relaxed text-accent/80">{{ $t("admin.authPasswordHint") }}</p>
       </div>
 
       <div class="mb-6 flex items-center justify-center gap-3">
@@ -106,6 +118,7 @@ async function submit() {
           class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
         />
         <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
+        <p v-else-if="oauthErrorKey" class="text-sm text-red-400">{{ $t(oauthErrorKey) }}</p>
         <button
           type="submit"
           :disabled="busy"
