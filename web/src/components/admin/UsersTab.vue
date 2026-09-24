@@ -928,20 +928,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </svg>
                 <span>{{ copiedPromptId === p.id ? t("admin.users.promptCopied") : t("admin.users.copyPrompt") }}</span>
               </button>
-
-              <!-- Open Research Link -->
-              <a
-                v-if="p.research_id"
-                :href="`/research/${p.research_id}`"
-                target="_blank"
-                class="flex items-center gap-1 rounded-md border border-bd bg-surface px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-accent"
-                :title="t('admin.users.openResearch')"
-              >
-                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                <span>{{ t("admin.users.openResearch") }}</span>
-              </a>
+              <!-- No "open research" link: research routes are owner-scoped (SEC-IDOR),
+                   so an admin would only get a 404 for another user's run. -->
             </div>
           </div>
 
@@ -1422,16 +1410,6 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 <div class="font-medium text-ink select-text">{{ r.prompt }}</div>
                 <div class="flex items-center gap-1.5 shrink-0">
                   <span class="rounded bg-surface px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">{{ r.depth }}</span>
-                  <a
-                    :href="`/research/${r.id}`"
-                    target="_blank"
-                    class="rounded border border-bd bg-surface p-1 text-muted transition hover:border-accent/40 hover:text-accent"
-                    :title="t('admin.users.openResearch')"
-                  >
-                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                  </a>
                 </div>
               </div>
               <div class="flex items-center justify-between text-[11px] text-muted">
