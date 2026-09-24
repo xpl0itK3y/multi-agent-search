@@ -390,6 +390,38 @@ def test_finalize_job_failure_retries_and_requeue(store):
     assert requeued.status == FinalizeJobStatus.PENDING
 
 
+def test_requeue_only_accepts_stopped_jobs_and_fences_the_old_lease(store):
+    record = _research(store)
+    finalize_job = store.add_research_finalize_job(record.id, max_attempts=1)
+    task = _task(store, record.id)
+    search_job = store.add_search_task_job(task.id, SearchDepth.EASY.value, max_attempts=1)
+
+    # PENDING and RUNNING jobs are live: a requeue would hand them to a second worker.
+    assert store.requeue_research_finalize_job(finalize_job.id) is None
+    assert store.requeue_search_task_job(search_job.id) is None
+    old_epoch = store.claim_research_finalize_job_by_id(finalize_job.id).lease_epoch
+    store.claim_search_task_job_by_id(search_job.id)
+    assert store.requeue_research_finalize_job(finalize_job.id) is None
+    assert store.requeue_search_task_job(search_job.id) is None
+    assert store.get_research_finalize_job(finalize_job.id).status == FinalizeJobStatus.RUNNING
+
+    store.record_research_finalize_job_failure(finalize_job.id, "boom", lease_epoch=old_epoch)
+    store.record_search_task_job_failure(search_job.id, "boom")
+    requeued = store.requeue_research_finalize_job(finalize_job.id)
+    assert requeued.status == FinalizeJobStatus.PENDING
+    assert requeued.lease_epoch == old_epoch + 1
+    reclaimed = store.claim_research_finalize_job_by_id(finalize_job.id)
+    assert store.renew_research_finalize_job_lease(finalize_job.id, old_epoch) is False
+    assert store.renew_research_finalize_job_lease(finalize_job.id, reclaimed.lease_epoch) is True
+    assert store.requeue_search_task_job(search_job.id).status == SearchJobStatus.PENDING
+
+    store.update_search_task_job(search_job.id, SearchJobStatus.FAILED, error="task missing")
+    assert store.requeue_search_task_job(search_job.id).status == SearchJobStatus.PENDING
+    store.update_search_task_job(search_job.id, SearchJobStatus.COMPLETED)
+    assert store.requeue_search_task_job(search_job.id) is None
+    assert store.requeue_research_finalize_job("missing-job") is None
+
+
 def test_finalize_job_stale_recovery_bumps_lease_epoch(store):
     record = _research(store)
     job = store.add_research_finalize_job(record.id)

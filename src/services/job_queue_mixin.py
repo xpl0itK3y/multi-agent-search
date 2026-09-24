@@ -56,8 +56,8 @@ class JobQueueMixin:
         self.require_agent(self.analyzer, "Analyzer")
         self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
         requeued = self.task_store.requeue_research_finalize_job(job_id)
-        if requeued is None:
-            raise NotFoundError("Finalize job not found")
+        if requeued is None:  # deleted, or requeued by a concurrent caller
+            raise ConflictError("Only dead-letter finalize jobs can be requeued")
         if self.broker:
             self.broker.push_finalize_job(requeued.id)
         logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)
@@ -129,8 +129,8 @@ class JobQueueMixin:
             TaskUpdate(status=TaskStatus.PENDING, log="Search job manually requeued"),
         )
         requeued = self.task_store.requeue_search_task_job(job_id)
-        if requeued is None:
-            raise NotFoundError("Search job not found")
+        if requeued is None:  # deleted, or requeued by a concurrent caller
+            raise ConflictError("Only dead-letter search jobs can be requeued")
         if self.broker:
             self.broker.push_search_job(requeued.id)
         logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)

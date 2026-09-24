@@ -772,14 +772,19 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    # Only a stopped job may be requeued (a RUNNING one would get a second runner).
+    _REQUEUEABLE_FINALIZE_STATUSES = (FinalizeJobStatus.DEAD_LETTER, FinalizeJobStatus.FAILED)
+    _REQUEUEABLE_SEARCH_STATUSES = (SearchJobStatus.DEAD_LETTER, SearchJobStatus.FAILED)
+
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or job.status not in self._REQUEUEABLE_FINALIZE_STATUSES:
             return None
 
         job.status = FinalizeJobStatus.PENDING
         job.attempt_count = 0
         job.error = None
+        job.lease_epoch += 1  # fence any runner still holding the old lease
         job.updated_at = datetime.now(timezone.utc)
         return job
 
@@ -926,7 +931,7 @@ class InMemoryTaskStore:
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.search_jobs.get(job_id)
-        if job is None:
+        if job is None or job.status not in self._REQUEUEABLE_SEARCH_STATUSES:
             return None
 
         job.status = SearchJobStatus.PENDING

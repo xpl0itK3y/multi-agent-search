@@ -205,6 +205,8 @@ class TaskStore(Protocol):
         lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None: ...
 
+    # Requeue only a DEAD_LETTER/FAILED job (None otherwise), resetting its attempts;
+    # the finalize variant also bumps lease_epoch to fence a runner on the old lease.
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
     def recover_stale_research_finalize_jobs(

@@ -1066,18 +1066,32 @@ class SQLAlchemyTaskStore:
                 return None
             return research_finalize_job_orm_to_schema(job)
 
+    # Only a job that has stopped may be requeued. Resetting a RUNNING (or PENDING) job
+    # would let a second worker claim it next to the live runner.
+    _REQUEUEABLE_JOB_STATUSES = (FinalizeJobStatus.DEAD_LETTER.value, FinalizeJobStatus.FAILED.value)
+
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable.
+        The lease epoch is bumped so any runner still holding the old lease is fenced."""
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = (
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.status.in_(self._REQUEUEABLE_JOB_STATUSES),
+                )
+                .values(
+                    status=FinalizeJobStatus.PENDING.value,
+                    attempt_count=0,
+                    error=None,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(ResearchFinalizeJobORM)
+            )
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.status = FinalizeJobStatus.PENDING.value
-            job.attempt_count = 0
-            job.error = None
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return research_finalize_job_orm_to_schema(job)
 
     def recover_stale_research_finalize_jobs(
@@ -1300,17 +1314,25 @@ class SQLAlchemyTaskStore:
             return search_task_job_orm_to_schema(job)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable."""
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id)
+            statement = (
+                update(SearchTaskJobORM)
+                .where(
+                    SearchTaskJobORM.id == job_id,
+                    SearchTaskJobORM.status.in_(self._REQUEUEABLE_JOB_STATUSES),
+                )
+                .values(
+                    status=SearchJobStatus.PENDING.value,
+                    attempt_count=0,
+                    error=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(SearchTaskJobORM)
+            )
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.status = SearchJobStatus.PENDING.value
-            job.attempt_count = 0
-            job.error = None
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
             return search_task_job_orm_to_schema(job)
 
     def recover_stale_search_task_jobs(
