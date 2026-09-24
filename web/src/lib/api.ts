@@ -128,7 +128,17 @@ function recoverFromExpiredSession(hadToken: boolean): void {
   window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+interface RequestOptions {
+  // false: a 401 from this call means "wrong credential" (a mistyped current
+  // password), not a stale session — keep the token and let the caller show it.
+  sessionRecovery?: boolean;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  { sessionRecovery = true }: RequestOptions = {},
+): Promise<T> {
   const method = init?.method ?? "GET";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -142,7 +152,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!res.ok) {
-    if (res.status === 401) recoverFromExpiredSession(hadToken);
+    if (res.status === 401 && sessionRecovery) recoverFromExpiredSession(hadToken);
     throw await apiErrorFromResponse(res);
   }
   if (res.status === 204) return undefined as T;
@@ -215,19 +225,28 @@ export const api = {
   getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
 
   // The server requires an explicit confirm flag (DATA-LIFECYCLE); callers invoke
-  // this only after the user confirmed in the Settings delete modal.
+  // this only after the user confirmed in the Settings delete modal. With a
+  // password sent, a 401 means that password was wrong: no session recovery.
   deleteAccount: async (currentPassword?: string) => {
-    return await request<{ status: string }>("/v1/auth/account", {
-      method: "DELETE",
-      body: JSON.stringify({ current_password: currentPassword, confirm: true }),
-    });
+    return await request<{ status: string }>(
+      "/v1/auth/account",
+      {
+        method: "DELETE",
+        body: JSON.stringify({ current_password: currentPassword, confirm: true }),
+      },
+      { sessionRecovery: currentPassword === undefined },
+    );
   },
 
   setPassword: async (password: string, currentPassword?: string) => {
-    const res = await request<AuthSession>("/v1/auth/set-password", {
-      method: "POST",
-      body: JSON.stringify({ password, current_password: currentPassword }),
-    });
+    const res = await request<AuthSession>(
+      "/v1/auth/set-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ password, current_password: currentPassword }),
+      },
+      { sessionRecovery: currentPassword === undefined },
+    );
     setAuthToken(res.access_token);
     return res;
   },

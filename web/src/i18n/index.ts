@@ -353,6 +353,12 @@ const ru = {
     retry: "Повторить попытку",
     retrying: "Повтор…",
   },
+  settings: {
+    errors: {
+      wrongCurrentPassword: "Текущий пароль указан неверно",
+      currentPasswordRequired: "Введите текущий пароль",
+    },
+  },
   auth: {
     loginTitle: "Вход",
     registerTitle: "Регистрация",
@@ -1237,6 +1243,12 @@ const en: typeof ru = {
     retry: "Retry",
     retrying: "Retrying…",
   },
+  settings: {
+    errors: {
+      wrongCurrentPassword: "The current password is incorrect",
+      currentPasswordRequired: "Enter your current password",
+    },
+  },
   auth: {
     loginTitle: "Sign in",
     registerTitle: "Sign up",
@@ -2120,6 +2132,12 @@ const es: typeof ru = {
     failedMessage: "Se produjo un error durante el análisis de datos. Por favor, verifique los parámetros y vuelva a intentarlo.",
     retry: "Reintentar",
     retrying: "Reintentando…",
+  },
+  settings: {
+    errors: {
+      wrongCurrentPassword: "La contraseña actual es incorrecta",
+      currentPasswordRequired: "Introduce tu contraseña actual",
+    },
   },
   auth: {
     loginTitle: "Iniciar sesión",

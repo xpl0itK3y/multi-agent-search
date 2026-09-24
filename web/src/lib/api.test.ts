@@ -123,6 +123,37 @@ describe("account endpoints", () => {
     expect(init.method).toBe("DELETE");
     expect(JSON.parse(init.body as string)).toEqual({ current_password: "secret123", confirm: true });
   });
+
+  it("a wrong current password (401) keeps the session instead of redirecting", async () => {
+    const { assign, removeItem } = stubEnv("valid-token", "/settings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () =>
+        new Response(JSON.stringify({ detail: "Current password is incorrect" }), { status: 401 }),
+      ),
+    );
+
+    const { api } = await import("./api");
+    await expect(api.setPassword("new-password", "wrong")).rejects.toMatchObject({ status: 401 });
+    await expect(api.deleteAccount("wrong")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("without a current password a 401 is still an expired session", async () => {
+    const { assign, removeItem } = stubEnv("stale-token", "/settings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "Not authenticated" }), { status: 401 })),
+    );
+
+    const { api } = await import("./api");
+    await expect(api.setPassword("new-password")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fsettings");
+  });
 });
 
 describe("apiErrorMessage", () => {

@@ -1,14 +1,26 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore, THEMES } from "@/stores/ui";
-import { api } from "@/lib/api";
+import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import type { Depth, UserTokenStats } from "@/lib/types";
 
 const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
+const { t } = useI18n();
+
+// Password change and account deletion verify the current password: a 401 then
+// means it was wrong (api skips session recovery), a 400 that it is required.
+function credentialErrorMessage(e: unknown, sentPassword: boolean): string {
+  if (e instanceof ApiError) {
+    if (e.status === 401 && sentPassword) return t("settings.errors.wrongCurrentPassword");
+    if (e.status === 400 && !sentPassword) return t("settings.errors.currentPasswordRequired");
+  }
+  return apiErrorMessage(e, t);
+}
 
 type TabId = "profile" | "research" | "appearance" | "analytics" | "security";
 const activeTab = ref<TabId>("profile");
@@ -167,15 +179,16 @@ async function changePassword() {
   }
 
   passwordBusy.value = true;
+  const current = currentPassword.value || undefined;
   try {
-    await api.setPassword(newPassword.value, currentPassword.value || undefined);
+    await api.setPassword(newPassword.value, current);
     passwordSuccess.value = true;
     currentPassword.value = "";
     newPassword.value = "";
     confirmPassword.value = "";
     setTimeout(() => (passwordSuccess.value = false), 3000);
   } catch (e) {
-    passwordError.value = (e as Error).message;
+    passwordError.value = credentialErrorMessage(e, current !== undefined);
   } finally {
     passwordBusy.value = false;
   }
@@ -210,12 +223,13 @@ const deleteError = ref<string | null>(null);
 async function confirmDeleteAccount() {
   deleteBusy.value = true;
   deleteError.value = null;
+  const current = deletePassword.value || undefined;
   try {
-    await api.deleteAccount(deletePassword.value || undefined);
+    await api.deleteAccount(current);
     await auth.logout();
     router.push("/login");
   } catch (e) {
-    deleteError.value = (e as Error).message;
+    deleteError.value = credentialErrorMessage(e, current !== undefined);
   } finally {
     deleteBusy.value = false;
   }
