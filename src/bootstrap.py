@@ -16,6 +16,7 @@ from src.agents.cross_language import CrossLanguageAgent
 from src.agents.replan import ReplanAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.api.dependencies import LOCAL_USER
 from src.brokers.redis_broker import RedisBroker
 from src.config import settings
 from src.observability import configure_logging
@@ -46,6 +47,24 @@ def _create_broker() -> RedisBroker | None:
     except Exception as exc:
         print(f"Warning: Failed to initialize Redis broker: {exc} — falling back to Postgres polling")
         return None
+
+
+def _llm_usage_sink(task_store):
+    """DeepSeekProvider usage sink: one llm_usage_logs row per LLM call (USAGE-ACCOUNTING),
+    in the API process (decompose, optimize, clarify, chat) as well as the workers."""
+
+    def record(*, research_id, user_id, prompt_tokens, completion_tokens, **usage) -> None:
+        task_store.record_llm_usage(
+            research_id=research_id,
+            # With auth disabled calls are bound to LOCAL_USER, which has no users row.
+            user_id=None if user_id == LOCAL_USER.id else user_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            **usage,
+        )
+
+    return record
 
 
 _INSECURE_SECRET_DEFAULT = "dev-insecure-secret-change-in-production"
@@ -83,6 +102,7 @@ def create_research_service() -> ResearchService:
     evidence_mapper = EvidenceMapperAgent()
     claim_verifier = ClaimVerifierAgent()
     report_critic = ReportCriticAgent()
+    llm: DeepSeekProvider | None = None
     llm_available = False
 
     if settings.smoke_analyzer_report:
@@ -112,6 +132,8 @@ def create_research_service() -> ResearchService:
         print(f"Warning: Failed to initialize agents: {exc}")
 
     task_store = create_task_store()
+    if llm is not None:
+        llm.set_usage_sink(_llm_usage_sink(task_store))
     broker = _create_broker()
     # Wire pub/sub so state changes (any process) wake SSE streams instead of DB polling.
     if broker is not None and hasattr(task_store, "set_event_notifier"):

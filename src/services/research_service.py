@@ -929,12 +929,14 @@ class ResearchService(
         stored = (research.graph_state or {}).get(self._SUMMARY_FOLLOW_UP_KEY) or {}
         if stored.get("fingerprint") == fingerprint:
             return [ReplanRecommendation.model_validate(item) for item in stored.get("recommendations") or []]
-        recommendations = self.replan_agent.suggest_follow_up(
-            research.prompt,
-            research.depth,
-            tasks,
-            source_summary=source_summary,
-        )
+        # Runs in the API process: bind the owner so the calls land in llm_usage_logs.
+        with bind_observability_context(research_id=research.id, user_id=research.user_id or "local"):
+            recommendations = self.replan_agent.suggest_follow_up(
+                research.prompt,
+                research.depth,
+                tasks,
+                source_summary=source_summary,
+            )
         self.task_store.merge_research_graph_state(
             research.id,
             {
@@ -2001,7 +2003,9 @@ class ResearchService(
             if latest is not None and latest.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_discarded_cancelled research_id=%s", research_id)
                 return latest
-            # persist token usage into graph_state (U-3)
+            # persist token usage into graph_state (U-3). This is the per-research figure the
+            # UI shows; llm_usage_logs gets one row per call from the provider's usage sink,
+            # so nothing is written there from here (that would count the calls twice).
             if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
                 usage = analyzer_llm.token_usage
                 logger.info(
@@ -2015,18 +2019,6 @@ class ResearchService(
                 # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
                 self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
                 self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
-                try:
-                    self.task_store.record_llm_usage(
-                        research_id=research_id,
-                        user_id=research.user_id if research else None,
-                        model=getattr(analyzer_llm, "model", "deepseek-chat"),
-                        prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                        completion_tokens=int(usage.get("completion_tokens", 0)),
-                        total_tokens=int(usage.get("total_tokens", 0)),
-                        estimated_cost_usd=float(usage.get("estimated_cost_usd", 0.0)),
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to record llm_usage_log for %s: %s", research_id, exc)
 
             if finalize_job_id is not None and lease_epoch is not None:
                 completed_job = self.task_store.complete_research_finalize_job(

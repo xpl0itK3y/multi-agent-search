@@ -337,6 +337,8 @@ class TaskStore(Protocol):
     def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int: ...
 
     # ── admin & token tracking ────────────────────────────────────────────────
+    # One row per LLM call (the provider's usage sink): the model actually sent and the
+    # unrounded cost; cache_hit_tokens is the part of prompt_tokens served from cache.
     def record_llm_usage(
         self,
         research_id: str | None,
@@ -346,6 +348,7 @@ class TaskStore(Protocol):
         completion_tokens: int,
         total_tokens: int,
         estimated_cost_usd: float,
+        cache_hit_tokens: int = 0,
     ) -> str: ...
 
     def record_admin_audit(

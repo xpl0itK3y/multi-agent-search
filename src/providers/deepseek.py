@@ -3,12 +3,13 @@ import logging
 import random
 import threading
 import time
+from typing import Callable
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from src.config import settings
 from src.core.llm import LLMProvider
-from src.observability import maybe_wrap_openai_client, observe_llm_cost
+from src.observability import get_observability_context, maybe_wrap_openai_client, observe_llm_cost
 from src.providers.rate_limit import get_llm_limiter
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ _DEEPSEEK_MODEL_PRICING: dict[str, dict[str, tuple[float, float, float]]] = {
         "peak":     (0.30, 0.006, 1.20),
     },
 }
+
+# Per-call usage sink (USAGE-ACCOUNTING); bootstrap points it at the task store. It is
+# called with keyword arguments: research_id and user_id as bound in the observability
+# context, the model actually sent, the token counts and the unrounded cost.
+LLMUsageSink = Callable[..., None]
 
 # Legacy fallback rates for test mocks (e.g. "deepseek-test" in test_llm_cost_metrics.py)
 _DEFAULT_PRICE_INPUT_PER_M = 0.14
@@ -100,6 +106,7 @@ class DeepSeekProvider(LLMProvider):
         self._completion_tokens: int = 0
         self._cache_hit_tokens: int = 0
         self._cost_usd: float = 0.0
+        self._usage_sink: LLMUsageSink | None = None
 
     # ── token tracking ────────────────────────────────────────────────────────
 
@@ -131,6 +138,38 @@ class DeepSeekProvider(LLMProvider):
             self._cache_hit_tokens  = getattr(self, "_cache_hit_tokens", 0) + cache_hit_tokens
             self._cost_usd          = getattr(self, "_cost_usd", 0.0) + cost
         observe_llm_cost(cost, model)
+        self._emit_usage(model, prompt_tokens, completion_tokens, cache_hit_tokens, cost)
+
+    def set_usage_sink(self, sink: LLMUsageSink | None) -> None:
+        self._usage_sink = sink
+
+    def _emit_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cache_hit_tokens: int,
+        cost: float,
+    ) -> None:
+        """Hand one call's usage to the sink, attributed to the research/user the caller
+        bound (the shared counters above cannot tell concurrent calls apart)."""
+        sink = getattr(self, "_usage_sink", None)
+        if sink is None:
+            return
+        context = get_observability_context()
+        try:
+            sink(
+                research_id=context.get("research_id"),
+                user_id=context.get("user_id"),
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cache_hit_tokens=cache_hit_tokens,
+                estimated_cost_usd=cost,
+            )
+        except Exception:
+            # Accounting must never fail the call it accounts for.
+            logger.warning("llm_usage_record_failed model=%s", model, exc_info=True)
 
     @property
     def token_usage(self) -> dict:

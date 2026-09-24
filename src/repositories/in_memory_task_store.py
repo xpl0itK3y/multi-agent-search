@@ -1108,6 +1108,7 @@ class InMemoryTaskStore:
         completion_tokens: int,
         total_tokens: int,
         estimated_cost_usd: float,
+        cache_hit_tokens: int = 0,
     ) -> str:
         usage_id = str(uuid.uuid4())
         self.llm_usage_logs.append({
@@ -1118,6 +1119,7 @@ class InMemoryTaskStore:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "cache_hit_tokens": cache_hit_tokens,
             "estimated_cost_usd": estimated_cost_usd,
             "created_at": datetime.now(timezone.utc),
         })
