@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.api.schemas import (
     FinalizeJobStatus,
     ResearchRequest,
@@ -199,3 +201,31 @@ def test_maintenance_sweeps_telemetry_per_retention_setting(monkeypatch):
 
     assert len(store.admin_audit_logs) == 1
     assert len(store.user_events) == 2  # 0 = keep forever
+
+
+def test_a_failing_maintenance_step_does_not_starve_the_others(monkeypatch):
+    """Research retention stuck on a huge backlog used to abort the pass before the
+    telemetry sweeps and graph compaction, on every pass. Each step now runs; the first
+    failure is still raised afterwards, so the worker heartbeat reports it."""
+    from src.config import settings
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    store.create_user("u-steps", "u-steps@example.com", None)
+    store.record_user_event("tab_focus", "ui", user_id="u-steps")
+    store.user_events[-1]["created_at"] = datetime.now(timezone.utc) - timedelta(days=100)
+    monkeypatch.setattr(settings, "user_events_retention_seconds", 90 * 86400)
+    monkeypatch.setattr(settings, "research_retention_seconds", 86400)
+
+    def stuck(older_than):
+        raise RuntimeError("number of parameters must be between 0 and 65535")
+
+    monkeypatch.setattr(store, "cleanup_old_researches", stuck)
+    compacted = []
+    monkeypatch.setattr(service, "compact_graph_operational_data", lambda: compacted.append(True) or ([], []))
+
+    with pytest.raises(RuntimeError, match="65535"):
+        service.run_queue_maintenance()
+
+    assert store.user_events == []  # the telemetry sweep after it still ran
+    assert compacted == [True]

@@ -427,23 +427,33 @@ class SQLAlchemyTaskStore:
         ResearchStatus.CANCELLED,
     )
 
+    # Retention: one short transaction per batch, so the first sweep over a large table
+    # never becomes one huge delete holding locks and WAL (nor, for researches, one IN list
+    # past the protocol's 65,535 bind parameters).
+    _RETENTION_BATCH_SIZE = 1000
+
     def cleanup_old_researches(self, older_than: datetime) -> list[str]:
         terminal = [status.value for status in self._TERMINAL_RESEARCH_STATUSES]
-        with self.session_scope() as session:
-            research_ids = session.execute(
-                select(ResearchORM.id).where(
-                    ResearchORM.status.in_(terminal),
-                    ResearchORM.updated_at < older_than,
+        # Also in the DELETE itself: a row changed since the batch was picked (a retry
+        # made it PROCESSING again) is re-checked there and kept.
+        expired = and_(ResearchORM.status.in_(terminal), ResearchORM.updated_at < older_than)
+        deleted: list[str] = []
+        while True:
+            with self.session_scope() as session:
+                batch = select(ResearchORM.id).where(expired).limit(self._RETENTION_BATCH_SIZE)
+                research_ids = list(
+                    session.execute(
+                        delete(ResearchORM)
+                        .where(ResearchORM.id.in_(batch.scalar_subquery()), expired)
+                        .returning(ResearchORM.id)
+                        .execution_options(synchronize_session=False)
+                    ).scalars()
                 )
-            ).scalars().all()
-            if research_ids:
-                session.execute(delete(ResearchORM).where(ResearchORM.id.in_(research_ids)))
-                session.execute(self._delete_prompt_events(list(research_ids)))
-            return list(research_ids)
-
-    # Telemetry retention: one short transaction per batch, so the first sweep over a
-    # large table never becomes one huge delete holding locks and WAL.
-    _RETENTION_BATCH_SIZE = 1000
+                if research_ids:  # in the same transaction as their research
+                    session.execute(self._delete_prompt_events(research_ids))
+            deleted.extend(research_ids)
+            if len(research_ids) < self._RETENTION_BATCH_SIZE:
+                return deleted
 
     def _delete_in_batches(self, model, predicate) -> int:
         deleted = 0

@@ -11,11 +11,12 @@ so it never depends on a developer's working database.
 import ast
 import inspect
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from src.api.schemas import (
     FinalizeJobStatus,
@@ -908,6 +909,51 @@ def test_research_retention_removes_its_prompt_copies(store):
 
     assert deleted == [expired.id]
     assert store.get_admin_event_logs(user_id="retention-owner").events == []
+
+
+@contextmanager
+def _statements(store):
+    """(SQL, bind parameter count) of each statement the block runs; None on the memory leg."""
+    if isinstance(store, InMemoryTaskStore):
+        yield None
+        return
+    captured: list[tuple[str, int]] = []
+    bind = store.session_factory.kw["bind"]
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        captured.append((statement.lstrip(), len(parameters or ())))
+
+    event.listen(bind, "before_cursor_execute", record)
+    try:
+        yield captured
+    finally:
+        event.remove(bind, "before_cursor_execute", record)
+
+
+def test_research_retention_deletes_in_bounded_batches(store, monkeypatch):
+    """One IN list over every expired id failed past 65,535 bind parameters (psycopg binds
+    one per value), so a large first sweep never deleted anything: batches instead."""
+    monkeypatch.setattr(type(store), "_RETENTION_BATCH_SIZE", 2, raising=False)
+    owner = _user(store)
+    expired = []
+    for n in range(5):
+        research = store.add_research(_request(f"expired topic {n}"), task_ids=[], user_id=owner.id)
+        store.update_research_status(research.id, ResearchStatus.COMPLETED, "done")
+        _prompt_copy(store, "chat_prompt", research.id, f"expired follow-up {n}", owner.id)
+        expired.append(research.id)
+    active = store.add_research(_request("running topic"), task_ids=[], user_id=owner.id)
+    _prompt_copy(store, "chat_prompt", active.id, "live follow-up", owner.id)
+
+    with _statements(store) as statements:
+        deleted = store.cleanup_old_researches(datetime.now(timezone.utc) + timedelta(minutes=1))
+
+    assert sorted(deleted) == sorted(expired)
+    assert store.get_research(active.id) is not None
+    assert [e.details["prompt"] for e in store.get_admin_event_logs(user_id=owner.id).events] == ["live follow-up"]
+    if statements is not None:
+        assert len([sql for sql, _count in statements if sql.startswith("DELETE FROM researches")]) == 3
+        prompt_deletes = [count for sql, count in statements if sql.startswith("DELETE FROM user_events")]
+        assert max(prompt_deletes) <= 3 + 2  # the event names, the JSON key and one batch of ids
 
 
 def test_telemetry_retention_deletes_rows_past_the_cutoff(store):

@@ -326,17 +326,39 @@ class JobQueueMixin:
         return True
 
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
-        self.recover_pending_decompositions()
-        search_recovery = self.recover_stale_search_task_jobs()
-        finalize_recovery = self.recover_stale_research_finalize_jobs()
+        """Every step runs even when an earlier one fails, so one broken sweep (say research
+        retention on a huge backlog) cannot starve recovery or the other sweeps pass after
+        pass. The first failure is raised once all have run: the worker heartbeat and the
+        admin route still report it."""
+        failures: list[Exception] = []
+
+        def step(name: str, run, fallback):
+            try:
+                return run()
+            except Exception as exc:
+                logger.exception("queue_maintenance_step_failed step=%s", name)
+                failures.append(exc)
+                return fallback
+
+        no_recovery = JobRecoveryResponse(recovered_job_ids=[], recovered_count=0)
+        no_cleanup = JobCleanupResponse(deleted_job_ids=[], deleted_count=0)
+        step("recover_pending_decompositions", self.recover_pending_decompositions, 0)
+        search_recovery = step("recover_stale_search_jobs", self.recover_stale_search_task_jobs, no_recovery)
+        finalize_recovery = step(
+            "recover_stale_finalize_jobs", self.recover_stale_research_finalize_jobs, no_recovery
+        )
         # After the stale-job recovery, so a research whose job was just requeued is busy.
-        stalled_research_ids = self.sweep_stalled_researches()
-        search_cleanup = self.cleanup_old_search_task_jobs()
-        finalize_cleanup = self.cleanup_old_research_finalize_jobs()
-        self.cleanup_search_cache()
-        self.cleanup_old_researches()
-        self.cleanup_old_telemetry()
-        compacted_worker_names, compacted_research_ids = self.compact_graph_operational_data()
+        stalled_research_ids = step("sweep_stalled_researches", self.sweep_stalled_researches, [])
+        search_cleanup = step("cleanup_old_search_jobs", self.cleanup_old_search_task_jobs, no_cleanup)
+        finalize_cleanup = step("cleanup_old_finalize_jobs", self.cleanup_old_research_finalize_jobs, no_cleanup)
+        step("cleanup_search_cache", self.cleanup_search_cache, 0)
+        step("cleanup_old_researches", self.cleanup_old_researches, [])
+        step("cleanup_old_telemetry", self.cleanup_old_telemetry, {})
+        compacted_worker_names, compacted_research_ids = step(
+            "compact_graph_operational_data", self.compact_graph_operational_data, ([], [])
+        )
+        if failures:
+            raise failures[0]
 
         recovered_count = search_recovery.recovered_count + finalize_recovery.recovered_count
         deleted_count = search_cleanup.deleted_count + finalize_cleanup.deleted_count
