@@ -10,6 +10,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from src.config import settings
 from src.core.llm import LLMProvider
+from src.model_catalog import get_model
 from src.observability import get_observability_context, maybe_wrap_openai_client, observe_llm_cost
 from src.providers.rate_limit import get_llm_limiter
 
@@ -40,6 +41,43 @@ LLMUsageSink = Callable[..., None]
 _DEFAULT_PRICE_INPUT_PER_M = 0.14
 _DEFAULT_PRICE_OUTPUT_PER_M = 1.10
 
+# Pricing tier of the model ids that are not in the user catalog. DeepSeek serves the
+# legacy ids as deepseek-v4-flash: deepseek-chat in non-thinking mode and
+# deepseek-reasoner in thinking mode (api-docs.deepseek.com/updates, 2026-04-24), both at
+# the flash rates; thinking mode costs no extra.
+_LEGACY_MODEL_TIERS: dict[str, str] = {
+    "deepseek-chat": "flash",
+    "deepseek-reasoner": "flash",
+}
+
+
+def _known_tier(model_id: str) -> str | None:
+    """Tier of a known id: the catalog's (aliases included), then the legacy ids."""
+    option = get_model(model_id)
+    if option is not None:
+        return option.tier
+    return _LEGACY_MODEL_TIERS.get(model_id)
+
+
+def _pricing_tier(model: str | None) -> str | None:
+    """Pricing tier ("pro" or "flash") of a model id, or None for a test mock.
+
+    Known ids are billed from the explicit map. Only an id this module does not know
+    is guessed from its name, and one naming no tier takes the base model's tier.
+    """
+    m = (model or "").strip().lower()
+    tier = _known_tier(m)
+    if tier is not None:
+        return tier
+    if "pro" in m:
+        return "pro"
+    if "flash" in m or "chat" in m:
+        return "flash"
+    if "test" in m:
+        return None
+    base = (settings.deepseek_model or "").strip().lower()
+    return _known_tier(base) or ("pro" if "pro" in base else "flash")
+
 
 def is_deepseek_peak_hours(dt: datetime | None = None) -> bool:
     """Check whether a given UTC time falls within DeepSeek's Peak hours.
@@ -61,17 +99,9 @@ def calculate_deepseek_cost(
     at_time: datetime | None = None,
 ) -> float:
     """Calculate the estimated USD cost of an LLM call according to DeepSeek's model-specific pricing and context caching."""
-    m = (model or "").lower()
-    # A reasoner (e.g. DEEPSEEK_REASONER_MODEL=deepseek-reasoner) is a reasoning model:
-    # bill it at the pro tier rather than whichever tier the base model happens to use.
-    if "pro" in m or "reasoner" in m:
-        tier = "pro"
-    elif "flash" in m or "chat" in m:
-        tier = "flash"
-    elif "test" in m:
+    tier = _pricing_tier(model)
+    if tier is None:
         return (prompt_tokens * _DEFAULT_PRICE_INPUT_PER_M + completion_tokens * _DEFAULT_PRICE_OUTPUT_PER_M) / 1_000_000
-    else:
-        tier = "pro" if "pro" in settings.deepseek_model.lower() else "flash"
 
     period = "peak" if is_deepseek_peak_hours(at_time) else "off_peak"
     miss_rate, hit_rate, out_rate = _DEEPSEEK_MODEL_PRICING[tier][period]

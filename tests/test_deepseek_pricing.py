@@ -61,10 +61,54 @@ def test_extract_usage():
     assert cht == 900
 
 
-def test_reasoner_is_billed_at_the_pro_tier_whatever_the_base_model(monkeypatch):
+OFF_PEAK = datetime(2026, 9, 23, 14, 0, tzinfo=timezone.utc)
+FLASH_1M_IN_1M_OUT = 0.15 + 0.60
+PRO_1M_IN_1M_OUT = 0.66 + 1.98
+
+
+@pytest.mark.parametrize("base_model", ["deepseek-v4-pro", "deepseek-flash"])
+@pytest.mark.parametrize("model", ["deepseek-reasoner", "deepseek-chat", "DeepSeek-Reasoner"])
+def test_legacy_ids_are_billed_at_the_flash_tier_whatever_the_base_model(monkeypatch, model, base_model):
+    # DeepSeek serves deepseek-reasoner / deepseek-chat as deepseek-v4-flash in thinking /
+    # non-thinking mode, at the flash rates; thinking mode costs no extra.
     from src.config import settings
 
-    monkeypatch.setattr(settings, "deepseek_model", "deepseek-flash")
-    offpeak = datetime(2026, 9, 23, 14, 0, tzinfo=timezone.utc)
-    cost = calculate_deepseek_cost("deepseek-reasoner", 1_000_000, 1_000_000, at_time=offpeak)
-    assert cost == pytest.approx(2.64)  # pro off-peak: 0.66 + 1.98, not flash's 0.75
+    monkeypatch.setattr(settings, "deepseek_model", base_model)
+    cost = calculate_deepseek_cost(model, 1_000_000, 1_000_000, at_time=OFF_PEAK)
+    assert cost == pytest.approx(FLASH_1M_IN_1M_OUT)  # not pro's 2.64
+
+
+def test_every_catalog_model_and_alias_is_billed_at_its_catalog_tier(monkeypatch):
+    from src.config import settings
+    from src.model_catalog import MODEL_CATALOG, _ALIASES, get_model
+
+    expected = {"pro": PRO_1M_IN_1M_OUT, "flash": FLASH_1M_IN_1M_OUT}
+    for base_model in ("deepseek-v4-pro", "deepseek-flash"):
+        monkeypatch.setattr(settings, "deepseek_model", base_model)
+        for model_id in [option.id for option in MODEL_CATALOG] + list(_ALIASES):
+            cost = calculate_deepseek_cost(model_id, 1_000_000, 1_000_000, at_time=OFF_PEAK)
+            assert cost == pytest.approx(expected[get_model(model_id).tier]), model_id
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected"),
+    [
+        # An unknown id is still guessed from its name ...
+        ("deepseek-v5-pro", "deepseek-flash", PRO_1M_IN_1M_OUT),
+        ("deepseek-v5-flash", "deepseek-v4-pro", FLASH_1M_IN_1M_OUT),
+        # ... and one naming no tier takes the base model's tier, from the map first.
+        ("deepseek-next", "deepseek-v4-pro", PRO_1M_IN_1M_OUT),
+        ("deepseek-next", "deepseek-flash", FLASH_1M_IN_1M_OUT),
+        ("deepseek-next", "deepseek-reasoner", FLASH_1M_IN_1M_OUT),
+    ],
+)
+def test_unknown_ids_fall_back_to_name_heuristics(monkeypatch, model, base_model, expected):
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "deepseek_model", base_model)
+    assert calculate_deepseek_cost(model, 1_000_000, 1_000_000, at_time=OFF_PEAK) == pytest.approx(expected)
+
+
+def test_test_mock_ids_keep_the_legacy_fallback_rates():
+    cost = calculate_deepseek_cost("deepseek-test", 1_000_000, 1_000_000, at_time=OFF_PEAK)
+    assert cost == pytest.approx(0.14 + 1.10)
