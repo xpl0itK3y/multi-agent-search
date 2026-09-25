@@ -1844,20 +1844,7 @@ class SQLAlchemyTaskStore:
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse:
         with self.session_scope() as session:
-            # 1. Totals
-            tot_stmt = select(
-                func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-            )
-            tot_row = session.execute(tot_stmt).one()
-            total_prompt = int(tot_row[0])
-            total_comp = int(tot_row[1])
-            total_tok = int(tot_row[2])
-            total_cost = round(float(tot_row[3]), 4)
-
-            # 2. By Model
+            # 1. By model: one pass over llm_usage_logs, which also gives the totals.
             model_stmt = (
                 select(
                     LLMUsageLogORM.model,
@@ -1870,6 +1857,7 @@ class SQLAlchemyTaskStore:
                 .group_by(LLMUsageLogORM.model)
                 .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), LLMUsageLogORM.model)
             )
+            model_rows = session.execute(model_stmt).all()
             by_model = [
                 AdminTokenModelBreakdown(
                     model=row[0],
@@ -1879,20 +1867,38 @@ class SQLAlchemyTaskStore:
                     estimated_cost_usd=round(float(row[4]), 4),
                     calls_count=int(row[5]),
                 )
-                for row in session.execute(model_stmt).all()
+                for row in model_rows
             ]
+            # 2. Totals
+            total_prompt = sum(int(row[1]) for row in model_rows)
+            total_comp = sum(int(row[2]) for row in model_rows)
+            total_tok = sum(int(row[3]) for row in model_rows)
+            total_cost = round(sum(float(row[4]) for row in model_rows), 4)
 
-            # 3. By Depth
+            # 3. By depth: usage summed per research first (a hash aggregate), then one row
+            # per research joined to researches, so count(*) counts researches with usage.
+            # Joining every usage row and counting DISTINCT sorted the whole join to disk.
+            per_research = (
+                select(
+                    LLMUsageLogORM.research_id,
+                    func.sum(LLMUsageLogORM.total_tokens).label("total_tokens"),
+                    func.sum(LLMUsageLogORM.estimated_cost_usd).label("total_cost"),
+                )
+                .where(LLMUsageLogORM.research_id.is_not(None))
+                .group_by(LLMUsageLogORM.research_id)
+                .subquery("per_research")
+            )
             depth_stmt = (
                 select(
                     ResearchORM.depth,
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    func.count(func.distinct(ResearchORM.id)),
+                    func.coalesce(func.sum(per_research.c.total_tokens), 0),
+                    func.coalesce(func.sum(per_research.c.total_cost), 0.0),
+                    func.count(),
                 )
-                .join(ResearchORM, LLMUsageLogORM.research_id == ResearchORM.id)
+                .select_from(per_research)
+                .join(ResearchORM, ResearchORM.id == per_research.c.research_id)
                 .group_by(ResearchORM.depth)
-                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), ResearchORM.depth)
+                .order_by(func.sum(per_research.c.total_tokens).desc(), ResearchORM.depth)
             )
             by_depth = [
                 AdminTokenDepthBreakdown(

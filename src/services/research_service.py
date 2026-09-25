@@ -2,6 +2,7 @@ import hashlib
 import inspect
 import logging
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -160,6 +161,8 @@ class ResearchService(
         self.reputation_auditor = SourceReputationAgent()
         self.retraction_agent = RetractionAgent()
         self._crossref_cache: dict[str, dict | None] = {}
+        # (time.monotonic() when computed, response): see get_admin_token_analytics.
+        self._token_analytics_cache: tuple[float, AdminTokenAnalyticsResponse] | None = None
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.broker = broker
@@ -2724,12 +2727,24 @@ class ResearchService(
         }
         return overview.model_copy(update={"system_health": system_health})
 
+    # The totals and breakdowns of the admin Tokens tab aggregate all of llm_usage_logs
+    # (one row per LLM call), and the tab asks again on every page change: they are reused
+    # for this long in a process, while the per-research page is always read fresh.
+    TOKEN_ANALYTICS_CACHE_SECONDS = 30.0
+
     def get_admin_token_analytics(
         self,
         page: int = 1,
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse:
-        return self.task_store.get_admin_token_analytics(page=page, page_size=page_size)
+        now = time.monotonic()
+        cached = self._token_analytics_cache
+        if cached is not None and now - cached[0] < self.TOKEN_ANALYTICS_CACHE_SECONDS:
+            researches = self.task_store.get_admin_token_research_usage(page=page, page_size=page_size)
+            return cached[1].model_copy(update={"researches": researches, "page": page, "page_size": page_size})
+        analytics = self.task_store.get_admin_token_analytics(page=page, page_size=page_size)
+        self._token_analytics_cache = (now, analytics)
+        return analytics
 
     def get_admin_audit_logs(
         self,

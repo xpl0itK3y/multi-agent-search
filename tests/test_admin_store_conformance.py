@@ -396,6 +396,24 @@ def test_token_analytics_selects_only_the_legacy_usage_key(store):
         assert not [s for s in statements if re.search(_WHOLE_BLOB, s)]
 
 
+def test_token_analytics_sums_usage_per_research_before_the_depth_join(store):
+    _user(store, "t-user")
+    research = _research(store, "t-user", "depth topic", T0, depth=SearchDepth.MEDIUM)
+    _usage(store, research.id, "t-user", 5, 0.1)
+    _usage(store, research.id, "t-user", 7, 0.1)
+
+    with _statements(store) as statements:
+        analytics = store.get_admin_token_analytics()
+
+    assert [(d.depth, d.total_tokens, d.researches_count) for d in analytics.by_depth] == [("medium", 12, 1)]
+    assert (analytics.total_prompt_tokens, analytics.total_tokens, analytics.total_cost_usd) == (12, 12, 0.2)
+    if statements is not None:
+        usage_scans = [s for s in statements if "FROM llm_usage_logs" in s]
+        # count(DISTINCT) over every usage row joined to researches sorted the join to disk.
+        assert not [s for s in usage_scans if "DISTINCT" in s]
+        assert len(usage_scans) == 3  # by model (which also gives the totals), by depth, the page
+
+
 # ── per-user token stats (/v1/auth/token-stats) ───────────────────────────────
 
 

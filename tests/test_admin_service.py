@@ -108,3 +108,38 @@ def test_sqlalchemy_task_store_admin_methods(postgres_session_factory):
     # 4. Token analytics
     analytics = store.get_admin_token_analytics()
     assert analytics.page == 1
+
+
+def test_token_analytics_reuses_its_aggregates_across_page_changes(monkeypatch):
+    """The totals and breakdowns scan all of llm_usage_logs; a page change within the
+    cache window reads only the research page, and the aggregates refresh after it."""
+    from types import SimpleNamespace
+
+    from src.api.schemas import ResearchRequest, SearchDepth
+
+    clock = [1000.0]
+    monkeypatch.setattr("src.services.research_service.time", SimpleNamespace(monotonic=lambda: clock[0]))
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    for n in range(3):
+        research = store.add_research(ResearchRequest(prompt=f"topic {n}", depth=SearchDepth.EASY), task_ids=[])
+        store.record_llm_usage(research.id, None, "deepseek-chat", 10, 0, 10, 0.01)
+    full_scans = []
+    aggregate = store.get_admin_token_analytics
+    monkeypatch.setattr(store, "get_admin_token_analytics", lambda **kw: full_scans.append(kw) or aggregate(**kw))
+
+    first = service.get_admin_token_analytics(page=1, page_size=2)
+    store.record_llm_usage(None, None, "deepseek-chat", 5, 0, 5, 0.01)
+    clock[0] += ResearchService.TOKEN_ANALYTICS_CACHE_SECONDS - 1
+    second = service.get_admin_token_analytics(page=2, page_size=2)
+
+    assert len(full_scans) == 1
+    assert (first.total_tokens, second.total_tokens, second.total_researches) == (30, 30, 3)
+    assert (second.page, second.page_size) == (2, 2)
+    assert [r.prompt for r in second.researches] == ["topic 0"]  # the page itself is fresh
+    assert [r.prompt for r in first.researches] == ["topic 2", "topic 1"]
+
+    clock[0] += 2
+    third = service.get_admin_token_analytics(page=1, page_size=2)
+
+    assert len(full_scans) == 2 and third.total_tokens == 35
