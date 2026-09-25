@@ -1,7 +1,7 @@
 {
   "uid": "mas-research-operations",
   "title": "Research Operations",
-  "description": "Worker job throughput/outcomes and LLM spend for multi-agent-search.",
+  "description": "Worker job throughput/outcomes and worker-side LLM spend for multi-agent-search.",
   "tags": ["multi-agent-search", "operations"],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -231,8 +231,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "LLM cost per hour by model",
-      "description": "Estimated spend rate (USD/hour) derived from mas_llm_cost_usd_total.",
+      "title": "LLM cost per hour by model (workers only)",
+      "description": "Estimated worker-side spend rate (USD/hour) from the worker scrape job's mas_llm_cost_usd_total (search and finalize jobs). LLM calls made inside the API (decompose, optimize, clarify, plan approval, chat, summary) are left out on purpose: the API runs several uvicorn processes without prometheus_client multiprocess mode, each scrape reads one process's counter at random, and rate() turns every switch between processes into a counter reset worth that process's whole lifetime total. Exact spend including API-side calls is in the admin panel's Analytics tab (llm_usage_logs).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": {
@@ -250,7 +250,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (model) (rate(mas_llm_cost_usd_total[5m])) * 3600",
+          "expr": "sum by (model) (rate(mas_llm_cost_usd_total{job=\"multi-agent-search-workers\"}[5m])) * 3600",
           "legendFormat": "{{model}}"
         }
       ]
@@ -258,8 +258,8 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "LLM cost in time range by model (USD)",
-      "description": "Estimated LLM spend per model over the selected time range (increase() tolerates process restarts, unlike the raw counter).",
+      "title": "LLM cost in time range by model, workers only (USD)",
+      "description": "Estimated worker-side LLM spend per model over the selected time range, from the worker scrape job only (increase() tolerates worker restarts, unlike the raw counter). API-side calls (decompose, optimize, clarify, plan approval, chat, summary) are not included, because the multi-process API counter would add phantom spend on every scrape that lands on a different uvicorn process. For exact totals including the API, use the admin panel's Analytics tab (llm_usage_logs).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
@@ -288,7 +288,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (model) (increase(mas_llm_cost_usd_total[$__range]))",
+          "expr": "sum by (model) (increase(mas_llm_cost_usd_total{job=\"multi-agent-search-workers\"}[$__range]))",
           "legendFormat": "{{model}}",
           "instant": true,
           "range": false

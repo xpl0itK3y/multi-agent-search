@@ -39,8 +39,16 @@ counters and every scrape reads one of them at random. API request rates,
 latency and `APIHighErrorRate` are therefore approximate (process switches look
 like counter resets). Set `API_WORKERS: "1"` on the `api` service in
 `docker-compose.yml` when you need exact API metrics. The workers are
-single-process and unaffected, which is why the queue alerts use the worker
-series.
+single-process and unaffected, which is why the queue alerts, the queue panels
+and the LLM cost panels read the worker series only.
+
+The Grafana LLM cost panels therefore show worker-side spend (search and
+finalize jobs) and leave out LLM calls made inside the API (decompose, optimize,
+clarify, plan approval, chat, summary). On a counter the per-process problem is
+worse than noise: every scrape that lands on the other process looks like a
+reset worth that process's whole total, so `rate()`/`increase()` over the API
+series report spend that never happened. Exact totals, API calls included, are
+in the admin panel's Analytics tab, which reads `llm_usage_logs`.
 
 Health endpoints: `GET /health` is the cheap readiness probe (status +
 dependency pings); `GET /health/detail` (admin) returns the full operational
