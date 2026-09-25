@@ -5,6 +5,7 @@ import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { CitationGround, SourceIndependence, SourcePreview } from "@/lib/types";
+import { safeHttpUrl } from "@/lib/url";
 
 const props = defineProps<{
   source: string;
@@ -28,12 +29,19 @@ function escAttr(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// A source URL safe to place inside an href: http(s) only, attribute-escaped so a URL
-// containing a quote can't break out of href="…" and inject an event handler (XSS).
+// A source URL safe to place inside a hand-built href: an http(s) URL that parses,
+// percent-encoded (lib/url) and attribute-escaped. Anything else gets no link ("").
 function safeHref(u: string | undefined): string {
-  if (!u || !/^https?:\/\//i.test(u)) return "";
-  return escAttr(u);
+  const href = safeHttpUrl(u);
+  return href ? escAttr(href) : "";
 }
+
+// Claim sentinels (verify mode): OPEN idx MID … OPEN idx END wraps one cited sentence.
+// Control characters, so they survive markdown rendering and never occur in real text.
+const OPEN = "\u0001";
+const MID = "\u0002";
+const END = "\u0003";
+const SENTINEL = /\u0001(\d+)([\u0002\u0003])/g;
 
 // html:false — report text comes from LLM/web content, never render raw HTML (XSS-safe).
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -49,7 +57,9 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 };
 
 // Map Sn -> url from the explicit API map, with the report's Sources section as
-// a backward-compatible fallback for older stored reports.
+// a backward-compatible fallback for older stored reports. The explicit map is
+// authoritative: any report line mentioning [Sn] next to a URL (body text, not
+// just the Sources section) may only fill ids the map does not have.
 function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Map<string, string> {
   const map = new Map<string, string>();
   for (const source of explicitSources) {
@@ -58,7 +68,7 @@ function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Ma
   }
   for (const line of source.split("\n")) {
     const idMatch = line.match(/\[S(\d+)\\?\]/);
-    if (!idMatch) continue;
+    if (!idMatch || map.has(idMatch[1])) continue;
     const urlMatch = line.match(/\((https?:\/\/[^)\s]+)\)/) || line.match(/(https?:\/\/[^)\s]+)/);
     if (urlMatch) map.set(idMatch[1], urlMatch[1]);
   }
@@ -145,10 +155,30 @@ function splitSentences(text: string): string[] {
   return parts.length ? parts : [text];
 }
 
+// Source lines that markdown-it renders as table rows (header and body), taken from a
+// parse of the same source so the verify pass agrees with the renderer: rows without
+// outer pipes and tables inside a blockquote or list count too.
+function tableRowLines(source: string): Set<number> {
+  const rows = new Set<number>();
+  for (const token of md.parse(source, {})) {
+    if (token.type === "tr_open" && token.map) rows.add(token.map[0]);
+  }
+  return rows;
+}
+
+// A cell separator as markdown-it's table rule sees it: any "|" not right after a "\".
+const CELL_PIPE = /(?<!\\)\|/;
+
 const html = computed(() => {
   // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
   // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
-  const source = (props.source || "").replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
+  // Control characters that double as claim sentinels are dropped so report text can't forge one.
+  // Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
+  // numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
+  const source = (props.source || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0001-\u0003]/g, "")
+    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
   const urls = sourceUrlMap(source, props.sources);
   const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
 
@@ -159,10 +189,24 @@ const html = computed(() => {
   const claims: Claim[] = [];
   if (props.verify) {
     const grade = buildGrader();
+    const decorate = (text: string) =>
+      splitSentences(text)
+        .map((part) => {
+          if (!/\[S\d+\]/.test(part)) return part;
+          const wm = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
+          const lead = wm?.[1] ?? "";
+          const core = wm?.[2] ?? part;
+          const trail = wm?.[3] ?? "";
+          if (!core) return part;
+          const idx = claims.push(grade(core)) - 1;
+          return `${lead}${OPEN}${idx}${MID}${core}${OPEN}${idx}${END}${trail}`;
+        })
+        .join("");
+    const tableRows = tableRowLines(source);
     let inSources = false;
     prepared = source
       .split("\n")
-      .map((line) => {
+      .map((line, lineNo) => {
         if (/^\s*#{1,6}\s+(sources|источники|fuentes)/i.test(line)) inSources = true;
         // Skip: the Sources section, headings, source-definition lines ("- **[S1]** …"),
         // and any line without inline citations.
@@ -176,18 +220,12 @@ const html = computed(() => {
         const pm = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+|>\s+)?)([\s\S]*)$/);
         const prefix = pm?.[1] ?? "";
         const body = pm?.[2] ?? line;
-        const decorated = splitSentences(body)
-          .map((part) => {
-            if (!/\[S\d+\]/.test(part)) return part;
-            const wm = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
-            const lead = wm?.[1] ?? "";
-            const core = wm?.[2] ?? part;
-            const trail = wm?.[3] ?? "";
-            if (!core) return part;
-            const idx = claims.push(grade(core)) - 1;
-            return `${lead}${idx}${core}${idx}${trail}`;
-          })
-          .join("");
+        // A table row is decorated cell by cell, with every pipe left outside the
+        // sentinels: a sentinel before a row's leading "|" reads as an extra first cell
+        // (and the last cell is dropped), and a span across cells cannot nest.
+        const decorated = tableRows.has(lineNo)
+          ? body.split(CELL_PIPE).map(decorate).join("|")
+          : decorate(body);
         return prefix + decorated;
       })
       .join("\n");
@@ -197,34 +235,45 @@ const html = computed(() => {
   // destroy KaTeX's inline-math delimiters before renderMathInElement runs. Shield them across
   // render with ASCII sentinels, then restore so renderMathInElement can find the math.
   prepared = prepared.replace(/\\\(/g, "@@KMO@@").replace(/\\\)/g, "@@KMC@@");
-  let rendered = md.render(prepared).replace(/@@KMO@@/g, "\\(").replace(/@@KMC@@/g, "\\)");
+  const rendered = md.render(prepared).replace(/@@KMO@@/g, "\\(").replace(/@@KMC@@/g, "\\)");
 
-  // 2. Turn the sentinels into a styled span + a trailing support badge.
-  if (props.verify) {
-    rendered = rendered
-      .replace(/(\d+)/g, (_f, i: string) => {
-        const c = claims[+i];
-        return c ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">` : "";
-      })
-      .replace(/(\d+)/g, (_f, i: string) => {
-        const c = claims[+i];
-        return c
-          ? `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`
-          : "</span>";
-      });
-  }
-
-  // 3. Inline [Sn] -> clickable link to the source; hover shows the grounding quote and
-  //    a weak-citation flag when the source text doesn't actually back the claim.
-  return rendered.replace(/\[S(\d+)\]/g, (_full, n: string) => {
-    const g = ground.get(`S${n}`);
-    const url = safeHref(g?.url || urls.get(n));
-    const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
-    const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
-    return url
-      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
-      : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
+  // 2 + 3. Rewrite TEXT only, never inside a tag. With html:false markdown-it escapes every
+  //    "<" and ">" that is not its own markup — in text and in attribute values alike — so
+  //    /<[^>]*>/ splits the output into exactly its real tags. An [Sn] or a sentinel inside
+  //    an attribute (image alt, link title) must stay plain text there: an injected
+  //    <a href="…"> would close the attribute and let the URL add event handlers (XSS).
+  const parts = rendered.split(/(<[^>]*>)/);
+  // A claim is decorated only when both of its sentinels sit in text; otherwise its
+  // span could open inside an attribute or never close.
+  const opened = new Set<string>();
+  const closed = new Set<string>();
+  parts.forEach((part, i) => {
+    if (i % 2) return;
+    for (const m of part.matchAll(SENTINEL)) (m[2] === MID ? opened : closed).add(m[1]);
   });
+
+  //    Sentinels → a styled span + a trailing support badge; inline [Sn] → a link to the
+  //    source, whose hover shows the grounding quote and a weak-citation flag when the
+  //    source text doesn't actually back the claim.
+  const rewriteText = (text: string) =>
+    text.replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
+      if (n === undefined) {
+        const c = claims[Number(idx)];
+        if (!c || !opened.has(idx!) || !closed.has(idx!)) return "";
+        return kind === MID
+          ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`
+          : `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
+      }
+      const g = ground.get(`S${n}`);
+      const url = safeHref(g?.url || urls.get(n));
+      const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
+      const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
+      return url
+        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
+        : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
+    });
+
+  return parts.map((part, i) => (i % 2 ? part.replace(SENTINEL, "") : rewriteText(part))).join("");
 });
 
 // Render LaTeX math (\(…\), \[…\], $$…$$) in the article after each html update (KaTeX).

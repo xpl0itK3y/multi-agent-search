@@ -3,7 +3,24 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import and_, case, delete, false, func, or_, select, text, update
+from sqlalchemy import (
+    and_,
+    case,
+    delete,
+    false,
+    func,
+    insert,
+    literal,
+    null,
+    or_,
+    select,
+    text,
+    true,
+    union_all,
+    update,
+)
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -28,16 +45,22 @@ from src.domain import (
     GraphMetrics,
     QueueMetrics,
     ResearchFinalizeJob,
+    PROMPT_EVENT_NAMES,
     ResearchHistoryItem,
     SearchJobStatus,
     SearchTaskJob,
+    TELEMETRY_IP_MAX_LENGTH,
+    TELEMETRY_USER_AGENT_MAX_LENGTH,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     WorkerHeartbeat,
     ResearchRecord,
     ResearchRequest,
     ResearchStatus,
     SearchTask,
+    TaskStatus,
     TaskUpdate,
     UserRecord,
+    clip_text,
 )
 from src.db.models import (
     AdminAuditLogORM,
@@ -52,7 +75,9 @@ from src.db.models import (
     UserSessionORM,
     WorkerHeartbeatORM,
 )
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
+from src.repositories.protocols import STALE_FINALIZE_CLOSED_ERROR
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
@@ -61,14 +86,30 @@ from src.repositories.mappers import (
     search_task_orm_to_schema,
     worker_heartbeat_orm_to_schema,
 )
-def _parse_admin_emails() -> set[str]:
-    from src.config import settings
-    raw = getattr(settings, "admin_emails", "")
-    if not raw:
-        return set()
-    if isinstance(raw, str):
-        return {e.strip().lower() for e in raw.split(",") if e.strip()}
-    return {str(e).strip().lower() for e in raw if str(e).strip()}
+
+
+def _user_record(user: UserORM) -> UserRecord:
+    return UserRecord(
+        id=user.id,
+        email=user.email,
+        password_hash=user.password_hash,
+        google_subject=user.google_subject,
+        token_version=user.token_version,
+        name=user.name,
+        avatar_url=user.avatar_url,
+        admin_provisioned_at=user.admin_provisioned_at,
+    )
+
+
+# SQLSTATE foreign_key_violation.
+_FOREIGN_KEY_VIOLATION = "23503"
+
+
+def _contains_pattern(term: str) -> str:
+    """ILIKE pattern (with escape '\\') matching ``term`` as a plain substring: its % and _
+    are literal, as in the in-memory store's substring match."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 class SQLAlchemyTaskStore:
@@ -250,25 +291,20 @@ class SQLAlchemyTaskStore:
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord:
         user = UserORM(
             id=user_id,
             email=email.strip().lower(),
             password_hash=password_hash,
             google_subject=google_subject,
+            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
         )
         with self.session_scope() as session:
             session.add(user)
             session.flush()
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -277,30 +313,14 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -308,15 +328,7 @@ class SQLAlchemyTaskStore:
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def delete_user(self, user_id: str) -> bool:
         """Delete a user; researches (and via FK cascades: tasks, results, jobs,
@@ -328,29 +340,36 @@ class SQLAlchemyTaskStore:
             session.delete(user)
             return True
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None:
+        values = {"password_hash": password_hash, "token_version": UserORM.token_version + 1}
+        if admin_provisioned:
+            values["admin_provisioned_at"] = datetime.now(timezone.utc)
         with self.session_scope() as session:
             statement = (
                 update(UserORM)
                 .where(UserORM.id == user_id)
-                .values(
-                    password_hash=password_hash,
-                    token_version=UserORM.token_version + 1,
-                )
+                .values(**values)
                 .returning(UserORM)
             )
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
+            return _user_record(user)
+
+    def bump_user_token_version(self, user_id: str) -> UserRecord | None:
+        with self.session_scope() as session:
+            statement = (
+                update(UserORM)
+                .where(UserORM.id == user_id)
+                .values(token_version=UserORM.token_version + 1)
+                .returning(UserORM)
             )
+            user = session.execute(statement).scalar_one_or_none()
+            if user is None:
+                return None
+            return _user_record(user)
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
         with self.session_scope() as session:
@@ -361,15 +380,7 @@ class SQLAlchemyTaskStore:
                 if avatar_url is not None:
                     user.avatar_url = avatar_url
                 session.flush()
-                return UserRecord(
-                    id=user.id,
-                    email=user.email,
-                    password_hash=user.password_hash,
-                    google_subject=user.google_subject,
-                    token_version=user.token_version,
-                    name=user.name,
-                    avatar_url=user.avatar_url,
-                )
+                return _user_record(user)
             return None
 
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
@@ -378,7 +389,7 @@ class SQLAlchemyTaskStore:
             if row is None:
                 return None
             age = (datetime.now(timezone.utc) - row.created_at).total_seconds()
-            if age > max_age_seconds:
+            if age >= max_age_seconds:  # same boundary as the in-memory store
                 return None
             return [dict(item) for item in (row.payload or [])]
 
@@ -405,7 +416,22 @@ class SQLAlchemyTaskStore:
             if research is None:
                 return False
             session.delete(research)
+            session.execute(self._delete_prompt_events([research_id]))
             return True
+
+    @staticmethod
+    def _delete_prompt_events(research_ids: list[str]):
+        """The research/chat prompt copies in user_events, which has no FK to researches:
+        deleted explicitly, in the same transaction as their research. The IN list keeps
+        the ix_user_events_prompt_research_id partial index usable."""
+        return (
+            delete(UserEventORM)
+            .where(
+                UserEventORM.event_name.in_(PROMPT_EVENT_NAMES),
+                UserEventORM.details["research_id"].astext.in_(research_ids),
+            )
+            .execution_options(synchronize_session=False)
+        )
 
     # Retention (OPS-RETENTION): terminal researches past the window are removed
     # with their tasks/results via the existing ON DELETE CASCADEs.
@@ -415,18 +441,57 @@ class SQLAlchemyTaskStore:
         ResearchStatus.CANCELLED,
     )
 
+    # Retention: one short transaction per batch, so the first sweep over a large table
+    # never becomes one huge delete holding locks and WAL (nor, for researches, one IN list
+    # past the protocol's 65,535 bind parameters).
+    _RETENTION_BATCH_SIZE = 1000
+
     def cleanup_old_researches(self, older_than: datetime) -> list[str]:
         terminal = [status.value for status in self._TERMINAL_RESEARCH_STATUSES]
-        with self.session_scope() as session:
-            research_ids = session.execute(
-                select(ResearchORM.id).where(
-                    ResearchORM.status.in_(terminal),
-                    ResearchORM.updated_at < older_than,
+        # Also in the DELETE itself: a row changed since the batch was picked (a retry
+        # made it PROCESSING again) is re-checked there and kept.
+        expired = and_(ResearchORM.status.in_(terminal), ResearchORM.updated_at < older_than)
+        deleted: list[str] = []
+        while True:
+            with self.session_scope() as session:
+                batch = select(ResearchORM.id).where(expired).limit(self._RETENTION_BATCH_SIZE)
+                research_ids = list(
+                    session.execute(
+                        delete(ResearchORM)
+                        .where(ResearchORM.id.in_(batch.scalar_subquery()), expired)
+                        .returning(ResearchORM.id)
+                        .execution_options(synchronize_session=False)
+                    ).scalars()
                 )
-            ).scalars().all()
-            if research_ids:
-                session.execute(delete(ResearchORM).where(ResearchORM.id.in_(research_ids)))
-            return list(research_ids)
+                if research_ids:  # in the same transaction as their research
+                    session.execute(self._delete_prompt_events(research_ids))
+            deleted.extend(research_ids)
+            if len(research_ids) < self._RETENTION_BATCH_SIZE:
+                return deleted
+
+    def _delete_in_batches(self, model, predicate) -> int:
+        deleted = 0
+        while True:
+            with self.session_scope() as session:
+                batch = select(model.id).where(predicate).limit(self._RETENTION_BATCH_SIZE)
+                result = session.execute(
+                    delete(model)
+                    .where(model.id.in_(batch.scalar_subquery()))
+                    .execution_options(synchronize_session=False)
+                )
+            count = result.rowcount or 0
+            deleted += count
+            if count < self._RETENTION_BATCH_SIZE:
+                return deleted
+
+    def cleanup_old_user_events(self, older_than: datetime) -> int:
+        return self._delete_in_batches(UserEventORM, UserEventORM.created_at < older_than)
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int:
+        return self._delete_in_batches(UserSessionORM, UserSessionORM.last_active_at < older_than)
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int:
+        return self._delete_in_batches(AdminAuditLogORM, AdminAuditLogORM.created_at < older_than)
 
     @staticmethod
     def _research_history_select():
@@ -524,25 +589,106 @@ class SQLAlchemyTaskStore:
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
         return result
 
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None or research.status not in [item.value for item in expected]:
+                return None
+            if updated_before is not None and research.updated_at >= updated_before:
+                return None
+            research.status = status.value
+            if report is not None:
+                research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)
+        return result
+
+    _ACTIVE_JOB_STATUSES = (FinalizeJobStatus.PENDING.value, FinalizeJobStatus.RUNNING.value)
+
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]:
+        finalize_active = (
+            select(ResearchFinalizeJobORM.id)
+            .where(
+                ResearchFinalizeJobORM.research_id == ResearchORM.id,
+                ResearchFinalizeJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+            )
+            .exists()
+        )
+        search_active = (
+            select(SearchTaskJobORM.id)
+            .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
+            .where(
+                SearchTaskORM.research_id == ResearchORM.id,
+                SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+            )
+            .exists()
+        )
+        statement = (
+            select(ResearchORM.id)
+            .where(
+                ResearchORM.status.in_([ResearchStatus.PROCESSING.value, ResearchStatus.ANALYZING.value]),
+                ResearchORM.updated_at < stale_before,
+                ~ResearchORM.graph_state.has_key("decompose_pending"),
+                ~finalize_active,
+                ~search_active,
+            )
+            .order_by(ResearchORM.updated_at.asc(), ResearchORM.id.asc())
+            .limit(limit)
+        )
+        with self.session_scope() as session:
+            return list(session.execute(statement).scalars().all())
+
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]:
+        statement = (
+            select(ResearchORM.id)
+            .where(
+                ResearchORM.status == ResearchStatus.PROCESSING.value,
+                ResearchORM.graph_state.has_key("decompose_pending"),
+            )
+            .order_by(ResearchORM.updated_at.asc(), ResearchORM.id.asc())
+            .limit(limit)
+        )
+        with self.session_scope() as session:
+            return list(session.execute(statement).scalars().all())
+
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None:
+        """Clear a failed attempt's report and graph_state keys under the row lock, only
+        while the research is still in `expected_status` (a retry resets right after its
+        admission CAS; a cancel landing in between wins). None when the guard fails."""
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None or research.status != expected_status.value:
                 return None
 
-            research.status = status.value
             research.final_report = None
             research.partial_report = None
             research.partial_reasoning = None
-            gs = dict(research.graph_state or {})
-            gs.pop("error", None)
-            gs.pop("report", None)
-            gs.pop("step", None)
-            research.graph_state = gs
+            graph_state = dict(research.graph_state or {})
+            for key in remove_graph_state_keys:
+                graph_state.pop(key, None)
+            research.graph_state = graph_state
             research.updated_at = datetime.now(timezone.utc)
             session.flush()
             session.refresh(research)
@@ -575,9 +721,13 @@ class SQLAlchemyTaskStore:
             self._emit_change(research_id)
         return claimed
 
-    def try_begin_finalization(self, research_id: str) -> bool:
+    def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this caller
-        won — prevents two replicas from enqueueing duplicate finalize jobs for one research."""
+        won — prevents two replicas from enqueueing duplicate finalize jobs for one research.
+        With require_settled_searches it also refuses while a task of the research that has
+        not COMPLETED has a PENDING or RUNNING search job, checked under the research row
+        lock that requeue_search_task_job_of_active_research takes first: a requeue committed
+        after the caller found every search settled then keeps the research searching."""
         terminal = [
             ResearchStatus.ANALYZING.value,
             ResearchStatus.COMPLETED.value,
@@ -585,12 +735,35 @@ class SQLAlchemyTaskStore:
             ResearchStatus.CANCELLED.value,
         ]
         with self.session_scope() as session:
-            outcome = session.execute(
-                update(ResearchORM)
-                .where(ResearchORM.id == research_id, ResearchORM.status.notin_(terminal))
-                .values(status=ResearchStatus.ANALYZING.value, updated_at=datetime.now(timezone.utc))
-            )
-            claimed = outcome.rowcount == 1
+            if require_settled_searches:
+                # FOR NO KEY UPDATE, the lock the bare UPDATE below takes: it waits for the
+                # requeue's FOR UPDATE but not for the key-share locks of FK inserts.
+                research = session.get(ResearchORM, research_id, with_for_update={"key_share": True})
+                unsettled = (
+                    select(SearchTaskJobORM.id)
+                    .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
+                    .where(
+                        SearchTaskORM.research_id == research_id,
+                        SearchTaskORM.status != TaskStatus.COMPLETED.value,
+                        SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+                    )
+                    .limit(1)
+                )
+                claimed = (
+                    research is not None
+                    and research.status not in terminal
+                    and session.execute(unsettled).first() is None
+                )
+                if claimed:
+                    research.status = ResearchStatus.ANALYZING.value
+                    research.updated_at = datetime.now(timezone.utc)
+            else:
+                outcome = session.execute(
+                    update(ResearchORM)
+                    .where(ResearchORM.id == research_id, ResearchORM.status.notin_(terminal))
+                    .values(status=ResearchStatus.ANALYZING.value, updated_at=datetime.now(timezone.utc))
+                )
+                claimed = outcome.rowcount == 1
         if claimed:
             self._emit_change(research_id)
         return claimed
@@ -604,6 +777,9 @@ class SQLAlchemyTaskStore:
             status=getattr(task_data.get("status"), "value", task_data.get("status", "pending")),
             logs=task_data.get("logs", []),
             search_metrics=task_data.get("search_metrics") or {},
+            # Stored like update_task's, so a task created with its results keeps them
+            # (the in-memory store always did).
+            results=search_result_dicts_to_orm(task_data["id"], task_data.get("result") or []),
         )
         with self.session_scope() as session:
             session.add(task)
@@ -661,6 +837,36 @@ class SQLAlchemyTaskStore:
             session.refresh(research)
             return research_orm_to_record(research)
 
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None:
+        """Append to a graph_state list under the row lock. A merge of a list computed
+        from an earlier read would drop whatever another writer appended meanwhile."""
+        with self.session_scope() as session:
+            row = session.execute(
+                select(ResearchORM.graph_state)
+                .where(ResearchORM.id == research_id)
+                .with_for_update()
+            ).one_or_none()
+            if row is None:
+                return None
+            graph_state = dict(row.graph_state or {})
+            items = [*(graph_state.get(key) or []), item]
+            if max_items is not None:
+                items = items[-max_items:]
+            graph_state[key] = items
+            session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(graph_state=graph_state, updated_at=datetime.now(timezone.utc))
+            )
+            return items
+
     def save_partial_report(self, research_id: str, partial: str) -> None:
         with self.session_scope() as session:
             outcome = session.execute(
@@ -687,23 +893,31 @@ class SQLAlchemyTaskStore:
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None:
+    ) -> list[dict] | None:
+        """Append one trail event under the research row lock, reading and writing only
+        graph_trail — parallel search workers append to the same research, and the old
+        unlocked read-modify-write dropped events. The timestamp is taken inside the
+        lock, so trail order follows commit order (the SSE cursor relies on it).
+        Returns the new trail (None when the research is gone)."""
         with self.session_scope() as session:
-            research = session.get(ResearchORM, research_id)
-            if research is None:
+            row = session.execute(
+                select(ResearchORM.graph_trail)
+                .where(ResearchORM.id == research_id)
+                .with_for_update()
+            ).one_or_none()
+            if row is None:
                 return None
 
-            normalized_event = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                **event,
-            }
-            research.graph_trail = compact_graph_trail(research.graph_trail or [], [normalized_event])
-            research.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(research)
-            result = research_orm_to_record(research)
+            now = datetime.now(timezone.utc)
+            normalized_event = {"timestamp": now.isoformat(), **event}
+            trail = compact_graph_trail(row.graph_trail or [], [normalized_event])
+            session.execute(
+                update(ResearchORM)
+                .where(ResearchORM.id == research_id)
+                .values(graph_trail=trail, updated_at=now)
+            )
         self._emit_change(research_id)
-        return result
+        return trail
 
     def compact_research_graph_trails(self) -> list[str]:
         # Bounded working set (OPS-RETENTION): only recently-active researches still grow a
@@ -779,7 +993,12 @@ class SQLAlchemyTaskStore:
             statement = (
                 select(ResearchFinalizeJobORM)
                 .where(ResearchFinalizeJobORM.research_id == research_id)
-                .order_by(ResearchFinalizeJobORM.created_at.desc())
+                # Secondary keys keep a created_at tie deterministic.
+                .order_by(
+                    ResearchFinalizeJobORM.created_at.desc(),
+                    ResearchFinalizeJobORM.updated_at.desc(),
+                    ResearchFinalizeJobORM.id.desc(),
+                )
             )
             if user_id is not None:
                 statement = statement.join(
@@ -973,41 +1192,116 @@ class SQLAlchemyTaskStore:
                 return None
             return research_finalize_job_orm_to_schema(job)
 
+    # Only a job that has stopped may be requeued. Resetting a RUNNING (or PENDING) job
+    # would let a second worker claim it next to the live runner.
+    _REQUEUEABLE_JOB_STATUSES = (FinalizeJobStatus.DEAD_LETTER.value, FinalizeJobStatus.FAILED.value)
+
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable.
+        The lease epoch is bumped so any runner still holding the old lease is fenced."""
         with self.session_scope() as session:
-            job = session.get(ResearchFinalizeJobORM, job_id)
+            statement = (
+                update(ResearchFinalizeJobORM)
+                .where(
+                    ResearchFinalizeJobORM.id == job_id,
+                    ResearchFinalizeJobORM.status.in_(self._REQUEUEABLE_JOB_STATUSES),
+                )
+                .values(
+                    status=FinalizeJobStatus.PENDING.value,
+                    attempt_count=0,
+                    error=None,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(ResearchFinalizeJobORM)
+            )
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
+            return research_finalize_job_orm_to_schema(job)
 
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        """Requeue a stopped job and move its research FAILED -> ANALYZING in one transaction.
+        None unless the job is DEAD_LETTER/FAILED, is the research's latest finalize job and
+        the research is FAILED: requeueing a job a retry superseded, or one of a research
+        that completed, was cancelled or is running a retry, would rewind that research."""
+        with self.session_scope() as session:
+            # Job row first, then the research: the lock order complete_research_finalize_job uses.
+            job = session.execute(
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.id == job_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.status not in self._REQUEUEABLE_JOB_STATUSES:
+                return None
+            research = session.get(ResearchORM, job.research_id, with_for_update=True)
+            if research is None or research.status != ResearchStatus.FAILED.value:
+                return None
+            latest_id = session.execute(
+                select(ResearchFinalizeJobORM.id)
+                .where(ResearchFinalizeJobORM.research_id == job.research_id)
+                .order_by(
+                    ResearchFinalizeJobORM.created_at.desc(),
+                    ResearchFinalizeJobORM.updated_at.desc(),
+                    ResearchFinalizeJobORM.id.desc(),
+                )
+                .limit(1)
+            ).scalar_one()
+            if latest_id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
             job.status = FinalizeJobStatus.PENDING.value
             job.attempt_count = 0
             job.error = None
-            job.updated_at = datetime.now(timezone.utc)
+            job.lease_epoch += 1
+            job.updated_at = now
+            research.status = ResearchStatus.ANALYZING.value
+            research.updated_at = now
             session.flush()
-            session.refresh(job)
-            return research_finalize_job_orm_to_schema(job)
+            result = research_finalize_job_orm_to_schema(job)
+        self._emit_change(result.research_id)
+        return result
 
     def recover_stale_research_finalize_jobs(
         self,
         stale_before: datetime,
     ) -> list[ResearchFinalizeJob]:
+        stale = (
+            ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+            ResearchFinalizeJobORM.updated_at < stale_before,
+        )
+        ended = select(ResearchORM.id).where(
+            ResearchORM.status.in_([status.value for status in self._TERMINAL_RESEARCH_STATUSES])
+        )
+        now = datetime.now(timezone.utc)
         with self.session_scope() as session:
-            statement = (
+            # A research that was cancelled, completed or failed meanwhile keeps its status:
+            # its stale job is closed, not handed to a new runner that would finish it.
+            closed = session.execute(
                 update(ResearchFinalizeJobORM)
-                .where(
-                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
-                    ResearchFinalizeJobORM.updated_at < stale_before,
+                .where(*stale, ResearchFinalizeJobORM.research_id.in_(ended))
+                .values(
+                    status=FinalizeJobStatus.COMPLETED.value,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    error=STALE_FINALIZE_CLOSED_ERROR,
+                    updated_at=now,
                 )
+                .returning(ResearchFinalizeJobORM)
+                .execution_options(synchronize_session=False)
+            ).scalars().all()
+            requeued = session.execute(
+                update(ResearchFinalizeJobORM)
+                .where(*stale)
                 .values(
                     status=FinalizeJobStatus.PENDING.value,
                     lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
                     error=None,
-                    updated_at=datetime.now(timezone.utc),
+                    updated_at=now,
                 )
                 .returning(ResearchFinalizeJobORM)
-            )
-            jobs = session.execute(statement).scalars().all()
-            jobs.sort(key=lambda item: item.created_at)
+                .execution_options(synchronize_session=False)
+            ).scalars().all()
+            jobs = sorted([*closed, *requeued], key=lambda item: item.created_at)
             return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
     def cleanup_old_research_finalize_jobs(
@@ -1078,7 +1372,11 @@ class SQLAlchemyTaskStore:
             statement = (
                 select(SearchTaskJobORM)
                 .where(SearchTaskJobORM.task_id == task_id)
-                .order_by(SearchTaskJobORM.created_at.desc())
+                .order_by(
+                    SearchTaskJobORM.created_at.desc(),
+                    SearchTaskJobORM.updated_at.desc(),
+                    SearchTaskJobORM.id.desc(),
+                )
             )
             if user_id is not None:
                 statement = (
@@ -1203,17 +1501,72 @@ class SQLAlchemyTaskStore:
             return search_task_job_orm_to_schema(job)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable."""
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id)
+            statement = (
+                update(SearchTaskJobORM)
+                .where(
+                    SearchTaskJobORM.id == job_id,
+                    SearchTaskJobORM.status.in_(self._REQUEUEABLE_JOB_STATUSES),
+                )
+                .values(
+                    status=SearchJobStatus.PENDING.value,
+                    attempt_count=0,
+                    error=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(SearchTaskJobORM)
+            )
+            job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
+            return search_task_job_orm_to_schema(job)
 
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            owner = session.execute(
+                select(SearchTaskORM.research_id)
+                .join(SearchTaskJobORM, SearchTaskJobORM.task_id == SearchTaskORM.id)
+                .where(SearchTaskJobORM.id == job_id)
+            ).one_or_none()
+            if owner is None:
+                return None
+            # The research row first, as delete_research_tasks (whose task delete cascades
+            # to the job rows) and the status CAS take it.
+            research = None
+            if owner.research_id is not None:
+                research = session.get(ResearchORM, owner.research_id, with_for_update=True)
+                if research is None or research.status != ResearchStatus.PROCESSING.value:
+                    return None
+            job = session.execute(
+                select(SearchTaskJobORM).where(SearchTaskJobORM.id == job_id).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.status not in self._REQUEUEABLE_JOB_STATUSES:
+                return None
+            latest_id = session.execute(
+                select(SearchTaskJobORM.id)
+                .where(SearchTaskJobORM.task_id == job.task_id)
+                .order_by(
+                    SearchTaskJobORM.created_at.desc(),
+                    SearchTaskJobORM.updated_at.desc(),
+                    SearchTaskJobORM.id.desc(),
+                )
+                .limit(1)
+            ).scalar_one()
+            if latest_id != job.id:
+                return None
+            task = session.get(SearchTaskORM, job.task_id, with_for_update=True)
+            now = datetime.now(timezone.utc)
+            task.status = TaskStatus.PENDING.value
+            task.logs = [*task.logs, task_log]
+            task.updated_at = now
             job.status = SearchJobStatus.PENDING.value
             job.attempt_count = 0
             job.error = None
-            job.updated_at = datetime.now(timezone.utc)
+            job.updated_at = now
+            if research is not None:
+                research.updated_at = now
             session.flush()
-            session.refresh(job)
             return search_task_job_orm_to_schema(job)
 
     def recover_stale_search_task_jobs(
@@ -1418,6 +1771,31 @@ class SQLAlchemyTaskStore:
             tasks = session.execute(statement).scalars().all()
             return [search_task_orm_to_schema(task) for task in tasks]
 
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int:
+        if not task_ids:
+            return 0
+        with self.session_scope() as session:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None:
+                return 0
+            # Jobs and results go with the rows (ON DELETE CASCADE).
+            deleted = set(
+                session.execute(
+                    delete(SearchTaskORM)
+                    .where(SearchTaskORM.research_id == research_id, SearchTaskORM.id.in_(task_ids))
+                    .returning(SearchTaskORM.id)
+                    .execution_options(synchronize_session=False)
+                ).scalars().all()
+            )
+            if deleted:
+                research.task_ids = [task_id for task_id in research.task_ids or [] if task_id not in deleted]
+                research.updated_at = datetime.now(timezone.utc)
+        if deleted:
+            self._emit_change(research_id)
+        return len(deleted)
+
     def update_task(
         self,
         task_id: str,
@@ -1465,22 +1843,46 @@ class SQLAlchemyTaskStore:
         completion_tokens: int,
         total_tokens: int,
         estimated_cost_usd: float,
+        cache_hit_tokens: int = 0,
     ) -> str:
+        """One usage row. An owner deleted while its call ran (a research deleted mid-run,
+        an account deleted) is stored as NULL, as ON DELETE SET NULL would have left a row
+        written a moment earlier: the call was billed, so its row is kept either way."""
+        usage_id = str(uuid.uuid4())
+        values = {
+            "id": usage_id,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cache_hit_tokens": cache_hit_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "created_at": datetime.now(timezone.utc),
+        }
+        try:
+            self._insert_llm_usage(values, research_id, user_id)
+        except IntegrityError as exc:
+            # A delete that committed between the owner lookup and the FK check: the
+            # retry's lookup no longer finds that owner.
+            if getattr(exc.orig, "sqlstate", None) != _FOREIGN_KEY_VIOLATION:
+                raise
+            self._insert_llm_usage(values, research_id, user_id)
+        return usage_id
+
+    def _insert_llm_usage(self, values: dict, research_id: str | None, user_id: str | None) -> None:
+        def existing(model, owner_id: str | None):
+            if owner_id is None:
+                return None
+            return select(model.id).where(model.id == owner_id).scalar_subquery()
+
         with self.session_scope() as session:
-            usage_id = str(uuid.uuid4())
-            record = LLMUsageLogORM(
-                id=usage_id,
-                research_id=research_id,
-                user_id=user_id,
-                model=model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                estimated_cost_usd=estimated_cost_usd,
-                created_at=datetime.now(timezone.utc),
+            session.execute(
+                insert(LLMUsageLogORM).values(
+                    **values,
+                    research_id=existing(ResearchORM, research_id),
+                    user_id=existing(UserORM, user_id),
+                )
             )
-            session.add(record)
-            return usage_id
 
     def record_admin_audit(
         self,
@@ -1519,7 +1921,12 @@ class SQLAlchemyTaskStore:
                 stmt = stmt.where(AdminAuditLogORM.action == action)
             if actor_email:
                 stmt = stmt.where(AdminAuditLogORM.actor_email == actor_email)
-            stmt = stmt.order_by(AdminAuditLogORM.created_at.desc()).limit(limit).offset(offset)
+            # id breaks created_at ties, so LIMIT/OFFSET pages neither repeat nor skip rows.
+            stmt = (
+                stmt.order_by(AdminAuditLogORM.created_at.desc(), AdminAuditLogORM.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             records = session.execute(stmt).scalars().all()
             return [
                 AdminAuditLogItem(
@@ -1541,20 +1948,7 @@ class SQLAlchemyTaskStore:
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse:
         with self.session_scope() as session:
-            # 1. Totals
-            tot_stmt = select(
-                func.coalesce(func.sum(LLMUsageLogORM.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.completion_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-            )
-            tot_row = session.execute(tot_stmt).one()
-            total_prompt = int(tot_row[0])
-            total_comp = int(tot_row[1])
-            total_tok = int(tot_row[2])
-            total_cost = round(float(tot_row[3]), 4)
-
-            # 2. By Model
+            # 1. By model: one pass over llm_usage_logs, which also gives the totals.
             model_stmt = (
                 select(
                     LLMUsageLogORM.model,
@@ -1565,8 +1959,9 @@ class SQLAlchemyTaskStore:
                     func.count(LLMUsageLogORM.id),
                 )
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), LLMUsageLogORM.model)
             )
+            model_rows = session.execute(model_stmt).all()
             by_model = [
                 AdminTokenModelBreakdown(
                     model=row[0],
@@ -1576,19 +1971,38 @@ class SQLAlchemyTaskStore:
                     estimated_cost_usd=round(float(row[4]), 4),
                     calls_count=int(row[5]),
                 )
-                for row in session.execute(model_stmt).all()
+                for row in model_rows
             ]
+            # 2. Totals
+            total_prompt = sum(int(row[1]) for row in model_rows)
+            total_comp = sum(int(row[2]) for row in model_rows)
+            total_tok = sum(int(row[3]) for row in model_rows)
+            total_cost = round(sum(float(row[4]) for row in model_rows), 4)
 
-            # 3. By Depth
+            # 3. By depth: usage summed per research first (a hash aggregate), then one row
+            # per research joined to researches, so count(*) counts researches with usage.
+            # Joining every usage row and counting DISTINCT sorted the whole join to disk.
+            per_research = (
+                select(
+                    LLMUsageLogORM.research_id,
+                    func.sum(LLMUsageLogORM.total_tokens).label("total_tokens"),
+                    func.sum(LLMUsageLogORM.estimated_cost_usd).label("total_cost"),
+                )
+                .where(LLMUsageLogORM.research_id.is_not(None))
+                .group_by(LLMUsageLogORM.research_id)
+                .subquery("per_research")
+            )
             depth_stmt = (
                 select(
                     ResearchORM.depth,
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    func.count(func.distinct(ResearchORM.id)),
+                    func.coalesce(func.sum(per_research.c.total_tokens), 0),
+                    func.coalesce(func.sum(per_research.c.total_cost), 0.0),
+                    func.count(),
                 )
-                .join(ResearchORM, LLMUsageLogORM.research_id == ResearchORM.id)
+                .select_from(per_research)
+                .join(ResearchORM, ResearchORM.id == per_research.c.research_id)
                 .group_by(ResearchORM.depth)
+                .order_by(func.sum(per_research.c.total_tokens).desc(), ResearchORM.depth)
             )
             by_depth = [
                 AdminTokenDepthBreakdown(
@@ -1603,46 +2017,7 @@ class SQLAlchemyTaskStore:
             # 4. Researches list with pagination
             total_researches_stmt = select(func.count()).select_from(ResearchORM)
             total_researches = session.execute(total_researches_stmt).scalar_one()
-
-            offset = max(0, (page - 1) * page_size)
-            researches_stmt = (
-                select(
-                    ResearchORM.id,
-                    ResearchORM.prompt,
-                    ResearchORM.depth,
-                    ResearchORM.status,
-                    ResearchORM.created_at,
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    ResearchORM.graph_state,
-                )
-                .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
-                .group_by(ResearchORM.id)
-                .order_by(ResearchORM.created_at.desc())
-                .limit(page_size)
-                .offset(offset)
-            )
-            research_items: list[AdminTokenResearchUsageItem] = []
-            for row in session.execute(researches_stmt).all():
-                r_id, r_prompt, r_depth, r_status, r_created, r_tokens, r_cost, r_state = row
-                tokens = int(r_tokens)
-                cost = float(r_cost)
-                if tokens == 0 and isinstance(r_state, dict):
-                    legacy = r_state.get("llm_token_usage") or {}
-                    if legacy:
-                        tokens = int(legacy.get("total_tokens", 0) or 0)
-                        cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
-                research_items.append(
-                    AdminTokenResearchUsageItem(
-                        research_id=r_id,
-                        prompt=r_prompt,
-                        depth=r_depth,
-                        status=r_status,
-                        total_tokens=tokens,
-                        estimated_cost_usd=round(cost, 4),
-                        created_at=r_created,
-                    )
-                )
+            research_items = self._token_research_page(session, page, page_size)
 
             return AdminTokenAnalyticsResponse(
                 total_prompt_tokens=total_prompt,
@@ -1656,6 +2031,68 @@ class SQLAlchemyTaskStore:
                 page=page,
                 page_size=page_size,
             )
+
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]:
+        with self.session_scope() as session:
+            return self._token_research_page(session, page, page_size)
+
+    def _token_research_page(self, session: Session, page: int, page_size: int) -> list[AdminTokenResearchUsageItem]:
+        """The page first, then usage for its ids only, and just graph_state's
+        llm_token_usage (the legacy per-research figure), never the whole graph_state."""
+        page_rows = session.execute(
+            select(
+                ResearchORM.id,
+                ResearchORM.prompt,
+                ResearchORM.depth,
+                ResearchORM.status,
+                ResearchORM.created_at,
+                ResearchORM.graph_state["llm_token_usage"],
+            )
+            .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
+            .limit(page_size)
+            .offset(max(0, (page - 1) * page_size))
+        ).all()
+        usage_by_research = self._usage_by_research(session, [row[0] for row in page_rows])
+        items: list[AdminTokenResearchUsageItem] = []
+        for r_id, r_prompt, r_depth, r_status, r_created, legacy in page_rows:
+            tokens, cost, calls = usage_by_research.get(r_id, (0, 0.0, 0))
+            if calls == 0 and isinstance(legacy, dict):
+                # Researches finalized before per-call usage rows existed.
+                tokens = int(legacy.get("total_tokens", 0) or 0)
+                cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
+            items.append(
+                AdminTokenResearchUsageItem(
+                    research_id=r_id,
+                    prompt=r_prompt,
+                    depth=r_depth,
+                    status=r_status,
+                    total_tokens=tokens,
+                    estimated_cost_usd=round(cost, 4),
+                    created_at=r_created,
+                )
+            )
+        return items
+
+    @staticmethod
+    def _usage_by_research(session: Session, research_ids: list[str]) -> dict[str, tuple[int, float, int]]:
+        """(total_tokens, unrounded cost, calls) per research, for these ids only."""
+        if not research_ids:
+            return {}
+        rows = session.execute(
+            select(
+                LLMUsageLogORM.research_id,
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
+                func.count(LLMUsageLogORM.id),
+            )
+            .where(LLMUsageLogORM.research_id.in_(research_ids))
+            .group_by(LLMUsageLogORM.research_id)
+        ).all()
+        return {row[0]: (int(row[1]), float(row[2]), int(row[3])) for row in rows}
 
     def get_admin_overview(self) -> AdminOverviewResponse:
         from src.config import settings
@@ -1705,13 +2142,8 @@ class SQLAlchemyTaskStore:
                     )
                 )
 
-            system_health = {
-                "postgres": "ok",
-                "overall": "healthy" if failed_tasks == 0 else "degraded",
-            }
-
+            # system_health is the service's: it adds the LLM/broker probes to these counters.
             return AdminOverviewResponse(
-                system_health=system_health,
                 active_researches_count=active_researches,
                 pending_tasks_count=pending_tasks,
                 failed_tasks_count=failed_tasks,
@@ -1816,91 +2248,6 @@ class SQLAlchemyTaskStore:
                 summary=f"Unknown maintenance action: {action}",
             )
 
-    def execute_maintenance_action(
-        self,
-        action: str,
-        actor_email: str,
-        params: dict | None = None,
-        ip_address: str | None = None,
-    ) -> AdminDryRunResult:
-        params = params or {}
-        now = datetime.now(timezone.utc)
-        affected_count = 0
-        sample_ids: list[str] = []
-        summary = ""
-
-        if action == "recover_stale_finalize_jobs":
-            stale_seconds = int(params.get("stale_seconds", 300))
-            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
-            recovered = self.recover_stale_research_finalize_jobs(stale_dt)
-            affected_count = len(recovered)
-            sample_ids = [j.id for j in recovered[:10]]
-            summary = f"Recovered {affected_count} stale finalize jobs"
-
-        elif action == "recover_stale_search_jobs":
-            stale_seconds = int(params.get("stale_seconds", 300))
-            stale_dt = datetime.fromtimestamp(now.timestamp() - stale_seconds, tz=timezone.utc)
-            recovered = self.recover_stale_search_task_jobs(stale_dt)
-            affected_count = len(recovered)
-            sample_ids = [j.id for j in recovered[:10]]
-            summary = f"Recovered {affected_count} stale search jobs"
-
-        elif action == "cleanup_old_jobs":
-            days = int(params.get("days", 7))
-            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
-            f_ids = self.cleanup_old_research_finalize_jobs(cutoff)
-            s_ids = self.cleanup_old_search_task_jobs(cutoff)
-            all_ids = f_ids + s_ids
-            affected_count = len(all_ids)
-            sample_ids = all_ids[:10]
-            summary = f"Deleted {len(f_ids)} finalize and {len(s_ids)} search jobs"
-
-        elif action == "cleanup_search_cache":
-            days = int(params.get("days", 3))
-            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
-            affected_count = self.cleanup_search_cache(cutoff)
-            summary = f"Cleaned up {affected_count} search cache entries"
-
-        elif action == "requeue_finalize_job":
-            target_id = params.get("target_id")
-            if target_id:
-                requeued = self.requeue_research_finalize_job(target_id)
-                if requeued:
-                    affected_count = 1
-                    sample_ids = [target_id]
-                    summary = f"Requeued finalize job {target_id}"
-                else:
-                    summary = f"Finalize job {target_id} not found"
-
-        elif action == "requeue_search_job":
-            target_id = params.get("target_id")
-            if target_id:
-                requeued = self.requeue_search_task_job(target_id)
-                if requeued:
-                    affected_count = 1
-                    sample_ids = [target_id]
-                    summary = f"Requeued search job {target_id}"
-                else:
-                    summary = f"Search job {target_id} not found"
-
-        # Record audit log
-        self.record_admin_audit(
-            actor_email=actor_email,
-            action=action,
-            target_type="maintenance",
-            target_id=params.get("target_id"),
-            details={"params": params, "affected_count": affected_count, "summary": summary},
-            ip_address=ip_address,
-        )
-
-        return AdminDryRunResult(
-            action=action,
-            dry_run=False,
-            affected_count=affected_count,
-            sample_affected_ids=sample_ids,
-            summary=summary,
-        )
-
     # ── user telemetry & activity tracking ───────────────────────────────────
     def record_user_session(
         self,
@@ -1918,43 +2265,40 @@ class SQLAlchemyTaskStore:
         country: str | None = None,
         city: str | None = None,
     ) -> str:
-        record_id = str(uuid.uuid4())
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
+        # One row per (session_id, user_id). session_id is client-chosen, so the key must
+        # include the caller: another account's session is never updated. The unique
+        # index arbitrates concurrent session_starts instead of a check-then-insert.
+        insert_stmt = pg_insert(UserSessionORM).values(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            session_id=session_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            device_type=device_type,
+            browser=browser,
+            os=os,
+            screen_res=screen_res,
+            viewport=viewport,
+            language=language,
+            timezone=client_timezone,
+            country=country,
+            city=city,
+            started_at=now,
+            last_active_at=now,
+        )
+        upsert = insert_stmt.on_conflict_do_update(
+            index_elements=[UserSessionORM.session_id, UserSessionORM.user_id],
+            set_={
+                "last_active_at": insert_stmt.excluded.last_active_at,
+                "ip_address": func.coalesce(insert_stmt.excluded.ip_address, UserSessionORM.ip_address),
+                "user_agent": func.coalesce(insert_stmt.excluded.user_agent, UserSessionORM.user_agent),
+            },
+        ).returning(UserSessionORM.id)
         with self.session_scope() as session:
-            # Check if session already exists
-            existing = session.execute(
-                select(UserSessionORM).where(UserSessionORM.session_id == session_id)
-            ).scalar_one_or_none()
-            if existing:
-                existing.last_active_at = now
-                if ip_address:
-                    existing.ip_address = ip_address
-                if user_agent:
-                    existing.user_agent = user_agent
-                return existing.id
-
-            session_orm = UserSessionORM(
-                id=record_id,
-                user_id=user_id,
-                session_id=session_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                device_type=device_type,
-                browser=browser,
-                os=os,
-                screen_res=screen_res,
-                viewport=viewport,
-                language=language,
-                timezone=client_timezone,
-                country=country,
-                city=city,
-                started_at=now,
-                last_active_at=now,
-            )
-            session.add(session_orm)
-
-        self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent, device=device_type)
-        return record_id
+            return session.execute(upsert).scalar_one()
 
     def record_user_event(
         self,
@@ -1966,6 +2310,8 @@ class SQLAlchemyTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         with self.session_scope() as session:
@@ -1981,9 +2327,8 @@ class SQLAlchemyTaskStore:
                 created_at=now,
             )
             session.add(event_orm)
-
-        if user_id:
-            self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent)
+        # users.last_seen_at is the activity middleware's job (throttled); touching it here
+        # too cost a second users UPDATE per event.
         return record_id
 
     def touch_user_activity(
@@ -1993,17 +2338,110 @@ class SQLAlchemyTaskStore:
         user_agent: str | None = None,
         device: str | None = None,
     ) -> None:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
+        values: dict = {"last_seen_at": now}
+        if ip_address:
+            values["last_ip"] = ip_address
+        if user_agent:
+            values["last_user_agent"] = user_agent
+        if device:
+            values["last_device"] = device
+        # Throttled in SQL as well as by the caller's in-process gate (other API workers
+        # have their own): a user seen within the interval is not rewritten, sparing a
+        # users-row UPDATE per request.
+        stale_before = now - timedelta(seconds=USER_ACTIVITY_TOUCH_INTERVAL_SECONDS)
         with self.session_scope() as session:
-            user = session.get(UserORM, user_id)
-            if user:
-                user.last_seen_at = now
-                if ip_address:
-                    user.last_ip = ip_address
-                if user_agent:
-                    user.last_user_agent = user_agent
-                if device:
-                    user.last_device = device
+            session.execute(
+                update(UserORM)
+                .where(
+                    UserORM.id == user_id,
+                    or_(UserORM.last_seen_at.is_(None), UserORM.last_seen_at < stale_before),
+                )
+                .values(**values)
+            )
+
+    # The users columns the admin views show (never password_hash).
+    _ADMIN_USER_COLUMNS = (
+        UserORM.id,
+        UserORM.email,
+        UserORM.name,
+        UserORM.avatar_url,
+        UserORM.google_subject,
+        UserORM.admin_provisioned_at,
+        UserORM.created_at,
+        UserORM.last_seen_at,
+        UserORM.last_ip,
+        UserORM.last_device,
+    )
+
+    @staticmethod
+    def _admin_users_select(users):
+        """``users`` (a subquery of _ADMIN_USER_COLUMNS rows: a page, or one account) with
+        its research count, usage totals and latest session. Each is a LATERAL subquery
+        correlated to those rows, so it runs for them only, never for every account."""
+        research_stats = (
+            select(func.count().label("researches_count"))
+            .where(ResearchORM.user_id == users.c.id)
+            .lateral("research_stats")
+        )
+        usage_stats = (
+            select(
+                func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0).label("total_tokens"),
+                func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0).label("total_cost"),
+            )
+            .where(LLMUsageLogORM.user_id == users.c.id)
+            .lateral("usage_stats")
+        )
+        last_session = (
+            select(
+                UserSessionORM.ip_address,
+                UserSessionORM.device_type,
+                UserSessionORM.browser,
+                UserSessionORM.os,
+            )
+            .where(UserSessionORM.user_id == users.c.id)
+            .order_by(UserSessionORM.last_active_at.desc(), UserSessionORM.id.desc())
+            .limit(1)
+            .lateral("last_session")
+        )
+        return (
+            select(
+                *users.c,
+                research_stats.c.researches_count,
+                usage_stats.c.total_tokens,
+                usage_stats.c.total_cost,
+                last_session.c.ip_address.label("session_ip"),
+                last_session.c.device_type.label("session_device"),
+                last_session.c.browser.label("session_browser"),
+                last_session.c.os.label("session_os"),
+            )
+            .select_from(users)
+            .join(research_stats, true())
+            .join(usage_stats, true())
+            .outerjoin(last_session, true())
+        )
+
+    @staticmethod
+    def _admin_user_item(row, online_threshold: datetime) -> AdminUserListItem:
+        return AdminUserListItem(
+            id=row.id,
+            email=row.email,
+            name=row.name,
+            avatar_url=row.avatar_url,
+            is_admin=has_admin_rights(row.email, row.google_subject, row.admin_provisioned_at),
+            created_at=row.created_at.isoformat(),
+            last_seen_at=row.last_seen_at.isoformat() if row.last_seen_at else None,
+            is_online=bool(row.last_seen_at and row.last_seen_at >= online_threshold),
+            last_ip=row.last_ip or row.session_ip,
+            last_device=row.last_device or row.session_device,
+            last_browser=row.session_browser,
+            last_os=row.session_os,
+            researches_count=int(row.researches_count),
+            total_tokens=int(row.total_tokens),
+            total_cost_usd=round(float(row.total_cost), 4),
+        )
 
     def get_admin_users_list(
         self,
@@ -2016,114 +2454,91 @@ class SQLAlchemyTaskStore:
     ) -> AdminUserListResponse:
         now = datetime.now(timezone.utc)
         online_threshold = now - timedelta(minutes=2)
+        listed = admin_emails()
+
+        filters = []
+        term = (search or "").strip()
+        if term:
+            pattern = _contains_pattern(term)
+            filters.append(
+                or_(
+                    UserORM.email.ilike(pattern, escape="\\"),
+                    UserORM.name.ilike(pattern, escape="\\"),
+                    UserORM.last_ip.ilike(pattern, escape="\\"),
+                )
+            )
+        # has_admin_rights in SQL: listed email AND a verified identity. Both IS NOT NULL
+        # tests are two-valued, so the negation needs no NULL handling.
+        admin_rights = and_(
+            func.lower(UserORM.email).in_(listed),
+            or_(UserORM.google_subject.is_not(None), UserORM.admin_provisioned_at.is_not(None)),
+        )
+        if role == "admin":
+            filters.append(admin_rights if listed else false())
+        elif role == "user" and listed:
+            filters.append(~admin_rights)
+        if online_only:
+            filters.append(UserORM.last_seen_at >= online_threshold)
+
+        # The page is picked first, then only its rows get the laterals. A sort by a metric
+        # needs that metric for every filtered account: one GROUP BY pass over the table
+        # (a hash aggregate), not a lateral per account.
+        page_select = select(*self._ADMIN_USER_COLUMNS).where(*filters)
+        metric = None
+        if sort_by in ("tokens", "cost"):
+            usage_totals = (
+                select(
+                    LLMUsageLogORM.user_id,
+                    func.sum(LLMUsageLogORM.total_tokens).label("total_tokens"),
+                    func.sum(LLMUsageLogORM.estimated_cost_usd).label("total_cost"),
+                )
+                .where(LLMUsageLogORM.user_id.is_not(None))
+                .group_by(LLMUsageLogORM.user_id)
+                .subquery("usage_totals")
+            )
+            total = usage_totals.c.total_tokens if sort_by == "tokens" else usage_totals.c.total_cost
+            metric = func.coalesce(total, 0)
+            page_select = page_select.outerjoin(usage_totals, usage_totals.c.user_id == UserORM.id)
+        elif sort_by == "researches":
+            research_totals = (
+                select(ResearchORM.user_id, func.count().label("researches_count"))
+                .where(ResearchORM.user_id.is_not(None))
+                .group_by(ResearchORM.user_id)
+                .subquery("research_totals")
+            )
+            metric = func.coalesce(research_totals.c.researches_count, 0)
+            page_select = page_select.outerjoin(research_totals, research_totals.c.user_id == UserORM.id)
+        if metric is not None:
+            page_select = page_select.add_columns(metric.label("sort_metric"))
+
+        def order(columns, sort_metric=None):
+            newest_first = (columns.created_at.desc(), columns.id.desc())
+            if sort_metric is not None:
+                return (sort_metric.desc(), *newest_first)
+            if sort_by == "registered":
+                return newest_first
+            return (columns.last_seen_at.desc().nulls_last(), *newest_first)
+
+        page_rows = (
+            page_select.order_by(*order(UserORM, metric))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .subquery("page")
+        )
+        statement = self._admin_users_select(page_rows).order_by(  # the join does not keep the page order
+            *order(page_rows.c, page_rows.c.sort_metric if metric is not None else None)
+        )
 
         with self.session_scope() as session:
-            query = select(UserORM)
-
-            # Filtering
-            if search:
-                s = f"%{search.strip()}%"
-                query = query.where(
-                    or_(
-                        UserORM.email.ilike(s),
-                        UserORM.name.ilike(s),
-                        UserORM.last_ip.ilike(s),
-                    )
-                )
-
-            admin_emails = _parse_admin_emails()
-            if role:
-                if role == "admin":
-                    if not admin_emails:
-                        query = query.where(false())
-                    else:
-                        query = query.where(func.lower(UserORM.email).in_(admin_emails))
-                elif role == "user":
-                    if admin_emails:
-                        query = query.where(~func.lower(UserORM.email).in_(admin_emails))
-
-            if online_only:
-                query = query.where(UserORM.last_seen_at >= online_threshold)
-
-            # Total count before pagination
-            count_stmt = select(func.count()).select_from(query.subquery())
-            total_users = session.execute(count_stmt).scalar_one()
-
-            # Online count total
-            online_count_stmt = (
-                select(func.count())
-                .select_from(UserORM)
-                .where(UserORM.last_seen_at >= online_threshold)
-            )
-            online_users = session.execute(online_count_stmt).scalar_one()
-
-            # Sorting
-            if sort_by == "registered":
-                query = query.order_by(UserORM.created_at.desc())
-            else:
-                query = query.order_by(UserORM.last_seen_at.desc().nulls_last(), UserORM.created_at.desc())
-
-            offset = (page - 1) * page_size
-            users = list(session.execute(query.offset(offset).limit(page_size)).scalars().all())
-
-            items: list[AdminUserListItem] = []
-            for u in users:
-                is_admin = bool(u.email and u.email.lower() in admin_emails)
-                is_online = bool(u.last_seen_at and u.last_seen_at >= online_threshold)
-
-                # Researches count
-                r_cnt = session.execute(
-                    select(func.count()).select_from(ResearchORM).where(ResearchORM.user_id == u.id)
-                ).scalar_one()
-
-                # Tokens & Cost
-                usage_row = session.execute(
-                    select(
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    ).where(LLMUsageLogORM.user_id == u.id)
-                ).one()
-                tot_tokens = int(usage_row[0])
-                tot_cost = float(usage_row[1])
-
-                # Get latest session for browser/os
-                last_sess = session.execute(
-                    select(UserSessionORM)
-                    .where(UserSessionORM.user_id == u.id)
-                    .order_by(UserSessionORM.last_active_at.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
-
-                items.append(
-                    AdminUserListItem(
-                        id=u.id,
-                        email=u.email,
-                        name=u.name,
-                        avatar_url=u.avatar_url,
-                        is_admin=is_admin,
-                        created_at=u.created_at.isoformat(),
-                        last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
-                        is_online=is_online,
-                        last_ip=u.last_ip or (last_sess.ip_address if last_sess else None),
-                        last_device=u.last_device or (last_sess.device_type if last_sess else None),
-                        last_browser=last_sess.browser if last_sess else None,
-                        last_os=last_sess.os if last_sess else None,
-                        researches_count=r_cnt,
-                        total_tokens=tot_tokens,
-                        total_cost_usd=round(tot_cost, 4),
-                    )
-                )
-
-            # In-memory post-sort for token/cost/research if requested
-            if sort_by == "tokens":
-                items.sort(key=lambda x: x.total_tokens, reverse=True)
-            elif sort_by == "cost":
-                items.sort(key=lambda x: x.total_cost_usd, reverse=True)
-            elif sort_by == "researches":
-                items.sort(key=lambda x: x.researches_count, reverse=True)
-
+            total_users = session.execute(
+                select(func.count()).select_from(UserORM).where(*filters)
+            ).scalar_one()
+            online_users = session.execute(
+                select(func.count()).select_from(UserORM).where(UserORM.last_seen_at >= online_threshold)
+            ).scalar_one()
+            rows = session.execute(statement).all()
             return AdminUserListResponse(
-                users=items,
+                users=[self._admin_user_item(row, online_threshold) for row in rows],
                 total_users=total_users,
                 online_users=online_users,
                 page=page,
@@ -2131,40 +2546,20 @@ class SQLAlchemyTaskStore:
             )
 
     def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
+        online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
+        account = select(*self._ADMIN_USER_COLUMNS).where(UserORM.id == user_id).subquery("account")
         with self.session_scope() as session:
-            u = session.get(UserORM, user_id)
-            if not u:
+            row = session.execute(self._admin_users_select(account)).one_or_none()
+            if row is None:
                 return None
+            user_item = self._admin_user_item(row, online_threshold)
 
-            admin_emails = _parse_admin_emails()
-            is_admin = bool(u.email and u.email.lower() in admin_emails)
-
-            now = datetime.now(timezone.utc)
-            online_threshold = now - timedelta(minutes=2)
-            is_online = bool(u.last_seen_at and u.last_seen_at >= online_threshold)
-
-            r_cnt = session.execute(
-                select(func.count()).select_from(ResearchORM).where(ResearchORM.user_id == u.id)
-            ).scalar_one()
-
-            usage_row = session.execute(
-                select(
-                    func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                    func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                ).where(LLMUsageLogORM.user_id == u.id)
-            ).one()
-            tot_tokens = int(usage_row[0])
-            tot_cost = float(usage_row[1])
-
-            # Sessions
-            sessions_orm = list(
-                session.execute(
-                    select(UserSessionORM)
-                    .where(UserSessionORM.user_id == u.id)
-                    .order_by(UserSessionORM.last_active_at.desc())
-                    .limit(10)
-                ).scalars().all()
-            )
+            sessions = session.execute(
+                select(UserSessionORM)
+                .where(UserSessionORM.user_id == user_id)
+                .order_by(UserSessionORM.last_active_at.desc(), UserSessionORM.id.desc())
+                .limit(10)
+            ).scalars().all()
             sessions_data = [
                 {
                     "id": s.id,
@@ -2181,99 +2576,70 @@ class SQLAlchemyTaskStore:
                     "started_at": s.started_at.isoformat(),
                     "last_active_at": s.last_active_at.isoformat(),
                 }
-                for s in sessions_orm
+                for s in sessions
             ]
 
-            # Recent researches
-            researches_orm = list(
-                session.execute(
-                    select(ResearchORM)
-                    .where(ResearchORM.user_id == u.id)
-                    .order_by(ResearchORM.created_at.desc())
-                    .limit(20)
-                ).scalars().all()
-            )
-            r_ids = [r.id for r in researches_orm]
-            usage_by_res = {}
-            if r_ids:
-                u_rows = session.execute(
-                    select(
-                        LLMUsageLogORM.research_id,
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0),
-                    )
-                    .where(LLMUsageLogORM.research_id.in_(r_ids))
-                    .group_by(LLMUsageLogORM.research_id)
-                ).all()
-                usage_by_res = {
-                    row[0]: {"tokens": int(row[1]), "cost_usd": round(float(row[2]), 4)}
-                    for row in u_rows
-                }
-
+            # Recent researches: listing columns only, never the report or graph_state.
+            research_rows = session.execute(
+                select(
+                    ResearchORM.id,
+                    ResearchORM.prompt,
+                    ResearchORM.depth,
+                    ResearchORM.status,
+                    ResearchORM.created_at,
+                )
+                .where(ResearchORM.user_id == user_id)
+                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
+                .limit(20)
+            ).all()
+            usage_by_research = self._usage_by_research(session, [r.id for r in research_rows])
             researches_data = [
                 {
                     "id": r.id,
                     "prompt": r.prompt,
                     "depth": r.depth,
                     "status": r.status,
-                    "total_tokens": usage_by_res.get(r.id, {}).get("tokens", 0),
-                    "cost_usd": usage_by_res.get(r.id, {}).get("cost_usd", 0.0),
+                    "total_tokens": usage_by_research.get(r.id, (0, 0.0, 0))[0],
+                    "cost_usd": round(usage_by_research.get(r.id, (0, 0.0, 0))[1], 4),
                     "created_at": r.created_at.isoformat(),
                 }
-                for r in researches_orm
+                for r in research_rows
             ]
 
-            # Recent events
-            events_orm = list(
-                session.execute(
-                    select(UserEventORM)
-                    .where(UserEventORM.user_id == u.id)
-                    .order_by(UserEventORM.created_at.desc())
-                    .limit(20)
-                ).scalars().all()
-            )
+            event_rows = session.execute(
+                select(
+                    UserEventORM.id,
+                    UserEventORM.event_name,
+                    UserEventORM.event_category,
+                    UserEventORM.details,
+                    UserEventORM.created_at,
+                )
+                .where(UserEventORM.user_id == user_id)
+                .order_by(UserEventORM.created_at.desc(), UserEventORM.id.desc())
+                .limit(20)
+            ).all()
             events_data = [
                 {
                     "id": e.id,
                     "event_name": e.event_name,
                     "event_category": e.event_category,
-                    "details": e.details,
+                    "details": e.details or {},
                     "created_at": e.created_at.isoformat(),
                 }
-                for e in events_orm
+                for e in event_rows
             ]
 
-            # Tokens by model
             model_rows = session.execute(
                 select(
                     LLMUsageLogORM.model,
                     func.sum(LLMUsageLogORM.total_tokens),
                     func.sum(LLMUsageLogORM.estimated_cost_usd),
                 )
-                .where(LLMUsageLogORM.user_id == u.id)
+                .where(LLMUsageLogORM.user_id == user_id)
                 .group_by(LLMUsageLogORM.model)
+                .order_by(LLMUsageLogORM.model)
             ).all()
             by_model = {row[0]: {"tokens": int(row[1]), "cost_usd": round(float(row[2]), 4)} for row in model_rows}
-
-            last_sess = sessions_orm[0] if sessions_orm else None
-
-            user_item = AdminUserListItem(
-                id=u.id,
-                email=u.email,
-                name=u.name,
-                avatar_url=u.avatar_url,
-                is_admin=is_admin,
-                created_at=u.created_at.isoformat(),
-                last_seen_at=u.last_seen_at.isoformat() if u.last_seen_at else None,
-                is_online=is_online,
-                last_ip=u.last_ip or (last_sess.ip_address if last_sess else None),
-                last_device=u.last_device or (last_sess.device_type if last_sess else None),
-                last_browser=last_sess.browser if last_sess else None,
-                last_os=last_sess.os if last_sess else None,
-                researches_count=r_cnt,
-                total_tokens=tot_tokens,
-                total_cost_usd=round(tot_cost, 4),
-            )
 
             return AdminUserDetailResponse(
                 user=user_item,
@@ -2320,12 +2686,12 @@ class SQLAlchemyTaskStore:
             total_tokens = int(usage_row[0])
             total_cost = float(usage_row[1])
 
-            # Breakdowns from UserSessionORM
+            # Breakdowns from UserSessionORM; ties are ordered by name, so the top 10 is stable.
             os_rows = session.execute(
                 select(UserSessionORM.os, func.count())
                 .where(UserSessionORM.os.isnot(None))
                 .group_by(UserSessionORM.os)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.os)
                 .limit(10)
             ).all()
 
@@ -2333,7 +2699,7 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.browser, func.count())
                 .where(UserSessionORM.browser.isnot(None))
                 .group_by(UserSessionORM.browser)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.browser)
                 .limit(10)
             ).all()
 
@@ -2341,7 +2707,7 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.device_type, func.count())
                 .where(UserSessionORM.device_type.isnot(None))
                 .group_by(UserSessionORM.device_type)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.device_type)
                 .limit(10)
             ).all()
 
@@ -2349,20 +2715,20 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.country, func.count())
                 .where(UserSessionORM.country.isnot(None))
                 .group_by(UserSessionORM.country)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.country)
                 .limit(10)
             ).all()
 
             depth_rows = session.execute(
                 select(ResearchORM.depth, func.count())
                 .group_by(ResearchORM.depth)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), ResearchORM.depth)
             ).all()
 
             model_rows = session.execute(
                 select(LLMUsageLogORM.model, func.count())
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), LLMUsageLogORM.model)
                 .limit(10)
             ).all()
 
@@ -2422,7 +2788,12 @@ class SQLAlchemyTaskStore:
             count_stmt = select(func.count()).select_from(query.subquery())
             total_count = session.execute(count_stmt).scalar_one()
 
-            query = query.order_by(UserEventORM.created_at.desc()).offset(offset).limit(limit)
+            # id breaks created_at ties, so LIMIT/OFFSET pages neither repeat nor skip rows.
+            query = (
+                query.order_by(UserEventORM.created_at.desc(), UserEventORM.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
             rows = session.execute(query).all()
 
             items = [
@@ -2448,6 +2819,104 @@ class SQLAlchemyTaskStore:
                 page_size=limit,
             )
 
+    @staticmethod
+    def _admin_prompt_branches(
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ) -> list[tuple]:
+        """The two prompt sources as (select, created_at, item_id) per wanted branch: the
+        research prompts and the chat follow-up prompts (chat_prompt events)."""
+        term = (search or "").strip()
+        pattern = _contains_pattern(term) if term else None
+        branches = []
+        if not prompt_type or prompt_type in ("all", "research"):
+            research_item_id = func.concat("res_", ResearchORM.id)
+            research_branch = (
+                select(
+                    literal("research").label("prompt_type"),
+                    research_item_id.label("item_id"),
+                    ResearchORM.prompt.label("prompt"),
+                    ResearchORM.id.label("research_id"),
+                    ResearchORM.user_id.label("user_id"),
+                    UserORM.email.label("user_email"),
+                    UserORM.name.label("user_name"),
+                    ResearchORM.depth.label("depth"),
+                    ResearchORM.status.label("status"),
+                    ResearchORM.created_at.label("created_at"),
+                )
+                .select_from(ResearchORM)
+                .outerjoin(UserORM, ResearchORM.user_id == UserORM.id)
+            )
+            if user_id:
+                research_branch = research_branch.where(ResearchORM.user_id == user_id)
+            if pattern:
+                research_branch = research_branch.where(
+                    or_(
+                        ResearchORM.prompt.ilike(pattern, escape="\\"),
+                        UserORM.email.ilike(pattern, escape="\\"),
+                        UserORM.name.ilike(pattern, escape="\\"),
+                    )
+                )
+            branches.append((research_branch, ResearchORM.created_at, research_item_id))
+        if not prompt_type or prompt_type in ("all", "chat"):
+            chat_prompt = func.coalesce(UserEventORM.details["prompt"].astext, "")
+            chat_item_id = func.concat("chat_", UserEventORM.id)
+            chat_branch = (
+                select(
+                    literal("chat").label("prompt_type"),
+                    chat_item_id.label("item_id"),
+                    chat_prompt.label("prompt"),
+                    func.coalesce(UserEventORM.details["research_id"].astext, "").label("research_id"),
+                    UserEventORM.user_id.label("user_id"),
+                    UserORM.email.label("user_email"),
+                    UserORM.name.label("user_name"),
+                    null().label("depth"),
+                    null().label("status"),
+                    UserEventORM.created_at.label("created_at"),
+                )
+                .select_from(UserEventORM)
+                .outerjoin(UserORM, UserEventORM.user_id == UserORM.id)
+                .where(UserEventORM.event_name == "chat_prompt")
+            )
+            if user_id:
+                chat_branch = chat_branch.where(UserEventORM.user_id == user_id)
+            if pattern:
+                chat_branch = chat_branch.where(
+                    or_(
+                        chat_prompt.ilike(pattern, escape="\\"),
+                        UserORM.email.ilike(pattern, escape="\\"),
+                        UserORM.name.ilike(pattern, escape="\\"),
+                    )
+                )
+            branches.append((chat_branch, UserEventORM.created_at, chat_item_id))
+        return branches
+
+    @staticmethod
+    def _admin_prompt_items(rows, usage_by_research: dict[str, tuple[int, float, int]]) -> list[AdminPromptItem]:
+        items: list[AdminPromptItem] = []
+        for row in rows:
+            tokens, cost = 0, 0.0
+            if row.prompt_type == "research":
+                tokens, cost, _calls = usage_by_research.get(row.research_id, (0, 0.0, 0))
+            items.append(
+                AdminPromptItem(
+                    id=row.item_id,
+                    prompt_type=row.prompt_type,
+                    prompt=row.prompt,
+                    research_id=row.research_id,
+                    user_id=row.user_id,
+                    user_email=row.user_email,
+                    user_name=row.user_name,
+                    depth=row.depth,
+                    status=row.status,
+                    total_tokens=tokens,
+                    cost_usd=round(cost, 4),
+                    created_at=row.created_at.isoformat(),
+                )
+            )
+        return items
+
     def get_admin_prompts(
         self,
         page: int = 1,
@@ -2456,127 +2925,54 @@ class SQLAlchemyTaskStore:
         user_id: str | None = None,
         prompt_type: str | None = None,
     ) -> AdminPromptsResponse:
+        """Research prompts and chat follow-up prompts (chat_prompt events) as one list,
+        newest first. Paginated in SQL: a UNION ALL of the two sources ordered and sliced
+        by the database, a separate COUNT, and usage summed for the page's researches only."""
+        branches = [branch for branch, _created_at, _item_id in self._admin_prompt_branches(search, user_id, prompt_type)]
+        if not branches:  # an unknown prompt_type matches nothing
+            return AdminPromptsResponse(prompts=[], total_count=0, page=page, page_size=page_size)
+
+        prompts = (union_all(*branches) if len(branches) > 1 else branches[0]).subquery("prompts")
         with self.session_scope() as session:
-            items: list[AdminPromptItem] = []
-
-            # 1. Researches
-            if not prompt_type or prompt_type in ("all", "research"):
-                usage_sub = (
-                    select(
-                        LLMUsageLogORM.research_id,
-                        func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0).label("tokens"),
-                        func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0).label("cost"),
-                    )
-                    .group_by(LLMUsageLogORM.research_id)
-                    .subquery()
-                )
-                q_res = (
-                    select(
-                        ResearchORM.id,
-                        ResearchORM.prompt,
-                        ResearchORM.depth,
-                        ResearchORM.status,
-                        ResearchORM.created_at,
-                        ResearchORM.user_id,
-                        UserORM.email,
-                        UserORM.name,
-                        func.coalesce(usage_sub.c.tokens, 0),
-                        func.coalesce(usage_sub.c.cost, 0.0),
-                    )
-                    .outerjoin(UserORM, ResearchORM.user_id == UserORM.id)
-                    .outerjoin(usage_sub, ResearchORM.id == usage_sub.c.research_id)
-                )
-                if user_id:
-                    q_res = q_res.where(ResearchORM.user_id == user_id)
-                if search:
-                    term = f"%{search.strip()}%"
-                    q_res = q_res.where(
-                        or_(
-                            ResearchORM.prompt.ilike(term),
-                            UserORM.email.ilike(term),
-                            UserORM.name.ilike(term),
-                        )
-                    )
-
-                res_rows = session.execute(q_res).all()
-                for r_id, prompt, depth, status, created_at, u_id, email, name, tokens, cost in res_rows:
-                    items.append(
-                        AdminPromptItem(
-                            id=f"res_{r_id}",
-                            prompt_type="research",
-                            prompt=prompt,
-                            research_id=r_id,
-                            user_id=u_id,
-                            user_email=email,
-                            user_name=name,
-                            depth=depth,
-                            status=status,
-                            total_tokens=int(tokens),
-                            cost_usd=round(float(cost), 4),
-                            created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
-                        )
-                    )
-
-            # 2. Chat follow-up prompts from user_events
-            if not prompt_type or prompt_type in ("all", "chat"):
-                q_chat = (
-                    select(
-                        UserEventORM.id,
-                        UserEventORM.details,
-                        UserEventORM.created_at,
-                        UserEventORM.user_id,
-                        UserORM.email,
-                        UserORM.name,
-                    )
-                    .outerjoin(UserORM, UserEventORM.user_id == UserORM.id)
-                    .where(UserEventORM.event_name == "chat_prompt")
-                )
-                if user_id:
-                    q_chat = q_chat.where(UserEventORM.user_id == user_id)
-
-                chat_rows = session.execute(q_chat).all()
-                for e_id, details, created_at, u_id, email, name in chat_rows:
-                    det = details or {}
-                    prompt_txt = str(det.get("prompt") or "")
-                    res_id = str(det.get("research_id") or "")
-                    if search:
-                        term_lower = search.strip().lower()
-                        matches = (
-                            term_lower in prompt_txt.lower()
-                            or (email and term_lower in email.lower())
-                            or (name and term_lower in name.lower())
-                        )
-                        if not matches:
-                            continue
-                    items.append(
-                        AdminPromptItem(
-                            id=f"chat_{e_id}",
-                            prompt_type="chat",
-                            prompt=prompt_txt,
-                            research_id=res_id,
-                            user_id=u_id,
-                            user_email=email,
-                            user_name=name,
-                            depth=None,
-                            status=None,
-                            total_tokens=0,
-                            cost_usd=0.0,
-                            created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
-                        )
-                    )
-
-            # Sort all items descending by created_at
-            items.sort(key=lambda x: x.created_at, reverse=True)
-            total_count = len(items)
-            start = (page - 1) * page_size
-            paged = items[start : start + page_size]
-
-            return AdminPromptsResponse(
-                prompts=paged,
-                total_count=total_count,
-                page=page,
-                page_size=page_size,
+            total_count = session.execute(select(func.count()).select_from(prompts)).scalar_one()
+            rows = session.execute(
+                select(prompts)
+                .order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc())
+                .offset(max(0, (page - 1) * page_size))
+                .limit(page_size)
+            ).all()
+            usage_by_research = self._usage_by_research(
+                session, [row.research_id for row in rows if row.prompt_type == "research"]
             )
+        return AdminPromptsResponse(
+            prompts=self._admin_prompt_items(rows, usage_by_research),
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]:
+        """Each branch reads its next ``limit`` rows from the cursor on (the leading
+        created_at bound can use the created_at indexes), and only those are merged."""
+        cursor = None if after is None else (datetime.fromisoformat(after.created_at), after.id)
+        limited = []
+        for branch, created_at, item_id in self._admin_prompt_branches():
+            if cursor is not None:
+                branch = branch.where(created_at <= cursor[0], or_(created_at < cursor[0], item_id < cursor[1]))
+            limited.append(select(branch.order_by(created_at.desc(), item_id.desc()).limit(limit).subquery()))
+        prompts = union_all(*limited).subquery("prompts")
+        with self.session_scope() as session:
+            rows = session.execute(
+                select(prompts).order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc()).limit(limit)
+            ).all()
+            usage_by_research = self._usage_by_research(
+                session, [row.research_id for row in rows if row.prompt_type == "research"]
+            )
+        return self._admin_prompt_items(rows, usage_by_research)
 
     def get_user_token_analytics(self, user_id: str) -> dict:
         with self.session_scope() as session:
@@ -2608,7 +3004,7 @@ class SQLAlchemyTaskStore:
                 )
                 .where(LLMUsageLogORM.user_id == user_id)
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc())
+                .order_by(func.sum(LLMUsageLogORM.total_tokens).desc(), LLMUsageLogORM.model)
             )
             by_model = [
                 {
@@ -2635,7 +3031,7 @@ class SQLAlchemyTaskStore:
                 .outerjoin(LLMUsageLogORM, LLMUsageLogORM.research_id == ResearchORM.id)
                 .where(ResearchORM.user_id == user_id)
                 .group_by(ResearchORM.id, ResearchORM.prompt, ResearchORM.depth, ResearchORM.status, ResearchORM.created_at)
-                .order_by(ResearchORM.created_at.desc())
+                .order_by(ResearchORM.created_at.desc(), ResearchORM.id.desc())
                 .limit(10)
             )
             recent = [

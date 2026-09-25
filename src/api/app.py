@@ -1,11 +1,16 @@
 import asyncio
 import contextlib
+import csv
 import hmac
+import io
 import json
+import logging
+import re
 import secrets
 import uuid
 import time
-from typing import List
+import unicodedata
+from typing import Callable, Iterator, List
 
 from starlette.concurrency import run_in_threadpool
 from urllib.parse import quote
@@ -14,25 +19,38 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-from src.domain.errors import ServiceError
+from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
+    request_bearer_token,
+    request_has_fresh_google_auth,
+    request_token_subject,
     require_admin,
+    resolve_request_user_id,
     scope_user_id,
     verify_research_access,
 )
-from src.auth.login_rate_limit import enforce_auth_rate_limit
+from src.auth.login_rate_limit import (
+    SlidingWindowLimiter,
+    enforce_auth_rate_limit,
+    enforce_login_account_rate_limit,
+    enforce_password_check_rate_limit,
+)
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
-from src.auth.security import create_token, decode_token
+from src.auth.telemetry_rate_limit import telemetry_user_id
+from src.auth.security import AUTH_METHOD_GOOGLE, OAUTH_STATE_PURPOSE, create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
     AdminAuditLogItem,
     AdminDryRunResult,
+    MaintenanceActionRequest,
     AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptItem,
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
@@ -40,6 +58,7 @@ from src.api.schemas import (
     AdminUserListResponse,
     AgentMetadataItem,
     UserTelemetryEventInput,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     AuthUser,
     UpdateProfileRequest,
     AuthSession,
@@ -97,22 +116,54 @@ from src.api.schemas import (
     WorkerHeartbeat,
 )
 from src.bootstrap import lifespan
+from src.services import ResearchService
 from src.config import settings
 from src.observability import bind_observability_context, metric_route_template, observe_api_request, render_metrics
 
 
+logger = logging.getLogger(__name__)
+
+# Seconds between admin overview pushes on /v1/admin/stream (and admin re-checks).
+ADMIN_STREAM_INTERVAL_SECONDS = 2.0
+
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register", "/v1/telemetry/event"})
+_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+_LOGOUT_PATH = "/v1/auth/logout"
+# GETs with side effects, checked like mutations: each admin CSV export writes an audit
+# row and spends the shared admin rate budget, and a SameSite=Lax session cookie rides
+# along on a cross-site top-level GET (a link or a redirect to the export URL).
+_CSRF_CHECKED_GET_PATHS = frozenset(
+    {"/v1/admin/users/export", "/v1/admin/prompts/export", "/v1/admin/tokens/export"}
+)
 
 
 def _is_csrf_violation(request: Request) -> bool:
-    """Double-submit CSRF check for cookie-authenticated mutations. Bearer-token requests are
-    exempt (the header can't be forged cross-site); the check is off when auth is disabled."""
-    if settings.auth_disabled or request.method in _CSRF_SAFE_METHODS:
+    """Double-submit CSRF check for cookie-authenticated mutations and the side-effecting
+    GETs in _CSRF_CHECKED_GET_PATHS. Bearer-token requests are exempt (the header can't be
+    forged cross-site).
+    "Bearer-token request" follows the rule authentication uses (request_bearer_token): a
+    header whose token is blank falls back to the cookie there, so it is no exemption.
+    With auth disabled the session cookie still authenticates one identity once
+    ADMIN_EMAILS is set: the admin that require_admin asks for. So in that mode the check
+    is off only when no such admin can ride on the request (no ADMIN_EMAILS or no session
+    cookie)."""
+    if settings.auth_disabled and (
+        not admin_emails() or not request.cookies.get(settings.auth_cookie_name)
+    ):
+        return False
+    if request.method in _CSRF_SAFE_METHODS and (
+        # A CORS preflight (OPTIONS) carries neither cookies nor the header: never checked.
+        request.method == "OPTIONS" or request.url.path not in _CSRF_CHECKED_GET_PATHS
+    ):
         return False
     if request.url.path in _CSRF_EXEMPT_PATHS:
         return False
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request_bearer_token(request):
+        return False
+    # Logout answers 200 even without a session. With no session cookie there is nothing
+    # a cross-site request could ride on; with one, the check stops a forced sign-out of
+    # every device.
+    if request.url.path == _LOGOUT_PATH and not request.cookies.get(settings.auth_cookie_name):
         return False
     cookie = request.cookies.get(settings.csrf_cookie_name)
     header = request.headers.get("x-csrf-token")
@@ -131,19 +182,177 @@ def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
     return record.model_copy(update={"graph_state": cleaned})
 
 
-def extract_client_ip(request: Request) -> str:
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    x_real_ip = request.headers.get("x-real-ip")
-    if x_real_ip:
-        return x_real_ip.strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "127.0.0.1"
+def _owner_job_view(job):
+    """Owner-facing copy of a search/finalize job. The stored ``error`` is the raw worker
+    exception (kept for the admin dead-letter views), which may carry provider or DB
+    details; owners get the same classified reason the research itself reports."""
+    if job is None or not job.error:
+        return job
+    return job.model_copy(update={"error": ResearchService._failure_message(RuntimeError(job.error))})
+
+
+# Cells a spreadsheet would evaluate as a formula (OWASP CSV injection): = + - @, tab, CR.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_CSV_FORMULA_TRIGGERS = frozenset("=+-@")
+# Excel opens a double-clicked .csv with the OS list separator, which is ';', not ',',
+# in the ru, kk, es and de locales. There a line is one run of text cut at each ';', and
+# the quotes the writer puts around a cell (past the first) fall mid-field, where they
+# quote nothing: the text after a ';' in a cell becomes a cell of its own, and the text
+# after a CR or LF starts a new row. Each such piece is checked like a whole cell, and
+# past any '"' too: the writer doubles each '"' of a quoted cell, and a piece opening
+# with '""=' is not one to trust a spreadsheet to read as text.
+_CSV_PIECE_BREAKS = frozenset(";\r\n")
+_CSV_PIECE_BREAK_RE = re.compile(r"[;\r\n]")
+_CSV_PIECE_PREFIXES = tuple(p for p in _CSV_FORMULA_PREFIXES if p not in _CSV_PIECE_BREAKS)
+# Rows per DB page while streaming an admin CSV export.
+ADMIN_EXPORT_PAGE_SIZE = 500
+
+
+def _starts_like_formula(value: str, start: int = 0, *, piece: bool = False) -> bool:
+    """Whether value[start:] starts like a formula. For a ``piece`` (the text after a
+    ';', CR or LF) the search for its first visible character ends at the next break,
+    where the next piece begins: that one is checked on its own, which also keeps a
+    cell made of many breaks linear to check."""
+    if value.startswith(_CSV_PIECE_PREFIXES if piece else _CSV_FORMULA_PREFIXES, start):
+        return True
+    # Spreadsheets trim leading blanks before parsing a cell, and invisible characters
+    # (NBSP, zero-width space, BOM) hide a trigger from a plain startswith check; the
+    # fullwidth and small forms (＝ ＋ － ＠, ﹦ ...) fold to the ASCII ones under NFKC.
+    for index in range(start, len(value)):
+        char = value[index]
+        if piece and char in _CSV_PIECE_BREAKS:
+            return False
+        if char.isspace() or unicodedata.category(char) == "Cf" or (piece and char == '"'):
+            continue
+        return unicodedata.normalize("NFKC", char) in _CSV_FORMULA_TRIGGERS
+    return False
+
+
+def csv_safe(value: object) -> object:
+    """A text cell that starts like a formula gets a leading single quote, so Excel or
+    Sheets show it as text instead of running it (a user-chosen name or prompt such as
+    '=HYPERLINK(...)' in an admin export). "Starts" means the first visible character,
+    so leading whitespace or zero-width characters do not hide it. The same goes for
+    the text after each ';', CR or LF in the cell (see _CSV_PIECE_BREAKS): its quote
+    goes right after the break. Numbers pass through."""
+    if not isinstance(value, str):
+        return value
+    cuts = [
+        match.end()
+        for match in _CSV_PIECE_BREAK_RE.finditer(value)
+        if _starts_like_formula(value, match.end(), piece=True)
+    ]
+    if cuts:
+        pieces = [value[begin:end] for begin, end in zip([0, *cuts], [*cuts, len(value)])]
+        safe = "'".join(pieces)
+    else:
+        safe = value
+    return "'" + safe if _starts_like_formula(value) else safe
+
+
+def stream_csv(
+    header: list[str],
+    fetch_page: Callable[[int], list],
+    to_row: Callable[[object], list],
+    key: Callable[[object], str],
+) -> Iterator[str]:
+    """CSV text one DB page at a time, so an export never holds every row in memory.
+    The first page is read before the response starts, so a failing DB is a 500 rather
+    than a truncated 200 file."""
+    return _csv_chunks(header, fetch_page(1), fetch_page, to_row, key)
+
+
+def _csv_chunks(header, first_page, fetch_page, to_row, key) -> Iterator[str]:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    # A row already written is skipped: one pushed onto the next page by a row inserted
+    # while the export runs is not repeated.
+    written: set[str] = set()
+    page, items = 1, first_page
+    while True:
+        for item in items:
+            item_key = key(item)
+            if item_key in written:
+                continue
+            written.add(item_key)
+            writer.writerow([csv_safe(cell) for cell in to_row(item)])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        if len(items) < ADMIN_EXPORT_PAGE_SIZE:
+            return
+        page += 1
+        items = fetch_page(page)
+
+
+def _csv_attachment(rows: Iterator[str], filename: str) -> StreamingResponse:
+    # A sync iterator: Starlette pulls it in the threadpool, so the DB pages stay off the loop.
+    return StreamingResponse(
+        rows,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def record_admin_action(
+    request: Request,
+    admin_user: AuthUser,
+    action: str,
+    *,
+    target_type: str,
+    target_id: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """admin_audit_logs row for an admin mutation or bulk PII export (ADMIN-AUDIT). Every
+    non-GET admin route writes one and is throttled by enforce_admin_rate_limit; the
+    maintenance service (execute_maintenance_action) records its own."""
+    get_research_service(request).task_store.record_admin_audit(
+        actor_email=admin_user.email,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        details=details or {},
+        ip_address=extract_client_ip(request),
+    )
+
+
+def extract_client_ip(request: Request) -> str | None:
+    """The caller's address for audit rows, last_ip and telemetry.
+
+    Only the peer address uvicorn resolved (``--proxy-headers`` against the trusted nginx
+    hop, which overwrites X-Forwarded-For with $remote_addr) is used. Raw
+    CF-Connecting-IP / X-Forwarded-For / X-Real-IP headers are client-supplied and would
+    let any caller forge the IP recorded in the admin audit log."""
+    client = request.client
+    return client.host if client and client.host else None
+
+
+# In-process "touched recently" gate for request activity: one allowance per user per
+# interval, checked on the token's subject before any DB work (the stores repeat the
+# check in SQL for the other API workers).
+_activity_touch_gate = SlidingWindowLimiter(window_seconds=USER_ACTIVITY_TOUCH_INTERVAL_SECONDS)
+
+
+def reset_activity_touch_gate() -> None:
+    """Test hook: forget which users were touched recently."""
+    _activity_touch_gate.reset()
+
+
+def _touch_request_activity(request: Request) -> None:
+    """Refresh last_seen/last_ip/UA for the request's (unrevoked) user. Blocking DB I/O:
+    run it in the threadpool, never on the event loop."""
+    user_id = resolve_request_user_id(request)
+    service = getattr(request.app.state, "research_service", None)
+    if not user_id or service is None:
+        return
+    user_agent = request.headers.get("user-agent")
+    service.task_store.touch_user_activity(
+        user_id=user_id,
+        ip_address=extract_client_ip(request),
+        user_agent=user_agent,
+        device=parse_client_ua(user_agent)["device_type"],
+    )
 
 
 def parse_client_ua(ua_string: str | None) -> dict[str, str]:
@@ -187,6 +396,58 @@ def parse_client_ua(ua_string: str | None) -> dict[str, str]:
     return {"browser": browser, "os": os_name, "device_type": device_type}
 
 
+# Research SSE trail cursor: (timestamp of the last streamed entry, how many entries with
+# that timestamp were streamed). The stored trail is sorted by timestamp and capped at
+# graph_trail_history_limit, so a positional cursor stops moving once the cap is reached.
+TrailCursor = tuple[str, int]
+
+
+def unsent_trail_entries(
+    trail: list[dict], cursor: TrailCursor | None
+) -> list[tuple[dict, TrailCursor]]:
+    """Trail entries after `cursor`, each with the cursor that points at it."""
+    fresh: list[tuple[dict, TrailCursor]] = []
+    current_timestamp, same_timestamp_count = None, 0
+    for entry in trail:
+        timestamp = str(entry.get("timestamp") or "")
+        if timestamp == current_timestamp:
+            same_timestamp_count += 1
+        else:
+            current_timestamp, same_timestamp_count = timestamp, 1
+        if cursor is not None and (
+            timestamp < cursor[0] or (timestamp == cursor[0] and same_timestamp_count <= cursor[1])
+        ):
+            continue
+        fresh.append((entry, (timestamp, same_timestamp_count)))
+    return fresh
+
+
+def format_trail_cursor(cursor: TrailCursor) -> str:
+    return f"{cursor[0]}|{cursor[1]}"
+
+
+def parse_trail_cursor(value: str | None) -> TrailCursor | None:
+    timestamp, _, count = (value or "").rpartition("|")
+    # ASCII digits only: isdigit() also accepts superscripts ("\xb2" is a valid latin-1
+    # header byte) that int() rejects, so a malformed Last-Event-ID raised a 500.
+    if not timestamp or not (count.isascii() and count.isdigit()):
+        return None
+    return timestamp, int(count)
+
+
+# The only shape of client X-Request-ID that is kept. The id is bound into every log record
+# of the request and echoed back, so a free-form value could forge key=value fields in text
+# logs, collide with other requests' ids or inflate each log line by kilobytes.
+_CLIENT_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def accepted_request_id(client_value: str | None) -> str:
+    """The client's X-Request-ID if it matches ^[A-Za-z0-9._-]{1,64}$, else a new id."""
+    if client_value and _CLIENT_REQUEST_ID.fullmatch(client_value):
+        return client_value
+    return uuid.uuid4().hex
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
@@ -208,7 +469,7 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def correlation_middleware(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        request_id = accepted_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         started_at = time.perf_counter()
         with bind_observability_context(
@@ -225,34 +486,18 @@ def create_app() -> FastAPI:
         )
         response.headers["X-Request-ID"] = request_id
 
-        # Automatic server-side user activity telemetry
+        # Automatic server-side user activity telemetry: at most once a minute per user
+        # (gated on the token subject, so repeat requests skip the DB entirely), and the
+        # identity lookup + UPDATE run in the threadpool, never on the event loop.
+        # Revoked tokens (password changed) attribute nothing, same rule as auth.
         path_str = str(request.url.path)
         if not path_str.startswith("/metrics") and not path_str.startswith("/health"):
-            auth_header = request.headers.get("authorization")
-            token_str = None
-            if auth_header and auth_header.startswith("Bearer "):
-                token_str = auth_header.split(" ", 1)[1]
-            elif settings.auth_cookie_name in request.cookies:
-                token_str = request.cookies[settings.auth_cookie_name]
-
-            if token_str:
+            subject = request_token_subject(request)
+            if subject and _activity_touch_gate.allow(subject, 1):
                 try:
-                    dec = decode_token(token_str)
-                    uid = dec.get("sub")
-                    if uid:
-                        service = getattr(request.app.state, "research_service", None)
-                        if service and hasattr(service, "task_store"):
-                            c_ip = extract_client_ip(request)
-                            u_agent = request.headers.get("user-agent")
-                            dev_info = parse_client_ua(u_agent)
-                            service.task_store.touch_user_activity(
-                                user_id=uid,
-                                ip_address=c_ip,
-                                user_agent=u_agent,
-                                device=dev_info["device_type"],
-                            )
+                    await run_in_threadpool(_touch_request_activity, request)
                 except Exception:
-                    pass
+                    logger.warning("user_activity_touch_failed", exc_info=True)
         # Baseline security headers (SEC-009). HSTS only when cookies are Secure (i.e. served
         # over HTTPS). CSP is left to the SPA's own server — this API is JSON-first.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -274,9 +519,10 @@ def create_app() -> FastAPI:
     return app
 
 
-def _issue_session(response: Response, user: AuthUser) -> str:
-    """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer)."""
-    token = create_token(user.id, email=user.email, token_version=user.token_version)
+def _issue_session(response: Response, user: AuthUser, *, amr: list[str] | None = None) -> str:
+    """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer).
+    ``amr`` names how the user just authenticated; only the Google callback passes it."""
+    token = create_token(user.id, email=user.email, token_version=user.token_version, amr=amr)
     response.set_cookie(
         key=settings.auth_cookie_name,
         value=token,
@@ -325,15 +571,28 @@ def register_routes(app: FastAPI) -> None:
 
     @app.post("/v1/auth/login", response_model=AuthSession, dependencies=auth_rate_limit)
     def login(payload: LoginRequest, response: Response, request: Request):
+        enforce_login_account_rate_limit(payload.email)  # per-account, on top of per-IP
         user = get_research_service(request).authenticate_user(payload.email, payload.password)
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
-    @app.post("/v1/auth/logout")
-    def logout(response: Response):
+    @app.post(_LOGOUT_PATH)
+    def logout(request: Request, response: Response):
+        """Sign out everywhere: revoke every session token of the caller's account (its
+        token_version is bumped, so all devices are signed out) and clear the session
+        cookies. Always 200, also without a valid session; ``revoked`` says whether an
+        account's sessions were revoked."""
+        revoked = False
+        try:
+            user_id = resolve_request_user_id(request)
+            if user_id:
+                revoked = get_research_service(request).revoke_user_sessions(user_id)
+        except Exception:
+            # This browser is still signed out below; the other devices are not.
+            logger.exception("logout_revoke_failed")
         response.delete_cookie(settings.auth_cookie_name, path="/")
         response.delete_cookie(settings.csrf_cookie_name, path="/")
-        return {"status": "ok"}
+        return {"status": "ok", "revoked": revoked}
 
     @app.get("/v1/auth/me", response_model=AuthUser)
     def me(user: AuthUser = Depends(get_current_user)):
@@ -370,7 +629,9 @@ def register_routes(app: FastAPI) -> None:
         # CSRF state bound to the browser: a short-lived signed token carried in BOTH the URL
         # and an httpOnly SameSite=Lax cookie. The callback requires them to match, so a state
         # minted for one browser can't be used to complete a login in another (login-CSRF).
-        state = create_token(secrets.token_urlsafe(8), ttl_seconds=600)
+        # Its own purpose claim: signed with the session key, it must never pass as a
+        # session token (and cost an identity lookup or a limiter slot as one).
+        state = create_token(secrets.token_urlsafe(8), ttl_seconds=600, purpose=OAUTH_STATE_PURPOSE)
         redirect = RedirectResponse(build_authorization_url(state), status_code=302)
         redirect.set_cookie(
             "oauth_state", state, max_age=600, httponly=True,
@@ -378,32 +639,58 @@ def register_routes(app: FastAPI) -> None:
         )
         return redirect
 
+    def _oauth_failure(reason: str) -> RedirectResponse:
+        # The callback is a full-page navigation: send the browser back to the SPA's login
+        # page with a stable code instead of a raw JSON error (or provider exception text).
+        redirect = RedirectResponse(f"/login?error={reason}", status_code=302)
+        redirect.delete_cookie("oauth_state", path="/")
+        return redirect
+
     @app.get("/v1/auth/google/callback")
     def google_callback(request: Request, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         cookie_state = request.cookies.get("oauth_state")
-        if not code or decode_token(state) is None or not cookie_state or cookie_state != state:
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+        if (
+            not code
+            or decode_token(state, purpose=OAUTH_STATE_PURPOSE) is None
+            or not cookie_state
+            or cookie_state != state
+        ):
+            logger.warning("google_oauth_invalid_state")
+            return _oauth_failure("oauth_failed")
         try:
             userinfo = fetch_userinfo(code)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Google sign-in failed: {exc}")
+        except Exception:
+            logger.exception("google_oauth_userinfo_failed")
+            return _oauth_failure("oauth_failed")
         email = userinfo.get("email")
         verified = userinfo.get("email_verified")
         if not email or verified not in (True, "true"):
-            raise HTTPException(status_code=400, detail="Google account email is not verified")
-        user, created = get_research_service(request).get_or_create_oauth_user(
-            email,
-            google_subject=userinfo.get("sub") or "",
-            name=userinfo.get("name"),
-            avatar_url=userinfo.get("picture"),
-        )
+            logger.warning("google_oauth_email_unverified")
+            return _oauth_failure("oauth_failed")
+        try:
+            user, created = get_research_service(request).get_or_create_oauth_user(
+                email,
+                google_subject=userinfo.get("sub") or "",
+                name=userinfo.get("name"),
+                avatar_url=userinfo.get("picture"),
+            )
+        except ConflictError:
+            # The email already belongs to a local account that is not linked to this Google
+            # identity; it is never merged silently (SEC-ACCOUNT).
+            logger.warning("google_oauth_conflict_unlinked_local_account")
+            return _oauth_failure("oauth_conflict")
+        except Exception:
+            logger.exception("google_oauth_account_resolution_failed")
+            return _oauth_failure("oauth_failed")
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
         redirect.delete_cookie("oauth_state", path="/")
-        _issue_session(redirect, user)  # sets the JWT session cookie
+        # Sets the JWT session cookie. Its amr claim marks a fresh Google sign-in for the
+        # next few minutes (set-password, account deletion: is_fresh_google_auth).
+        _issue_session(redirect, user, amr=[AUTH_METHOD_GOOGLE])
         return redirect
 
     @app.post("/v1/auth/set-password", response_model=AuthSession)
@@ -411,12 +698,16 @@ def register_routes(app: FastAPI) -> None:
         payload: SetPasswordRequest,
         response: Response,
         request: Request,
-        user: AuthUser = Depends(get_current_user),
+        user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
+        """Set or change the password. A first password, or a reset without the current
+        one on a Google-linked account, needs a session from a Google sign-in of the last
+        10 minutes (403 reauth_required otherwise). The new session is a plain one."""
         updated_user = get_research_service(request).set_user_password(
             user.id,
             payload.password,
             current_password=payload.current_password,
+            fresh_google_auth=request_has_fresh_google_auth(request),
         )
         token = _issue_session(response, updated_user)
         return AuthSession(access_token=token, user=updated_user)
@@ -426,17 +717,18 @@ def register_routes(app: FastAPI) -> None:
         payload: DeleteAccountRequest,
         response: Response,
         request: Request,
-        user: AuthUser = Depends(get_current_user),
+        user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
         """Delete the account and all owned data (researches, results, share links).
 
-        No login-rate-limit here on purpose: this is not a credential-guessing
-        surface — it requires an authenticated session, the current password,
-        and passes through the CSRF middleware like every other mutation."""
+        Throttled per user like set-password: whoever holds a stolen session could
+        otherwise guess current_password here without limit. A passwordless account
+        needs a Google sign-in of the last 10 minutes instead (403 reauth_required)."""
         get_research_service(request).delete_user_account(
             user.id,
             current_password=payload.current_password,
             confirm=payload.confirm,
+            fresh_google_auth=request_has_fresh_google_auth(request),
         )
         response.delete_cookie(settings.auth_cookie_name, path="/")
         response.delete_cookie(settings.csrf_cookie_name, path="/")
@@ -458,35 +750,68 @@ def register_routes(app: FastAPI) -> None:
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 
-    @app.get("/health/queues", response_model=QueueMetrics, dependencies=auth_required)
+    # Operator detail (every user's research ids in the maintenance summary, admins'
+    # resolution notes, worker errors): admin only, like /health/detail.
+    @app.get("/health/queues", response_model=QueueMetrics, dependencies=admin_guard)
     def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
 
-    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse, dependencies=admin_guard)
-    def run_queue_maintenance(request: Request):
-        return get_research_service(request).run_queue_maintenance()
+    # Admin mutations: enforce_admin_rate_limit (admin check + per-admin budget) and an
+    # audit row each (record_admin_action). tests/test_admin_audit.py enumerates them.
+    @app.post("/health/queues/maintenance", response_model=QueueMaintenanceResponse)
+    def run_queue_maintenance(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        result = get_research_service(request).run_queue_maintenance()
+        record_admin_action(
+            request,
+            admin_user,
+            "run_queue_maintenance",
+            target_type="maintenance",
+            details={
+                "recovered_count": result.recovered_count,
+                "deleted_count": result.deleted_count,
+                "compacted_count": result.compacted_count,
+            },
+        )
+        return result
 
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/ack",
         response_model=OperationalHealth.RecommendationEntry,
-        dependencies=admin_guard,
     )
-    def acknowledge_operational_recommendation(code: str, request: Request):
-        return get_research_service(request).acknowledge_operational_recommendation(code)
+    def acknowledge_operational_recommendation(
+        code: str,
+        request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
+    ):
+        entry = get_research_service(request).acknowledge_operational_recommendation(code)
+        record_admin_action(
+            request, admin_user, "acknowledge_recommendation", target_type="recommendation", target_id=code
+        )
+        return entry
 
     @app.post(
         "/health/queues/operational-health/recommendations/{code}/resolve",
         response_model=OperationalHealth.RecommendationEntry,
-        dependencies=admin_guard,
     )
     def resolve_operational_recommendation(
         code: str,
         payload: OperationalRecommendationResolveRequest,
         request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
-        return get_research_service(request).resolve_operational_recommendation(code, payload.note)
+        entry = get_research_service(request).resolve_operational_recommendation(code, payload.note)
+        record_admin_action(
+            request,
+            admin_user,
+            "resolve_recommendation",
+            target_type="recommendation",
+            target_id=code,
+            details={"note": entry.resolution_note},
+        )
+        return entry
 
-    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=auth_required)
+    # last_error is the worker's raw exception text (DB host, IP, user): admin only.
+    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=admin_guard)
     def worker_health(worker_name: str, request: Request):
         heartbeat = get_research_service(request).get_worker_heartbeat(worker_name)
         if not heartbeat:
@@ -533,14 +858,27 @@ def register_routes(app: FastAPI) -> None:
     def get_task_summary(task_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).get_task_summary(task_id, user_id=owner)
 
-    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
+    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
     def update_task(
         task_id: str,
         update: TaskUpdate,
         request: Request,
-        owner: str | None = Depends(scope_user_id),
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
-        task = get_research_service(request).update_task(task_id, update, user_id=owner)
+        """Admin maintenance: rewrite a task's status, results, log or metrics (any
+        owner's). Not for owners: the results are a finished report's evidence, which its
+        sources, verification and confidence (also on the public share page) read live."""
+        service = get_research_service(request)
+        if service.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        details: dict = {"fields": sorted(update.model_fields_set)}
+        if update.status is not None:
+            details["status"] = update.status.value
+        if update.result is not None:
+            details["result_count"] = len(update.result)
+        # Written first, like delete_user: the rewrite must not happen unaudited.
+        record_admin_action(request, admin_user, "update_task", target_type="task", target_id=task_id, details=details)
+        task = service.update_task(task_id, update)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task
@@ -554,7 +892,7 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_latest_search_task_job(task_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/search-jobs/{job_id}", response_model=SearchTaskJob, dependencies=auth_required)
     def get_search_job(
@@ -565,7 +903,7 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_search_task_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Search job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/search-jobs", response_model=List[SearchTaskJob], dependencies=admin_guard)
     def list_search_jobs(status: str, request: Request):
@@ -576,17 +914,35 @@ def register_routes(app: FastAPI) -> None:
             return service.list_dead_letter_search_task_jobs()
         raise HTTPException(status_code=422, detail="Unsupported search job status filter")
 
-    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob, dependencies=admin_guard)
-    def requeue_search_job(job_id: str, request: Request):
-        return get_research_service(request).requeue_search_task_job(job_id)
+    @app.post("/v1/search-jobs/{job_id}/requeue", response_model=SearchTaskJob)
+    def requeue_search_job(job_id: str, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        job = get_research_service(request).requeue_search_task_job(job_id)
+        record_admin_action(request, admin_user, "requeue_search_job", target_type="maintenance", target_id=job_id)
+        return job
 
-    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    def recover_stale_search_jobs(request: Request):
-        return get_research_service(request).recover_stale_search_task_jobs()
+    @app.post("/v1/search-jobs/recover-stale", response_model=JobRecoveryResponse)
+    def recover_stale_search_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        recovery = get_research_service(request).recover_stale_search_task_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "recover_stale_search_jobs",
+            target_type="maintenance",
+            details={"affected_count": recovery.recovered_count, "job_ids": recovery.recovered_job_ids[:10]},
+        )
+        return recovery
 
-    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    def cleanup_search_jobs(request: Request):
-        return get_research_service(request).cleanup_old_search_task_jobs()
+    @app.post("/v1/search-jobs/cleanup", response_model=JobCleanupResponse)
+    def cleanup_search_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        cleanup = get_research_service(request).cleanup_old_search_task_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "cleanup_search_jobs",
+            target_type="maintenance",
+            details={"affected_count": cleanup.deleted_count},
+        )
+        return cleanup
 
     @app.get("/v1/research", response_model=List[ResearchHistoryItem])
     def list_researches(request: Request, limit: int = Query(20, ge=1, le=200), owner: str | None = Depends(scope_user_id)):
@@ -620,7 +976,8 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            # The research itself is already accepted; only the admin prompt log misses it.
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
         # LLM decompose runs after response is sent — user gets research_id instantly
         background_tasks.add_task(service.decompose_and_enqueue, research_id, payload)
         return response
@@ -643,70 +1000,96 @@ def register_routes(app: FastAPI) -> None:
         job = get_research_service(request).get_research_finalize_job(job_id, user_id=owner)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
-        return job
+        return _owner_job_view(job)
 
     @app.get("/v1/research/{research_id}/finalize-job", response_model=ResearchFinalizeJob, dependencies=research_guard)
     def get_latest_finalize_job(research_id: str, request: Request):
         job = get_research_service(request).get_latest_research_finalize_job(research_id)
         if not job:
             raise HTTPException(status_code=404, detail="Finalize job not found")
+        return _owner_job_view(job)
+
+    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob)
+    def requeue_finalize_job(job_id: str, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        job = get_research_service(request).requeue_research_finalize_job(job_id)
+        record_admin_action(request, admin_user, "requeue_finalize_job", target_type="maintenance", target_id=job_id)
         return job
 
-    @app.post("/v1/research/finalize-jobs/{job_id}/requeue", response_model=ResearchFinalizeJob, dependencies=admin_guard)
-    def requeue_finalize_job(job_id: str, request: Request):
-        return get_research_service(request).requeue_research_finalize_job(job_id)
+    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse)
+    def recover_stale_finalize_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        recovery = get_research_service(request).recover_stale_research_finalize_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "recover_stale_finalize_jobs",
+            target_type="maintenance",
+            details={"affected_count": recovery.recovered_count, "job_ids": recovery.recovered_job_ids[:10]},
+        )
+        return recovery
 
-    @app.post("/v1/research/finalize-jobs/recover-stale", response_model=JobRecoveryResponse, dependencies=admin_guard)
-    def recover_stale_finalize_jobs(request: Request):
-        return get_research_service(request).recover_stale_research_finalize_jobs()
-
-    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse, dependencies=admin_guard)
-    def cleanup_finalize_jobs(request: Request):
-        return get_research_service(request).cleanup_old_research_finalize_jobs()
+    @app.post("/v1/research/finalize-jobs/cleanup", response_model=JobCleanupResponse)
+    def cleanup_finalize_jobs(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        cleanup = get_research_service(request).cleanup_old_research_finalize_jobs()
+        record_admin_action(
+            request,
+            admin_user,
+            "cleanup_finalize_jobs",
+            target_type="maintenance",
+            details={"affected_count": cleanup.deleted_count},
+        )
+        return cleanup
 
     # ── Client Telemetry Ingestion ────────────────────────────────────────────
+    # Authenticated-only and CSRF-checked: anonymous callers are refused (401, or 403 from
+    # the CSRF check when there is no credential at all); each user gets a per-minute
+    # budget (telemetry_user_id).
     @app.post("/v1/telemetry/event")
     def record_telemetry_event(
         payload: UserTelemetryEventInput,
         request: Request,
+        user_id: str | None = Depends(telemetry_user_id),
     ):
+        if not user_id:
+            # Auth disabled and no real account behind the request: nothing to attribute.
+            return {"status": "ignored", "event_id": None}
         service = get_research_service(request)
         c_ip = extract_client_ip(request)
         u_agent = request.headers.get("user-agent")
 
-        user_id = None
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ", 1)[1]
-            try:
-                decoded = decode_token(token)
-                user_id = decoded.get("sub")
-            except Exception:
-                pass
-        elif settings.auth_cookie_name in request.cookies:
-            try:
-                decoded = decode_token(request.cookies[settings.auth_cookie_name])
-                user_id = decoded.get("sub")
-            except Exception:
-                pass
+        if payload.event_name == "heartbeat":
+            # "Still here" only: bump the caller's session (created from the User-Agent if
+            # its session_start was lost) instead of adding a user_events row per tab every
+            # 30 s. users.last_seen_at is kept fresh by the activity middleware.
+            if payload.session_id:
+                ua_parsed = parse_client_ua(u_agent)
+                service.task_store.record_user_session(
+                    user_id=user_id,
+                    session_id=payload.session_id,
+                    ip_address=c_ip,
+                    user_agent=u_agent,
+                    device_type=ua_parsed["device_type"],
+                    browser=ua_parsed["browser"],
+                    os=ua_parsed["os"],
+                )
+            return {"status": "ok", "event_id": None}
 
-        if payload.device_info and user_id:
+        if payload.device_info:
             dev = payload.device_info
             ua_parsed = parse_client_ua(u_agent)
+            # No country/city: the only source would be client-sent CF-IP* headers (there
+            # is no Cloudflare in front of this stack), which anyone can forge.
             service.task_store.record_user_session(
                 user_id=user_id,
                 session_id=payload.session_id or str(uuid.uuid4()),
                 ip_address=c_ip,
                 user_agent=u_agent,
-                device_type=dev.get("device_type") or ua_parsed["device_type"],
-                browser=dev.get("browser") or ua_parsed["browser"],
-                os=dev.get("os") or ua_parsed["os"],
-                screen_res=dev.get("screen_res"),
-                viewport=dev.get("viewport"),
-                language=dev.get("language"),
-                client_timezone=dev.get("timezone"),
-                country=request.headers.get("cf-ipcountry"),
-                city=request.headers.get("cf-ipcity"),
+                device_type=dev.device_type or ua_parsed["device_type"],
+                browser=dev.browser or ua_parsed["browser"],
+                os=dev.os or ua_parsed["os"],
+                screen_res=dev.screen_res,
+                viewport=dev.viewport,
+                language=dev.language,
+                client_timezone=dev.timezone,
             )
 
         event_id = service.task_store.record_user_event(
@@ -761,20 +1144,22 @@ def register_routes(app: FastAPI) -> None:
             user_id=user_id,
         )
 
-    @app.get("/v1/admin/users/export", dependencies=admin_guard)
-    def admin_users_export(request: Request):
-        import csv
-        import io
-        users_resp = get_research_service(request).task_store.get_admin_users_list(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "user_id", "email", "name", "role", "is_online", "last_seen_at",
-            "last_ip", "last_device", "last_browser", "last_os",
-            "researches_count", "total_tokens", "total_cost_usd", "created_at"
-        ])
-        for u in users_resp.users:
-            writer.writerow([
+    # Bulk exports carry every user's email, IP and prompts: audited and throttled too.
+    @app.get("/v1/admin/users/export")
+    def admin_users_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_users", target_type="export")
+        store = get_research_service(request).task_store
+        rows = stream_csv(
+            [
+                "user_id", "email", "name", "role", "is_online", "last_seen_at",
+                "last_ip", "last_device", "last_browser", "last_os",
+                "researches_count", "total_tokens", "total_cost_usd", "created_at",
+            ],
+            # Registration order: unlike last_seen, it does not move while we page.
+            lambda page: store.get_admin_users_list(
+                page=page, page_size=ADMIN_EXPORT_PAGE_SIZE, sort_by="registered"
+            ).users,
+            lambda u: [
                 u.id,
                 u.email,
                 u.name or "",
@@ -789,13 +1174,10 @@ def register_routes(app: FastAPI) -> None:
                 u.total_tokens,
                 u.total_cost_usd,
                 u.created_at,
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=users_telemetry.csv"},
+            ],
+            key=lambda u: u.id,
         )
+        return _csv_attachment(rows, "users_telemetry.csv")
 
     @app.get("/v1/admin/prompts", response_model=AdminPromptsResponse, dependencies=admin_guard)
     def admin_prompts(
@@ -814,19 +1196,27 @@ def register_routes(app: FastAPI) -> None:
             prompt_type=prompt_type,
         )
 
-    @app.get("/v1/admin/prompts/export", dependencies=admin_guard)
-    def admin_prompts_export(request: Request):
-        import csv
-        import io
-        resp = get_research_service(request).task_store.get_admin_prompts(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
-            "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at"
-        ])
-        for p in resp.prompts:
-            writer.writerow([
+    @app.get("/v1/admin/prompts/export")
+    def admin_prompts_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_prompts", target_type="export")
+        store = get_research_service(request).task_store
+        last_exported: list[AdminPromptItem] = []  # the keyset cursor
+
+        def next_page(_page: int) -> list[AdminPromptItem]:
+            # From the previous page's last row: no COUNT and no sort before an OFFSET per page.
+            after = last_exported[0] if last_exported else None
+            items = store.get_admin_prompts_after(after, limit=ADMIN_EXPORT_PAGE_SIZE)
+            if items:
+                last_exported[:] = [items[-1]]
+            return items
+
+        rows = stream_csv(
+            [
+                "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
+                "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at",
+            ],
+            next_page,
+            lambda p: [
                 p.id,
                 p.prompt_type,
                 p.research_id,
@@ -839,13 +1229,10 @@ def register_routes(app: FastAPI) -> None:
                 p.total_tokens,
                 p.cost_usd,
                 p.created_at,
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=user_prompts.csv"},
+            ],
+            key=lambda p: p.id,
         )
+        return _csv_attachment(rows, "user_prompts.csv")
 
     @app.get("/v1/admin/users/{user_id}", response_model=AdminUserDetailResponse, dependencies=admin_guard)
     def admin_user_detail(user_id: str, request: Request):
@@ -858,23 +1245,30 @@ def register_routes(app: FastAPI) -> None:
     def admin_delete_user(
         user_id: str,
         request: Request,
-        admin_user: AuthUser = Depends(require_admin),
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
         if admin_user.id == user_id:
             raise HTTPException(status_code=400, detail="Cannot delete your own admin account")
         service = get_research_service(request)
-        deleted = service.task_store.delete_user(user_id)
-        if not deleted:
+        target = service.task_store.get_user_by_id(user_id)
+        if target is None:
             raise HTTPException(status_code=404, detail="User not found")
-        client_ip = extract_client_ip(request)
-        service.task_store.record_admin_audit(
-            actor_email=admin_user.email,
-            action="delete_user",
+        # Only a real admin is protected: an unverified account squatting an ADMIN_EMAILS
+        # address holds no admin rights, and deleting it is the remedy.
+        if has_admin_rights(target.email, target.google_subject, target.admin_provisioned_at):
+            raise HTTPException(status_code=403, detail="Admin accounts cannot be deleted from the admin panel")
+        # Audit before deleting: afterwards the account's email is gone, and a failed
+        # audit write must not leave a deletion nobody recorded.
+        record_admin_action(
+            request,
+            admin_user,
+            "delete_user",
             target_type="user",
             target_id=user_id,
-            details={"deleted_user_id": user_id},
-            ip_address=client_ip,
+            details={"deleted_user_id": user_id, "deleted_email": target.email},
         )
+        if not service.task_store.delete_user(user_id):
+            raise HTTPException(status_code=404, detail="User not found")
         return {"status": "ok", "deleted_user_id": user_id}
 
     @app.get("/v1/admin/overview", response_model=AdminOverviewResponse, dependencies=admin_guard)
@@ -889,31 +1283,25 @@ def register_routes(app: FastAPI) -> None:
     ):
         return get_research_service(request).get_admin_token_analytics(page=page, page_size=page_size)
 
-    @app.get("/v1/admin/tokens/export", dependencies=admin_guard)
-    def admin_tokens_export(request: Request):
-        import csv
-        import io
-        analytics = get_research_service(request).get_admin_token_analytics(page=1, page_size=10000)
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"])
-        for item in analytics.researches:
-            clean_prompt = item.prompt.replace("\n", " ").replace("\r", "")
-            writer.writerow([
+    @app.get("/v1/admin/tokens/export")
+    def admin_tokens_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
+        record_admin_action(request, admin_user, "export_tokens", target_type="export")  # has prompt text
+        store = get_research_service(request).task_store
+        rows = stream_csv(
+            ["research_id", "prompt", "depth", "status", "total_tokens", "estimated_cost_usd", "created_at"],
+            lambda page: store.get_admin_token_research_usage(page=page, page_size=ADMIN_EXPORT_PAGE_SIZE),
+            lambda item: [
                 item.research_id,
-                clean_prompt,
+                item.prompt.replace("\n", " ").replace("\r", ""),
                 item.depth,
                 item.status,
                 item.total_tokens,
                 item.estimated_cost_usd,
                 item.created_at.isoformat(),
-            ])
-        csv_content = output.getvalue()
-        return Response(
-            content=csv_content,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=token_usage.csv"},
+            ],
+            key=lambda item: item.research_id,
         )
+        return _csv_attachment(rows, "token_usage.csv")
 
     @app.get("/v1/admin/agents", response_model=List[AgentMetadataItem], dependencies=admin_guard)
     def admin_agents(request: Request):
@@ -931,40 +1319,50 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.post("/v1/admin/operations/preview", response_model=AdminDryRunResult, dependencies=admin_guard)
-    def admin_operations_preview(payload: dict, request: Request):
-        action = payload.get("action", "")
-        params = payload.get("params", {})
-        return get_research_service(request).preview_maintenance_action(action=action, params=params)
+    def admin_operations_preview(payload: MaintenanceActionRequest, request: Request):
+        return get_research_service(request).preview_maintenance_action(payload)
 
     @app.post("/v1/admin/operations/execute", response_model=AdminDryRunResult)
-    def admin_operations_execute(payload: dict, request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
-        action = payload.get("action", "")
-        params = payload.get("params", {})
-        client_ip = request.client.host if request.client else None
+    def admin_operations_execute(
+        payload: MaintenanceActionRequest,
+        request: Request,
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
+    ):
         return get_research_service(request).execute_maintenance_action(
-            action=action,
+            payload,
             actor_email=admin_user.email,
-            params=params,
-            ip_address=client_ip,
+            ip_address=extract_client_ip(request),
         )
 
     @app.get("/v1/admin/stream")
     async def admin_stream(request: Request):
-        require_admin(request)
+        # Both the admin check (a users lookup) and the overview hit the DB: threadpool.
+        await run_in_threadpool(require_admin, request)
         service = get_research_service(request)
 
         async def event_generator():
-            import asyncio
             while True:
                 if await request.is_disconnected():
                     break
+                # Re-authorize every tick: an expired or revoked token (token_version) or an
+                # email dropped from ADMIN_EMAILS ends the stream instead of keeping it live.
                 try:
-                    overview = service.get_admin_overview()
-                    data = overview.model_dump_json()
-                    yield f"event: overview\ndata: {data}\n\n"
-                except Exception as err:
-                    yield f"event: error\ndata: {json.dumps({'error': str(err)})}\n\n"
-                await asyncio.sleep(2.0)
+                    await run_in_threadpool(require_admin, request)
+                except HTTPException:
+                    yield f"event: error\ndata: {json.dumps({'error': 'unauthorized'})}\n\n"
+                    break
+                except Exception:
+                    logger.exception("admin_stream_authorization_failed")
+                    yield f"event: error\ndata: {json.dumps({'error': 'overview_unavailable'})}\n\n"
+                    break
+                try:
+                    overview = await run_in_threadpool(service.get_admin_overview)
+                    yield f"event: overview\ndata: {overview.model_dump_json()}\n\n"
+                except Exception:
+                    # Never the exception text: DB errors carry SQL and connection details.
+                    logger.exception("admin_stream_overview_failed")
+                    yield f"event: error\ndata: {json.dumps({'error': 'overview_unavailable'})}\n\n"
+                await asyncio.sleep(ADMIN_STREAM_INTERVAL_SECONDS)
 
         return StreamingResponse(
             event_generator(),
@@ -991,6 +1389,7 @@ def register_routes(app: FastAPI) -> None:
         research_id: str,
         request: Request,
         background_tasks: BackgroundTasks,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
         owner: str | None = Depends(scope_user_id),
     ):
         return _public_record(
@@ -1010,7 +1409,12 @@ def register_routes(app: FastAPI) -> None:
         return _public_record(get_research_service(request).get_research_status(research_id))
 
     @app.get("/v1/research/{research_id}/summary", response_model=ResearchSummary, dependencies=research_guard)
-    def get_research_summary(research_id: str, request: Request):
+    def get_research_summary(
+        research_id: str,
+        request: Request,
+        # May compute the LLM follow-up recommendations (then stored until the tasks change).
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return get_research_service(request).get_research_summary(research_id)
 
     @app.get("/v1/research/{research_id}/status", response_model=ResearchStatusSummary, dependencies=research_guard)
@@ -1114,7 +1518,12 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).get_research_clarifications(research_id)
 
     @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord, dependencies=research_guard)
-    def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
+    def submit_clarifications(
+        research_id: str,
+        payload: ClarifyAnswers,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return _public_record(get_research_service(request).submit_clarifications(research_id, payload.answers))
 
     @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
@@ -1126,7 +1535,11 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).update_research_plan(research_id, payload)
 
     @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord, dependencies=research_guard)
-    def approve_research_plan(research_id: str, request: Request):
+    def approve_research_plan(
+        research_id: str,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return _public_record(get_research_service(request).approve_research_plan(research_id))
 
     @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage], dependencies=research_guard)
@@ -1155,7 +1568,7 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
         answer = service.generate_research_answer(research_id, payload.question)
         service.append_research_message(research_id, "user", payload.question)
         service.append_research_message(
@@ -1180,7 +1593,9 @@ def register_routes(app: FastAPI) -> None:
         service = get_research_service(request)
         question = payload.question
         try:
-            service.task_store.record_user_event(
+            # Blocking DB write inside an async route: keep it off the event loop.
+            await run_in_threadpool(
+                service.task_store.record_user_event,
                 event_name="chat_prompt",
                 event_category="prompt",
                 details={
@@ -1192,7 +1607,7 @@ def register_routes(app: FastAPI) -> None:
                 user_agent=request.headers.get("user-agent"),
             )
         except Exception:
-            pass
+            logger.warning("prompt_event_record_failed research_id=%s", research_id, exc_info=True)
 
         def sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -1217,8 +1632,10 @@ def register_routes(app: FastAPI) -> None:
                     emit("final", answer)
                 except ServiceError as exc:
                     emit("error", str(exc.detail))
-                except Exception as exc:  # pragma: no cover - defensive
-                    emit("error", str(exc))
+                except Exception:
+                    # Raw exception text can carry provider/DB details: log it, send a generic reason.
+                    logger.exception("chat_stream_answer_failed research_id=%s", research_id)
+                    emit("error", "Answer failed. Please try again.")
 
             threading.Thread(target=worker, daemon=True, name=f"chat-{research_id[:8]}").start()
             yield ": connected\n\n"
@@ -1269,15 +1686,18 @@ def register_routes(app: FastAPI) -> None:
         pub/sub wait runs on redis.asyncio, so each open stream costs zero
         threadpool tokens — /health stays responsive under many viewers."""
         service = get_research_service(request)
+        # A reconnecting EventSource resends the id of the last trace step it received.
+        resume_cursor = parse_trail_cursor(request.headers.get("last-event-id"))
 
-        def sse(event: str, data: dict) -> str:
-            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        def sse(event: str, data: dict, event_id: str | None = None) -> str:
+            id_line = f"id: {event_id}\n" if event_id else ""
+            return f"{id_line}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
         async def event_stream():
             last_status: str | None = None
             last_report: str | None = None
             last_reasoning: str | None = None
-            last_trail_len = 0
+            trail_cursor = resume_cursor
             # Sized for long deep-research workloads (HARD can take 30-45+ minutes);
             # dynamically bumped whenever new steps/reasoning/reports arrive.
             deadline = time.monotonic() + 3600
@@ -1309,20 +1729,20 @@ def register_routes(app: FastAPI) -> None:
                         last_status = status
                         yield sse("status_change", {"status": status})
 
-                    trail = research.graph_trail or []
-                    if len(trail) > last_trail_len:
-                        for entry in trail[last_trail_len:]:
-                            yield sse("trace_step", {
-                                "step": entry.get("step"),
-                                "detail": entry.get("detail"),
-                                "sources": entry.get("sources") or [],
-                                "agent": entry.get("agent"),
-                                "phase": entry.get("phase"),
-                                "action": entry.get("action"),
-                                "metrics": entry.get("metrics"),
-                                "timestamp": entry.get("timestamp"),
-                            })
-                        last_trail_len = len(trail)
+                    fresh_entries = unsent_trail_entries(research.graph_trail or [], trail_cursor)
+                    for entry, entry_cursor in fresh_entries:
+                        trail_cursor = entry_cursor
+                        yield sse("trace_step", {
+                            "step": entry.get("step"),
+                            "detail": entry.get("detail"),
+                            "sources": entry.get("sources") or [],
+                            "agent": entry.get("agent"),
+                            "phase": entry.get("phase"),
+                            "action": entry.get("action"),
+                            "metrics": entry.get("metrics"),
+                            "timestamp": entry.get("timestamp"),
+                        }, event_id=format_trail_cursor(trail_cursor))
+                    if fresh_entries:
                         deadline = max(deadline, time.monotonic() + 1800)
 
                     reasoning = research.partial_reasoning
@@ -1370,7 +1790,11 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse, dependencies=research_guard)
-    def finalize_research(research_id: str, request: Request):
+    def finalize_research(
+        research_id: str,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         research, job = get_research_service(request).enqueue_research_finalization(research_id)
         return ResearchFinalizeResponse(
             research=research,

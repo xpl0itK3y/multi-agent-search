@@ -41,7 +41,7 @@ jobs:
         run: bash -n scripts/*.sh
       - name: Run backend unit tests with coverage
         run: |
-          python -m pip install pytest-cov
+          python -m pip install pytest-cov==7.1.0 coverage==7.16.1
           python -m pytest -q -m "not postgres" --cov=src --cov-report=term --cov-report=xml
 
   frontend:
@@ -63,6 +63,20 @@ jobs:
         run: npx vue-tsc --noEmit
       - name: Run frontend tests
         run: npm run test
+
+  prometheus-rules:
+    name: Prometheus alert rules
+    runs-on: ubuntu-latest
+    env:
+      # Same digest-pinned image as docker-compose.yml, so CI checks the rules with the
+      # promtool that ships with the Prometheus that loads them.
+      PROMETHEUS_IMAGE: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Check alert rules
+        run: docker run --rm --entrypoint promtool -v "$PWD/ops/prometheus:/rules:ro" "$PROMETHEUS_IMAGE" check rules /rules/alerts.yml
+      - name: Unit-test alert rules
+        run: docker run --rm --entrypoint promtool -v "$PWD/ops/prometheus:/rules:ro" "$PROMETHEUS_IMAGE" test rules /rules/alerts.test.yml
 
   eval:
     name: Offline evaluation gate

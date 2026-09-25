@@ -60,15 +60,20 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+// Double-submit CSRF token (the readable csrf cookie echoed in a header) for
+// cookie-authenticated requests, e.g. after Google OAuth, where there is no Bearer token.
+function csrfHeaders(): Record<string, string> {
+  const csrf = readCookie("csrf_token");
+  return csrf ? { "X-CSRF-Token": csrf } : {};
+}
+
 export function authHeaders(method = "GET"): Record<string, string> {
   const headers: Record<string, string> = {};
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
-  // Double-submit CSRF token for cookie-authenticated mutations (e.g. after Google OAuth,
-  // where there is no Bearer token). Safe methods don't need it.
+  // Mutations need the CSRF token; safe methods don't (file downloads add it themselves).
   if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
-    const csrf = readCookie("csrf_token");
-    if (csrf) headers["X-CSRF-Token"] = csrf;
+    Object.assign(headers, csrfHeaders());
   }
   return headers;
 }
@@ -118,17 +123,49 @@ function isPublicPath(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/r/");
 }
 
-// A stored bearer token the server just rejected is stale — drop it and bounce
-// to /login (with a `redirect` back param) so the user can re-authenticate.
-function recoverFromExpiredSession(hadToken: boolean): void {
-  if (!hadToken) return;
+// Whether this page signed a user in: set once /v1/auth/me, a login or a registration
+// succeeds, cleared by logout. A Google sign-in's session is the httpOnly cookie alone
+// (no bearer token), so a 401 cannot be told from a stale session by the token only.
+let sessionActive = false;
+
+// Whether the server still accepts this page's session: a 401 from /v1/auth/me. Any
+// other answer, or no answer (offline), is no verdict on the session.
+async function sessionRejected(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/v1/auth/me`, { credentials: "include", headers: authHeaders("GET") });
+    return res.status === 401;
+  } catch {
+    return false;
+  }
+}
+
+// A session the server just rejected is stale (expired, or revoked: a logout signs out
+// every device): drop the stored bearer and bounce to /login (with a `redirect` back
+// param) so the user can re-authenticate. Nothing to recover before a sign-in (the
+// page-load /v1/auth/me probe) or on public pages. A cookie-only session is confirmed
+// dead with /v1/auth/me first: JS cannot drop that cookie, so a 401 that is not about
+// the session would otherwise bounce the user to /login and straight back, forever.
+async function recoverFromExpiredSession(hadToken: boolean, hadSession: boolean): Promise<void> {
+  if (!hadToken && !hadSession) return;
   const { pathname, search } = window.location;
   if (isPublicPath(pathname)) return;
+  if (!hadToken && !(await sessionRejected())) return;
+  sessionActive = false;
   setAuthToken(null);
   window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+interface RequestOptions {
+  // false: a 401 from this call means "wrong credential" (a mistyped current
+  // password), not a stale session — keep the token and let the caller show it.
+  sessionRecovery?: boolean;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  { sessionRecovery = true }: RequestOptions = {},
+): Promise<T> {
   const method = init?.method ?? "GET";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -136,17 +173,48 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...authHeaders(method),
   };
   const hadToken = authToken !== null;
+  const hadSession = sessionActive;
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     ...init,
     headers,
   });
   if (!res.ok) {
-    if (res.status === 401) recoverFromExpiredSession(hadToken);
+    if (res.status === 401 && sessionRecovery) await recoverFromExpiredSession(hadToken, hadSession);
     throw await apiErrorFromResponse(res);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+export interface ApiFile {
+  blob: Blob;
+  filename: string | null; // from Content-Disposition, when the server names it
+}
+
+function attachmentFilename(disposition: string | null): string | null {
+  const cd = disposition || "";
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// File downloads (report exports, admin CSVs) go through the same credentials,
+// bearer header and 401 recovery as request(); only the body differs. They always
+// carry the CSRF token too, although they are GETs: the admin CSV exports have side
+// effects (an audit row, the shared admin rate budget), so the server checks the token
+// on them like on a mutation whenever the session is the cookie (a Google sign-in).
+async function fetchFile(path: string): Promise<ApiFile> {
+  const hadToken = authToken !== null;
+  const hadSession = sessionActive;
+  const res = await fetch(`${BASE}${path}`, {
+    credentials: "include",
+    headers: { ...authHeaders("GET"), ...csrfHeaders() },
+  });
+  if (!res.ok) {
+    if (res.status === 401) await recoverFromExpiredSession(hadToken, hadSession);
+    throw await apiErrorFromResponse(res);
+  }
+  return { blob: await res.blob(), filename: attachmentFilename(res.headers.get("Content-Disposition")) };
 }
 
 // Frequent HTTP statuses → `errors.api.*` i18n keys (see web/src/i18n/index.ts).
@@ -160,11 +228,47 @@ const API_STATUS_KEYS: Record<number, string> = {
   500: "server",
 };
 
+// Known server details of a mapped status → a more specific `errors.api.*` key. The
+// server sends no error codes, so these match the English error texts raised in
+// src/services; any other detail gets the status's generic text, never the raw one.
+const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
+  403: [
+    // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
+    [/^This email is reserved for an administrator\b/, "adminEmailReserved"],
+    // An action that needs a fresh Google sign-in (see isReauthRequired). The text
+    // speaks of passwords; the account deletion shows its own (SettingsView).
+    [/^reauth_required/, "reauthRequired"],
+  ],
+  409: [
+    [/^A research is already in progress\b/, "researchInProgress"],
+    [/^Research capacity is currently full\b/, "capacityFull"],
+    [/^(?:Email already registered|An account with this email already exists)\b/, "emailTaken"],
+    [/^Report is not ready yet\b/, "reportNotReady"],
+    [/^Only dead-letter \w+ jobs can be requeued\b/, "notDeadLetter"],
+    // An admin requeue of a dead-letter finalize job (job_queue_mixin): the research is
+    // no longer FAILED, a newer job replaced this one, or the job changed concurrently.
+    [/^Only the finalize job of a failed research can be requeued\b/, "finalizeResearchNotFailed"],
+    [/^A newer finalize job has superseded this one\b/, "finalizeJobSuperseded"],
+    [/^Finalize job state changed\b/, "finalizeJobChanged"],
+  ],
+};
+
+// Refused until the user signs in with Google again: POST /v1/auth/set-password for
+// the first password of a Google-only account, or a reset without the current password
+// on a Google-linked one, and DELETE /v1/auth/account for a passwordless account. They
+// need a session from a Google sign-in of the last few minutes.
+export function isReauthRequired(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && err.detail.startsWith("reauth_required");
+}
+
 // Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
-// statuses get a translated text; anything else falls back to the server
-// detail, and network-level failures (fetch's TypeError) to a network text.
+// statuses get a translated text (a specific one for known details); anything
+// else falls back to the server detail, and network-level failures (fetch's
+// TypeError) to a network text.
 export function apiErrorMessage(err: unknown, t: (key: string) => string): string {
   if (err instanceof ApiError) {
+    const specific = API_DETAIL_KEYS[err.status]?.find(([pattern]) => pattern.test(err.detail));
+    if (specific) return t(`errors.api.${specific[1]}`);
     const key = API_STATUS_KEYS[err.status];
     if (key) return t(`errors.api.${key}`);
     return err.detail || t("errors.api.unexpected");
@@ -175,7 +279,11 @@ export function apiErrorMessage(err: unknown, t: (key: string) => string): strin
 }
 
 export const api = {
-  me: () => request<AuthUser>("/v1/auth/me"),
+  me: async () => {
+    const user = await request<AuthUser>("/v1/auth/me");
+    sessionActive = true;
+    return user;
+  },
 
   register: async (email: string, password: string) => {
     const res = await request<AuthSession>("/v1/auth/register", {
@@ -183,6 +291,7 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     setAuthToken(res.access_token);
+    sessionActive = true;
     return res;
   },
 
@@ -192,14 +301,17 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     setAuthToken(res.access_token);
+    sessionActive = true;
     return res;
   },
 
+  // A 401 here only says the session had already ended: the caller signs out anyway.
   logout: async () => {
     try {
-      return await request<{ status: string }>("/v1/auth/logout", { method: "POST" });
+      return await request<{ status: string }>("/v1/auth/logout", { method: "POST" }, { sessionRecovery: false });
     } finally {
       setAuthToken(null);
+      sessionActive = false;
     }
   },
 
@@ -214,18 +326,29 @@ export const api = {
 
   getTokenStats: () => request<UserTokenStats>("/v1/auth/token-stats"),
 
+  // The server requires an explicit confirm flag (DATA-LIFECYCLE); callers invoke
+  // this only after the user confirmed in the Settings delete modal. With a
+  // password sent, a 401 means that password was wrong: no session recovery.
   deleteAccount: async (currentPassword?: string) => {
-    return await request<{ status: string }>("/v1/auth/account", {
-      method: "DELETE",
-      body: JSON.stringify({ current_password: currentPassword }),
-    });
+    return await request<{ status: string }>(
+      "/v1/auth/account",
+      {
+        method: "DELETE",
+        body: JSON.stringify({ current_password: currentPassword, confirm: true }),
+      },
+      { sessionRecovery: currentPassword === undefined },
+    );
   },
 
   setPassword: async (password: string, currentPassword?: string) => {
-    const res = await request<AuthSession>("/v1/auth/set-password", {
-      method: "POST",
-      body: JSON.stringify({ password, current_password: currentPassword }),
-    });
+    const res = await request<AuthSession>(
+      "/v1/auth/set-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ password, current_password: currentPassword }),
+      },
+      { sessionRecovery: currentPassword === undefined },
+    );
     setAuthToken(res.access_token);
     return res;
   },
@@ -332,6 +455,9 @@ export const api = {
   getGraph: (id: string) =>
     request<ResearchGraph>(`/v1/research/${id}/graph`),
 
+  exportReport: (id: string, params: URLSearchParams) =>
+    fetchFile(`/v1/research/${id}/export?${params.toString()}`),
+
   deleteResearch: (id: string) =>
     request<void>(`/v1/research/${id}`, { method: "DELETE" }),
 
@@ -369,21 +495,22 @@ export const adminApi = {
   getTelemetrySummary: () =>
     request<AdminTelemetrySummaryResponse>("/v1/admin/users/analytics/summary"),
 
+  // Offset-paginated (the route takes limit/offset/category, not page/page_size).
   getUserEvents: (
-    page: number = 1,
-    pageSize: number = 50,
+    limit: number = 50,
+    offset: number = 0,
     userId?: string,
     eventName?: string,
-    eventCategory?: string
+    category?: string
   ) => {
-    let url = `/v1/admin/users/events?page=${page}&page_size=${pageSize}`;
+    let url = `/v1/admin/users/events?limit=${limit}&offset=${offset}`;
     if (userId) url += `&user_id=${encodeURIComponent(userId)}`;
     if (eventName) url += `&event_name=${encodeURIComponent(eventName)}`;
-    if (eventCategory) url += `&event_category=${encodeURIComponent(eventCategory)}`;
+    if (category) url += `&category=${encodeURIComponent(category)}`;
     return request<AdminEventLogResponse>(url);
   },
 
-  exportUsersCsvUrl: () => `${BASE}/v1/admin/users/export`,
+  exportUsersCsv: () => fetchFile("/v1/admin/users/export"),
 
   getPrompts: (
     page: number = 1,
@@ -399,7 +526,7 @@ export const adminApi = {
     return request<AdminPromptsResponse>(url);
   },
 
-  exportPromptsCsvUrl: () => `${BASE}/v1/admin/prompts/export`,
+  exportPromptsCsv: () => fetchFile("/v1/admin/prompts/export"),
 
   deleteUser: (userId: string) =>
     request<{ status: string; deleted_user_id: string }>(`/v1/admin/users/${userId}`, {
@@ -411,7 +538,7 @@ export const adminApi = {
   getTokens: (page: number = 1, pageSize: number = 20) =>
     request<AdminTokenAnalyticsResponse>(`/v1/admin/tokens?page=${page}&page_size=${pageSize}`),
 
-  exportTokensCsvUrl: () => `${BASE}/v1/admin/tokens/export`,
+  exportTokensCsv: () => fetchFile("/v1/admin/tokens/export"),
 
   getAgents: () => request<AgentMetadataItem[]>("/v1/admin/agents"),
 
@@ -453,18 +580,3 @@ export const adminApi = {
     return () => es.close();
   },
 };
-
-export const telemetryApi = {
-  recordEvent: (payload: {
-    session_id?: string;
-    event_name: string;
-    event_category?: string;
-    details?: Record<string, any>;
-    device_info?: Record<string, any>;
-  }) =>
-    request<{ ok: boolean; event_id: string }>("/v1/telemetry/event", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-};
-

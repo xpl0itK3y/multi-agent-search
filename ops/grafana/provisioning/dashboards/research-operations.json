@@ -1,7 +1,7 @@
 {
   "uid": "mas-research-operations",
   "title": "Research Operations",
-  "description": "Worker job throughput/outcomes and LLM spend for multi-agent-search.",
+  "description": "Worker job throughput/outcomes and worker-side LLM spend for multi-agent-search.",
   "tags": ["multi-agent-search", "operations"],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -35,6 +35,15 @@
         "includeAll": true,
         "multi": true,
         "sort": 1
+      },
+      {
+        "name": "research_id",
+        "label": "Research ID",
+        "description": "Research id to show API and worker logs for (Logs row).",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" },
+        "hide": 0
       }
     ]
   },
@@ -51,7 +60,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Jobs processed by worker",
-      "description": "Jobs per second per worker replica (mas_worker_jobs_total).",
+      "description": "Job attempts per second per worker replica (mas_worker_jobs_total), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "fieldConfig": {
@@ -78,7 +87,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Jobs processed by type",
-      "description": "Jobs per second split by job type (search, finalize, maintenance).",
+      "description": "Job attempts per second split by job type (search, finalize, maintenance), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "fieldConfig": {
@@ -104,8 +113,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Failed jobs",
-      "description": "Jobs per second ending in status=failure.",
+      "title": "Failed job attempts",
+      "description": "Failed job attempts per second (status=failure). Every failed attempt counts, including one that is then retried, so a job that exhausts JOB_MAX_ATTEMPTS (3) adds three failures; dead-lettered jobs are on Platform Overview.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 9 },
       "fieldConfig": {
@@ -139,7 +148,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Job success ratio",
-      "description": "Share of processed jobs with status=success over the last 5 minutes.",
+      "description": "Share of job attempts with status=success over the last 5 minutes; a retried job counts once per attempt.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 9 },
       "fieldConfig": {
@@ -176,7 +185,7 @@
       "id": 6,
       "type": "stat",
       "title": "Total jobs processed",
-      "description": "Cumulative processed jobs since process start (all workers).",
+      "description": "Cumulative job attempts since process start (all workers), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
       "fieldConfig": {
@@ -222,8 +231,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "LLM cost per hour by model",
-      "description": "Estimated spend rate (USD/hour) derived from mas_llm_cost_usd.",
+      "title": "LLM cost per hour by model (workers only)",
+      "description": "Estimated worker-side spend rate (USD/hour) from the worker scrape job's mas_llm_cost_usd_total (search and finalize jobs). LLM calls made inside the API (decompose, optimize, clarify, plan approval, chat, summary) are left out on purpose: the API runs several uvicorn processes without prometheus_client multiprocess mode, each scrape reads one process's counter at random, and rate() turns every switch between processes into a counter reset worth that process's whole lifetime total. Exact spend including API-side calls is in the admin panel's Analytics tab (llm_usage_logs).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": {
@@ -241,7 +250,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (model) (rate(mas_llm_cost_usd[5m])) * 3600",
+          "expr": "sum by (model) (rate(mas_llm_cost_usd_total{job=\"multi-agent-search-workers\"}[5m])) * 3600",
           "legendFormat": "{{model}}"
         }
       ]
@@ -249,8 +258,8 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "Total LLM cost (USD)",
-      "description": "Cumulative estimated LLM spend since process start.",
+      "title": "LLM cost in time range by model, workers only (USD)",
+      "description": "Estimated worker-side LLM spend per model over the selected time range, from the worker scrape job only (increase() tolerates worker restarts, unlike the raw counter). API-side calls (decompose, optimize, clarify, plan approval, chat, summary) are not included, because the multi-process API counter would add phantom spend on every scrape that lands on a different uvicorn process. For exact totals including the API, use the admin panel's Analytics tab (llm_usage_logs).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
@@ -279,10 +288,44 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(mas_llm_cost_usd)",
-          "legendFormat": "cost",
+          "expr": "sum by (model) (increase(mas_llm_cost_usd_total{job=\"multi-agent-search-workers\"}[$__range]))",
+          "legendFormat": "{{model}}",
           "instant": true,
           "range": false
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Logs",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "Logs for research $research_id",
+      "description": "API and worker JSON logs (LOG_FORMAT=json) whose research_id matches the Research ID box above; empty until an id is entered.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 27 },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{service=~\"api|worker.*\"} |= \"$research_id\" | json | __error__=\"\" | research_id=\"$research_id\" | line_format \"{{.level}} {{.logger}} {{.message}}\"",
+          "queryType": "range"
         }
       ]
     }

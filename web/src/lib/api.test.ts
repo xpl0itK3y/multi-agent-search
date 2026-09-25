@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { i18n, LOCALES } from "@/i18n";
+
 // api.ts touches localStorage / document.cookie at import time and
 // window.location on 401 recovery — stub the globals before each dynamic import.
-function stubEnv(token: string | null, pathname: string, search = "") {
+function stubEnv(token: string | null, pathname: string, search = "", cookie = "") {
   const assign = vi.fn();
   const removeItem = vi.fn();
   vi.stubGlobal("localStorage", {
@@ -10,10 +12,23 @@ function stubEnv(token: string | null, pathname: string, search = "") {
     setItem: vi.fn(),
     removeItem,
   });
-  vi.stubGlobal("document", { cookie: "" });
+  vi.stubGlobal("document", { cookie });
   vi.stubGlobal("window", { location: { pathname, search, assign } });
   return { assign, removeItem };
 }
+
+// A fetch whose n-th call gets the n-th status (200 with a user body; NaN: no answer).
+function fetchAnswering(...statuses: number[]) {
+  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+    const status = statuses.shift() ?? 500;
+    if (Number.isNaN(status)) throw new TypeError("fetch failed");
+    return new Response(status === 200 ? JSON.stringify({ id: "u1", email: "denis@example.com" }) : "", { status });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const calledPaths = (fetchMock: ReturnType<typeof fetchAnswering>) => fetchMock.mock.calls.map(([url]) => url);
 
 describe("api request error handling", () => {
   beforeEach(() => {
@@ -74,15 +89,70 @@ describe("api request error handling", () => {
     expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fresearch%2Fabc%3Ftab%3Dsources");
   });
 
-  it("on 401 without a stored token: no redirect (unauthenticated page)", async () => {
+  it("on 401 before anyone signed in (no token, no session): no redirect", async () => {
     const { assign, removeItem } = stubEnv(null, "/research/abc");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+    const fetchMock = fetchAnswering(401, 401);
 
     const { api } = await import("./api");
+    // The page-load session probe of a signed-out visitor, then any other call.
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
     await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
 
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/research/abc/report"]);
     expect(assign).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  // A Google sign-in's session is the cookie alone, and a logout elsewhere revokes it.
+  it("on 401 of a signed-in cookie-only session: confirms with /me, then redirects to /login", async () => {
+    const { assign } = stubEnv(null, "/research/abc", "?tab=sources");
+    const fetchMock = fetchAnswering(200, 401, 401);
+
+    const { api } = await import("./api");
+    await api.me();
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/research/abc/report", "/v1/auth/me"]);
+    expect(assign).toHaveBeenCalledOnce();
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fresearch%2Fabc%3Ftab%3Dsources");
+  });
+
+  it("on 401 of a cookie-only session that /me still accepts: stays (no /login loop)", async () => {
+    // e.g. an admin check refused while the session itself is fine.
+    const { assign } = stubEnv(null, "/admin");
+    for (const answer of [200, NaN]) {
+      const fetchMock = fetchAnswering(200, 401, answer); // NaN: the probe has no answer
+      const { api } = await import("./api");
+      await api.me();
+      await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+      expect(calledPaths(fetchMock)).toHaveLength(3);
+      vi.resetModules();
+    }
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("recovers a cookie-only session from a file download's 401 too", async () => {
+    const { assign } = stubEnv(null, "/admin");
+    fetchAnswering(200, 401, 401);
+
+    const { api, adminApi } = await import("./api");
+    await api.me();
+    await expect(adminApi.exportUsersCsv()).rejects.toMatchObject({ status: 401 });
+
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fadmin");
+  });
+
+  it("after logout a 401 is no longer a lost session, and logout's own 401 never redirects", async () => {
+    const { assign } = stubEnv("stale-token", "/settings");
+    const fetchMock = fetchAnswering(200, 401, 401);
+
+    const { api } = await import("./api");
+    await api.me();
+    await expect(api.logout()).rejects.toMatchObject({ status: 401 });
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/auth/logout", "/v1/research/abc/report"]);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("on 401 on public routes (/r/…, /login): no redirect loop", async () => {
@@ -96,6 +166,188 @@ describe("api request error handling", () => {
 
       vi.unstubAllGlobals();
     }
+  });
+
+  it("on 401 on public routes with a cookie-only session: no probe, no redirect", async () => {
+    for (const pathname of ["/r/share-token", "/login"]) {
+      const { assign } = stubEnv(null, pathname);
+      const fetchMock = fetchAnswering(200, 401);
+
+      const { api } = await import("./api");
+      await api.me();
+      await expect(api.getPublicReport("t")).rejects.toMatchObject({ status: 401 });
+      expect(calledPaths(fetchMock)).toHaveLength(2);
+      expect(assign).not.toHaveBeenCalled();
+
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+});
+
+describe("account endpoints", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("deleteAccount sends the password together with confirm=true", async () => {
+    stubEnv("token", "/settings");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "deleted" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api } = await import("./api");
+    await api.deleteAccount("secret123");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/v1/auth/account");
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(init.body as string)).toEqual({ current_password: "secret123", confirm: true });
+  });
+
+  it("a wrong current password (401) keeps the session instead of redirecting", async () => {
+    const { assign, removeItem } = stubEnv("valid-token", "/settings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () =>
+        new Response(JSON.stringify({ detail: "Current password is incorrect" }), { status: 401 }),
+      ),
+    );
+
+    const { api } = await import("./api");
+    await expect(api.setPassword("new-password", "wrong")).rejects.toMatchObject({ status: 401 });
+    await expect(api.deleteAccount("wrong")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("without a current password a 401 is still an expired session", async () => {
+    const { assign, removeItem } = stubEnv("stale-token", "/settings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "Not authenticated" }), { status: 401 })),
+    );
+
+    const { api } = await import("./api");
+    await expect(api.setPassword("new-password")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fsettings");
+  });
+});
+
+describe("file downloads", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("report export and admin CSVs send the bearer token and read the filename", async () => {
+    stubEnv("access", "/admin");
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response("a,b\n", {
+        status: 200,
+        headers: { "Content-Disposition": "attachment; filename=token_usage.csv" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api, adminApi } = await import("./api");
+    const report = await api.exportReport("r-1", new URLSearchParams({ format: "pdf" }));
+    const csv = await adminApi.exportTokensCsv();
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual(["/v1/research/r-1/export?format=pdf", "/v1/admin/tokens/export"]);
+    for (const [, init] of calls) {
+      expect(init).toMatchObject({ credentials: "include", headers: { Authorization: "Bearer access" } });
+    }
+    expect(report.filename).toBe("token_usage.csv");
+    expect(await csv.blob.text()).toBe("a,b\n");
+  });
+
+  it("downloads echo the csrf cookie so admin CSV exports work with a cookie session", async () => {
+    // A Google sign-in leaves no bearer token: the session is the cookie alone.
+    stubEnv(null, "/admin", "", "theme=dark; csrf_token=c%2Bsrf%3D; x=1");
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("a,b\n", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api, adminApi } = await import("./api");
+    await adminApi.exportUsersCsv();
+    await adminApi.exportPromptsCsv();
+    await adminApi.exportTokensCsv();
+    await api.exportReport("r-1", new URLSearchParams({ format: "md" }));
+    await api.getReport("r-1").catch(() => undefined);
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    for (const [url, init] of calls.slice(0, 4)) {
+      expect(init.headers, url).toEqual({ "X-CSRF-Token": "c+srf=" });
+    }
+    // Other GETs stay without it: only the downloads opt in.
+    expect(calls[4][1].headers).not.toHaveProperty("X-CSRF-Token");
+  });
+
+  it("downloads send the bearer and the csrf token when both exist", async () => {
+    stubEnv("access", "/admin", "", "csrf_token=tok");
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { adminApi } = await import("./api");
+    await adminApi.exportUsersCsv();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toEqual({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
+  });
+
+  it("a 401 on a download goes through the shared session recovery", async () => {
+    const { assign, removeItem } = stubEnv("stale-token", "/admin");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+    const { adminApi, ApiError } = await import("./api");
+    const err: unknown = await adminApi.exportUsersCsv().catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fadmin");
+  });
+});
+
+describe("admin API contract", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("getUserEvents sends limit/offset/category and reads total_count", async () => {
+    stubEnv("token", "/admin");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ events: [], total_count: 7, page: 1, page_size: 40 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { adminApi } = await import("./api");
+    const resp = await adminApi.getUserEvents(40, 80, "u-1", undefined, "research");
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string, "http://host");
+    expect(url.pathname).toBe("/v1/admin/users/events");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: "40",
+      offset: "80",
+      user_id: "u-1",
+      category: "research",
+    });
+    expect(resp.total_count).toBe(7);
   });
 });
 
@@ -119,5 +371,93 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage(new ApiError(418, ""), t)).toBe("[errors.api.unexpected]");
     expect(apiErrorMessage(new TypeError("fetch failed"), t)).toBe("[errors.api.network]");
     expect(apiErrorMessage(new Error("custom"), t)).toBe("custom");
+  });
+
+  it("names the known 409 reasons instead of one generic conflict text", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    // The server's ConflictError texts (src/services): they carry no error code.
+    const cases: [string, string][] = [
+      ["A research is already in progress. Please wait for it to finish before starting another.", "researchInProgress"],
+      ["Research capacity is currently full or the research state changed. Please retry.", "capacityFull"],
+      ["Email already registered", "emailTaken"],
+      ["An account with this email already exists", "emailTaken"],
+      ["Report is not ready yet", "reportNotReady"],
+      ["Only dead-letter finalize jobs can be requeued", "notDeadLetter"],
+      ["Only dead-letter search jobs can be requeued", "notDeadLetter"],
+      ["Research state changed. Please retry.", "conflict"],
+      ["<b>some other internal text</b>", "conflict"],
+    ];
+    for (const [detail, key] of cases) {
+      expect(apiErrorMessage(new ApiError(409, detail), t), detail).toBe(`[errors.api.${key}]`);
+      for (const { value } of LOCALES) expect(i18n.global.te(`errors.api.${key}`, value), `${value}: ${key}`).toBe(true);
+    }
+    // The detail refines only its own status.
+    expect(apiErrorMessage(new ApiError(404, "Report is not ready yet"), t)).toBe("[errors.api.notFound]");
+  });
+
+  it("names why an admin requeue of a dead-letter finalize job was refused", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    // job_queue_mixin.requeue_research_finalize_job, raised after the dead-letter check.
+    const cases: [string, string][] = [
+      ["Only the finalize job of a failed research can be requeued", "finalizeResearchNotFailed"],
+      ["A newer finalize job has superseded this one", "finalizeJobSuperseded"],
+      ["Finalize job state changed. Please retry.", "finalizeJobChanged"],
+    ];
+    for (const [detail, key] of cases) {
+      expect(apiErrorMessage(new ApiError(409, detail), t), detail).toBe(`[errors.api.${key}]`);
+      for (const { value } of LOCALES) {
+        expect(i18n.global.te(`errors.api.${key}`, value), `${value}: ${key}`).toBe(true);
+        // A text of its own, not the generic conflict or the dead-letter one.
+        for (const other of ["conflict", "notDeadLetter"]) {
+          expect(i18n.global.t(`errors.api.${key}`, {}, { locale: value }), `${value}: ${key}`).not.toBe(
+            i18n.global.t(`errors.api.${other}`, {}, { locale: value }),
+          );
+        }
+      }
+    }
+    // Similar texts of other refusals keep their own mapping.
+    expect(apiErrorMessage(new ApiError(409, "Research state changed. Please retry."), t)).toBe("[errors.api.conflict]");
+    expect(apiErrorMessage(new ApiError(409, "Only dead-letter finalize jobs can be requeued"), t)).toBe(
+      "[errors.api.notDeadLetter]",
+    );
+    expect(apiErrorMessage(new ApiError(409, "Only failed research can be retried"), t)).toBe("[errors.api.conflict]");
+    // Only on a 409.
+    expect(apiErrorMessage(new ApiError(404, "A newer finalize job has superseded this one"), t)).toBe(
+      "[errors.api.notFound]",
+    );
+  });
+
+  it("explains a refused sign-up with an administrator's email", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+    const detail =
+      "This email is reserved for an administrator: sign in with Google, or ask the operator to provision it with scripts/create_admin.py";
+
+    expect(apiErrorMessage(new ApiError(403, detail), t)).toBe("[errors.api.adminEmailReserved]");
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.adminEmailReserved", value)).toBe(true);
+    expect(apiErrorMessage(new ApiError(403, "Admin privileges required"), t)).toBe("[errors.api.forbidden]");
+  });
+
+  it("recognizes a set-password refused until a fresh Google sign-in", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage, isReauthRequired } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    for (const detail of ["reauth_required", "reauth_required: sign in with Google again"]) {
+      expect(isReauthRequired(new ApiError(403, detail)), detail).toBe(true);
+      expect(apiErrorMessage(new ApiError(403, detail), t)).toBe("[errors.api.reauthRequired]");
+    }
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.reauthRequired", value)).toBe(true);
+    // Only a 403 whose detail starts with the code.
+    expect(isReauthRequired(new ApiError(401, "reauth_required"))).toBe(false);
+    expect(isReauthRequired(new ApiError(403, "Forbidden: reauth_required"))).toBe(false);
+    expect(isReauthRequired(new Error("403 reauth_required"))).toBe(false);
   });
 });

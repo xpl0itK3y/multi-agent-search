@@ -10,3 +10,6 @@ backups/
 .codegraph/
 *.dump
 *.sha256
+.coverage
+coverage.xml
+htmlcov/

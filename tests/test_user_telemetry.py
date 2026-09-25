@@ -1,43 +1,51 @@
+"""Store reads go through TaskStore methods, so these also run in postgres-smoke (the
+app's store is SQLAlchemyTaskStore on a database shared with every other test)."""
 import uuid
+from datetime import datetime
+
 import pytest
 from src.config import settings
+
+
+def _event_count(store) -> int:
+    return store.get_admin_event_logs(limit=1).total_count
+
+
+async def _register(client, prefix="telem"):
+    reg = await client.post(
+        "/v1/auth/register",
+        json={"email": f"{prefix}_{uuid.uuid4().hex[:8]}@example.com", "password": "Password123!"},
+    )
+    assert reg.status_code == 200
+    return reg.json()
 
 
 @pytest.mark.anyio
 async def test_telemetry_event_ingestion(client, monkeypatch):
     monkeypatch.setattr(settings, "auth_disabled", False)
+    store = client._transport.app.state.research_service.task_store
 
-    # 1. Anonymous event
-    anon_resp = await client.post(
-        "/v1/telemetry/event",
-        json={
-            "session_id": "anon-sess-123",
-            "event_name": "page_view",
-            "event_category": "ui",
-            "details": {"path": "/"},
-        },
+    # Anonymous ingestion is refused: telemetry is authenticated-only. With no credential
+    # at all the CSRF check answers first (403); a bogus bearer reaches auth (401).
+    anon_event = {"session_id": "anon-sess-123", "event_name": "session_start", "event_category": "system"}
+    events_before = _event_count(store)
+    no_credentials = await client.post("/v1/telemetry/event", json=anon_event)
+    bogus_bearer = await client.post(
+        "/v1/telemetry/event", json=anon_event, headers={"Authorization": "Bearer not.a.token"}
     )
-    assert anon_resp.status_code == 200
-    assert anon_resp.json()["status"] == "ok"
-    assert "event_id" in anon_resp.json()
+    assert no_credentials.status_code == 403
+    assert bogus_bearer.status_code == 401
+    assert _event_count(store) == events_before
 
-    # 2. Authenticated user with device info
-    unique_email = f"telem_{uuid.uuid4().hex[:8]}@example.com"
-    reg = await client.post(
-        "/v1/auth/register",
-        json={"email": unique_email, "password": "Password123!"},
-    )
-    assert reg.status_code == 200
-    token = reg.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
+    session = await _register(client)
+    headers = {"Authorization": f"Bearer {session['access_token']}"}
     auth_resp = await client.post(
         "/v1/telemetry/event",
         json={
             "session_id": "auth-sess-456",
-            "event_name": "research.create",
-            "event_category": "research",
-            "details": {"prompt": "quantum computing", "depth": "medium"},
+            "event_name": "session_start",
+            "event_category": "system",
+            "details": {"path": "/"},
             "device_info": {
                 "device_type": "desktop",
                 "browser": "Chrome",
@@ -51,8 +59,58 @@ async def test_telemetry_event_ingestion(client, monkeypatch):
     )
     assert auth_resp.status_code == 200
     assert auth_resp.json()["status"] == "ok"
+    assert _event_count(store) == events_before + 1
+    assert [e.event_name for e in store.get_admin_event_logs(user_id=session["user"]["id"]).events] == [
+        "session_start"
+    ]
 
-    client._transport.app.state.research_service.task_store.delete_user(reg.json()["user"]["id"])
+    store.delete_user(session["user"]["id"])
+
+
+@pytest.mark.anyio
+async def test_cookie_authenticated_telemetry_requires_csrf_token(client, monkeypatch):
+    """The endpoint is no longer CSRF-exempt: a cross-site form POST riding the session
+    cookie is rejected, the SPA's double-submit header is accepted."""
+    monkeypatch.setattr(settings, "auth_disabled", False)
+    session = await _register(client, "csrf")  # sets the session + csrf cookies
+    event = {"session_id": "cookie-sess", "event_name": "tab_focus", "event_category": "ui"}
+
+    forged = await client.post("/v1/telemetry/event", json=event)
+    assert forged.status_code == 403
+
+    accepted = await client.post(
+        "/v1/telemetry/event",
+        json=event,
+        headers={"X-CSRF-Token": client.cookies.get("csrf_token") or ""},
+    )
+    assert accepted.status_code == 200
+
+    client._transport.app.state.research_service.task_store.delete_user(session["user"]["id"])
+
+
+@pytest.mark.anyio
+async def test_telemetry_is_rate_limited_per_user(client, monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", False)
+    monkeypatch.setattr(settings, "telemetry_rate_limit_per_minute", 2)
+    store = client._transport.app.state.research_service.task_store
+    first, second = await _register(client, "flood_a"), await _register(client, "flood_b")
+    event = {"session_id": "flood-sess", "event_name": "tab_blur", "event_category": "ui"}
+
+    def auth(session):
+        return {"Authorization": f"Bearer {session['access_token']}"}
+
+    statuses = [
+        (await client.post("/v1/telemetry/event", json=event, headers=auth(first))).status_code
+        for _ in range(3)
+    ]
+    other = await client.post("/v1/telemetry/event", json=event, headers=auth(second))
+
+    assert statuses == [200, 200, 429]
+    assert other.status_code == 200  # the budget is per user, not global
+    assert store.get_admin_event_logs(user_id=first["user"]["id"]).total_count == 2
+
+    store.delete_user(first["user"]["id"])
+    store.delete_user(second["user"]["id"])
 
 
 @pytest.mark.anyio
@@ -64,9 +122,10 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     admin_email = f"admin_{uuid.uuid4().hex[:8]}@example.com"
     monkeypatch.setattr(settings, "admin_emails", [admin_email])
 
-    # Register admin
+    # Provision the admin out of band (sign-up refuses ADMIN_EMAILS), then log in.
+    client._transport.app.state.research_service.provision_admin_account(admin_email, "AdminPassword123!")
     admin_reg = await client.post(
-        "/v1/auth/register",
+        "/v1/auth/login",
         json={"email": admin_email, "password": "AdminPassword123!"},
     )
     assert admin_reg.status_code == 200
@@ -87,9 +146,9 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
         "/v1/telemetry/event",
         json={
             "session_id": f"sess-{user_id}",
-            "event_name": "theme_toggle",
-            "event_category": "ui",
-            "details": {"theme": "midnight"},
+            "event_name": "session_start",
+            "event_category": "system",
+            "details": {"path": "/"},
             "device_info": {
                 "device_type": "desktop",
                 "browser": "Safari",
@@ -120,7 +179,7 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     assert detail_data["user"]["is_online"] is True
     assert len(detail_data["sessions"]) >= 1
     assert len(detail_data["recent_events"]) >= 1
-    assert detail_data["recent_events"][0]["event_name"] == "theme_toggle"
+    assert detail_data["recent_events"][0]["event_name"] == "session_start"
 
     # 3. GET /v1/admin/users/analytics/summary
     summary_resp = await client.get("/v1/admin/users/analytics/summary", headers=admin_headers)
@@ -180,3 +239,110 @@ async def test_admin_user_telemetry_endpoints(client, monkeypatch):
     client._transport.app.state.research_service.task_store.delete_user(admin_id)
 
 
+
+
+@pytest.mark.anyio
+async def test_revoked_token_attributes_no_activity_or_telemetry(client):
+    """Auth disabled: telemetry is still attributed only to a current token's account;
+    a revoked token (or none) records nothing instead of an anonymous row."""
+    service = client._transport.app.state.research_service
+    store = service.task_store
+    reg = await client.post(
+        "/v1/auth/register",
+        json={"email": f"revoked_{uuid.uuid4().hex[:8]}@example.com", "password": "secret123"},
+    )
+    user_id = reg.json()["user"]["id"]
+    stale = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+    # A password change bumps token_version, revoking every token minted before it.
+    service.set_user_password(user_id, "rotated-pass1", current_password="secret123")
+
+    events_before = _event_count(store)
+    await client.get("/v1/auth/config", headers=stale)
+    event = await client.post(
+        "/v1/telemetry/event",
+        json={
+            "session_id": "stale-sess",
+            "event_name": "session_start",
+            "event_category": "system",
+            "device_info": {"browser": "Firefox"},
+        },
+        headers=stale,
+    )
+
+    assert event.status_code == 200
+    assert event.json()["status"] == "ignored"
+    detail = store.get_admin_user_detail(user_id)
+    assert detail.user.last_seen_at is None
+    assert detail.sessions == []
+    assert _event_count(store) == events_before
+
+
+@pytest.mark.anyio
+async def test_revoked_token_is_rejected_when_auth_enabled(client, monkeypatch):
+    monkeypatch.setattr(settings, "auth_disabled", False)
+    service = client._transport.app.state.research_service
+    session = await _register(client, "revoked_on")
+    service.set_user_password(session["user"]["id"], "rotated-pass1", current_password="Password123!")
+    events_before = _event_count(service.task_store)
+
+    event = await client.post(
+        "/v1/telemetry/event",
+        json={"session_id": "stale-sess", "event_name": "tab_focus", "event_category": "ui"},
+        headers={"Authorization": f"Bearer {session['access_token']}"},
+    )
+
+    assert event.status_code == 401
+    assert _event_count(service.task_store) == events_before
+    service.task_store.delete_user(session["user"]["id"])
+
+
+@pytest.mark.anyio
+async def test_heartbeat_bumps_the_session_instead_of_adding_an_event(client):
+    store = client._transport.app.state.research_service.task_store
+    session = await _register(client, "heartbeat")
+    user_id = session["user"]["id"]
+    headers = {
+        "Authorization": f"Bearer {session['access_token']}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36",
+    }
+    await client.post(
+        "/v1/telemetry/event",
+        json={
+            "session_id": "hb-sess",
+            "event_name": "session_start",
+            "event_category": "system",
+            "device_info": {"browser": "Chrome", "os": "Windows", "screen_res": "1920x1080"},
+        },
+        headers=headers,
+    )
+    [started] = store.get_admin_user_detail(user_id).sessions
+    started_active_at = datetime.fromisoformat(started["last_active_at"])
+    events_before = _event_count(store)
+
+    beats = [
+        await client.post(
+            "/v1/telemetry/event",
+            json={"session_id": "hb-sess", "event_name": "heartbeat", "event_category": "system"},
+            headers=headers,
+        )
+        for _ in range(3)
+    ]
+
+    assert [b.status_code for b in beats] == [200, 200, 200]
+    assert _event_count(store) == events_before  # no heartbeat rows
+    sessions = store.get_admin_user_detail(user_id).sessions
+    assert len(sessions) == 1
+    assert datetime.fromisoformat(sessions[0]["last_active_at"]) >= started_active_at
+    assert sessions[0]["screen_res"] == "1920x1080"  # session_start details kept
+
+    # A heartbeat whose session_start never arrived still records the session.
+    await client.post(
+        "/v1/telemetry/event",
+        json={"session_id": "hb-orphan", "event_name": "heartbeat", "event_category": "system"},
+        headers=headers,
+    )
+    orphan = next(s for s in store.get_admin_user_detail(user_id).sessions if s["session_id"] == "hb-orphan")
+    assert (orphan["browser"], orphan["os"]) == ("Chrome", "Windows")
+    assert _event_count(store) == events_before
+
+    store.delete_user(user_id)

@@ -218,7 +218,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Total queue backlog",
-      "description": "Pending + running + dead-letter jobs across all queues (mas_queue_backlog).",
+      "description": "Pending + running + dead-letter jobs across all queues (mas_queue_backlog), as last counted by the workers' maintenance loop (worker scrape job only: the API refreshes its copy only when a health or admin route reads the queues, and each of its uvicorn processes keeps its own, possibly stale, value).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
       "fieldConfig": {
@@ -236,7 +236,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max(mas_queue_backlog)",
+          "expr": "max(mas_queue_backlog{job=\"multi-agent-search-workers\"})",
           "legendFormat": "backlog"
         }
       ]
@@ -245,7 +245,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Queue jobs by type and status",
-      "description": "Current job counts per queue (mas_queue_jobs).",
+      "description": "Current job counts per queue (mas_queue_jobs), from the worker scrape job only: the API's copy of this gauge is refreshed ad hoc and differs per uvicorn process.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
       "fieldConfig": {
@@ -270,7 +270,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max by (job_type, status) (mas_queue_jobs)",
+          "expr": "max by (job_type, status) (mas_queue_jobs{job=\"multi-agent-search-workers\"})",
           "legendFormat": "{{job_type}} / {{status}}"
         }
       ]
@@ -279,7 +279,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Dead-letter jobs",
-      "description": "Jobs parked in the dead-letter queues; anything above zero needs attention.",
+      "description": "Jobs parked in the dead-letter queues (worker scrape job only); anything above zero needs attention.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
       "fieldConfig": {
@@ -304,7 +304,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max by (job_type) (mas_queue_jobs{status=\"dead_letter\"})",
+          "expr": "max by (job_type) (mas_queue_jobs{job=\"multi-agent-search-workers\", status=\"dead_letter\"})",
           "legendFormat": "{{job_type}}"
         }
       ]

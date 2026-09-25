@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Tuple
 
 from src.config import settings
-from src.observability.context import get_observability_context
 
 try:  # pragma: no cover - import behavior depends on optional dependency presence
     from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
@@ -38,10 +37,13 @@ if Counter is not None and settings.prometheus_metrics_enabled:
         "Current queue counts by kind and status.",
         ["job_type", "status"],
     )
+    # Model only: a per-user or per-research label adds a series for every research (in
+    # every process, forever) and publishes identifiers on /metrics. Per-user and
+    # per-research cost lives in llm_usage_logs. Exposed as mas_llm_cost_usd_total.
     LLM_COST_USD_TOTAL = Counter(
         "mas_llm_cost_usd",
         "Estimated LLM cost in US dollars.",
-        ["user_id", "research_id", "model"],
+        ["model"],
     )
 else:  # pragma: no cover
     API_REQUESTS_TOTAL = None
@@ -52,10 +54,20 @@ else:  # pragma: no cover
     LLM_COST_USD_TOTAL = None
 
 
+# The method label takes one of these or "OTHER". h11 accepts any token as a method, so
+# a raw label would let an anonymous client add a counter and a histogram per string.
+_METRIC_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def metric_http_method(method: str | None) -> str:
+    normalized = (method or "GET").upper()
+    return normalized if normalized in _METRIC_HTTP_METHODS else "OTHER"
+
+
 def observe_api_request(method: str, path: str, status_code: int, elapsed_seconds: float) -> None:
     if API_REQUESTS_TOTAL is None or API_REQUEST_DURATION_SECONDS is None:
         return
-    normalized_method = (method or "GET").upper()
+    normalized_method = metric_http_method(method)
     normalized_path = path or "/"
     API_REQUESTS_TOTAL.labels(
         method=normalized_method,
@@ -92,12 +104,7 @@ def observe_worker_job(worker_name: str, job_type: str, status: str, count: int 
 def observe_llm_cost(cost_usd: float, model: str) -> None:
     if LLM_COST_USD_TOTAL is None or cost_usd <= 0:
         return
-    context = get_observability_context()
-    LLM_COST_USD_TOTAL.labels(
-        user_id=context.get("user_id", "-"),
-        research_id=context.get("research_id", "-"),
-        model=model or "unknown",
-    ).inc(cost_usd)
+    LLM_COST_USD_TOTAL.labels(model=model or "unknown").inc(cost_usd)
 
 
 def set_queue_metrics(metrics) -> None:

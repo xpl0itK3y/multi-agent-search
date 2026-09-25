@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import threading
 import uuid
 
+from src.auth.admin_identity import has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
+from src.repositories.protocols import STALE_FINALIZE_CLOSED_ERROR
 from src.domain import (
     AdminAuditLogItem,
     AdminDryRunResult,
@@ -13,6 +15,7 @@ from src.domain import (
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
+    AdminTokenDepthBreakdown,
     AdminTokenModelBreakdown,
     AdminTokenResearchUsageItem,
     AdminUserDetailResponse,
@@ -22,6 +25,7 @@ from src.domain import (
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
+    PROMPT_EVENT_NAMES,
     QueueMetrics,
     ResearchFinalizeJob,
     ResearchHistoryItem,
@@ -32,8 +36,13 @@ from src.domain import (
     ResearchRequest,
     ResearchStatus,
     SearchTask,
+    TELEMETRY_IP_MAX_LENGTH,
+    TELEMETRY_USER_AGENT_MAX_LENGTH,
+    TaskStatus,
     TaskUpdate,
+    USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     UserRecord,
+    clip_text,
 )
 
 
@@ -44,8 +53,12 @@ class InMemoryTaskStore:
         self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
         self.search_jobs: dict[str, SearchTaskJob] = {}
         self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
+        # The heartbeat JSON columns as written: the admin overview returns them unparsed.
+        self._worker_heartbeat_json: dict[str, dict] = {}
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
+        # users.created_at: UserRecord does not carry it, the admin views sort by it.
+        self._user_created_at: dict[str, datetime] = {}
         self.search_cache: dict[str, tuple[datetime, list[dict]]] = {}
         self.llm_usage_logs: list[dict] = []
         self.admin_audit_logs: list[AdminAuditLogItem] = []
@@ -55,6 +68,9 @@ class InMemoryTaskStore:
         self._admission_lock = threading.RLock()
         # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
         self._state_lock = threading.RLock()
+        # Serializes the user-row read-modify-writes (password, token_version, profile), so
+        # one cannot overwrite another's columns: SQL updates only the columns it sets.
+        self._user_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -70,7 +86,9 @@ class InMemoryTaskStore:
         if entry is None:
             return None
         created_at, payload = entry
-        if (datetime.now(timezone.utc) - created_at).total_seconds() > max_age_seconds:
+        # An entry exactly max_age old is already expired, so max_age_seconds=0 always
+        # misses even when the clock has not ticked since the write.
+        if (datetime.now(timezone.utc) - created_at).total_seconds() >= max_age_seconds:
             return None
         return [dict(item) for item in payload]
 
@@ -228,14 +246,18 @@ class InMemoryTaskStore:
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord:
         user = UserRecord(
             id=user_id,
             email=email,
             password_hash=password_hash,
             google_subject=google_subject,
+            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
         )
         self.users[user_id] = user
+        self._user_created_at[user_id] = datetime.now(timezone.utc)
         return user
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
@@ -255,6 +277,7 @@ class InMemoryTaskStore:
         if user_id not in self.users:
             return False
         del self.users[user_id]
+        self._user_created_at.pop(user_id, None)
         # Mirror the SQL FK cascade: the user's researches (and their tasks) go too,
         # which also revokes every public share token they had minted.
         for research in [
@@ -263,35 +286,51 @@ class InMemoryTaskStore:
             self.delete_research(research.id)
         self.user_sessions = [s for s in self.user_sessions if s.get("user_id") != user_id]
         self.user_events = [e for e in self.user_events if e.get("user_id") != user_id]
+        # The users row carried the activity columns; llm_usage_logs.user_id is SET NULL.
+        self.user_telemetry.pop(user_id, None)
+        for usage in self.llm_usage_logs:
+            if usage["user_id"] == user_id:
+                usage["user_id"] = None
         return True
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
-        user = self.users.get(user_id)
-        if user is None:
-            return None
-        updated = user.model_copy(
-            update={
-                "password_hash": password_hash,
-                "token_version": user.token_version + 1,
-            }
-        )
-        self.users[user_id] = updated
-        return updated
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return None
+            patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
+            if admin_provisioned:
+                patch["admin_provisioned_at"] = datetime.now(timezone.utc)
+            updated = user.model_copy(update=patch)
+            self.users[user_id] = updated
+            return updated
+
+    def bump_user_token_version(self, user_id: str) -> UserRecord | None:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return None
+            updated = user.model_copy(update={"token_version": user.token_version + 1})
+            self.users[user_id] = updated
+            return updated
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
-        user = self.users.get(user_id)
-        if user:
-            patch = {}
-            if name is not None:
-                patch["name"] = name
-            if avatar_url is not None:
-                patch["avatar_url"] = avatar_url
-            if patch:
-                updated = user.model_copy(update=patch)
-                self.users[user_id] = updated
-                return updated
-            return user
-        return None
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user:
+                patch = {}
+                if name is not None:
+                    patch["name"] = name
+                if avatar_url is not None:
+                    patch["avatar_url"] = avatar_url
+                if patch:
+                    updated = user.model_copy(update=patch)
+                    self.users[user_id] = updated
+                    return updated
+                return user
+            return None
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)
@@ -303,6 +342,18 @@ class InMemoryTaskStore:
         task_ids = [tid for tid, t in self.tasks.items() if t.research_id == research_id]
         for tid in task_ids:
             del self.tasks[tid]
+        # llm_usage_logs.research_id is SET NULL: the spend stays, unattributed.
+        for usage in self.llm_usage_logs:
+            if usage["research_id"] == research_id:
+                usage["research_id"] = None
+        # Like SQL: the prompt copies in user_events go with their research.
+        self.user_events = [
+            e for e in self.user_events
+            if not (
+                e.get("event_name") in PROMPT_EVENT_NAMES
+                and (e.get("details") or {}).get("research_id") == research_id
+            )
+        ]
         return True
 
     _TERMINAL_RESEARCH_STATUSES = (
@@ -321,6 +372,21 @@ class InMemoryTaskStore:
         for research_id in deleted_ids:
             self.delete_research(research_id)
         return deleted_ids
+
+    def cleanup_old_user_events(self, older_than: datetime) -> int:
+        kept = [e for e in self.user_events if e["created_at"] >= older_than]
+        deleted, self.user_events = len(self.user_events) - len(kept), kept
+        return deleted
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int:
+        kept = [s for s in self.user_sessions if s["last_active_at"] >= older_than]
+        deleted, self.user_sessions = len(self.user_sessions) - len(kept), kept
+        return deleted
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int:
+        kept = [entry for entry in self.admin_audit_logs if entry.created_at >= older_than]
+        deleted, self.admin_audit_logs = len(self.admin_audit_logs) - len(kept), kept
+        return deleted
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         records = self.researches.values()
@@ -408,24 +474,88 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status not in expected:
+                return None
+            if updated_before is not None and research.updated_at >= updated_before:
+                return None
+            research.status = status
+            if report is not None:
+                research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
+            research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
+        return research
+
+    _ACTIVE_FINALIZE_STATUSES = (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING)
+    _ACTIVE_SEARCH_STATUSES = (SearchJobStatus.PENDING, SearchJobStatus.RUNNING)
+
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]:
+        busy = {
+            job.research_id
+            for job in self.finalize_jobs.values()
+            if job.status in self._ACTIVE_FINALIZE_STATUSES
+        }
+        for job in self.search_jobs.values():
+            task = self.tasks.get(job.task_id)
+            if job.status in self._ACTIVE_SEARCH_STATUSES and task is not None and task.research_id:
+                busy.add(task.research_id)
+        stalled = sorted(
+            (
+                research
+                for research in self.researches.values()
+                if research.status in (ResearchStatus.PROCESSING, ResearchStatus.ANALYZING)
+                and research.updated_at < stale_before
+                and "decompose_pending" not in (research.graph_state or {})
+                and research.id not in busy
+            ),
+            key=lambda research: (research.updated_at, research.id),
+        )
+        return [research.id for research in stalled[:limit]]
+
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]:
+        pending = sorted(
+            (
+                research
+                for research in self.researches.values()
+                if research.status == ResearchStatus.PROCESSING
+                and "decompose_pending" in (research.graph_state or {})
+            ),
+            key=lambda research: (research.updated_at, research.id),
+        )
+        return [research.id for research in pending[:limit]]
+
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research:
-            research.status = status
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status != expected_status:
+                return None
             research.final_report = None
             research.partial_report = None
             research.partial_reasoning = None
-            gs = dict(research.graph_state or {})
-            gs.pop("error", None)
-            gs.pop("report", None)
-            gs.pop("step", None)
-            research.graph_state = gs
+            research.graph_state = {
+                key: value
+                for key, value in (research.graph_state or {}).items()
+                if key not in remove_graph_state_keys
+            }
             research.updated_at = datetime.now(timezone.utc)
-            self._emit_change(research_id)
+        self._emit_change(research_id)
         return research
 
     def try_claim_queued_research(
@@ -450,24 +580,41 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
             return True
 
-    def try_begin_finalization(self, research_id: str) -> bool:
+    def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this
-        caller won the transition (single-winner finalize enqueue)."""
-        research = self.researches.get(research_id)
-        if research is None or research.status in (
-            ResearchStatus.ANALYZING,
-            ResearchStatus.COMPLETED,
-            ResearchStatus.FAILED,
-            ResearchStatus.CANCELLED,
-        ):
-            return False
-        research.status = ResearchStatus.ANALYZING
-        research.updated_at = datetime.now(timezone.utc)
+        caller won the transition (single-winner finalize enqueue). With
+        require_settled_searches it also refuses while a task of the research that has not
+        COMPLETED has a PENDING or RUNNING search job, checked under the lock
+        requeue_search_task_job_of_active_research takes: a requeue landing after the
+        caller found every search settled then keeps the research searching."""
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status in (
+                ResearchStatus.ANALYZING,
+                ResearchStatus.COMPLETED,
+                ResearchStatus.FAILED,
+                ResearchStatus.CANCELLED,
+            ):
+                return False
+            if require_settled_searches and self._has_unsettled_search(research_id):
+                return False
+            research.status = ResearchStatus.ANALYZING
+            research.updated_at = datetime.now(timezone.utc)
         self._emit_change(research_id)
         return True
 
+    def _has_unsettled_search(self, research_id: str) -> bool:
+        for job in self.search_jobs.values():
+            if job.status not in self._ACTIVE_SEARCH_STATUSES:
+                continue
+            task = self.tasks.get(job.task_id)
+            if task is not None and task.research_id == research_id and task.status != TaskStatus.COMPLETED:
+                return True
+        return False
+
     def add_task(self, task_data: dict) -> SearchTask:
-        task = SearchTask(**task_data)
+        # No results read back as None, as on the SQL store (where they are rows).
+        task = SearchTask(**{**task_data, "result": task_data.get("result") or None})
         self.tasks[task.id] = task
         return task
 
@@ -505,6 +652,25 @@ class InMemoryTaskStore:
                 research.updated_at = datetime.now(timezone.utc)
             return research
 
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            items = [*((research.graph_state or {}).get(key) or []), item]
+            if max_items is not None:
+                items = items[-max_items:]
+            research.graph_state = {**(research.graph_state or {}), key: items}
+            research.updated_at = datetime.now(timezone.utc)
+            return items
+
     def save_partial_report(self, research_id: str, partial: str) -> None:
         research = self.researches.get(research_id)
         if research is None:
@@ -523,22 +689,30 @@ class InMemoryTaskStore:
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None:
-        research = self.researches.get(research_id)
-        if research is None:
-            return None
-        normalized_event = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            **event,
-        }
-        research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
-        research.updated_at = datetime.now(timezone.utc)
+    ) -> list[dict] | None:
+        # Same lock as graph_state merges, mirroring the SQL store's row lock: concurrent
+        # appenders must not overwrite each other's events.
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return None
+            now = datetime.now(timezone.utc)
+            normalized_event = {"timestamp": now.isoformat(), **event}
+            research.graph_trail = compact_graph_trail(research.graph_trail, [normalized_event])
+            research.updated_at = now
+            trail = research.graph_trail
         self._emit_change(research_id)
-        return research
+        return trail
 
     def compact_research_graph_trails(self) -> list[str]:
+        from src.config import settings
+
+        # Same working set as SQL: researches idle past the trail retention are skipped.
+        horizon = datetime.now(timezone.utc) - timedelta(seconds=settings.graph_trail_retention_seconds)
         compacted_ids: list[str] = []
         for research in self.researches.values():
+            if research.updated_at < horizon:
+                continue
             compacted_trail = compact_graph_trail(research.graph_trail, [])
             if compacted_trail != (research.graph_trail or []):
                 research.graph_trail = compacted_trail
@@ -566,6 +740,17 @@ class InMemoryTaskStore:
             return None
         return job
 
+    @staticmethod
+    def _latest_job(jobs: list):
+        """Newest job by created_at, then updated_at, like the SQL ordering. Jobs created
+        in the same clock tick (common on Windows) tie on both; the last inserted wins."""
+        if not jobs:
+            return None
+        return max(
+            enumerate(jobs),
+            key=lambda pair: (pair[1].created_at, pair[1].updated_at, pair[0]),
+        )[1]
+
     def get_latest_research_finalize_job(
         self,
         research_id: str,
@@ -578,9 +763,7 @@ class InMemoryTaskStore:
             for job in self.finalize_jobs.values()
             if job.research_id == research_id
         ]
-        if not matching_jobs:
-            return None
-        return max(matching_jobs, key=lambda item: item.created_at)
+        return self._latest_job(matching_jobs)
 
     def get_pending_research_finalize_jobs(self) -> list[ResearchFinalizeJob]:
         return [
@@ -712,15 +895,44 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    # Only a stopped job may be requeued (a RUNNING one would get a second runner).
+    _REQUEUEABLE_FINALIZE_STATUSES = (FinalizeJobStatus.DEAD_LETTER, FinalizeJobStatus.FAILED)
+    _REQUEUEABLE_SEARCH_STATUSES = (SearchJobStatus.DEAD_LETTER, SearchJobStatus.FAILED)
+
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.finalize_jobs.get(job_id)
-        if job is None:
+        if job is None or job.status not in self._REQUEUEABLE_FINALIZE_STATUSES:
             return None
 
         job.status = FinalizeJobStatus.PENDING
         job.attempt_count = 0
         job.error = None
+        job.lease_epoch += 1  # fence any runner still holding the old lease
         job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        with self._state_lock:
+            job = self.finalize_jobs.get(job_id)
+            if job is None or job.status not in self._REQUEUEABLE_FINALIZE_STATUSES:
+                return None
+            research = self.researches.get(job.research_id)
+            if research is None or research.status != ResearchStatus.FAILED:
+                return None
+            latest = self._latest_job(
+                [item for item in self.finalize_jobs.values() if item.research_id == job.research_id]
+            )
+            if latest is None or latest.id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
+            job.status = FinalizeJobStatus.PENDING
+            job.attempt_count = 0
+            job.error = None
+            job.lease_epoch += 1
+            job.updated_at = now
+            research.status = ResearchStatus.ANALYZING
+            research.updated_at = now
+        self._emit_change(job.research_id)
         return job
 
     def recover_stale_research_finalize_jobs(
@@ -730,12 +942,15 @@ class InMemoryTaskStore:
         recovered_jobs = []
         for job in self.finalize_jobs.values():
             if job.status == FinalizeJobStatus.RUNNING and job.updated_at < stale_before:
-                job.status = FinalizeJobStatus.PENDING
+                research = self.researches.get(job.research_id)
+                # An ended research keeps its status: close the job instead of requeueing it.
+                ended = research is not None and research.status in self._TERMINAL_RESEARCH_STATUSES
+                job.status = FinalizeJobStatus.COMPLETED if ended else FinalizeJobStatus.PENDING
                 job.lease_epoch += 1
-                job.error = None
+                job.error = STALE_FINALIZE_CLOSED_ERROR if ended else None
                 job.updated_at = datetime.now(timezone.utc)
                 recovered_jobs.append(job)
-        return recovered_jobs
+        return sorted(recovered_jobs, key=lambda item: item.created_at)
 
     def cleanup_old_research_finalize_jobs(
         self,
@@ -781,9 +996,7 @@ class InMemoryTaskStore:
             for job in self.search_jobs.values()
             if job.task_id == task_id
         ]
-        if not matching_jobs:
-            return None
-        return max(matching_jobs, key=lambda item: item.created_at)
+        return self._latest_job(matching_jobs)
 
     def get_pending_search_task_jobs(self) -> list[SearchTaskJob]:
         return [
@@ -868,13 +1081,41 @@ class InMemoryTaskStore:
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.search_jobs.get(job_id)
-        if job is None:
+        if job is None or job.status not in self._REQUEUEABLE_SEARCH_STATUSES:
             return None
 
         job.status = SearchJobStatus.PENDING
         job.attempt_count = 0
         job.error = None
         job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None:
+        with self._state_lock:
+            job = self.search_jobs.get(job_id)
+            if job is None or job.status not in self._REQUEUEABLE_SEARCH_STATUSES:
+                return None
+            task = self.tasks.get(job.task_id)
+            if task is None:
+                return None
+            research = None
+            if task.research_id is not None:
+                research = self.researches.get(task.research_id)
+                if research is None or research.status != ResearchStatus.PROCESSING:
+                    return None
+            latest = self._latest_job([item for item in self.search_jobs.values() if item.task_id == task.id])
+            if latest is None or latest.id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
+            task.status = TaskStatus.PENDING
+            task.logs.append(task_log)
+            task.updated_at = now
+            job.status = SearchJobStatus.PENDING
+            job.attempt_count = 0
+            job.error = None
+            job.updated_at = now
+            if research is not None:
+                research.updated_at = now
         return job
 
     def recover_stale_search_task_jobs(
@@ -922,6 +1163,11 @@ class InMemoryTaskStore:
             maintenance_summary=maintenance_summary or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
+        self._worker_heartbeat_json[worker_name] = {
+            "extraction_metrics": extraction_metrics or {},
+            "graph_metrics": graph_metrics or {},
+            "maintenance_summary": maintenance_summary or {},
+        }
         self.worker_graph_step_events[worker_name] = compact_graph_step_events(
             self.worker_graph_step_events.get(worker_name, []),
             list(graph_step_events or []),
@@ -1011,6 +1257,27 @@ class InMemoryTaskStore:
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]:
         return [task for task in self.tasks.values() if task.research_id == research_id]
 
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return 0
+            deleted = {
+                task_id
+                for task_id in task_ids
+                if task_id in self.tasks and self.tasks[task_id].research_id == research_id
+            }
+            for task_id in deleted:
+                del self.tasks[task_id]
+            for job_id in [job_id for job_id, job in self.search_jobs.items() if job.task_id in deleted]:
+                del self.search_jobs[job_id]
+            if deleted:
+                research.task_ids = [task_id for task_id in research.task_ids if task_id not in deleted]
+                research.updated_at = datetime.now(timezone.utc)
+        if deleted:
+            self._emit_change(research_id)
+        return len(deleted)
+
     def update_task(
         self,
         task_id: str,
@@ -1024,7 +1291,7 @@ class InMemoryTaskStore:
         if update.status is not None:
             task.status = update.status
         if update.result is not None:
-            task.result = update.result
+            task.result = update.result or None  # emptied: None, as the SQL store reads it back
         if update.search_metrics is not None:
             task.search_metrics = update.search_metrics
         if update.log:
@@ -1043,16 +1310,19 @@ class InMemoryTaskStore:
         completion_tokens: int,
         total_tokens: int,
         estimated_cost_usd: float,
+        cache_hit_tokens: int = 0,
     ) -> str:
         usage_id = str(uuid.uuid4())
         self.llm_usage_logs.append({
             "id": usage_id,
-            "research_id": research_id,
-            "user_id": user_id,
+            # Like SQL: an owner deleted while its call ran is stored as None (SET NULL).
+            "research_id": research_id if research_id in self.researches else None,
+            "user_id": user_id if user_id in self.users else None,
             "model": model,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "cache_hit_tokens": cache_hit_tokens,
             "estimated_cost_usd": estimated_cost_usd,
             "created_at": datetime.now(timezone.utc),
         })
@@ -1093,7 +1363,8 @@ class InMemoryTaskStore:
             logs = [entry for entry in logs if entry.action == action]
         if actor_email:
             logs = [entry for entry in logs if entry.actor_email == actor_email]
-        sorted_logs = sorted(logs, key=lambda x: x.created_at, reverse=True)
+        # The SQL ORDER BY created_at DESC, id DESC.
+        sorted_logs = sorted(logs, key=lambda x: (x.created_at, x.id), reverse=True)
         return sorted_logs[offset : offset + limit]
 
     def get_admin_token_analytics(
@@ -1107,6 +1378,7 @@ class InMemoryTaskStore:
         total_cost = sum(u["estimated_cost_usd"] for u in self.llm_usage_logs)
 
         models_map: dict[str, dict] = {}
+        depths_map: dict[str, dict] = {}
         for u in self.llm_usage_logs:
             m = u["model"]
             if m not in models_map:
@@ -1116,7 +1388,14 @@ class InMemoryTaskStore:
             models_map[m]["tok"] += u["total_tokens"]
             models_map[m]["cost"] += u["estimated_cost_usd"]
             models_map[m]["count"] += 1
+            research = self.researches.get(u["research_id"] or "")
+            if research is not None:  # the SQL join on researches
+                d = depths_map.setdefault(research.depth.value, {"tok": 0, "cost": 0.0, "ids": set()})
+                d["tok"] += u["total_tokens"]
+                d["cost"] += u["estimated_cost_usd"]
+                d["ids"].add(research.id)
 
+        # Same order as SQL: by total tokens, then name.
         by_model = [
             AdminTokenModelBreakdown(
                 model=m,
@@ -1126,35 +1405,17 @@ class InMemoryTaskStore:
                 estimated_cost_usd=round(d["cost"], 4),
                 calls_count=d["count"],
             )
-            for m, d in models_map.items()
+            for m, d in sorted(models_map.items(), key=lambda item: (-item[1]["tok"], item[0]))
         ]
-
-        all_researches = sorted(self.researches.values(), key=lambda r: r.created_at, reverse=True)
-        total_researches = len(all_researches)
-        offset = max(0, (page - 1) * page_size)
-        paged_researches = all_researches[offset : offset + page_size]
-
-        research_items: list[AdminTokenResearchUsageItem] = []
-        for r in paged_researches:
-            r_logs = [u for u in self.llm_usage_logs if u["research_id"] == r.id]
-            if r_logs:
-                tok = sum(u["total_tokens"] for u in r_logs)
-                cost = sum(u["estimated_cost_usd"] for u in r_logs)
-            else:
-                legacy = (r.graph_state or {}).get("llm_token_usage") or {}
-                tok = legacy.get("total_tokens", 0)
-                cost = legacy.get("estimated_cost_usd", 0.0)
-            research_items.append(
-                AdminTokenResearchUsageItem(
-                    research_id=r.id,
-                    prompt=r.prompt,
-                    depth=r.depth,
-                    status=r.status,
-                    total_tokens=tok,
-                    estimated_cost_usd=round(cost, 4),
-                    created_at=r.created_at,
-                )
+        by_depth = [
+            AdminTokenDepthBreakdown(
+                depth=depth,
+                total_tokens=d["tok"],
+                estimated_cost_usd=round(d["cost"], 4),
+                researches_count=len(d["ids"]),
             )
+            for depth, d in sorted(depths_map.items(), key=lambda item: (-item[1]["tok"], item[0]))
+        ]
 
         return AdminTokenAnalyticsResponse(
             total_prompt_tokens=total_prompt,
@@ -1162,11 +1423,48 @@ class InMemoryTaskStore:
             total_tokens=total_tok,
             total_cost_usd=round(total_cost, 4),
             by_model=by_model,
-            by_depth=[],
-            researches=research_items,
-            total_researches=total_researches,
+            by_depth=by_depth,
+            researches=self.get_admin_token_research_usage(page=page, page_size=page_size),
+            total_researches=len(self.researches),
             page=page,
             page_size=page_size,
+        )
+
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]:
+        newest_first = sorted(self.researches.values(), key=lambda r: (r.created_at, r.id), reverse=True)
+        offset = max(0, (page - 1) * page_size)
+        items: list[AdminTokenResearchUsageItem] = []
+        for r in newest_first[offset : offset + page_size]:
+            tok, cost, calls = self._usage_by_research(r.id)
+            if calls == 0:
+                # Researches finalized before per-call usage rows existed.
+                legacy = (r.graph_state or {}).get("llm_token_usage") or {}
+                tok = int(legacy.get("total_tokens", 0) or 0)
+                cost = float(legacy.get("estimated_cost_usd", 0.0) or 0.0)
+            items.append(
+                AdminTokenResearchUsageItem(
+                    research_id=r.id,
+                    prompt=r.prompt,
+                    depth=r.depth.value,
+                    status=r.status.value,
+                    total_tokens=tok,
+                    estimated_cost_usd=round(cost, 4),
+                    created_at=r.created_at,
+                )
+            )
+        return items
+
+    def _usage_by_research(self, research_id: str) -> tuple[int, float, int]:
+        """(total_tokens, unrounded cost, calls) logged for one research."""
+        logs = [u for u in self.llm_usage_logs if u["research_id"] == research_id]
+        return (
+            sum(u["total_tokens"] for u in logs),
+            sum(u["estimated_cost_usd"] for u in logs),
+            len(logs),
         )
 
     def get_admin_overview(self) -> AdminOverviewResponse:
@@ -1188,14 +1486,12 @@ class InMemoryTaskStore:
                     last_error=hb.last_error,
                     last_seen_at=hb.last_seen_at,
                     is_alive=is_alive,
-                    extraction_metrics=hb.extraction_metrics or {},
-                    graph_metrics=hb.graph_metrics or {},
-                    maintenance_summary=hb.maintenance_summary or {},
+                    **self._worker_heartbeat_json.get(hb.worker_name, {}),
                 )
             )
 
+        # system_health is the service's: it adds the LLM/broker probes to these counters.
         return AdminOverviewResponse(
-            system_health={"overall": "healthy"},
             active_researches_count=active_count,
             pending_tasks_count=pending_count,
             failed_tasks_count=failed_count,
@@ -1219,7 +1515,7 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=len(stale),
                 sample_affected_ids=[j.id for j in stale[:10]],
-                summary=f"Would recover {len(stale)} stale finalize jobs",
+                summary=f"Would recover {len(stale)} stale finalize jobs running before {stale_dt.isoformat()}",
             )
         elif action == "recover_stale_search_jobs":
             stale_seconds = int(params.get("stale_seconds", 300))
@@ -1230,7 +1526,7 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=len(stale),
                 sample_affected_ids=[j.id for j in stale[:10]],
-                summary=f"Would recover {len(stale)} stale search jobs",
+                summary=f"Would recover {len(stale)} stale search jobs running before {stale_dt.isoformat()}",
             )
         elif action == "cleanup_old_jobs":
             days = int(params.get("days", 7))
@@ -1244,7 +1540,18 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=tot,
                 sample_affected_ids=sample,
-                summary=f"Would delete {tot} old jobs",
+                summary=f"Would delete {len(old_f)} finalize and {len(old_s)} search jobs older than {days} days",
+            )
+        elif action == "cleanup_search_cache":
+            days = int(params.get("days", 3))
+            cutoff = datetime.fromtimestamp(now.timestamp() - days * 86400, tz=timezone.utc)
+            count = sum(1 for created, _ in self.search_cache.values() if created < cutoff)
+            return AdminDryRunResult(
+                action=action,
+                dry_run=True,
+                affected_count=count,
+                sample_affected_ids=[],
+                summary=f"Would delete {count} cached search entries older than {days} days",
             )
         elif action in ("requeue_finalize_job", "requeue_search_job"):
             tid = params.get("target_id")
@@ -1255,26 +1562,13 @@ class InMemoryTaskStore:
                 sample_affected_ids=[tid] if tid else [],
                 summary=f"Would requeue job {tid}",
             )
-        return AdminDryRunResult(action=action, dry_run=True, affected_count=0, sample_affected_ids=[], summary="Unknown action")
-
-    def execute_maintenance_action(
-        self,
-        action: str,
-        actor_email: str,
-        params: dict | None = None,
-        ip_address: str | None = None,
-    ) -> AdminDryRunResult:
-        res = self.preview_maintenance_action(action, params)
-        res.dry_run = False
-        self.record_admin_audit(
-            actor_email=actor_email,
+        return AdminDryRunResult(
             action=action,
-            target_type="maintenance",
-            target_id=(params or {}).get("target_id"),
-            details={"params": params, "affected_count": res.affected_count},
-            ip_address=ip_address,
+            dry_run=True,
+            affected_count=0,
+            sample_affected_ids=[],
+            summary=f"Unknown maintenance action: {action}",
         )
-        return res
 
     # ── user telemetry & activity tracking ───────────────────────────────────
     def record_user_session(
@@ -1293,34 +1587,45 @@ class InMemoryTaskStore:
         country: str | None = None,
         city: str | None = None,
     ) -> str:
-        record_id = str(uuid.uuid4())
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
-        self.user_sessions.append({
-            "id": record_id,
-            "user_id": user_id,
-            "session_id": session_id,
-            "ip_address": ip_address,
-            "user_agent": user_agent,
-            "device_type": device_type,
-            "browser": browser,
-            "os": os,
-            "screen_res": screen_res,
-            "viewport": viewport,
-            "language": language,
-            "timezone": client_timezone,
-            "country": country,
-            "city": city,
-            "started_at": now,
-            "last_active_at": now,
-        })
-        self.touch_user_activity(
-            user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            device=device_type,
-            browser=browser,
-            os=os,
+        # Mirrors the SQL upsert on (session_id, user_id): a repeat bumps the caller's own
+        # row; another account's row with the same client-chosen id is left alone.
+        existing = next(
+            (
+                s for s in self.user_sessions
+                if s.get("session_id") == session_id and s.get("user_id") == user_id
+            ),
+            None,
         )
+        if existing is not None:
+            existing["last_active_at"] = now
+            if ip_address:
+                existing["ip_address"] = ip_address
+            if user_agent:
+                existing["user_agent"] = user_agent
+            record_id = existing["id"]
+        else:
+            record_id = str(uuid.uuid4())
+            self.user_sessions.append({
+                "id": record_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "device_type": device_type,
+                "browser": browser,
+                "os": os,
+                "screen_res": screen_res,
+                "viewport": viewport,
+                "language": language,
+                "timezone": client_timezone,
+                "country": country,
+                "city": city,
+                "started_at": now,
+                "last_active_at": now,
+            })
         return record_id
 
     def record_user_event(
@@ -1333,6 +1638,8 @@ class InMemoryTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> str:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         record_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         self.user_events.append({
@@ -1346,8 +1653,7 @@ class InMemoryTaskStore:
             "user_agent": user_agent,
             "created_at": now,
         })
-        if user_id:
-            self.touch_user_activity(user_id, ip_address=ip_address, user_agent=user_agent)
+        # Like SQL: users activity is the middleware's (throttled) job, not every event's.
         return record_id
 
     def touch_user_activity(
@@ -1356,11 +1662,17 @@ class InMemoryTaskStore:
         ip_address: str | None = None,
         user_agent: str | None = None,
         device: str | None = None,
-        browser: str | None = None,
-        os: str | None = None,
     ) -> None:
+        ip_address = clip_text(ip_address, TELEMETRY_IP_MAX_LENGTH)
+        user_agent = clip_text(user_agent, TELEMETRY_USER_AGENT_MAX_LENGTH)
         now = datetime.now(timezone.utc)
+        if user_id not in self.users:
+            return  # SQL updates no row for an unknown user
         entry = self.user_telemetry.setdefault(user_id, {})
+        # Same throttle as the SQL WHERE clause: seen within the interval -> no rewrite.
+        last_seen = entry.get("last_seen_at")
+        if last_seen is not None and (now - last_seen).total_seconds() < USER_ACTIVITY_TOUCH_INTERVAL_SECONDS:
+            return
         entry["last_seen_at"] = now
         if ip_address:
             entry["last_ip"] = ip_address
@@ -1368,10 +1680,50 @@ class InMemoryTaskStore:
             entry["last_user_agent"] = user_agent
         if device:
             entry["last_device"] = device
-        if browser:
-            entry["last_browser"] = browser
-        if os:
-            entry["last_os"] = os
+
+    def _admin_user_row(self, user_id: str, online_threshold: datetime) -> tuple[dict, AdminUserListItem]:
+        """The SQL store's per-user row: its sort keys plus the list item."""
+        u = self.users[user_id]
+        telem = self.user_telemetry.get(user_id, {})
+        last_seen = telem.get("last_seen_at")
+        created_at = self._user_created_at.get(user_id) or datetime.now(timezone.utc)
+        user_logs = [log_item for log_item in self.llm_usage_logs if log_item.get("user_id") == user_id]
+        tot_tokens = sum(log_item.get("total_tokens", 0) for log_item in user_logs)
+        tot_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in user_logs)
+        researches_count = sum(1 for r in self.researches.values() if r.user_id == user_id)
+        last_sess = self._latest_sessions(user_id, 1)
+        last_sess = last_sess[0] if last_sess else {}
+        item = AdminUserListItem(
+            id=user_id,
+            email=u.email,
+            name=u.name,
+            avatar_url=u.avatar_url,
+            is_admin=has_admin_rights(u.email, u.google_subject, u.admin_provisioned_at),
+            created_at=created_at.isoformat(),
+            last_seen_at=last_seen.isoformat() if last_seen else None,
+            is_online=bool(last_seen and last_seen >= online_threshold),
+            last_ip=telem.get("last_ip") or last_sess.get("ip_address"),
+            last_device=telem.get("last_device") or last_sess.get("device_type"),
+            last_browser=last_sess.get("browser"),
+            last_os=last_sess.get("os"),
+            researches_count=researches_count,
+            total_tokens=tot_tokens,
+            total_cost_usd=round(tot_cost, 4),
+        )
+        keys = {
+            "created_at": created_at,
+            "last_seen_at": last_seen,
+            "last_ip": telem.get("last_ip") or "",
+            "total_tokens": tot_tokens,
+            "total_cost": tot_cost,
+            "researches_count": researches_count,
+        }
+        return keys, item
+
+    def _latest_sessions(self, user_id: str, limit: int) -> list[dict]:
+        sessions = [s for s in self.user_sessions if s.get("user_id") == user_id]
+        sessions.sort(key=lambda s: (s["last_active_at"], s["id"]), reverse=True)
+        return sessions[:limit]
 
     def get_admin_users_list(
         self,
@@ -1382,213 +1734,194 @@ class InMemoryTaskStore:
         online_only: bool = False,
         sort_by: str = "last_seen",
     ) -> AdminUserListResponse:
-        now = datetime.now(timezone.utc)
-        items: list[AdminUserListItem] = []
+        online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
+        term = (search or "").strip().lower()
 
-        for uid, u in self.users.items():
-            telem = self.user_telemetry.get(uid, {})
-            last_seen = telem.get("last_seen_at")
-            is_online = False
-            if last_seen:
-                is_online = (now - last_seen).total_seconds() < 120
-
-            if online_only and not is_online:
+        rows: list[tuple[dict, AdminUserListItem]] = []
+        for uid in self.users:
+            keys, item = self._admin_user_row(uid, online_threshold)
+            if term and not (
+                term in item.email.lower()
+                or term in (item.name or "").lower()
+                or term in keys["last_ip"].lower()
+            ):
                 continue
+            if role == "admin" and not item.is_admin:
+                continue
+            if role == "user" and item.is_admin:
+                continue
+            if online_only and not item.is_online:
+                continue
+            rows.append((keys, item))
 
-            if role:
-                if role == "admin" and not getattr(u, "is_admin", False):
-                    continue
-                if role == "user" and getattr(u, "is_admin", False):
-                    continue
+        # The SQL ORDER BY: the metric (or recency) first, then newest account, then id.
+        def newest_first(row):
+            return (row[0]["created_at"], row[1].id)
 
-            if search:
-                s = search.lower()
-                matches = (
-                    s in (u.email or "").lower()
-                    or s in (getattr(u, "name", "") or "").lower()
-                    or s in (telem.get("last_ip") or "")
-                )
-                if not matches:
-                    continue
-
-            # Research count
-            user_researches = [r for r in self.researches.values() if r.user_id == uid]
-            # Tokens
-            user_logs = [log_item for log_item in self.llm_usage_logs if log_item.get("user_id") == uid]
-            tot_tokens = sum(log_item.get("total_tokens", 0) for log_item in user_logs)
-            tot_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in user_logs)
-
-            user_sessions = [s for s in self.user_sessions if s.get("user_id") == uid]
-            last_sess = user_sessions[-1] if user_sessions else {}
-
-            items.append(
-                AdminUserListItem(
-                    id=uid,
-                    email=u.email,
-                    name=getattr(u, "name", None),
-                    avatar_url=getattr(u, "avatar_url", None),
-                    is_admin=getattr(u, "is_admin", False),
-                    created_at=u.created_at.isoformat() if hasattr(u, "created_at") and u.created_at else now.isoformat(),
-                    last_seen_at=last_seen.isoformat() if last_seen else None,
-                    is_online=is_online,
-                    last_ip=telem.get("last_ip") or last_sess.get("ip_address"),
-                    last_device=telem.get("last_device") or last_sess.get("device_type"),
-                    last_browser=telem.get("last_browser") or last_sess.get("browser"),
-                    last_os=telem.get("last_os") or last_sess.get("os"),
-                    researches_count=len(user_researches),
-                    total_tokens=tot_tokens,
-                    total_cost_usd=round(tot_cost, 4),
-                )
+        metric = {"tokens": "total_tokens", "cost": "total_cost", "researches": "researches_count"}.get(sort_by)
+        if metric:
+            rows.sort(key=lambda row: (row[0][metric], *newest_first(row)), reverse=True)
+        elif sort_by == "registered":
+            rows.sort(key=newest_first, reverse=True)
+        else:  # last_seen, never-seen users last
+            epoch = datetime.min.replace(tzinfo=timezone.utc)
+            rows.sort(
+                key=lambda row: (row[0]["last_seen_at"] is not None, row[0]["last_seen_at"] or epoch, *newest_first(row)),
+                reverse=True,
             )
 
-        online_count = sum(1 for it in items if it.is_online)
-        total_count = len(items)
-
-        # Sorting
-        if sort_by == "tokens":
-            items.sort(key=lambda x: x.total_tokens, reverse=True)
-        elif sort_by == "cost":
-            items.sort(key=lambda x: x.total_cost_usd, reverse=True)
-        elif sort_by == "researches":
-            items.sort(key=lambda x: x.researches_count, reverse=True)
-        elif sort_by == "registered":
-            items.sort(key=lambda x: x.created_at, reverse=True)
-        else:
-            items.sort(key=lambda x: x.last_seen_at or "", reverse=True)
-
+        online_users = sum(
+            1
+            for entry in self.user_telemetry.values()
+            if entry.get("last_seen_at") and entry["last_seen_at"] >= online_threshold
+        )
         start = (page - 1) * page_size
-        paged = items[start : start + page_size]
-
         return AdminUserListResponse(
-            users=paged,
-            total_users=total_count,
-            online_users=online_count,
+            users=[item for _keys, item in rows[start : start + page_size]],
+            total_users=len(rows),
+            online_users=online_users,
             page=page,
             page_size=page_size,
         )
 
     def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
-        user_resp = self.get_admin_users_list(page=1, page_size=1000)
-        found_item = next((u for u in user_resp.users if u.id == user_id), None)
-        if not found_item:
+        if user_id not in self.users:
             return None
+        online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
+        _keys, user_item = self._admin_user_row(user_id, online_threshold)
 
-        # Sessions
-        sessions = [s for s in self.user_sessions if s.get("user_id") == user_id]
-        # Recent researches
-        researches = [
+        sessions = [
             {
-                "id": r.id,
-                "prompt": r.prompt,
-                "depth": r.depth,
-                "status": r.status.value if hasattr(r.status, "value") else str(r.status),
-                "created_at": r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                "id": s["id"],
+                "session_id": s["session_id"],
+                "ip_address": s.get("ip_address"),
+                "device_type": s.get("device_type"),
+                "browser": s.get("browser"),
+                "os": s.get("os"),
+                "screen_res": s.get("screen_res"),
+                "language": s.get("language"),
+                "timezone": s.get("timezone"),
+                "country": s.get("country"),
+                "city": s.get("city"),
+                "started_at": s["started_at"].isoformat(),
+                "last_active_at": s["last_active_at"].isoformat(),
             }
-            for r in self.researches.values()
-            if r.user_id == user_id
+            for s in self._latest_sessions(user_id, 10)
         ]
-        # Recent events
+        owned = sorted(
+            (r for r in self.researches.values() if r.user_id == user_id),
+            key=lambda r: (r.created_at, r.id),
+            reverse=True,
+        )[:20]
+        researches = []
+        for r in owned:
+            tokens, cost, _calls = self._usage_by_research(r.id)
+            researches.append(
+                {
+                    "id": r.id,
+                    "prompt": r.prompt,
+                    "depth": r.depth.value,
+                    "status": r.status.value,
+                    "total_tokens": tokens,
+                    "cost_usd": round(cost, 4),
+                    "created_at": r.created_at.isoformat(),
+                }
+            )
         events = [
             {
                 "id": e["id"],
                 "event_name": e["event_name"],
                 "event_category": e["event_category"],
-                "details": e["details"],
-                "created_at": e["created_at"].isoformat() if hasattr(e["created_at"], "isoformat") else str(e["created_at"]),
+                "details": e["details"] or {},
+                "created_at": e["created_at"].isoformat(),
             }
-            for e in self.user_events
-            if e.get("user_id") == user_id
+            for e in sorted(
+                (e for e in self.user_events if e.get("user_id") == user_id),
+                key=lambda e: (e["created_at"], e["id"]),
+                reverse=True,
+            )[:20]
         ]
-        # Token breakdown
-        user_logs = [log_item for log_item in self.llm_usage_logs if log_item.get("user_id") == user_id]
-        by_model: dict[str, int] = {}
-        for log_item in user_logs:
-            m = log_item.get("model", "unknown")
-            by_model[m] = by_model.get(m, 0) + log_item.get("total_tokens", 0)
+        by_model: dict[str, dict] = {}
+        for log_item in sorted(self.llm_usage_logs, key=lambda log_item: log_item["model"]):
+            if log_item.get("user_id") != user_id:
+                continue
+            entry = by_model.setdefault(log_item["model"], {"tokens": 0, "cost_usd": 0.0})
+            entry["tokens"] += log_item["total_tokens"]
+            entry["cost_usd"] += log_item["estimated_cost_usd"]
+        for entry in by_model.values():
+            entry["cost_usd"] = round(entry["cost_usd"], 4)
 
         return AdminUserDetailResponse(
-            user=found_item,
-            sessions=sessions[-10:],
-            researches=researches[-10:],
-            recent_researches=researches[-10:],
-            recent_events=events[-20:],
+            user=user_item,
+            sessions=sessions,
+            researches=researches,
+            recent_researches=researches,
+            recent_events=events,
             token_breakdown={"by_model": by_model},
         )
 
+    @staticmethod
+    def _ranked_counts(values, limit: int | None = 10) -> list[tuple[str, int]]:
+        """The SQL breakdowns: GROUP BY value ORDER BY count DESC, value, NULLs left out."""
+        counts: dict[str, int] = {}
+        for value in values:
+            if value is not None:
+                counts[value] = counts.get(value, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ranked if limit is None else ranked[:limit]
+
     def get_admin_telemetry_summary(self) -> AdminTelemetrySummaryResponse:
         now = datetime.now(timezone.utc)
-        total_users = len(self.users)
-        online_now = 0
-        dau_set = set()
-        wau_set = set()
-        mau_set = set()
+        # Activity is per user (users.last_seen_at in SQL), not per session row.
+        last_seen = [
+            entry["last_seen_at"]
+            for user_id, entry in self.user_telemetry.items()
+            if user_id in self.users and entry.get("last_seen_at") is not None
+        ]
 
-        os_counts: dict[str, int] = {}
-        browser_counts: dict[str, int] = {}
-        device_counts: dict[str, int] = {}
-        country_counts: dict[str, int] = {}
+        def active_within(window: timedelta) -> int:
+            return sum(1 for seen in last_seen if seen >= now - window)
 
-        for s in self.user_sessions:
-            uid = s.get("user_id")
-            active = s.get("last_active_at", now)
-            diff = (now - active).total_seconds()
-            if diff < 120:
-                online_now += 1
-            if diff < 86400 and uid:
-                dau_set.add(uid)
-            if diff < 7 * 86400 and uid:
-                wau_set.add(uid)
-            if diff < 30 * 86400 and uid:
-                mau_set.add(uid)
+        online_now = active_within(timedelta(minutes=2))
+        dau = active_within(timedelta(days=1))
+        wau = active_within(timedelta(days=7))
+        mau = active_within(timedelta(days=30))
 
-            os_name = s.get("os") or "macOS"
-            os_counts[os_name] = os_counts.get(os_name, 0) + 1
-
-            b_name = s.get("browser") or "Chrome"
-            browser_counts[b_name] = browser_counts.get(b_name, 0) + 1
-
-            d_name = s.get("device_type") or "desktop"
-            device_counts[d_name] = device_counts.get(d_name, 0) + 1
-
-            c_name = s.get("country") or "Local"
-            country_counts[c_name] = country_counts.get(c_name, 0) + 1
+        os_rows = self._ranked_counts(s.get("os") for s in self.user_sessions)
+        browser_rows = self._ranked_counts(s.get("browser") for s in self.user_sessions)
+        device_rows = self._ranked_counts(s.get("device_type") for s in self.user_sessions)
+        country_rows = self._ranked_counts(s.get("country") for s in self.user_sessions)
+        depth_rows = self._ranked_counts((r.depth.value for r in self.researches.values()), limit=None)
+        model_rows = self._ranked_counts(u["model"] for u in self.llm_usage_logs)
 
         total_tokens = sum(log_item.get("total_tokens", 0) for log_item in self.llm_usage_logs)
         total_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in self.llm_usage_logs)
-
-        depth_counts: dict[str, int] = {}
-        prompt_lens: list[int] = []
-        for r in self.researches.values():
-            d = r.depth or "medium"
-            depth_counts[d] = depth_counts.get(d, 0) + 1
-            if r.prompt:
-                prompt_lens.append(len(r.prompt))
-
+        prompt_lens = [len(r.prompt) for r in self.researches.values()]
         avg_prompt_len = round(sum(prompt_lens) / len(prompt_lens), 1) if prompt_lens else 0.0
 
         return AdminTelemetrySummaryResponse(
-            total_users=total_users,
+            total_users=len(self.users),
             online_now=online_now,
             online_users_now=online_now,
-            dau=len(dau_set),
-            dau_today=len(dau_set),
-            wau=len(wau_set),
-            wau_7d=len(wau_set),
-            mau=len(mau_set),
-            mau_30d=len(mau_set),
+            dau=dau,
+            dau_today=dau,
+            wau=wau,
+            wau_7d=wau,
+            mau=mau,
+            mau_30d=mau,
             total_researches=len(self.researches),
             total_tokens=total_tokens,
             total_cost_usd=round(total_cost, 4),
-            by_os=[{"name": k, "count": v} for k, v in os_counts.items()],
-            by_browser=[{"name": k, "count": v} for k, v in browser_counts.items()],
-            by_device=[{"name": k, "count": v} for k, v in device_counts.items()],
-            by_country=[{"name": k, "count": v} for k, v in country_counts.items()],
-            os_breakdown=os_counts,
-            browser_breakdown=browser_counts,
-            device_breakdown=device_counts,
-            depth_distribution=depth_counts,
-            popular_depths=[{"depth": k, "count": v} for k, v in depth_counts.items()],
-            popular_models=[],
+            by_os=[{"name": name, "count": count} for name, count in os_rows],
+            by_browser=[{"name": name, "count": count} for name, count in browser_rows],
+            by_device=[{"name": name, "count": count} for name, count in device_rows],
+            by_country=[{"name": name, "count": count} for name, count in country_rows],
+            os_breakdown={name: count for name, count in os_rows if name},
+            browser_breakdown={name: count for name, count in browser_rows if name},
+            device_breakdown={name: count for name, count in device_rows if name},
+            depth_distribution={depth: count for depth, count in depth_rows if depth},
+            popular_depths=[{"depth": depth, "count": count} for depth, count in depth_rows],
+            popular_models=[{"model": model, "count": count} for model, count in model_rows],
             avg_prompt_len=avg_prompt_len,
         )
 
@@ -1608,7 +1941,8 @@ class InMemoryTaskStore:
         if user_id:
             filtered = [e for e in filtered if e.get("user_id") == user_id]
 
-        filtered.reverse()
+        # The SQL ORDER BY created_at DESC, id DESC.
+        filtered.sort(key=lambda e: (e["created_at"], e["id"]), reverse=True)
         paged = filtered[offset : offset + limit]
 
         items = []
@@ -1647,82 +1981,81 @@ class InMemoryTaskStore:
         user_id: str | None = None,
         prompt_type: str | None = None,
     ) -> AdminPromptsResponse:
-        items: list[AdminPromptItem] = []
+        rows: list[tuple[datetime, AdminPromptItem]] = []
         if not prompt_type or prompt_type in ("all", "research"):
             for r in self.researches.values():
                 if user_id and r.user_id != user_id:
                     continue
                 user = self.users.get(r.user_id) if r.user_id else None
-                user_email = user.email if user else None
-                user_name = user.name if user else None
-                created_iso = r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at)
-                items.append(
-                    AdminPromptItem(
-                        id=f"res_{r.id}",
-                        prompt_type="research",
-                        prompt=r.prompt,
-                        research_id=r.id,
-                        user_id=r.user_id,
-                        user_email=user_email,
-                        user_name=user_name,
-                        depth=r.depth.value if hasattr(r.depth, "value") else str(r.depth),
-                        status=r.status.value if hasattr(r.status, "value") else str(r.status),
-                        total_tokens=0,
-                        cost_usd=0.0,
-                        created_at=created_iso,
-                    )
-                )
+                tokens, cost, _calls = self._usage_by_research(r.id)
+                rows.append((r.created_at, AdminPromptItem(
+                    id=f"res_{r.id}",
+                    prompt_type="research",
+                    prompt=r.prompt,
+                    research_id=r.id,
+                    user_id=r.user_id,
+                    user_email=user.email if user else None,
+                    user_name=user.name if user else None,
+                    depth=r.depth.value,
+                    status=r.status.value,
+                    total_tokens=tokens,
+                    cost_usd=round(cost, 4),
+                    created_at=r.created_at.isoformat(),
+                )))
 
         if not prompt_type or prompt_type in ("all", "chat"):
             for ev in self.user_events:
-                if ev.get("event_name") == "chat_prompt":
-                    ev_user_id = ev.get("user_id")
-                    if user_id and ev_user_id != user_id:
-                        continue
-                    details = ev.get("details") or {}
-                    prompt_text = details.get("prompt", "")
-                    res_id = details.get("research_id", "")
-                    user = self.users.get(ev_user_id) if ev_user_id else None
-                    user_email = user.email if user else None
-                    user_name = user.name if user else None
-                    created_at = ev.get("created_at")
-                    created_iso = created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at)
-                    items.append(
-                        AdminPromptItem(
-                            id=f"chat_{ev.get('id', '')}",
-                            prompt_type="chat",
-                            prompt=prompt_text,
-                            research_id=res_id,
-                            user_id=ev_user_id,
-                            user_email=user_email,
-                            user_name=user_name,
-                            depth=None,
-                            status=None,
-                            total_tokens=0,
-                            cost_usd=0.0,
-                            created_at=created_iso,
-                        )
-                    )
+                if ev.get("event_name") != "chat_prompt":
+                    continue
+                ev_user_id = ev.get("user_id")
+                if user_id and ev_user_id != user_id:
+                    continue
+                details = ev.get("details") or {}
+                user = self.users.get(ev_user_id) if ev_user_id else None
+                rows.append((ev["created_at"], AdminPromptItem(
+                    id=f"chat_{ev['id']}",
+                    prompt_type="chat",
+                    prompt=str(details.get("prompt") or ""),
+                    research_id=str(details.get("research_id") or ""),
+                    user_id=ev_user_id,
+                    user_email=user.email if user else None,
+                    user_name=user.name if user else None,
+                    depth=None,
+                    status=None,
+                    total_tokens=0,
+                    cost_usd=0.0,
+                    created_at=ev["created_at"].isoformat(),
+                )))
 
-        if search:
-            q = search.lower()
-            items = [
-                it for it in items
-                if q in it.prompt.lower()
-                or (it.user_email and q in it.user_email.lower())
-                or (it.user_name and q in it.user_name.lower())
+        term = (search or "").strip().lower()
+        if term:
+            rows = [
+                (created_at, it) for created_at, it in rows
+                if term in it.prompt.lower()
+                or (it.user_email and term in it.user_email.lower())
+                or (it.user_name and term in it.user_name.lower())
             ]
 
-        items.sort(key=lambda x: x.created_at, reverse=True)
-        total_count = len(items)
+        # The SQL ORDER BY created_at DESC, item id DESC.
+        rows.sort(key=lambda row: (row[0], row[1].id), reverse=True)
         start = (page - 1) * page_size
-        paged_items = items[start : start + page_size]
         return AdminPromptsResponse(
-            prompts=paged_items,
-            total_count=total_count,
+            prompts=[item for _created_at, item in rows[start : start + page_size]],
+            total_count=len(rows),
             page=page,
             page_size=page_size,
         )
+
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]:
+        prompts = self.get_admin_prompts(page=1, page_size=len(self.researches) + len(self.user_events)).prompts
+        if after is not None:
+            cursor = (datetime.fromisoformat(after.created_at), after.id)
+            prompts = [item for item in prompts if (datetime.fromisoformat(item.created_at), item.id) < cursor]
+        return prompts[:limit]
 
     def get_user_token_analytics(self, user_id: str) -> dict:
         logs = [u for u in self.llm_usage_logs if u.get("user_id") == user_id]
@@ -1757,13 +2090,13 @@ class InMemoryTaskStore:
             {
                 "id": r.id,
                 "prompt": r.prompt,
-                "depth": r.depth,
-                "status": r.status,
+                "depth": r.depth.value,
+                "status": r.status.value,
                 "total_tokens": sum(u.get("total_tokens", 0) for u in logs if u.get("research_id") == r.id),
                 "estimated_cost_usd": round(sum(u.get("estimated_cost_usd", 0.0) for u in logs if u.get("research_id") == r.id), 4),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
-            for r in sorted(researches, key=lambda x: x.created_at or datetime.min, reverse=True)[:10]
+            for r in sorted(researches, key=lambda x: (x.created_at, x.id), reverse=True)[:10]
         ]
 
         return {
@@ -1773,6 +2106,7 @@ class InMemoryTaskStore:
             "estimated_cost_usd": total_cost,
             "calls_count": len(logs),
             "researches_count": len(researches),
-            "by_model": list(models_map.values()),
+            # The SQL order: most tokens first, then model name.
+            "by_model": sorted(models_map.values(), key=lambda m: (-m["total_tokens"], m["model"])),
             "recent": recent,
         }

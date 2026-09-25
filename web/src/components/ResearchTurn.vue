@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
+import { createTraceDeduper, reconnectDelayMs, traceFromGraph } from "@/lib/trace";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "./AgentActivityConsole.vue";
 import type { TraceEntry } from "@/lib/stream";
@@ -27,12 +28,24 @@ const usage = ref<Record<string, number> | null>(null);
 const errorMsg = ref<string | null>(null);
 const streamLost = ref(false);
 
+// Every (re)connect replays the whole trail — show each step once.
+const traceSeen = createTraceDeduper();
+function addTrace(entry: TraceEntry) {
+  if (traceSeen.accept(entry)) trace.value.push(entry);
+}
+function resetTrace() {
+  traceSeen.reset();
+  trace.value = [];
+  reasoning.value = "";
+}
+
 const plan = ref<ResearchPlan | null>(null);
 const planBusy = ref(false);
 const clarification = ref<Clarification | null>(null);
 const clarifyBusy = ref(false);
 
-const DONE = new Set(["completed", "failed", "timeout", "cancelled"]);
+// "not_found" is client-side only: the research no longer exists (see markGone).
+const DONE = new Set(["completed", "failed", "timeout", "cancelled", "not_found"]);
 const queuePos = ref<number | null>(null);
 const cancelling = ref(false);
 const promptExpanded = ref(false);
@@ -45,7 +58,7 @@ async function onCancel() {
     done.value = true;
     emit("done", "cancelled");
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     cancelling.value = false;
   }
@@ -63,6 +76,10 @@ function notifyDone(s: string) {
 }
 let close: (() => void) | undefined;
 let queuePoll: number | undefined;
+// Pending auto-reconnect after a stream error; consecutive failures back off.
+let reconnectTimer: number | undefined;
+let reconnectAttempt = 0;
+let unmounted = false;
 
 function statusLabel(s: string): string {
   return te(`status.${s}`) ? t(`status.${s}`) : s;
@@ -78,8 +95,9 @@ function startQueuePoll() {
       status.value = s.status;
       queuePos.value = s.queue_position ?? null;
       if (s.status !== "queued") stopQueuePoll();
-    } catch {
-      /* transient — keep polling */
+    } catch (e) {
+      if (isGone(e)) markGone();
+      else if (isSignedOut(e)) markSignedOut(e); // otherwise transient — keep polling
     }
   }, 4000);
 }
@@ -114,20 +132,20 @@ const costTooltip = computed(() => {
   const u = usage.value;
   if (!u) return t("research.costTitle");
   const lines: string[] = [t("research.costTitle")];
-  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.prompt_tokens) lines.push(t("research.costInput", { n: u.prompt_tokens.toLocaleString() }));
   if (u.cache_hit_tokens) {
     const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
-    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+    lines.push(t("research.costCache", { n: u.cache_hit_tokens.toLocaleString(), pct }));
   }
-  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  if (u.completion_tokens) lines.push(t("research.costOutput", { n: u.completion_tokens.toLocaleString() }));
   return lines.join(" · ");
 });
 
 async function loadPlan() {
-  try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { plan.value = await api.getPlan(props.id); emit("grow"); } catch (e) { errorMsg.value = apiErrorMessage(e, t); }
 }
 async function loadClarifications() {
-  try { clarification.value = await api.getClarifications(props.id); emit("grow"); } catch (e) { errorMsg.value = (e as Error).message; }
+  try { clarification.value = await api.getClarifications(props.id); emit("grow"); } catch (e) { errorMsg.value = apiErrorMessage(e, t); }
 }
 
 async function onSubmitClarify(answers: string[]) {
@@ -137,7 +155,7 @@ async function onSubmitClarify(answers: string[]) {
     await api.submitClarify(props.id, answers);
     clarification.value = null;
     status.value = "processing";
-  } catch (e) { errorMsg.value = (e as Error).message; } finally { clarifyBusy.value = false; }
+  } catch (e) { errorMsg.value = apiErrorMessage(e, t); } finally { clarifyBusy.value = false; }
 }
 
 async function onApprove(items: PlanItem[]) {
@@ -148,11 +166,51 @@ async function onApprove(items: PlanItem[]) {
     await api.approvePlan(props.id);
     plan.value = null;
     status.value = "processing";
-  } catch (e) { errorMsg.value = (e as Error).message; } finally { planBusy.value = false; }
+  } catch (e) { errorMsg.value = apiErrorMessage(e, t); } finally { planBusy.value = false; }
+}
+
+// 404/403: the research was deleted (another tab, its owner removed, the retention
+// sweep) or is no longer ours. Network errors and 5xx are transient, never this.
+function isGone(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 404 || e.status === 403);
+}
+
+// Settle a research that no longer exists: stop streaming, reconnecting and polling,
+// and tell the thread it is over so its composer is released.
+function markGone() {
+  clearReconnect();
+  close?.();
+  close = undefined;
+  stopQueuePoll();
+  streamLost.value = false;
+  errorMsg.value = t("research.notFound");
+  status.value = "not_found";
+  if (!done.value) {
+    done.value = true;
+    emit("done", "not_found");
+  }
+}
+
+// 401: the session is gone (expired, or revoked: a logout signs out every device).
+// Reconnecting cannot bring it back; api's session recovery sends the tab to /login.
+function isSignedOut(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
+// Stop streaming, reconnecting and polling until the user signs in again. The research
+// itself goes on, so the thread keeps waiting and a manual resume stays offered.
+function markSignedOut(e: unknown) {
+  clearReconnect();
+  close?.();
+  close = undefined;
+  stopQueuePoll();
+  errorMsg.value = apiErrorMessage(e, t);
+  streamLost.value = true;
 }
 
 // Fetch the current status/report (also used to catch up after a dropped stream). Returns
-// true if the research is already in a terminal state (no live stream needed).
+// true if no live stream is needed: the research is in a terminal state, is gone, or the
+// session is.
 async function syncStatus(): Promise<boolean> {
   try {
     const s = await api.getStatus(props.id);
@@ -163,16 +221,7 @@ async function syncStatus(): Promise<boolean> {
       try {
         const g = await api.getGraph(props.id);
         if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
-          trace.value = g.graph_trail.map((entry) => ({
-            step: entry.step ?? "",
-            detail: entry.detail ?? "",
-            sources: entry.sources ?? [],
-            agent: entry.agent,
-            phase: entry.phase,
-            action: entry.action,
-            metrics: entry.metrics,
-            timestamp: entry.timestamp,
-          }));
+          traceFromGraph(g.graph_trail).forEach(addTrace);
         }
       } catch {
         /* non-fatal */
@@ -196,18 +245,57 @@ async function syncStatus(): Promise<boolean> {
       }
       return true;
     }
-  } catch {
+  } catch (e) {
+    if (isGone(e)) {
+      markGone();
+      return true;
+    }
+    if (isSignedOut(e)) {
+      markSignedOut(e);
+      return true;
+    }
     /* SSE still drives status/report */
   }
   return false;
 }
 
+function clearReconnect() {
+  if (reconnectTimer !== undefined) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+}
+
+// Catch up and reopen the stream after a delay that grows with each consecutive
+// failure. Only one reconnect is ever pending, and none survives unmount.
+function scheduleReconnect() {
+  clearReconnect();
+  reconnectTimer = window.setTimeout(async () => {
+    reconnectTimer = undefined;
+    if (unmounted || done.value) return;
+    const terminal = await syncStatus();
+    if (!terminal) connect();
+  }, reconnectDelayMs(reconnectAttempt++));
+}
+
+// The stream delivered data again: drop the pending reconnect and the error it showed.
+function streamRecovered() {
+  clearReconnect();
+  reconnectAttempt = 0;
+  if (streamLost.value) {
+    streamLost.value = false;
+    errorMsg.value = null;
+  }
+}
+
 // (Re)open the live SSE stream. Re-callable so a dropped connection can be resumed.
 function connect() {
+  if (unmounted) return;
+  clearReconnect();
   close?.();
-  streamLost.value = false;
   close = openResearchStream(props.id, {
     onStatus: (s) => {
+      streamRecovered();
       status.value = s;
       if (s === "queued") startQueuePoll();
       else if (queuePos.value !== null) queuePos.value = null;
@@ -220,7 +308,7 @@ function connect() {
         emit("done", s); // ensure the thread learns of completion even without onDone
       }
     },
-    onTrace: (entry) => trace.value.push(entry),
+    onTrace: addTrace,
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       const wasEmpty = !report.value;
@@ -231,11 +319,8 @@ function connect() {
     onDone: async (s) => {
       if (s === "timeout" || s === "failed") {
         const terminal = await syncStatus();
-        if (!terminal) {
-          // Research is still processing or analyzing on the server — reconnect stream!
-          connect();
-          return;
-        }
+        // Research is still processing or analyzing on the server — reconnect stream.
+        if (!terminal) scheduleReconnect();
         return;
       }
       status.value = s;
@@ -251,13 +336,7 @@ function connect() {
       errorMsg.value = m;
       if (!done.value) {
         streamLost.value = true; // offer a resume button
-        // Auto-reconnect attempt after 3s to catch up or continue
-        setTimeout(async () => {
-          if (!done.value && status.value !== "completed") {
-            const terminal = await syncStatus();
-            if (!terminal) connect();
-          }
-        }, 3000);
+        scheduleReconnect(); // …and try to catch up / continue on our own
       }
     },
   });
@@ -265,6 +344,7 @@ function connect() {
 
 async function resume() {
   errorMsg.value = null;
+  reconnectAttempt = 0;
   const terminal = await syncStatus(); // catch up on anything missed while disconnected
   if (!terminal) connect();
 }
@@ -280,9 +360,11 @@ async function retry() {
     done.value = false;
     report.value = "";
     isFinal.value = false;
+    resetTrace(); // the retried run streams its own trail
+    reconnectAttempt = 0;
     connect();
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     retrying.value = false;
   }
@@ -294,6 +376,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  unmounted = true;
+  clearReconnect();
   close?.();
   stopQueuePoll();
 });
@@ -343,7 +427,7 @@ onBeforeUnmount(() => {
           :class="{
             'bg-emerald-400': status === 'completed',
             'bg-red-400': status === 'failed' || status === 'timeout',
-            'bg-muted': status === 'cancelled',
+            'bg-muted': status === 'cancelled' || status === 'not_found',
             'bg-accent animate-pulse': !DONE.has(status),
           }"
         />

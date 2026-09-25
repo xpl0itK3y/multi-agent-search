@@ -6,9 +6,11 @@ from src.domain import (
     AdminDryRunResult,
     AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptItem,
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
+    AdminTokenResearchUsageItem,
     AdminUserDetailResponse,
     AdminUserListResponse,
     FinalizeJobStatus,
@@ -25,6 +27,9 @@ from src.domain import (
     TaskUpdate,
     UserRecord,
 )
+
+# The error a stale finalize job is closed with when its research has already ended.
+STALE_FINALIZE_CLOSED_ERROR = "Research no longer active — stale job closed"
 
 
 class TaskStore(Protocol):
@@ -65,6 +70,8 @@ class TaskStore(Protocol):
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord: ...
 
     def get_user_by_email(self, email: str) -> UserRecord | None: ...
@@ -76,7 +83,16 @@ class TaskStore(Protocol):
     # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
     def delete_user(self, user_id: str) -> bool: ...
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None: ...
+    # Bumps token_version (revokes earlier sessions). admin_provisioned also stamps
+    # admin_provisioned_at in the same write: scripts/create_admin.py (admin_identity).
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None: ...
+
+    # Revokes every session of the account (logout signs out everywhere): token_version + 1
+    # in one atomic write that touches no other column, so it cannot undo a password change
+    # committed at the same moment. None when the user does not exist.
+    def bump_user_token_version(self, user_id: str) -> UserRecord | None: ...
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None: ...
 
@@ -89,10 +105,37 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
+    # Status CAS under the row lock: move to `status` only while the research is in one of
+    # `expected` and, with `updated_before`, has not been written since then. `report`
+    # replaces final_report as in update_research_status. None when a guard fails.
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None: ...
+
+    # PROCESSING/ANALYZING researches not written since `stale_before` that nothing will
+    # move: no PENDING/RUNNING search job for any of their tasks, no PENDING/RUNNING
+    # finalize job and no decomposition in flight (a decompose_pending key in graph_state).
+    # Least recently updated first, at most `limit`.
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]: ...
+
+    # PROCESSING researches with a decomposition in flight (a decompose_pending key in
+    # graph_state), whatever their age: the rows list_stalled_research_ids leaves to
+    # decomposition recovery. Least recently updated first, at most `limit`.
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]: ...
+
+    # Status-guarded reset for a retry, under the row lock: clears the reports and drops
+    # `remove_graph_state_keys`, only while the research is in `expected_status`.
     def reset_research_for_retry(
         self,
         research_id: str,
-        status: ResearchStatus = ResearchStatus.PROCESSING,
+        expected_status: ResearchStatus,
+        remove_graph_state_keys: list[str],
     ) -> ResearchRecord | None: ...
 
     def try_admit_research(
@@ -111,7 +154,7 @@ class TaskStore(Protocol):
         stale_before: datetime | None = None,
     ) -> bool: ...
 
-    def try_begin_finalization(self, research_id: str) -> bool: ...
+    def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool: ...
 
     def set_research_task_ids(
         self,
@@ -127,15 +170,28 @@ class TaskStore(Protocol):
         remove_keys: list[str] | None = None,
     ) -> ResearchRecord | None: ...
 
+    # Append `item` to the graph_state list under `key` (keeping the last `max_items`)
+    # under the same row lock as merges, so concurrent appends cannot drop each other.
+    # Returns the new list, or None when the research does not exist.
+    def append_research_graph_state_item(
+        self,
+        research_id: str,
+        key: str,
+        item: dict,
+        *,
+        max_items: int | None = None,
+    ) -> list[dict] | None: ...
+
     def save_partial_report(self, research_id: str, partial: str) -> None: ...
 
     def save_partial_reasoning(self, research_id: str, partial: str) -> None: ...
 
+    # Atomic under the research row lock; returns the new trail, not the whole record.
     def append_research_graph_event(
         self,
         research_id: str,
         event: dict,
-    ) -> ResearchRecord | None: ...
+    ) -> list[dict] | None: ...
 
     def compact_research_graph_trails(self) -> list[str]: ...
 
@@ -192,8 +248,18 @@ class TaskStore(Protocol):
         lease_epoch: int | None = None,
     ) -> ResearchFinalizeJob | None: ...
 
+    # Requeue only a DEAD_LETTER/FAILED job (None otherwise), resetting its attempts;
+    # the finalize variant also bumps lease_epoch to fence a runner on the old lease.
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
+    # The admin requeue: one transaction that requeues a DEAD_LETTER/FAILED job (lease
+    # bumped) and moves its research FAILED -> ANALYZING. None unless the research is FAILED
+    # and this is its latest finalize job (a superseded job must never rewind the research).
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
+
+    # RUNNING jobs not renewed since `stale_before`: requeued (PENDING, lease bumped), or
+    # closed (COMPLETED with STALE_FINALIZE_CLOSED_ERROR) when their research is already
+    # COMPLETED/FAILED/CANCELLED. Returns both kinds; the status tells them apart.
     def recover_stale_research_finalize_jobs(
         self,
         stale_before: datetime,
@@ -248,6 +314,14 @@ class TaskStore(Protocol):
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
 
+    # The admin requeue: one transaction that requeues a DEAD_LETTER/FAILED job (attempts
+    # reset), sets its task PENDING with `task_log` appended and touches its research's
+    # updated_at, so a stalled sweep that listed the research loses its CAS. None unless
+    # this is the task's latest search job and its research is PROCESSING: on an ended or
+    # finalizing research the job is only drained and the task left PENDING. A task with
+    # no research has no state to rewind and is requeued as it stands.
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None: ...
+
     def recover_stale_search_task_jobs(
         self,
         stale_before: datetime,
@@ -291,6 +365,11 @@ class TaskStore(Protocol):
 
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]: ...
 
+    # Delete these tasks of `research_id` (their search jobs and results go with them) and
+    # drop them from its task_ids, in one transaction; ids of other researches' tasks are
+    # ignored. Returns how many tasks were deleted.
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int: ...
+
     def update_task(
         self,
         task_id: str,
@@ -310,7 +389,17 @@ class TaskStore(Protocol):
     # Retention: cascade-delete terminal researches past the retention window (OPS-RETENTION).
     def cleanup_old_researches(self, older_than: datetime) -> list[str]: ...
 
+    # Telemetry retention: delete rows older than the cutoff (events and audit rows by
+    # created_at, sessions by last_active_at) in short batches; returns how many went.
+    def cleanup_old_user_events(self, older_than: datetime) -> int: ...
+
+    def cleanup_old_user_sessions(self, older_than: datetime) -> int: ...
+
+    def cleanup_old_admin_audit_logs(self, older_than: datetime) -> int: ...
+
     # ── admin & token tracking ────────────────────────────────────────────────
+    # One row per LLM call (the provider's usage sink): the model actually sent and the
+    # unrounded cost; cache_hit_tokens is the part of prompt_tokens served from cache.
     def record_llm_usage(
         self,
         research_id: str | None,
@@ -320,6 +409,7 @@ class TaskStore(Protocol):
         completion_tokens: int,
         total_tokens: int,
         estimated_cost_usd: float,
+        cache_hit_tokens: int = 0,
     ) -> str: ...
 
     def record_admin_audit(
@@ -346,23 +436,27 @@ class TaskStore(Protocol):
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse: ...
 
+    # Just the per-research page of get_admin_token_analytics (newest first), without the
+    # totals and breakdowns: what the streamed CSV export pages through.
+    def get_admin_token_research_usage(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[AdminTokenResearchUsageItem]: ...
+
     def get_admin_overview(self) -> AdminOverviewResponse: ...
 
+    # Dry-run counting only: executing an action goes through the service's job paths
+    # (broker re-dispatch, dead-letter guard, status resets), then record_admin_audit.
     def preview_maintenance_action(
         self,
         action: str,
         params: dict | None = None,
     ) -> AdminDryRunResult: ...
 
-    def execute_maintenance_action(
-        self,
-        action: str,
-        actor_email: str,
-        params: dict | None = None,
-        ip_address: str | None = None,
-    ) -> AdminDryRunResult: ...
-
     # ── user telemetry & activity tracking ───────────────────────────────────
+    # Upsert keyed on (session_id, user_id): a repeat bumps last_active_at (and IP/UA);
+    # another user's row with the same client-chosen session_id is never touched.
     def record_user_session(
         self,
         user_id: str,
@@ -391,6 +485,8 @@ class TaskStore(Protocol):
         user_agent: str | None = None,
     ) -> str: ...
 
+    # users.last_seen_at/last_ip/...; skipped when the user was seen less than
+    # USER_ACTIVITY_TOUCH_INTERVAL_SECONDS ago. Events and sessions do not call it.
     def touch_user_activity(
         self,
         user_id: str,
@@ -430,5 +526,14 @@ class TaskStore(Protocol):
         user_id: str | None = None,
         prompt_type: str | None = None,
     ) -> AdminPromptsResponse: ...
+
+    # The streamed prompts export: the next ``limit`` prompts of get_admin_prompts' order
+    # (unfiltered) after ``after``, the last item of the previous page. Keyset paging, and
+    # no total count: a page costs O(limit) instead of a COUNT and a sort of every prompt.
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]: ...
 
 

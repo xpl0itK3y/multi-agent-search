@@ -35,12 +35,13 @@ class ExportMixin:
         depth = getattr(research.depth, "value", str(research.depth))
         created_at = research.created_at.isoformat() if research.created_at else None
         title = (research.graph_state or {}).get("title") or research.prompt
+        language = self._research_language(research)
         normalized = (fmt or "").lower()
         if normalized == "pdf":
-            data = generate_pdf(report, research.prompt, depth, created_at)
+            data = generate_pdf(report, research.prompt, depth, created_at, language=language)
             return data, "application/pdf", self._export_filename(title, "pdf")
         if normalized == "docx":
-            data = generate_docx(report, research.prompt, depth, created_at)
+            data = generate_docx(report, research.prompt, depth, created_at, language=language)
             return (
                 data,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -49,12 +50,11 @@ class ExportMixin:
         if normalized == "html":
             from src.ui.report_export import generate_html
 
-            language = self._research_language(research)
             labels = self._HTML_EXPORT_LABELS.get(language, self._HTML_EXPORT_LABELS["en"])
             data = generate_html(
                 report, research.prompt, depth, created_at,
                 scorecard=self._export_scorecard(research_id), labels=labels,
-                theme=theme, accent=accent, base=base,
+                theme=theme, accent=accent, base=base, language=language,
             )
             return data, "text/html; charset=utf-8", self._export_filename(title, "html")
         if normalized in ("md", "markdown"):
@@ -103,14 +103,20 @@ class ExportMixin:
         "ru": {
             "coverage": "Покрытие плана", "citations": "Цитаты", "sources": "Источников",
             "highQuality": "высокого качества", "redteam": "Red-team", "challengedHeld": "оспорено / устояло",
-            "eyebrow": "Исследование",
+            "eyebrow": "Исследование", "contents": "Содержание", "readingTime": "мин чтения",
             "footer": "Сделано в verifiable research — каждое утверждение прослеживается до источника.",
         },
         "en": {
             "coverage": "Plan coverage", "citations": "Citations", "sources": "Sources",
             "highQuality": "high quality", "redteam": "Red-team", "challengedHeld": "challenged / held",
-            "eyebrow": "Research report",
+            "eyebrow": "Research report", "contents": "Contents", "readingTime": "min read",
             "footer": "Generated with verifiable research — every claim traceable to its source.",
+        },
+        "es": {
+            "coverage": "Cobertura del plan", "citations": "Citas", "sources": "Fuentes",
+            "highQuality": "de alta calidad", "redteam": "Red-team", "challengedHeld": "cuestionadas / sostenidas",
+            "eyebrow": "Informe de investigación", "contents": "Contenido", "readingTime": "min de lectura",
+            "footer": "Generado con verifiable research — cada afirmación se puede rastrear hasta su fuente.",
         },
     }
 

@@ -45,9 +45,15 @@ class AnalyzerAgent(BaseAgent):
     {"decisions":[{"index":0,"conflict":true,"reason":"brief explanation"}]}
     Include one decision for every input index and do not alter or repeat source text.
     """
-    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники)\s*$.*\Z")
-    CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conflicts And Uncertainties|Противоречия и неопределенности|Противоречия и неопределённости)\s*$")
-    REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту)\s*$")
+    # The Sources heading in every report language (ru/es/en; en is the fallback for the rest),
+    # recognised whatever the report language: an English "## Sources" in an es report is
+    # still the list _rebuild_sources_section replaces, never a second one.
+    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники|Fuentes)\s*$.*\Z")
+    SOURCE_HEADING_LINE_PATTERN = re.compile(r"(?im)^##\s+(Sources|Источники|Fuentes)\s*$")
+    CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conflicts And Uncertainties|Противоречия и неопределенности|Противоречия и неопределённости|Contradicciones e incertidumbres)\s*$")
+    REPORT_NOTES_HEADING_PATTERN = re.compile(
+        r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту|Notas del informe)\s*$"
+    )
     # An opening summary or a closing bottom-line counts — the report now leads with an
     # "Executive summary" and may close with "Conclusion / Bottom line", so accept those
     # (and the ru/es equivalents) and don't require an exact, suffix-free heading.
@@ -610,7 +616,9 @@ class AnalyzerAgent(BaseAgent):
             normalized = re.sub(r"(?im)^sources:\s*$", localized_sources_heading, normalized)
         elif re.search(r"(?im)^источники:\s*$", normalized):
             normalized = re.sub(r"(?im)^источники:\s*$", localized_sources_heading, normalized)
-        elif re.search(r"(?im)^#*\s*(sources|источники)\s*$", normalized) is None:
+        elif re.search(r"(?im)^fuentes:\s*$", normalized):
+            normalized = re.sub(r"(?im)^fuentes:\s*$", localized_sources_heading, normalized)
+        elif re.search(r"(?im)^#*\s*(sources|источники|fuentes)\s*$", normalized) is None:
             normalized = f"{normalized}\n\n{localized_sources_heading}"
 
         normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
@@ -682,20 +690,45 @@ class AnalyzerAgent(BaseAgent):
             return rewritten
         return report
 
+    # Structural headings the analyzer writes itself, per report language (en for the rest).
+    # Every Sources/notes regex above recognises all of them.
+    _SOURCES_HEADINGS = {"ru": "## Источники", "en": "## Sources", "es": "## Fuentes"}
+    _REPORT_NOTES_HEADINGS = {
+        "ru": "## Примечания к отчёту",
+        "en": "## Report Notes",
+        "es": "## Notas del informe",
+    }
+    _USED_SOURCES_HEADINGS = {
+        "ru": "### Использованные источники",
+        "en": "### Used Sources",
+        "es": "### Fuentes utilizadas",
+    }
+    _ADDITIONAL_SOURCES_HEADINGS = {
+        "ru": "### Дополнительные релевантные источники",
+        "en": "### Additional Relevant Sources",
+        "es": "### Fuentes adicionales relevantes",
+    }
+
     def _sources_heading(self, language: str) -> str:
-        return "## Источники" if language == "ru" else "## Sources"
+        return self._SOURCES_HEADINGS.get(language, self._SOURCES_HEADINGS["en"])
+
+    _CONFLICTS_HEADINGS = {
+        "ru": "## Противоречия и неопределённости",
+        "en": "## Conflicts And Uncertainties",
+        "es": "## Contradicciones e incertidumbres",
+    }
 
     def _conflicts_heading(self, language: str) -> str:
-        return "## Противоречия и неопределённости" if language == "ru" else "## Conflicts And Uncertainties"
+        return self._CONFLICTS_HEADINGS.get(language, self._CONFLICTS_HEADINGS["en"])
 
     def _report_notes_heading(self, language: str) -> str:
-        return "## Примечания к отчёту" if language == "ru" else "## Report Notes"
+        return self._REPORT_NOTES_HEADINGS.get(language, self._REPORT_NOTES_HEADINGS["en"])
 
     def _used_sources_heading(self, language: str) -> str:
-        return "### Использованные источники" if language == "ru" else "### Used Sources"
+        return self._USED_SOURCES_HEADINGS.get(language, self._USED_SOURCES_HEADINGS["en"])
 
     def _additional_sources_heading(self, language: str) -> str:
-        return "### Дополнительные релевантные источники" if language == "ru" else "### Additional Relevant Sources"
+        return self._ADDITIONAL_SOURCES_HEADINGS.get(language, self._ADDITIONAL_SOURCES_HEADINGS["en"])
 
     def _quality_note_messages(self, language: str) -> dict[str, str]:
         if language == "ru":
@@ -890,6 +923,8 @@ class AnalyzerAgent(BaseAgent):
             or lowered.startswith("источники")
             or lowered.startswith("примечания к отчету")
             or lowered.startswith("примечания к отчёту")
+            or lowered.startswith("fuente")
+            or lowered.startswith("notas del informe")
         ):
             return False
         return bool(re.search(r"[A-Za-zА-Яа-я0-9]", stripped))
@@ -1157,7 +1192,46 @@ class AnalyzerAgent(BaseAgent):
             max_conflicts=5,
         )
 
-    def _detect_conflicts(self, aggregated_data: list[dict]) -> list[dict]:
+    # Heuristic candidate reasons (rust_accel codes) and the adjudicator's fallback, in the
+    # report language: the reason is inserted verbatim into the report's conflicts section.
+    _HEURISTIC_CONFLICT_REASONS = {
+        rust_accel.CONFLICT_REASON_NEGATION: {
+            "en": rust_accel.CONFLICT_REASON_NEGATION,
+            "ru": "один источник утверждает то, что другой отрицает",
+            "es": "una fuente afirma lo que la otra niega",
+        },
+        rust_accel.CONFLICT_REASON_FIGURES: {
+            "en": rust_accel.CONFLICT_REASON_FIGURES,
+            "ru": "источники приводят разные конкретные значения",
+            "es": "las fuentes dan cifras concretas distintas",
+        },
+    }
+    _CONFIRMED_CONFLICT_REASONS = {
+        "en": "confirmed conflict",
+        "ru": "подтверждённое противоречие",
+        "es": "contradicción confirmada",
+    }
+
+    def _conflict_adjudication_prompt(self, language: str | None) -> str:
+        name = self._LANGUAGE_NAMES.get(language or "")
+        if name is None and language and language != "unknown":
+            name = f"the language with ISO 639-1 code '{language}'"
+        if name is None:
+            return self.CONFLICT_ADJUDICATION_SYSTEM_PROMPT
+        return (
+            f"{self.CONFLICT_ADJUDICATION_SYSTEM_PROMPT.rstrip()}\n"
+            f"    Write every reason in {name}: it is quoted in a report written in {name}.\n"
+        )
+
+    def _fallback_conflict_reason(self, candidate_reason: str | None, language: str | None) -> str:
+        localized = self._HEURISTIC_CONFLICT_REASONS.get(candidate_reason or "")
+        if localized is not None:
+            return localized.get(language or "", localized["en"])
+        if candidate_reason:
+            return candidate_reason
+        return self._CONFIRMED_CONFLICT_REASONS.get(language or "", self._CONFIRMED_CONFLICT_REASONS["en"])
+
+    def _detect_conflicts(self, aggregated_data: list[dict], language: str | None = None) -> list[dict]:
         candidates = self._detect_conflict_candidates(aggregated_data)[:5]
         if not candidates:
             return []
@@ -1172,7 +1246,7 @@ class AnalyzerAgent(BaseAgent):
             })
         try:
             raw = self.llm.generate(
-                system_prompt=self.CONFLICT_ADJUDICATION_SYSTEM_PROMPT,
+                system_prompt=self._conflict_adjudication_prompt(language),
                 user_prompt=json.dumps({"claim_pairs": payload}, ensure_ascii=False),
                 model=settings.red_team_model,
                 temperature=0.0,
@@ -1198,14 +1272,30 @@ class AnalyzerAgent(BaseAgent):
             decision = by_index.get(index)
             if not decision or decision.get("conflict") is not True:
                 continue
-            reason = str(decision.get("reason") or "").strip()
+            reason = self._one_line(decision.get("reason"))
             confirmed.append(
                 {
                     **candidate,
-                    "reason": reason[:500] or candidate.get("reason") or "confirmed conflict",
+                    "reason": reason[:500] or self._fallback_conflict_reason(candidate.get("reason"), language),
                 }
             )
         return confirmed
+
+    # Heading and quote markers, and list markers followed by a space (so '-5%' stays).
+    _LEADING_BLOCK_MARKERS = re.compile(r"^(?:[#>]+|[*+•\-](?=\s)|\d+[.)](?=\s))\s*")
+
+    @classmethod
+    def _one_line(cls, text) -> str:
+        """Model or source text formatted into one report line: whitespace and newlines
+        collapsed and leading heading/quote/list markers dropped. A multi-line value could
+        otherwise open a heading (a '## Sources' line makes _rebuild_sources_section cut the
+        report from there) or split the line it is quoted in."""
+        line = " ".join(str(text or "").split())
+        previous = None
+        while line and line != previous:
+            previous = line
+            line = cls._LEADING_BLOCK_MARKERS.sub("", line).lstrip()
+        return line
 
     def _is_substantive_conflict_sentence(self, sentence: str) -> bool:
         """Return True only for real claim sentences, not titles or questions."""
@@ -1231,6 +1321,21 @@ class AnalyzerAgent(BaseAgent):
         ))
         return has_number or has_negation or has_claim_verb
 
+    _CONFLICT_LINES = {
+        "ru": (
+            '- Тема: {topic}. Причина: {reason}. Данные: "{left}" [{left_id}] против "{right}" [{right_id}].',
+            "существенное расхождение",
+        ),
+        "en": (
+            '- Topic: {topic}. Reason: {reason}. Evidence: "{left}" [{left_id}] versus "{right}" [{right_id}].',
+            "material discrepancy",
+        ),
+        "es": (
+            '- Tema: {topic}. Motivo: {reason}. Datos: "{left}" [{left_id}] frente a "{right}" [{right_id}].',
+            "discrepancia sustancial",
+        ),
+    }
+
     def _inject_conflicts_section(self, report: str, conflicts: list[dict], language: str) -> str:
         if not conflicts or self.CONFLICT_HEADING_PATTERN.search(report):
             return report
@@ -1243,25 +1348,36 @@ class AnalyzerAgent(BaseAgent):
         if not substantive:
             return report
 
+        template, default_reason = self._CONFLICT_LINES.get(language, self._CONFLICT_LINES["en"])
         lines = [self._conflicts_heading(language)]
         for conflict in substantive:
             left_source, right_source = conflict["source_ids"]
             left_sentence, right_sentence = conflict["sentences"]
-            if language == "ru":
-                lines.append(
-                    f"- Тема: {conflict['topic']}. Причина: {conflict.get('reason') or 'существенное расхождение'}. "
-                    f'Данные: "{left_sentence}" [{left_source}] против "{right_sentence}" [{right_source}].'
+            lines.append(
+                template.format(
+                    topic=self._one_line(conflict["topic"]),
+                    reason=self._one_line(conflict.get("reason")) or default_reason,
+                    left=self._one_line(left_sentence),
+                    left_id=left_source,
+                    right=self._one_line(right_sentence),
+                    right_id=right_source,
                 )
-            else:
-                lines.append(
-                    f"- Topic: {conflict['topic']}. Reason: {conflict.get('reason') or 'material discrepancy'}. "
-                    f'Evidence: "{left_sentence}" [{left_source}] versus "{right_sentence}" [{right_source}].'
-                )
+            )
 
         insertion = "\n".join(lines)
-        conclusion_match = self.CONCLUSION_HEADING_PATTERN.search(report)
-        if conclusion_match:
-            return f"{report[:conclusion_match.start()].rstrip()}\n\n{insertion}\n\n{report[conclusion_match.start():].lstrip()}"
+        # Before the conclusion, or else before the Sources heading: _rebuild_sources_section
+        # drops everything from "## Sources" on, so a section appended after it is lost.
+        anchors = [
+            match.start()
+            for match in (
+                self.CONCLUSION_HEADING_PATTERN.search(report),
+                self.SOURCE_HEADING_LINE_PATTERN.search(report),
+            )
+            if match
+        ]
+        if anchors:
+            at = min(anchors)
+            return f"{report[:at].rstrip()}\n\n{insertion}\n\n{report[at:].lstrip()}"
         return f"{report.strip()}\n\n{insertion}"
 
     def _report_quality_notes(self, report: str, aggregated_data: list[dict], language: str) -> list[str]:
@@ -1285,9 +1401,8 @@ class AnalyzerAgent(BaseAgent):
             notes.append(messages["small_subset"])
         if unsupported_lines:
             notes.append(messages["weak_support"])
-        if ("## sources" in normalized or "## источники" in normalized) and report.strip().endswith(
-            self._sources_heading(language)
-        ):
+        has_sources_heading = any(heading.lower() in normalized for heading in self._SOURCES_HEADINGS.values())
+        if has_sources_heading and report.strip().endswith(self._sources_heading(language)):
             notes.append(messages["empty_sources"])
 
         return notes
@@ -1297,7 +1412,7 @@ class AnalyzerAgent(BaseAgent):
             return report
 
         section = self._report_notes_heading(language) + "\n" + "\n".join(f"- {note}" for note in notes)
-        sources_match = re.search(r"(?im)^##\s+(Sources|Источники)\s*$", report)
+        sources_match = self.SOURCE_HEADING_LINE_PATTERN.search(report)
         if sources_match:
             return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{section}"
@@ -1540,18 +1655,18 @@ class AnalyzerAgent(BaseAgent):
         conflict_pool = aggregated_data[: profile["conflict_source_limit"]]
         evidence_pool = aggregated_data[: profile["evidence_source_limit"]]
 
-        conflict_started_at = time.perf_counter()
-        conflicts = self._detect_conflicts(conflict_pool)
-        conflict_ms = (time.perf_counter() - conflict_started_at) * 1000
-
-        evidence_started_at = time.perf_counter()
-        evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool, depth=depth)
-        evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         prompt_language = (
             language
             if language and language != "unknown"
             else detect_language(prompt)
         )
+        conflict_started_at = time.perf_counter()
+        conflicts = self._detect_conflicts(conflict_pool, language=prompt_language)
+        conflict_ms = (time.perf_counter() - conflict_started_at) * 1000
+
+        evidence_started_at = time.perf_counter()
+        evidence_groups, evidence_summary = self._extract_evidence_groups(evidence_pool, depth=depth)
+        evidence_ms = (time.perf_counter() - evidence_started_at) * 1000
         # Plan sub-questions drive the report outline so it answers exactly what was asked.
         plan_questions = list(dict.fromkeys(
             (t.description or "").strip() for t in tasks if getattr(t, "description", "").strip()

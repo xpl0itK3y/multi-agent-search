@@ -2,8 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { api } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
+import { createTraceDeduper, traceFromGraph } from "@/lib/trace";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
 import type { TraceEntry } from "@/lib/stream";
@@ -22,6 +23,11 @@ const status = ref<string>("processing");
 const report = ref<string>("");
 const isFinal = ref(false);
 const trace = ref<TraceEntry[]>([]);
+// The stream replays the whole trail on (re)connect, after the /graph pre-fill.
+const traceSeen = createTraceDeduper();
+function addTrace(entry: TraceEntry) {
+  if (traceSeen.accept(entry)) trace.value.push(entry);
+}
 const reasoning = ref<string>("");
 const errorMsg = ref<string | null>(null);
 const done = ref(false);
@@ -57,12 +63,12 @@ const costTooltip = computed(() => {
   const u = usage.value;
   if (!u) return t("research.costTitle");
   const lines: string[] = [t("research.costTitle")];
-  if (u.prompt_tokens) lines.push(`Вход: ${u.prompt_tokens.toLocaleString()}`);
+  if (u.prompt_tokens) lines.push(t("research.costInput", { n: u.prompt_tokens.toLocaleString() }));
   if (u.cache_hit_tokens) {
     const pct = Math.round((u.cache_hit_tokens / u.prompt_tokens) * 100);
-    lines.push(`Кэш (скидка): ${u.cache_hit_tokens.toLocaleString()} (${pct}%)`);
+    lines.push(t("research.costCache", { n: u.cache_hit_tokens.toLocaleString(), pct }));
   }
-  if (u.completion_tokens) lines.push(`Выход: ${u.completion_tokens.toLocaleString()}`);
+  if (u.completion_tokens) lines.push(t("research.costOutput", { n: u.completion_tokens.toLocaleString() }));
   return lines.join(" · ");
 });
 
@@ -78,7 +84,7 @@ async function loadPlan() {
   try {
     plan.value = await api.getPlan(props.id);
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   }
 }
 
@@ -86,7 +92,7 @@ async function loadClarifications() {
   try {
     clarification.value = await api.getClarifications(props.id);
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   }
 }
 
@@ -98,7 +104,7 @@ async function onSubmitClarify(answers: string[]) {
     clarification.value = null;
     status.value = "processing";
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     clarifyBusy.value = false;
   }
@@ -113,7 +119,7 @@ async function onApprove(items: PlanItem[]) {
     plan.value = null;
     status.value = "processing";
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     planBusy.value = false;
   }
@@ -169,16 +175,7 @@ onMounted(async () => {
       try {
         const g = await api.getGraph(props.id);
         if (g.graph_trail && g.graph_trail.length && !trace.value.length) {
-          trace.value = g.graph_trail.map((entry) => ({
-            step: entry.step ?? "",
-            detail: entry.detail ?? "",
-            sources: entry.sources ?? [],
-            agent: entry.agent,
-            phase: entry.phase,
-            action: entry.action,
-            metrics: entry.metrics,
-            timestamp: entry.timestamp,
-          }));
+          traceFromGraph(g.graph_trail).forEach(addTrace);
         }
       } catch {
         /* non-fatal */
@@ -202,7 +199,7 @@ onMounted(async () => {
       if (s === "plan_review" && !plan.value) loadPlan();
       if (s !== "plan_review") plan.value = null;
     },
-    onTrace: (entry) => trace.value.push(entry),
+    onTrace: addTrace,
     onReasoning: (r) => (reasoning.value = r),
     onReport: (r, final) => {
       report.value = r;

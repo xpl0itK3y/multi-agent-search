@@ -4,7 +4,7 @@ import pytest
 
 from src.api.app import create_app
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus
-from src.domain.errors import BadRequestError, UnauthorizedError
+from src.domain.errors import BadRequestError, ForbiddenError, UnauthorizedError
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
 
@@ -85,14 +85,20 @@ def test_delete_account_requires_confirm_and_current_password():
     assert store.get_user_by_id(user.id) is None
 
 
-def test_oauth_only_account_deletes_without_password():
+def test_oauth_only_account_deletes_after_a_fresh_google_sign_in():
     store = InMemoryTaskStore()
     service = ResearchService(task_store=store)
     user, _created = service.get_or_create_oauth_user(
         "google@example.com", google_subject="sub-1"
     )
-    # OAuth accounts have no password — the authenticated session is the proof.
-    service.delete_user_account(user.id, confirm=True)
+    # OAuth accounts have no password: a recent Google sign-in is the proof (SEC2-3), a
+    # session alone (possibly stolen) is not.
+    with pytest.raises(ForbiddenError) as refused:
+        service.delete_user_account(user.id, confirm=True)
+    assert refused.value.detail.startswith("reauth_required")
+    assert store.get_user_by_id(user.id) is not None
+
+    service.delete_user_account(user.id, confirm=True, fresh_google_auth=True)
     assert store.get_user_by_id(user.id) is None
 
 

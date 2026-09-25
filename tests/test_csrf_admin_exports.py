@@ -1,0 +1,116 @@
+"""SEC2-8: the admin CSV exports are GETs with side effects (an audit row, the shared admin
+rate budget), so a cookie session must send the double-submit CSRF header on them, as on
+a mutation. Otherwise a cross-site link or redirect, which carries the SameSite=Lax
+session cookie, starts an export under the admin's name. Bearer requests stay exempt.
+SEC3-2: the same holds with AUTH_DISABLED=true once ADMIN_EMAILS is set, since
+require_admin then still authenticates the admin by bearer token or session cookie.
+
+The app tests also run on the Postgres store over one shared database (postgres-smoke),
+so ids are unique per test and assertions only look at this test's audit rows."""
+import uuid
+
+import pytest
+
+from src.auth.security import create_token
+from src.config import settings
+
+EXPORTS = {
+    "/v1/admin/users/export": "export_users",
+    "/v1/admin/prompts/export": "export_prompts",
+    "/v1/admin/tokens/export": "export_tokens",
+}
+
+
+@pytest.fixture(params=["auth-on", "auth-disabled"])
+def admin(client, monkeypatch, request):
+    monkeypatch.setattr(settings, "auth_disabled", request.param == "auth-disabled")
+    monkeypatch.setattr(settings, "auth_secret_key", "export-csrf-secret-" + "x" * 40)
+    user_id = f"export-admin-{uuid.uuid4().hex[:8]}"
+    email = f"{user_id}@example.com"
+    monkeypatch.setattr(settings, "admin_emails", email)
+    store = client._transport.app.state.research_service.task_store
+    # Google-linked: a verified ADMIN_EMAILS identity (src/auth/admin_identity.py).
+    store.create_user(user_id, email, None, google_subject=f"g-{user_id}")
+    yield {"email": email, "token": create_token(user_id, email=email), "store": store}
+    store.delete_user(user_id)
+
+
+def _cookie_session(admin, csrf_header: str | None = "csrf-tok"):
+    headers = {"Cookie": f"{settings.auth_cookie_name}={admin['token']}; {settings.csrf_cookie_name}=csrf-tok"}
+    if csrf_header is not None:
+        headers["X-CSRF-Token"] = csrf_header
+    return headers
+
+
+def _export_audits(admin, action):
+    rows = admin["store"].get_admin_audit_logs(limit=200, action=action)
+    return [row for row in rows if row.actor_email == admin["email"]]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", sorted(EXPORTS))
+async def test_cookie_session_without_csrf_header_is_refused_and_not_audited(client, admin, path):
+    missing = await client.get(path, headers=_cookie_session(admin, csrf_header=None))
+    mismatched = await client.get(path, headers=_cookie_session(admin, csrf_header="forged"))
+
+    assert missing.status_code == 403
+    assert mismatched.status_code == 403
+    assert missing.json() == {"detail": "CSRF token missing or invalid"}
+    assert _export_audits(admin, EXPORTS[path]) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", sorted(EXPORTS))
+async def test_cookie_session_with_matching_csrf_header_exports(client, admin, path):
+    response = await client.get(path, headers=_cookie_session(admin))
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/csv")
+    assert len(_export_audits(admin, EXPORTS[path])) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", sorted(EXPORTS))
+async def test_bearer_request_needs_no_csrf_header(client, admin, path):
+    response = await client.get(path, headers={"Authorization": f"Bearer {admin['token']}"})
+
+    assert response.status_code == 200, response.text
+    assert len(_export_audits(admin, EXPORTS[path])) == 1
+
+
+@pytest.mark.anyio
+async def test_other_admin_gets_and_preflights_stay_unchecked(client, admin):
+    listing = await client.get("/v1/admin/users", headers=_cookie_session(admin, csrf_header=None))
+    preflight = await client.options(
+        "/v1/admin/users/export",
+        headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"},
+    )
+
+    assert listing.status_code == 200
+    assert preflight.status_code != 403
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("admin", ["auth-disabled"], indirect=True)
+async def test_auth_disabled_admin_mutation_with_a_cookie_needs_the_header(client, admin):
+    body = {"action": "not-an-action"}
+
+    refused = await client.post("/v1/admin/operations/preview", json=body, headers=_cookie_session(admin, None))
+    checked = await client.post("/v1/admin/operations/preview", json=body, headers=_cookie_session(admin))
+
+    assert refused.status_code == 403
+    assert refused.json() == {"detail": "CSRF token missing or invalid"}
+    assert checked.status_code == 422  # past the CSRF check and require_admin, to the body
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("admin", ["auth-disabled"], indirect=True)
+async def test_auth_disabled_request_without_a_session_cookie_stays_unchecked(client, admin):
+    export = await client.get("/v1/admin/users/export")
+    research = await client.post("/v1/research", json={})
+
+    # Refused by require_admin (no admin token), not by the CSRF check, and the open
+    # routes of this mode need no header without a cookie to ride on.
+    assert export.status_code == 401
+    assert research.status_code == 422
+    assert _export_audits(admin, "export_users") == []

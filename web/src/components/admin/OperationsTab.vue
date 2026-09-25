@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AdminAuditLogItem, AdminDryRunResult } from "@/lib/types";
 
 const { t } = useI18n();
@@ -55,8 +55,8 @@ async function triggerDryRun(action: string, params: Record<string, any> = {}) {
     previewResult.value = res;
     pendingAction.value = { action, params };
     modalOpen.value = true;
-  } catch (err: any) {
-    message.value = { type: "error", text: err.message || "Failed to preview operation" };
+  } catch (err) {
+    message.value = { type: "error", text: apiErrorMessage(err, t) };
   } finally {
     actionLoading.value = false;
   }
@@ -73,14 +73,14 @@ async function confirmExecute() {
     );
     message.value = {
       type: "success",
-      text: res.summary || `Successfully executed ${pendingAction.value.action}`,
+      text: res.summary || t("admin.operations.executed", { action: pendingAction.value.action }),
     };
     pendingAction.value = null;
     previewResult.value = null;
     // Refresh audit logs
     await fetchAuditLogs();
-  } catch (err: any) {
-    message.value = { type: "error", text: err.message || "Failed to execute operation" };
+  } catch (err) {
+    message.value = { type: "error", text: apiErrorMessage(err, t) };
   } finally {
     actionLoading.value = false;
   }
@@ -134,7 +134,7 @@ async function executeRequeue() {
           <button
             class="rounded-lg bg-surface border border-bd px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80 disabled:opacity-50"
             :disabled="actionLoading"
-            @click="triggerDryRun('recover_stale_finalize_jobs', { stale_seconds: 300 })"
+            @click="triggerDryRun('recover_stale_finalize_jobs')"
           >
             {{ t("admin.operations.previewBtn") }}
           </button>
@@ -156,7 +156,7 @@ async function executeRequeue() {
           <button
             class="rounded-lg bg-surface border border-bd px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80 disabled:opacity-50"
             :disabled="actionLoading"
-            @click="triggerDryRun('recover_stale_search_jobs', { stale_seconds: 300 })"
+            @click="triggerDryRun('recover_stale_search_jobs')"
           >
             {{ t("admin.operations.previewBtn") }}
           </button>

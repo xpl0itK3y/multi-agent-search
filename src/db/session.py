@@ -22,8 +22,11 @@ def _engine_kwargs(
     pool_recycle: int | None = None,
 ) -> dict:
     """Pool config per process. SQLite (dev/tests) ignores QueuePool sizing, so only
-    apply the pool knobs for server databases (Postgres)."""
-    kwargs: dict = {"pool_pre_ping": True}
+    apply the pool knobs for server databases (Postgres).
+
+    hide_parameters keeps bound values out of SQLAlchemy's error messages, which end up
+    in logs and job errors: they include share tokens, password hashes and prompts."""
+    kwargs: dict = {"pool_pre_ping": True, "hide_parameters": True}
     if not url.startswith("sqlite"):
         kwargs.update(
             pool_size=settings.db_pool_size if pool_size is None else pool_size,

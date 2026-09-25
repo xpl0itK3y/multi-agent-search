@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
@@ -42,8 +42,8 @@ async function loadOverview() {
     loading.value = true;
     error.value = null;
     overview.value = await adminApi.getOverview();
-  } catch (err: any) {
-    error.value = err.message || t("admin.loadOverviewError");
+  } catch (err) {
+    error.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }
@@ -113,6 +113,8 @@ onMounted(() => {
           >
             {{ t("admin.authSwitchAccount") }}
           </button>
+          <!-- Switching logs out first, and a logout ends every session of the account. -->
+          <p class="text-center text-[11px] leading-relaxed text-muted">{{ t("auth.logoutEverywhereHint") }}</p>
         </div>
       </div>
     </div>
@@ -164,7 +166,7 @@ onMounted(() => {
           <!-- Logout / Switch account button -->
           <button
             class="rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
-            :title="t('admin.logout')"
+            :title="t('auth.logoutEverywhereHint')"
             @click="handleLogout"
           >
             {{ t("admin.logout") }}

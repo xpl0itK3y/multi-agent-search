@@ -4,9 +4,28 @@ Composed into ResearchService; relies on self.task_store (set in ResearchService
 """
 import uuid
 
-from src.domain.errors import BadRequestError, ConflictError, UnauthorizedError, UnprocessableError
+from src.domain.errors import (
+    BadRequestError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+    UnprocessableError,
+)
 
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.domain import AuthUser
+
+# Detail prefix of the 403 that asks for a fresh Google sign-in. The web UI keys on it
+# (isReauthRequired: a 403 whose detail starts with it) to offer signing in again.
+REAUTH_REQUIRED = "reauth_required"
+
+
+def _reauth_required(action: str) -> str:
+    from src.auth.security import FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS
+
+    minutes = FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS // 60
+    return f"{REAUTH_REQUIRED}: {action} needs a Google sign-in from the last {minutes} minutes"
 
 
 class AuthMixin:
@@ -16,26 +35,29 @@ class AuthMixin:
         normalized = email.strip().lower()
         if "@" not in normalized or "." not in normalized.split("@")[-1]:
             raise UnprocessableError("Invalid email address")
+        # Admin rights follow the email and sign-up verifies nothing, so a local account for
+        # an ADMIN_EMAILS address would make whoever registers it first an admin.
+        if normalized in admin_emails():
+            raise ForbiddenError(
+                "This email is reserved for an administrator: sign in with Google, or ask the "
+                "operator to provision it with scripts/create_admin.py"
+            )
         if self.task_store.get_user_by_email(normalized) is not None:
             raise ConflictError("Email already registered")
         user = self.task_store.create_user(str(uuid.uuid4()), normalized, hash_password(password))
         return self._to_auth_user(user)
 
     def authenticate_user(self, email: str, password: str) -> AuthUser:
-        from src.auth.security import hash_password, verify_password
-        from src.config import settings
+        from src.auth.security import verify_password
 
         normalized = email.strip().lower()
         user = self.task_store.get_user_by_email(normalized)
         if user is None:
             raise UnauthorizedError("Invalid email or password")
-
-        allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
+        # A passwordless (Google-created) account never takes a password from the login form,
+        # admin or not: the first one is set from an authenticated session (set-password) or
+        # by the operator (scripts/create_admin.py). Accepting it here let anyone claim it.
         if user.password_hash is None:
-            if normalized in allowed and len(password or "") >= 6:
-                updated = self.task_store.update_user_password(user.id, hash_password(password))
-                if updated:
-                    return self._to_auth_user(updated)
             raise UnauthorizedError("This account was registered via Google Sign-In. Please sign in with Google.")
 
         if not verify_password(password, user.password_hash):
@@ -65,15 +87,10 @@ class AuthMixin:
             self.task_store.update_user_profile(linked.id, name, avatar_url)  # keep fresh
             return self._to_auth_user(linked), False
 
-        # Never silently attach a verified OAuth identity to an existing local account,
-        # unless it is a designated admin account being linked.
-        existing = self.task_store.get_user_by_email(normalized)
-        if existing is not None:
-            from src.config import settings
-            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-            if normalized in allowed:
-                self.task_store.update_user_profile(existing.id, name, avatar_url)
-                return self._to_auth_user(existing), False
+        # Never silently attach a verified OAuth identity to an existing local account — admin
+        # emails included: sign-up verifies no email, so that row may belong to whoever
+        # claimed the address first.
+        if self.task_store.get_user_by_email(normalized) is not None:
             raise ConflictError("An account with this email already exists")
 
         # New OAuth accounts are explicitly passwordless until the user sets one.
@@ -91,8 +108,17 @@ class AuthMixin:
         user_id: str,
         password: str,
         current_password: str | None = None,
+        *,
+        fresh_google_auth: bool = False,
     ) -> AuthUser:
-        """Set/replace a user's password (e.g. after first Google sign-in)."""
+        """Set/replace a user's password (e.g. after first Google sign-in).
+
+        A password that exists is replaced with the current one, as before. Two changes
+        need ``fresh_google_auth`` (a session from a Google sign-in of the last few minutes,
+        see security.is_fresh_google_auth) instead, else ForbiddenError(reauth_required):
+        the first password of a passwordless account, and a reset without the current
+        password on a Google-linked account (recovery). A stolen session alone must not add
+        a password login that the owner then cannot rotate or remove (SEC2-3)."""
         from src.auth.security import hash_password, verify_password
 
         if len(password or "") < 6:
@@ -100,15 +126,59 @@ class AuthMixin:
         user = self.task_store.get_user_by_id(user_id)
         if user is None:
             raise UnauthorizedError("User not found")
-        if user.password_hash is not None:
-            if not current_password:
-                raise BadRequestError("Current password is required")
+        if user.password_hash is None:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("setting a first password"))
+        elif current_password:
             if not verify_password(current_password, user.password_hash):
                 raise UnauthorizedError("Current password is incorrect")
+        elif user.google_subject:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("resetting the password without the current one"))
+        else:
+            raise BadRequestError("Current password is required")
         updated = self.task_store.update_user_password(user_id, hash_password(password))
         if updated is None:
             raise UnauthorizedError("User not found")
         return self._to_auth_user(updated)
+
+    def revoke_user_sessions(self, user_id: str) -> bool:
+        """Revoke every session token of the account (sign out on all devices) by bumping
+        its token_version. False when the account does not exist.
+
+        One atomic store write that touches only token_version: writing the stored password
+        hash back (as this once did) could undo a password change committed between the
+        read and the write."""
+        return self.task_store.bump_user_token_version(user_id) is not None
+
+    def provision_admin_account(self, email: str, password: str) -> tuple[AuthUser, bool]:
+        """Operator path (scripts/create_admin.py): create an ADMIN_EMAILS account or replace
+        its password. Returns (user, created).
+
+        Every password write bumps token_version, so replacing one revokes all sessions
+        minted before it — including any held by whoever registered the address first.
+        The same write stamps admin_provisioned_at: the operator's vouching is what makes a
+        password-only ADMIN_EMAILS account an admin (src/auth/admin_identity.py).
+        """
+        from src.auth.security import hash_password
+
+        normalized = (email or "").strip().lower()
+        if normalized not in admin_emails():
+            raise ForbiddenError(f"{normalized or 'email'} is not listed in ADMIN_EMAILS")
+        if len(password or "") < 6:
+            raise UnprocessableError("Password must be at least 6 characters")
+        existing = self.task_store.get_user_by_email(normalized)
+        if existing is None:
+            user = self.task_store.create_user(
+                str(uuid.uuid4()), normalized, hash_password(password), admin_provisioned=True
+            )
+            return self._to_auth_user(user), True
+        updated = self.task_store.update_user_password(
+            existing.id, hash_password(password), admin_provisioned=True
+        )
+        if updated is None:
+            raise NotFoundError("User not found")
+        return self._to_auth_user(updated), False
 
     def get_auth_user(self, user_id: str) -> AuthUser | None:
         user = self.task_store.get_user_by_id(user_id)
@@ -120,12 +190,15 @@ class AuthMixin:
         *,
         current_password: str | None = None,
         confirm: bool = False,
+        fresh_google_auth: bool = False,
     ) -> None:
         """Delete the account and everything it owns (DATA-LIFECYCLE).
 
         The DB cascade removes researches, tasks, results and jobs — which also revokes
-        every public share token the user had minted. Password (when the account has
-        one) plus an explicit confirm flag guard against accidents and CSRF-style abuse.
+        every public share token the user had minted. The current password (when the
+        account has one) plus an explicit confirm flag guard against accidents and
+        CSRF-style abuse. A passwordless account needs ``fresh_google_auth`` instead (a
+        Google sign-in of the last few minutes), else ForbiddenError(reauth_required).
         """
         from src.auth.security import verify_password
 
@@ -134,7 +207,10 @@ class AuthMixin:
         user = self.task_store.get_user_by_id(user_id)
         if user is None:
             raise UnauthorizedError("User not found")
-        if user.password_hash is not None:
+        if user.password_hash is None:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("deleting the account"))
+        else:
             if not current_password:
                 raise BadRequestError("Current password is required")
             if not verify_password(current_password, user.password_hash):
@@ -150,18 +226,12 @@ class AuthMixin:
 
     @staticmethod
     def _to_auth_user(user) -> AuthUser:
-        from src.config import settings
-
-        if isinstance(settings.admin_emails, str):
-            allowed = {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-        else:
-            allowed = {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
-        is_admin = bool(user.email and user.email.lower() in allowed)
+        # The one place an AuthUser's admin flag is computed: the guards only read it.
         return AuthUser(
             id=user.id,
             email=user.email,
             name=user.name,
             avatar_url=user.avatar_url,
-            is_admin=is_admin,
+            is_admin=has_admin_rights(user.email, user.google_subject, user.admin_provisioned_at),
             token_version=user.token_version,
         )

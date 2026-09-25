@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage, type ApiFile } from "@/lib/api";
+import { saveFile } from "@/lib/download";
 import type {
   AdminEventLogItem,
   AdminPromptItem,
@@ -51,6 +52,9 @@ const copiedPromptId = ref<string | null>(null);
 const events = ref<AdminEventLogItem[]>([]);
 const eventsTotal = ref(0);
 const eventsLoading = ref(false);
+const eventsError = ref<string | null>(null);
+// Live-feed filter: "" (all) or a server event_category — "prompt" for the research/chat
+// prompt copies the API writes, "ui"/"system" for client telemetry.
 const eventCategory = ref("");
 const autoRefresh = ref(true);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -150,8 +154,8 @@ async function loadUsers() {
     users.value = resp.users;
     totalUsers.value = resp.total_users;
     onlineUsers.value = resp.online_users;
-  } catch (err: any) {
-    usersError.value = err.message || t("admin.users.loadError");
+  } catch (err) {
+    usersError.value = apiErrorMessage(err, t);
   } finally {
     usersLoading.value = false;
   }
@@ -161,16 +165,17 @@ async function loadEvents() {
   try {
     eventsLoading.value = true;
     const resp = await adminApi.getUserEvents(
-      1,
       40,
+      0,
       undefined,
       undefined,
       eventCategory.value || undefined
     );
     events.value = resp.events;
-    eventsTotal.value = resp.total;
-  } catch {
-    // ignore
+    eventsTotal.value = resp.total_count;
+    eventsError.value = null;
+  } catch (err) {
+    eventsError.value = apiErrorMessage(err, t);
   } finally {
     eventsLoading.value = false;
   }
@@ -184,8 +189,8 @@ async function openUserDrawer(userId: string) {
   drawerTab.value = "profile";
   try {
     selectedUserDetail.value = await adminApi.getUserDetail(userId);
-  } catch (err: any) {
-    drawerError.value = err.message || t("admin.users.detailError");
+  } catch (err) {
+    drawerError.value = apiErrorMessage(err, t);
   } finally {
     drawerLoading.value = false;
   }
@@ -197,8 +202,26 @@ function closeUserDrawer() {
   selectedUserDetail.value = null;
 }
 
+// CSV exports need the bearer token too (window.open would send only the cookie).
+// A failed export or user deletion is shown inline, not in a blocking dialog.
+const exporting = ref(false);
+const actionError = ref<string | null>(null);
+
+async function runExport(fetchCsv: () => Promise<ApiFile>, fallbackName: string) {
+  if (exporting.value) return;
+  exporting.value = true;
+  actionError.value = null;
+  try {
+    saveFile(await fetchCsv(), fallbackName);
+  } catch (err) {
+    actionError.value = apiErrorMessage(err, t);
+  } finally {
+    exporting.value = false;
+  }
+}
+
 function exportCsv() {
-  window.open(adminApi.exportUsersCsvUrl(), "_blank");
+  return runExport(adminApi.exportUsersCsv, "users_telemetry.csv");
 }
 
 async function loadPrompts() {
@@ -214,15 +237,15 @@ async function loadPrompts() {
     );
     prompts.value = res.prompts;
     promptsTotal.value = res.total_count;
-  } catch (err: any) {
-    promptsError.value = err.message || "Failed to load prompts";
+  } catch (err) {
+    promptsError.value = apiErrorMessage(err, t);
   } finally {
     promptsLoading.value = false;
   }
 }
 
 function exportPromptsCsv() {
-  window.open(adminApi.exportPromptsCsvUrl(), "_blank");
+  return runExport(adminApi.exportPromptsCsv, "user_prompts.csv");
 }
 
 async function copyPromptText(item: AdminPromptItem) {
@@ -238,8 +261,9 @@ async function copyPromptText(item: AdminPromptItem) {
 }
 
 async function handleDeleteUser(user: AdminUserListItem) {
+  actionError.value = null;
   if (user.id === auth.user?.id || (auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase())) {
-    alert(t("admin.users.cannotDeleteSelf"));
+    actionError.value = t("admin.users.cannotDeleteSelf");
     return;
   }
   const confirmed = window.confirm(
@@ -255,8 +279,8 @@ async function handleDeleteUser(user: AdminUserListItem) {
     }
     await loadUsers();
     await loadSummary();
-  } catch (err: any) {
-    alert(err.message || "Failed to delete user");
+  } catch (err) {
+    actionError.value = apiErrorMessage(err, t);
   } finally {
     deletingUserId.value = null;
   }
@@ -537,7 +561,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <button
           type="button"
-          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90"
+          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+          :disabled="exporting"
           @click="activeSubView === 'prompts' ? exportPromptsCsv() : exportCsv()"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -547,6 +572,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         </button>
       </div>
     </div>
+
+    <p v-if="actionError" class="text-right text-xs text-red-400">{{ actionError }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- VIEW 1: USER DIRECTORY                                                  -->
@@ -904,20 +931,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </svg>
                 <span>{{ copiedPromptId === p.id ? t("admin.users.promptCopied") : t("admin.users.copyPrompt") }}</span>
               </button>
-
-              <!-- Open Research Link -->
-              <a
-                v-if="p.research_id"
-                :href="`/research/${p.research_id}`"
-                target="_blank"
-                class="flex items-center gap-1 rounded-md border border-bd bg-surface px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-accent"
-                :title="t('admin.users.openResearch')"
-              >
-                <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                <span>{{ t("admin.users.openResearch") }}</span>
-              </a>
+              <!-- No "open research" link: research routes are owner-scoped (SEC-IDOR),
+                   so an admin would only get a 404 for another user's run. -->
             </div>
           </div>
 
@@ -1116,15 +1131,15 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             :class="eventCategory === 'ui' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'ui'"
           >
-            UI / Client
+            {{ t("admin.users.catUi") }}
           </button>
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'research' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
-            @click="eventCategory = 'research'"
+            :class="eventCategory === 'prompt' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            @click="eventCategory = 'prompt'"
           >
-            Research
+            {{ t("admin.users.catPrompts") }}
           </button>
           <button
             type="button"
@@ -1132,7 +1147,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             :class="eventCategory === 'system' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'system'"
           >
-            System
+            {{ t("admin.users.catSystem") }}
           </button>
         </div>
 
@@ -1144,7 +1159,11 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
       <!-- Events List -->
       <div class="rounded-xl border border-bd bg-surface/40 overflow-hidden divide-y divide-bd">
-        <div v-if="eventsLoading && events.length === 0" class="p-12 text-center text-xs text-muted">
+        <div v-if="eventsError" class="p-4 text-center text-xs text-red-400">
+          {{ eventsError }}
+        </div>
+
+        <div v-else-if="eventsLoading && events.length === 0" class="p-12 text-center text-xs text-muted">
           {{ t("common.loading") }}
         </div>
 
@@ -1162,10 +1181,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               <span
                 class="rounded-full px-2 py-0.5 font-mono text-[10px] font-bold uppercase"
                 :class="{
-                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'research',
+                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
                   'bg-blue-500/15 text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
                   'bg-purple-500/15 text-purple-400 border border-purple-500/30': ev.event_category === 'system',
-                  'bg-surface text-muted border border-bd': !['research', 'ui', 'system'].includes(ev.event_category),
+                  'bg-surface text-muted border border-bd': !['prompt', 'ui', 'system'].includes(ev.event_category),
                 }"
               >
                 {{ ev.event_category }}
@@ -1215,9 +1234,9 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </span>
                 <span
                   v-if="activeUser?.is_online"
-                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400"
+                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-400"
                 >
-                  ONLINE
+                  {{ t("admin.users.online") }}
                 </span>
               </div>
               <p class="font-mono text-xs text-muted">{{ activeUser?.email }}</p>
@@ -1249,6 +1268,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             </button>
           </div>
         </div>
+
+        <p v-if="actionError" class="mt-3 text-xs text-red-400">{{ actionError }}</p>
 
         <div v-if="drawerLoading && !selectedUserDetail" class="mt-8 space-y-4 animate-pulse">
           <div class="grid grid-cols-3 gap-3">
@@ -1394,16 +1415,6 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 <div class="font-medium text-ink select-text">{{ r.prompt }}</div>
                 <div class="flex items-center gap-1.5 shrink-0">
                   <span class="rounded bg-surface px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">{{ r.depth }}</span>
-                  <a
-                    :href="`/research/${r.id}`"
-                    target="_blank"
-                    class="rounded border border-bd bg-surface p-1 text-muted transition hover:border-accent/40 hover:text-accent"
-                    :title="t('admin.users.openResearch')"
-                  >
-                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                  </a>
                 </div>
               </div>
               <div class="flex items-center justify-between text-[11px] text-muted">

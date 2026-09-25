@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.cross_language import detect_language
+from src.agents.trail_text import TRAIL_DETAILS, trail_detail
 from src.domain import ReplanRecommendation, ResearchStatus, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
@@ -34,42 +35,38 @@ class FinalizeLeaseLost(RuntimeError):
     """Raised when stale-job recovery fences off a previous finalize runner."""
 
 
+# Stable step/agent/phase/action codes for the trail; the human detail sentence for each
+# step is rendered from src.agents.trail_text in the research's language.
 GRAPH_STEP_METADATA: dict[str, dict[str, Any]] = {
     "collect_context": {
         "agent": "SourceCriticAgent",
         "phase": "critic",
         "action": "evaluate_sources",
-        "detail": "Оценка достоверности источников, структурирование доказательств и выявление белых пятен",
     },
     "replan": {
         "agent": "ReplanAgent",
         "phase": "plan",
         "action": "gap_analysis_loop",
-        "detail": "↩ Обнаружены пробелы в данных: возврат на допоиск источников для полноты картины",
     },
     "analyze": {
         "agent": "AnalyzerAgent",
         "phase": "synthesis",
         "action": "synthesize_report",
-        "detail": "Глубокий синтез аналитического отчёта, сведение фактов и разметка цитат",
     },
     "tie_break": {
         "agent": "ReplanAgent",
         "phase": "critic",
         "action": "conflict_tie_break",
-        "detail": "↩ Обнаружены противоречия между источниками: запуск арбитражного поиска (Tie-Break)",
     },
     "verify": {
         "agent": "ReportCriticAgent",
         "phase": "verify",
         "action": "verify_claims",
-        "detail": "Верификация утверждений отчёта, контроль точности цитирования и рецензирование",
     },
     "verify_retry": {
         "agent": "ReportCriticAgent",
         "phase": "verify",
         "action": "critic_revision_loop",
-        "detail": "↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
     },
 }
 
@@ -150,7 +147,7 @@ class FinalizeGraphRunner:
                 return {
                     **state,
                     "effective_prompt": graph_state.get("effective_prompt") or prompt,
-                    "canonical_sources": graph_state.get("canonical_sources") or [],
+                    "canonical_sources": graph_state.get("canonical_sources"),
                     "report": saved_report,
                     "resume_from_step": "complete",
                 }
@@ -162,6 +159,14 @@ class FinalizeGraphRunner:
             "analyze_attempts": int(graph_state.get("analyze_attempts") or 0),
             "replan_attempts": int(graph_state.get("replan_attempts") or 0),
             "tie_break_attempts": int(graph_state.get("tie_break_attempts") or 0),
+            # A resumed run must not take branches the interrupted run had ruled out:
+            # no-progress stays sticky, and the wall-clock budget is not reset by a
+            # resume (a deadline that already passed disables the deep branches).
+            # Checkpoints from before these keys existed get the fresh-run defaults.
+            "branch_stalled": bool(graph_state.get("branch_stalled")),
+            "finalize_deadline": self._resumed_deadline(
+                graph_state.get("finalize_deadline"), state["finalize_deadline"]
+            ),
             "should_replan": bool(graph_state.get("should_replan")),
             "should_tie_break": bool(graph_state.get("should_tie_break")),
             "should_retry_analysis": bool(graph_state.get("should_retry_analysis")),
@@ -170,13 +175,20 @@ class FinalizeGraphRunner:
             "detected_conflicts": graph_state.get("detected_conflicts") or [],
             "source_summary": graph_state.get("source_summary") or {},
             "evidence_summary": graph_state.get("evidence_summary") or {},
-            "canonical_sources": graph_state.get("canonical_sources") or [],
+            "canonical_sources": graph_state.get("canonical_sources"),
             "report": graph_state.get("report") or "",
             "resume_from_step": step,
         }
         logger.info("langgraph_finalize_resume step=%s", step)
         record_graph_resume()
         return resumed_state
+
+    @staticmethod
+    def _resumed_deadline(stored, fresh_deadline: float) -> float:
+        """The earlier of the checkpointed deadline and a fresh budget from now."""
+        if isinstance(stored, bool) or not isinstance(stored, (int, float)):
+            return fresh_deadline
+        return min(float(stored), fresh_deadline)
 
     def _checkpoint(self, state: FinalizeGraphState, step: str, detail: str) -> None:
         self.service.ensure_finalize_job_lease(
@@ -196,12 +208,16 @@ class FinalizeGraphRunner:
             "should_replan": state.get("should_replan", False),
             "should_tie_break": state.get("should_tie_break", False),
             "should_retry_analysis": state.get("should_retry_analysis", False),
+            "branch_stalled": bool(state.get("branch_stalled", False)),
+            "finalize_deadline": state.get("finalize_deadline"),
             "replan_recommendations": state.get("replan_recommendations", []),
             "tie_break_recommendations": state.get("tie_break_recommendations", []),
             "detected_conflicts": state.get("detected_conflicts", []),
             "source_summary": state.get("source_summary", {}),
             "evidence_summary": state.get("evidence_summary", {}),
-            "canonical_sources": state.get("canonical_sources", []),
+            # None until analyze has built the [Sn] table, so readers rebuild the pool from
+            # the tasks instead of taking an empty list as the report's (empty) table.
+            "canonical_sources": state.get("canonical_sources"),
             "report": state.get("report", ""),
         }
         meta = GRAPH_STEP_METADATA.get(step, {})
@@ -223,10 +239,12 @@ class FinalizeGraphRunner:
         action: str | None = None,
         detail: str | None = None,
         metrics: dict | None = None,
+        language: str | None = None,
     ) -> None:
         """Surface this finalize step on the live progress trail (streamed via SSE) so the
         trace keeps moving during synthesis instead of freezing after the search phase.
-        Step names reuse the existing trace.* i18n labels (collect_context/analyze/…)."""
+        Step names reuse the existing trace.* i18n labels (collect_context/analyze/…);
+        the default detail is the step's sentence in the research's ``language``."""
         store = getattr(self.service, "task_store", None)
         if not research_id or store is None or not hasattr(store, "append_research_graph_event"):
             return
@@ -237,7 +255,7 @@ class FinalizeGraphRunner:
                 "agent": agent or meta.get("agent", "FinalizeRunner"),
                 "phase": phase or meta.get("phase", "synthesis"),
                 "action": action or meta.get("action", step),
-                "detail": detail or meta.get("detail", ""),
+                "detail": detail or (trail_detail(step, language) if step in TRAIL_DETAILS else ""),
             }
             if metrics:
                 event["metrics"] = metrics
@@ -245,12 +263,12 @@ class FinalizeGraphRunner:
         except Exception:  # progress events must never break finalize
             pass
 
-    def _run_timed_step(self, step_name: str, action, research_id: str):
+    def _run_timed_step(self, step_name: str, action, research_id: str, language: str | None = None):
         research = self.service.task_store.get_research(research_id)
         if research is not None and research.status == ResearchStatus.CANCELLED:
             logger.info("langgraph_finalize_cancelled_before_step step=%s", step_name)
             raise FinalizeCancelled(research_id)
-        self._emit_trail(research_id, step_name)
+        self._emit_trail(research_id, step_name, language=language)
         started_at = perf_counter()
         try:
             result = action()
@@ -315,11 +333,16 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "collect_context",
-                f"Collected {len(aggregated_sources)} sources, replan_needed={should_replan}",
+                trail_detail(
+                    "collect_context_done",
+                    state.get("language"),
+                    count=len(aggregated_sources),
+                    replan=should_replan,
+                ),
             )
             return next_state
 
-        return self._run_timed_step("collect_context", action, state["research_id"])
+        return self._run_timed_step("collect_context", action, state["research_id"], state.get("language"))
 
     def _apply_replan(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -359,12 +382,17 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "replan",
-                f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
+                trail_detail(
+                    "replan_done",
+                    state.get("language"),
+                    tasks=len(created_tasks),
+                    recommendations=len(recommendations),
+                ),
             )
             record_graph_replan()
             return next_state
 
-        return self._run_timed_step("replan", action, state["research_id"])
+        return self._run_timed_step("replan", action, state["research_id"], state.get("language"))
 
     def _supported_analysis_kwargs(self, candidate: dict) -> dict:
         """Filter ``candidate`` kwargs down to those ``run_analysis`` accepts.
@@ -431,7 +459,7 @@ class FinalizeGraphRunner:
             else:
                 report = analysis_result
                 aggregated_data = state.get("aggregated_data")
-                canonical_sources = state.get("canonical_sources", [])
+                canonical_sources = state.get("canonical_sources")
                 detected_conflicts = state.get("detected_conflicts", [])
             next_state = {
                 **state,
@@ -444,12 +472,12 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "analyze",
-                f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
+                trail_detail("analyze_done", state.get("language"), attempt=next_state["analyze_attempts"]),
             )
             record_graph_analyze()
             return next_state
 
-        return self._run_timed_step("analyze", action, state["research_id"])
+        return self._run_timed_step("analyze", action, state["research_id"], state.get("language"))
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -484,12 +512,17 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "tie_break",
-                f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
+                trail_detail(
+                    "tie_break_done",
+                    state.get("language"),
+                    tasks=len(created_tasks),
+                    recommendations=len(recommendations),
+                ),
             )
             record_graph_tie_break()
             return next_state
 
-        return self._run_timed_step("tie_break", action, state["research_id"])
+        return self._run_timed_step("tie_break", action, state["research_id"], state.get("language"))
 
     def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -531,8 +564,8 @@ class FinalizeGraphRunner:
                     agent="ReportCriticAgent",
                     phase="verify",
                     action="critic_revision_loop",
-                    detail="↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
                     metrics={"attempt": state["analyze_attempts"] + 1},
+                    language=state.get("language"),
                 )
             elif should_tie_break and tie_break_recommendations:
                 effective_prompt = state["effective_prompt"]
@@ -542,7 +575,11 @@ class FinalizeGraphRunner:
                     agent="ReplanAgent",
                     phase="critic",
                     action="conflict_tie_break",
-                    detail=f"↩ Обнаружены противоречия в источниках ({len(state.get('detected_conflicts') or [])}): запуск арбитражного поиска (Tie-Break)",
+                    detail=trail_detail(
+                        "tie_break_conflicts",
+                        state.get("language"),
+                        count=len(state.get("detected_conflicts") or []),
+                    ),
                     metrics={"recommendations": len(tie_break_recommendations)},
                 )
             else:
@@ -557,21 +594,31 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "verify",
-                f"weak_support={weak_support} conflicts={len(state.get('detected_conflicts') or [])} retry={should_retry} tie_break={next_state['should_tie_break']}",
+                trail_detail(
+                    "verify_done",
+                    state.get("language"),
+                    weak_support=weak_support,
+                    conflicts=len(state.get("detected_conflicts") or []),
+                    retry=should_retry,
+                    tie_break=next_state["should_tie_break"],
+                ),
             )
             return next_state
 
-        return self._run_timed_step("verify", action, state["research_id"])
+        return self._run_timed_step("verify", action, state["research_id"], state.get("language"))
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
 
     def _report_needs_retry(self, report: str) -> bool:
+        # The report-notes heading in every language the analyzer writes it in
+        # (AnalyzerAgent._REPORT_NOTES_HEADINGS), plus the ru spelling without ё.
         normalized = report.lower()
         return (
             "## report notes" in normalized
             or "## примечания к отчёту" in normalized
             or "## примечания к отчету" in normalized
+            or "## notas del informe" in normalized
             or "weakly supported" in normalized
             or "слабо подтверж" in normalized
         )
@@ -642,7 +689,7 @@ class FinalizeGraphRunner:
         self._checkpoint(
             state,
             "complete",
-            f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
+            trail_detail("complete", state.get("language"), count=state.get("analyze_attempts", 0)),
         )
         record_graph_completed_run()
         return self._result_from_state(state)
@@ -662,7 +709,8 @@ class FinalizeGraphRunner:
         workflow.add_node("verify", self._verify)
         workflow.set_entry_point("resume_route")
         # Fresh runs route to collect_context; resumed runs enter at the successor
-        # of their last checkpointed step — same topology either way.
+        # of their last checkpointed step — same topology either way. A verify
+        # checkpoint that already settled on its report resumes straight to END.
         workflow.add_conditional_edges(
             "resume_route",
             self._resume_entry,
@@ -671,6 +719,7 @@ class FinalizeGraphRunner:
                 "analyze": "analyze",
                 "verify": "verify",
                 "tie_break": "tie_break",
+                END: END,
             },
         )
         workflow.add_conditional_edges("collect_context", self._next_after_context, {"replan": "replan", "analyze": "analyze"})

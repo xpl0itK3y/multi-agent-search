@@ -4,16 +4,14 @@ import App from "./App.vue";
 import router from "./router";
 import { i18n } from "./i18n";
 import { useAuthStore } from "./stores/auth";
-import { initTelemetry } from "./lib/telemetry";
 import "./style.css";
 
 const app = createApp(App);
 const pinia = createPinia();
 app.use(pinia).use(i18n);
 
-initTelemetry();
-
-// Resolve the session before mounting so the router guard sees auth state.
+// Resolve the session before mounting so the router guard sees auth state (and so
+// telemetry starts only for a signed-in user — see stores/auth.ts).
 useAuthStore(pinia)
   .fetchMe()
   .finally(() => {

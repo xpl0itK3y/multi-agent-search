@@ -9,6 +9,7 @@ import PromptExamples from "@/components/PromptExamples.vue";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
+import { apiErrorMessage } from "@/lib/api";
 import type { Depth } from "@/lib/types";
 
 const router = useRouter();
@@ -50,7 +51,7 @@ async function onSubmit(payload: { prompt: string; depth: Depth; model: string; 
     const res = await store.createResearch(payload.prompt, payload.depth, payload.model, payload.planFirst);
     router.push({ name: "thread", params: { threadId: res.thread_id ?? res.research_id } });
   } catch (e) {
-    errorMsg.value = (e as Error).message;
+    errorMsg.value = apiErrorMessage(e, t);
   } finally {
     busy.value = false;
   }

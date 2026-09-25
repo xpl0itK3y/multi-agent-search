@@ -17,6 +17,7 @@ Example: ["query one here", "query two here", "query three here"]"""
 
 
 class ReplanAgent:
+    MAX_FOLLOW_UP_RECOMMENDATIONS = 3
     MIN_SELECTED_SOURCES_BY_DEPTH = {
         SearchDepth.EASY: 4,
         SearchDepth.MEDIUM: 8,
@@ -44,8 +45,11 @@ class ReplanAgent:
         reason: str,
         task_descriptions: list[str],
         fallback: list[str],
+        llm_failures: list[str] | None = None,
     ) -> list[str]:
-        """Ask the LLM for gap-specific queries; fall back to templates on any failure."""
+        """Ask the LLM for gap-specific queries; fall back to templates on any failure.
+        A fallback caused by the LLM (an error or unusable output) appends `reason` to
+        `llm_failures`; running without an LLM is not a failure."""
         if self.llm is None:
             return fallback
 
@@ -84,6 +88,8 @@ class ReplanAgent:
                     return valid[:3]
         except Exception as exc:
             logger.warning("replan_llm_queries_failed reason=%r error=%s", reason, exc)
+        if llm_failures is not None:
+            llm_failures.append(reason)
         return fallback
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -108,7 +114,11 @@ class ReplanAgent:
         depth: SearchDepth,
         tasks: list[SearchTask],
         source_summary: SourceCriticSummary | None = None,
+        *,
+        llm_failures: list[str] | None = None,
     ) -> list[ReplanRecommendation]:
+        """Follow-up gaps for the task set. Pass `llm_failures` to learn which gaps fell
+        back to template queries because the LLM call failed."""
         recommendations: list[ReplanRecommendation] = []
         selected_sources = sum(task.search_metrics.selected_source_count for task in tasks)
         failed_tasks = [task for task in tasks if task.status.value == "failed" or not (task.result or [])]
@@ -134,7 +144,9 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
@@ -149,7 +161,9 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
@@ -164,11 +178,15 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
-        if domain_counter:
+        # Each recommendation costs an LLM call; once the cap is reached, a further gap
+        # would only be generated to be sliced off below.
+        if domain_counter and len(recommendations) < self.MAX_FOLLOW_UP_RECOMMENDATIONS:
             dominant_domain, dominant_count = domain_counter.most_common(1)[0]
             total_source_count = sum(domain_counter.values())
             if total_source_count and dominant_count / total_source_count >= 0.4:
@@ -182,11 +200,13 @@ class ReplanAgent:
                 recommendations.append(
                     ReplanRecommendation(
                         reason=reason,
-                        suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                        suggested_queries=self._llm_queries(
+                            prompt, reason, task_descriptions, fallback, llm_failures
+                        ),
                     )
                 )
 
-        return recommendations[:3]
+        return recommendations[: self.MAX_FOLLOW_UP_RECOMMENDATIONS]
 
     def suggest_tie_breakers(
         self,

@@ -7,6 +7,7 @@ import { useResearchStore } from "@/stores/research";
 import { useUiStore, THEMES } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { confirm } from "@/lib/confirm";
+import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
 import SparkLogo from "@/components/SparkLogo.vue";
 
 const ui = useUiStore();
@@ -17,7 +18,7 @@ const displayName = computed(() => {
   if (!user) return ui.userName || "";
   return user.name?.trim() || user.email?.split("@")[0] || ui.userName || "";
 });
-const avatarUrl = computed(() => auth.user?.avatar_url || null);
+const avatarUrl = computed(() => auth.user?.avatar_url || undefined);
 
 async function logout() {
   await auth.logout();
@@ -180,14 +181,14 @@ function openSettings() {
       @click="openSettings"
     >
       <img
-        v-if="avatarUrl"
+        v-if="isAvatarImage(avatarUrl)"
         :src="avatarUrl"
         alt=""
         referrerpolicy="no-referrer"
         class="h-9 w-9 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
       />
       <div v-else class="grid h-9 w-9 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
-        {{ displayName.charAt(0).toUpperCase() }}
+        {{ avatarGlyph(avatarUrl, displayName) }}
       </div>
     </button>
   </aside>
@@ -349,14 +350,14 @@ function openSettings() {
       @click="openSettings"
     >
       <img
-        v-if="avatarUrl"
+        v-if="isAvatarImage(avatarUrl)"
         :src="avatarUrl"
         alt=""
         referrerpolicy="no-referrer"
         class="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-bd group-hover:ring-accent/50 transition-all"
       />
       <div v-else class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface text-sm font-medium ring-1 ring-bd group-hover:ring-accent/50 transition-all">
-        {{ displayName.charAt(0).toUpperCase() }}
+        {{ avatarGlyph(avatarUrl, displayName) }}
       </div>
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-medium text-ink group-hover:text-accent transition-colors">{{ displayName }}</div>
@@ -373,9 +374,11 @@ function openSettings() {
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
+      <!-- Logout revokes every session of the account, not only this browser's. -->
       <button
         class="shrink-0 rounded p-1.5 text-muted hover:text-ink hover:bg-surface transition-colors"
-        :title="$t('auth.logout')"
+        :title="$t('auth.logoutEverywhere')"
+        :aria-label="$t('auth.logoutEverywhere')"
         @click.stop="logout"
       >
         ⏻

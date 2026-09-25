@@ -58,14 +58,34 @@ def _encode_segment(data: dict) -> str:
     return _b64encode(json.dumps(data, separators=(",", ":")).encode())
 
 
+# ``purpose`` claim of the OAuth CSRF state token. Session tokens carry no purpose claim,
+# and decode_token accepts a token only for the purpose it was minted for: every token is
+# signed with the same AUTH_SECRET_KEY, so a state token must never pass as a session.
+OAUTH_STATE_PURPOSE = "oauth_state"
+
+# ``amr`` (authentication methods, RFC 8176) value of a session minted by the Google OAuth
+# callback. Only that callback sets it: password login, register and set-password never do.
+AUTH_METHOD_GOOGLE = "google"
+# How long a Google sign-in counts as fresh proof of identity: setting the first password
+# of a passwordless account, a password reset without the current one on a Google-linked
+# account, and deleting a passwordless account need a session this recent.
+FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS = 600
+# Tolerated clock skew between API processes for a token's iat.
+_IAT_CLOCK_SKEW_SECONDS = 60
+
+
 def create_token(
     user_id: str,
     *,
     email: str | None = None,
     ttl_seconds: int | None = None,
     token_version: int = 0,
+    purpose: str | None = None,
+    amr: list[str] | None = None,
 ) -> str:
-    """Issue a signed HS256 JWT for ``user_id`` with iat/exp claims."""
+    """Issue a signed HS256 JWT for ``user_id`` with iat/exp claims. A session token has
+    no ``purpose``; any other token names its purpose (e.g. OAUTH_STATE_PURPOSE). ``amr``
+    records how the session was authenticated (AUTH_METHOD_GOOGLE)."""
     ttl = ttl_seconds if ttl_seconds is not None else settings.auth_token_ttl_seconds
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
@@ -77,12 +97,18 @@ def create_token(
     }
     if email:
         payload["email"] = email
+    if purpose:
+        payload["purpose"] = purpose
+    if amr:
+        payload["amr"] = list(amr)
     signing_input = f"{_encode_segment(header)}.{_encode_segment(payload)}"
     return f"{signing_input}.{_sign(signing_input)}"
 
 
-def decode_token(token: str) -> dict | None:
-    """Return the JWT claims if the token is well-formed, HS256-signed and unexpired."""
+def decode_token(token: str, *, purpose: str | None = None) -> dict | None:
+    """Return the JWT claims if the token is well-formed, HS256-signed, unexpired and minted
+    for ``purpose``. The default (None) means a session token: one with a purpose claim,
+    such as an OAuth state token, is rejected."""
     try:
         header_b64, payload_b64, signature = token.split(".")
         signing_input = f"{header_b64}.{payload_b64}"
@@ -94,12 +120,30 @@ def decode_token(token: str) -> dict | None:
         payload = json.loads(_b64decode(payload_b64))
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
+        if payload.get("purpose") != purpose:
+            return None
         return payload
     except Exception:
         return None
 
 
+def is_fresh_google_auth(claims: dict | None) -> bool:
+    """True when decoded session ``claims`` come from a Google sign-in (the OAuth callback's
+    amr claim) issued at most FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS ago. Pass claims from
+    decode_token, which has already checked the signature and expiry."""
+    if not claims:
+        return False
+    amr = claims.get("amr")
+    if not isinstance(amr, list) or AUTH_METHOD_GOOGLE not in amr:
+        return False
+    try:
+        age = int(time.time()) - int(claims.get("iat"))
+    except (TypeError, ValueError):
+        return False
+    return -_IAT_CLOCK_SKEW_SECONDS <= age <= FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS
+
+
 def verify_token(token: str) -> str | None:
-    """Return the subject (user id) if the JWT is valid and unexpired, else None."""
+    """Return the subject (user id) if the session JWT is valid and unexpired, else None."""
     claims = decode_token(token)
     return claims.get("sub") if claims else None

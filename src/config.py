@@ -74,11 +74,14 @@ class Settings(BaseSettings):
     auth_rate_limit_per_minute: int = 10
     # Per-admin mutations allowed per minute on admin endpoints (0 disables).
     admin_rate_limit_per_minute: int = 10
+    # Per-user client telemetry events accepted per minute (0 disables). The SPA sends
+    # about 2 a minute per open tab (heartbeat + focus/blur), so this only stops floods.
+    telemetry_rate_limit_per_minute: int = 120
     # Google OAuth (Sign in with Google). Create an OAuth 2.0 Web client in Google
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8501/v1/auth/google/callback"
+    google_redirect_uri: str = "http://localhost:8502/v1/auth/google/callback"
     oauth_post_login_redirect: str = "/"
     # New OAuth users land here to optionally set a password for email/password login.
     oauth_new_user_redirect: str = "/set-password"
@@ -104,6 +107,12 @@ class Settings(BaseSettings):
     # Terminal researches older than this are cascade-deleted by maintenance.
     # 0 (default) keeps researches forever — existing deployments are unchanged.
     research_retention_seconds: int = 0
+    # Telemetry retention, swept by the same maintenance pass (0 keeps a table forever):
+    # user_events by created_at (this also ages chat prompts out of the admin Prompt log),
+    # user_sessions by last activity. The admin audit trail is kept by default.
+    user_events_retention_seconds: int = 7776000  # 90 days
+    user_sessions_retention_seconds: int = 7776000  # 90 days
+    admin_audit_retention_seconds: int = 0
     search_extraction_concurrency: int = 4
     search_extraction_timeout_seconds: int = 12
     search_extraction_max_redirects: int = 1

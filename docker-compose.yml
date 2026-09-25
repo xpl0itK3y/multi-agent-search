@@ -1,3 +1,14 @@
+# Shared worker environment. A YAML merge key (<<) is shallow: a service that sets its
+# own `environment:` replaces the base's mapping wholesale instead of extending it. So
+# each worker merges this anchor *inside* its environment block rather than relying on
+# x-worker-base to carry it.
+x-worker-env: &worker-env
+  POSTGRES_HOST: pgbouncer
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  USE_REDIS_BROKER: "true"
+  LOG_FORMAT: json
+
 x-worker-base: &worker-base
   build:
     context: .
@@ -11,12 +22,7 @@ x-worker-base: &worker-base
       condition: service_healthy
   env_file:
     - .env
-  environment:
-    POSTGRES_HOST: pgbouncer
-    POSTGRES_PORT: 5432
-    REDIS_URL: redis://redis:6379/0
-    USE_REDIS_BROKER: "true"
-    LOG_FORMAT: json
+  environment: *worker-env
   volumes:
     - ./src:/app/src
   command: ["python", "scripts/run_finalize_worker.py"]
@@ -54,9 +60,17 @@ services:
     # Multiple uvicorn worker processes for request/SSE concurrency. Safe across workers:
     # startup recovery is single-flighted (Redis lock), queue promotion claims atomically,
     # and SSE wakes via Redis pub/sub shared by all workers.
-    # The only externally reachable route is the web proxy (the API port below
-    # binds to loopback). Trust its forwarded client address without a startup-time
-    # dependency on Docker's dynamically assigned web-container IP.
+    # Proxy trust model: --forwarded-allow-ips='*' makes uvicorn take the client
+    # address (used by the login rate limiter and audit logs) from X-Forwarded-For
+    # sent by any peer. That is safe only because
+    #   1. the web proxy is the only public entry point and nginx *overwrites*
+    #      X-Forwarded-For with $remote_addr (web/nginx.conf), so the value is never
+    #      client-supplied, and
+    #   2. the API port below binds to loopback, so only processes on this host can
+    #      reach uvicorn directly and forge the header.
+    # '*' avoids depending on Docker's dynamically assigned web-container IP. If you
+    # put a load balancer or CDN in front of nginx, configure nginx's real_ip module
+    # for it rather than appending its X-Forwarded-For.
     command: sh -c "uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2} --proxy-headers --forwarded-allow-ips='*'"
     volumes:
       - ./src:/app/src
@@ -89,8 +103,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker
       # Prometheus scrape port; reachable only inside the Docker network.
       WORKER_METRICS_PORT: "9101"
@@ -99,8 +112,7 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-2
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker-2
       WORKER_METRICS_PORT: "9102"
 
@@ -108,16 +120,19 @@ services:
     <<: *worker-base
     container_name: multi-agent-search-worker-3
     environment:
-      POSTGRES_HOST: pgbouncer
-      POSTGRES_PORT: 5432
+      <<: *worker-env
       WORKER_NAME: job-worker-3
       WORKER_METRICS_PORT: "9103"
 
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     container_name: multi-agent-search-redis
+    # Infrastructure ports are published on loopback only (see "Exposed ports" in
+    # README.md): containers talk over the Compose network, and a bare
+    # "HOST:CONTAINER" mapping binds 0.0.0.0, which Docker exposes past host
+    # firewalls. Local dev and tests rely on localhost:6379 and localhost:5433.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -135,7 +150,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: ${POSTGRES_DB:-multi_agent_search}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -165,7 +180,7 @@ services:
       DEFAULT_POOL_SIZE: "25"
       MIN_POOL_SIZE: "5"
     ports:
-      - "6432:5432"  # edoburu/pgbouncer listens on 5432 inside the container
+      - "127.0.0.1:6432:5432"  # edoburu/pgbouncer listens on 5432 inside the container
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-app} || exit 1"]
       interval: 10s
@@ -200,14 +215,14 @@ services:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     restart: unless-stopped
 
   loki:
     image: grafana/loki:3.3.2@sha256:8af2de1abbdd7aa92b27c9bcc96f0f4140c9096b507c77921ffddf1c6ad6c48f
     container_name: multi-agent-search-loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./ops/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
@@ -240,12 +255,14 @@ services:
       loki:
         condition: service_healthy
     environment:
+      # admin/admin is a local-dev default only: set GRAFANA_ADMIN_PASSWORD (and the
+      # POSTGRES_* credentials) in .env for any real deployment.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     restart: unless-stopped
 
 volumes:

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { api, apiErrorFromResponse, apiErrorMessage } from "@/lib/api";
+import { api, apiErrorMessage } from "@/lib/api";
+import { saveFile } from "@/lib/download";
+import { safeHttpUrl } from "@/lib/url";
 import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
@@ -53,7 +55,7 @@ async function ensureSources() {
   try {
     sources.value = await api.getSources(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -66,7 +68,7 @@ async function ensureTrail() {
   try {
     trail.value = (await api.getGraph(props.id)).graph_trail;
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -79,7 +81,7 @@ async function ensureConflicts() {
   try {
     conflicts.value = await api.getConflicts(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -92,7 +94,7 @@ async function ensureVerification() {
   try {
     verification.value = await api.getVerification(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -105,7 +107,7 @@ async function ensureRedTeam() {
   try {
     redTeam.value = await api.getRedTeam(props.id);
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   } finally {
     loading.value = false;
   }
@@ -213,8 +215,14 @@ async function ensureComparison() {
 // Citation grounding, living-research diff and the comparison table load once final.
 watch(
   () => props.isFinal,
-  (final) => {
+  (final, wasFinal) => {
     if (final) {
+      // While finalizing, /sources serves a fallback pool; the canonical [Sn] table lands with
+      // the report, so a list fetched before completion is refetched once.
+      if (wasFinal === false && sources.value) {
+        sources.value = null;
+        ensureSources();
+      }
       ensureCitations();
       ensureIndependence();
       ensureReputation();
@@ -329,7 +337,7 @@ async function toggleShareMenu() {
     try {
       share.value = await api.createShare(props.id);
     } catch (e) {
-      error.value = (e as Error).message;
+      error.value = apiErrorMessage(e, t);
     }
   }
 }
@@ -348,7 +356,7 @@ async function revokeShare() {
     share.value = await api.revokeShare(props.id);
     shareMenuOpen.value = false;
   } catch (e) {
-    error.value = (e as Error).message;
+    error.value = apiErrorMessage(e, t);
   }
 }
 
@@ -385,7 +393,6 @@ function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const exporting = ref<string | null>(null);
 const exportError = ref<string | null>(null);
 const exportMenuOpen = ref(false);
@@ -393,22 +400,6 @@ const siteMenuOpen = ref(false);
 const siteThemes = [
   "auto", "light", "dark", "midnight", "emerald", "rose", "sand",
 ] as const;
-
-function filenameFrom(res: Response, fallback: string): string {
-  const cd = res.headers.get("Content-Disposition") || "";
-  const m = cd.match(/filename\*=UTF-8''([^;]+)/) || cd.match(/filename="?([^";]+)"?/);
-  return m ? decodeURIComponent(m[1]) : fallback;
-}
-function saveBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
 
 async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trail", opts?: { theme?: string; accent?: string; base?: string }) {
   exporting.value = fmt;
@@ -418,11 +409,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     if (opts?.theme) params.set("theme", opts.theme);
     if (opts?.accent) params.set("accent", opts.accent);
     if (opts?.base) params.set("base", opts.base);
-    const res = await fetch(`${BASE}/v1/research/${props.id}/export?${params.toString()}`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw await apiErrorFromResponse(res);
-    saveBlob(await res.blob(), filenameFrom(res, fmt === "trail" ? "audit-trail.md" : `research.${fmt}`));
+    saveFile(await api.exportReport(props.id, params), fmt === "trail" ? "audit-trail.md" : `research.${fmt}`);
   } catch (e) {
     // Failed download must be visible — previously a non-2xx silently did nothing.
     exportError.value = apiErrorMessage(e, t);
@@ -495,7 +482,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 {{ $t("share.revoke") }}
               </button>
               <span v-if="shareCopied" class="text-[10px] text-emerald-400 font-medium">
-                Скопировано!
+                {{ $t("share.copied") }}
               </span>
             </div>
           </div>
@@ -1070,7 +1057,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 <a
                   v-for="(u, j) in f.source_urls"
                   :key="j"
-                  :href="u"
+                  :href="safeHttpUrl(u) ?? undefined"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="text-xs text-accent hover:underline"

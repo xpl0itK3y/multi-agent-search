@@ -1,3 +1,5 @@
+import pytest
+
 from src.agents.numeric_check import NumericCheckAgent
 
 
@@ -108,3 +110,62 @@ def test_source_unavailable_not_penalized():
 def test_empty_inputs_safe():
     assert _agent().check("", {}).total == 0
     assert _agent().check("No numbers worth checking here at all [S1].", {"S1": {"content": "x"}}).total == 0
+
+
+def test_numeric_check_step_reaches_the_progress_trail():
+    # The trail event used to read a missing NumericCheck.figures field, so it raised
+    # after the result was stored and the step never appeared on the trail.
+    from src.api.schemas import ResearchRequest, SearchDepth
+    from src.repositories import InMemoryTaskStore
+    from src.services import ResearchService
+
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="solar capacity", depth=SearchDepth.EASY), task_ids=[], language="en"
+    )
+    service = ResearchService(task_store=store)
+    report = "Solar capacity grew 40% according to the report [S1]."
+    aggregated = [{"source_id": "S1", "content": "Officials said solar capacity grew about 40 percent."}]
+
+    service._check_numbers(report, research, [], aggregated=aggregated)
+
+    event = store.get_research(research.id).graph_trail[-1]
+    assert event["step"] == "numeric_check"
+    assert event["metrics"] == {"figures_count": 1, "figures_supported": 1}
+
+
+@pytest.mark.parametrize(
+    "language,expected",
+    [
+        ("en", "figures found in their cited source: 1 of 2"),
+        ("ru", "показателей найдено в указанном источнике: 1 из 2"),
+        ("es", "cifras halladas en su fuente citada: 1 de 2"),
+    ],
+)
+def test_numeric_check_trail_reports_found_of_checked_not_checked_as_verified(language, expected):
+    # The detail used to read 'figures verified: {total}', so 2 checked and 1 found showed
+    # 'figures verified: 2' on the trail and in the report's execution-trail section.
+    from src.api.schemas import ResearchRequest, SearchDepth
+    from src.repositories import InMemoryTaskStore
+    from src.services import ResearchService
+
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="solar capacity", depth=SearchDepth.EASY), task_ids=[], language=language
+    )
+    service = ResearchService(task_store=store)
+    report = (
+        "Solar capacity grew 40% according to the report [S1].\n"
+        "Wind capacity grew 75% sharply this period [S2]."
+    )
+    aggregated = [
+        {"source_id": "S1", "content": "Officials said solar capacity grew about 40 percent."},
+        {"source_id": "S2", "content": "Officials said wind capacity grew about 14 percent."},
+    ]
+
+    service._check_numbers(report, research, [], aggregated=aggregated)
+
+    event = store.get_research(research.id).graph_trail[-1]
+    assert event["detail"].endswith(expected)
+    assert "verified" not in event["detail"] and "верифицировано" not in event["detail"]
+    assert event["metrics"] == {"figures_count": 2, "figures_supported": 1}

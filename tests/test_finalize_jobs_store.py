@@ -200,3 +200,36 @@ def test_in_memory_store_lists_running_and_dead_letter_finalize_jobs():
 
     assert [job.id for job in store.get_running_research_finalize_jobs()] == [running.id]
     assert [job.id for job in store.get_dead_letter_research_finalize_jobs()] == [dead.id]
+
+
+def test_in_memory_latest_finalize_job_breaks_timestamp_ties_by_insertion():
+    # Two jobs created in the same clock tick (routine on Windows) must not make
+    # "latest" depend on dict iteration luck: the one inserted last wins.
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="topic", depth=SearchDepth.EASY),
+        task_ids=[],
+    )
+    older = store.add_research_finalize_job(research.id)
+    newer = store.add_research_finalize_job(research.id)
+    tick = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for job in (older, newer):
+        job.created_at = job.updated_at = tick
+
+    assert store.get_latest_research_finalize_job(research.id).id == newer.id
+
+    # A created_at tie falls back to updated_at, as in the SQL ordering.
+    older.updated_at = tick + timedelta(seconds=1)
+    assert store.get_latest_research_finalize_job(research.id).id == older.id
+
+
+def test_in_memory_latest_search_job_breaks_timestamp_ties_by_insertion():
+    store = InMemoryTaskStore()
+    store.add_task({"id": "task-1", "description": "task", "queries": ["q"]})
+    older = store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    newer = store.add_search_task_job("task-1", SearchDepth.EASY.value)
+    tick = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for job in (older, newer):
+        job.created_at = job.updated_at = tick
+
+    assert store.get_latest_search_task_job("task-1").id == newer.id

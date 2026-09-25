@@ -4,12 +4,19 @@ For every inline ``[Sn]`` citation, check whether the cited source's text actual
 the sentence — by lexical overlap. Reports are frequently written in one language while
 citing sources in another, so matching is LANGUAGE-AWARE:
 
-  * when the source shares the claim's primary language, the full token overlap is scored
-    leniently (the normal same-language case),
+  * when the source is in the report's language (the research's stored language) and
+    shares the claim's script, the full token overlap is scored leniently (the normal
+    same-language case),
   * when it doesn't, only language-agnostic ANCHORS (numbers + Latin names/acronyms like
     "OpenAI", "GPT-5.6", "IPO") can match — these survive across languages, and
   * if a foreign-language source can't be judged from anchors, the claim is "unverified"
     rather than flagged — a foreign-language citation is never falsely called fabricated.
+
+"Foreign" compares each source's detected language with the report language, for every
+language pair (an English source is foreign to a Spanish report as much as to a Russian one).
+Only a confident detection (``detect_language(strict=True)``) or a different script makes a
+source foreign: a short or hint-less snippet in the report's script counts as the report's
+language, so it is judged, not exempted.
 
 Integrity is scored over VERIFIABLE claims only (supported / (supported + unsupported)).
 This is a lexical match, not a truth judgement: it catches citations whose source never
@@ -19,6 +26,7 @@ from __future__ import annotations
 
 import re
 
+from src.agents.cross_language import detect_language, dominant_script, language_script
 from src.domain import CitationAudit, CitationGround
 
 _CITATION = re.compile(r"\[S(\d+)\]")
@@ -34,6 +42,13 @@ _NUM = re.compile(r"\d[\d.,]*")
 _IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MDLINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL = re.compile(r"https?://\S+")
+# In Latin-script reports every word is a Latin token, so only name-like ones (inner
+# capitals, digits, or capitalized after the first word) are language-agnostic anchors.
+_LATIN_SCRIPT_LANGUAGES = {"en", "es", "fr", "de", "it", "pt"}
+# Languages that capitalise every noun: there a capital after the first word is no sign of
+# a name (Umsatz, Milliarden), so only inner capitals, digits and acronyms count.
+_NOUN_CAPITALISING_LANGUAGES = {"de"}
+_LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.+#-]{2,}")
 
 _NATIVE_T = 0.20    # share of same-language claim terms that must appear in the source
 _ANCHOR_T = 0.50    # share of language-agnostic anchors that must appear (cross-language)
@@ -48,15 +63,26 @@ _STOPWORDS = {
 
 
 class CitationAuditAgent:
-    def audit(self, report: str, sources_by_id: dict[str, dict]) -> CitationAudit:
-        """``sources_by_id``: {"S1": {"content","url","title"}, ...} as the report numbered them."""
+    def audit(
+        self, report: str, sources_by_id: dict[str, dict], language: str | None = None
+    ) -> CitationAudit:
+        """``sources_by_id``: {"S1": {"content","url","title"}, ...} as the report numbered them.
+
+        ``language`` is the report's language (the research's stored language); without it the
+        report text is run through the canonical detector.
+        """
         if not report or not sources_by_id:
             return CitationAudit()
 
-        report_has_cyr = bool(_CYR.search(report.lower()))
+        report_language = language if language and language != "unknown" else detect_language(report)
+        latin_report = report_language in _LATIN_SCRIPT_LANGUAGES
+        capitalised_nouns = report_language in _NOUN_CAPITALISING_LANGUAGES
         checks: list[tuple[str, str]] = []          # (claim, status: ok | no | unverified)
         best: dict[str, tuple[float, str, bool]] = {}  # source_id -> (score, quote, single_ok)
         foreign: dict[str, bool] = {}               # source_id -> different language than the report
+        # A foreign source is grounded unless every claim citing it was judged 'no' on its
+        # anchors: an unreadable citation is never red-flagged, a disproved one is.
+        foreign_grounded: dict[str, bool] = {}
 
         for sentence in _SENTENCE_SPLIT.split(report):
             ids = _CITATION.findall(sentence)
@@ -73,12 +99,15 @@ class CitationAuditAgent:
             s_lat: set[str] = set()
             s_num: set[str] = set()
             saw_source = False
+            all_foreign = True
+            cited: list[str] = []
             for n in dict.fromkeys(ids):  # dedupe, preserve order
                 source_id = f"S{n}"
                 source = sources_by_id.get(source_id)
                 if not source:
                     continue
                 saw_source = True
+                cited.append(source_id)
                 content = self._clean(source.get("content") or "")
                 t_cyr, t_cjk, t_lat, t_num = self._tokens(content)
                 s_cyr |= t_cyr
@@ -86,7 +115,8 @@ class CitationAuditAgent:
                 s_lat |= t_lat
                 s_num |= t_num
                 if source_id not in foreign:
-                    foreign[source_id] = report_has_cyr and not _CYR.search(content.lower())
+                    foreign[source_id] = self._is_foreign(content, report_language)
+                all_foreign = all_foreign and foreign[source_id]
                 quote, score = self._best_passage(claim_terms, content)
                 if source_id not in best or score > best[source_id][0]:
                     best[source_id] = (score, quote, score >= _NATIVE_T)
@@ -95,11 +125,14 @@ class CitationAuditAgent:
 
             src_terms = s_cyr | s_cjk | s_lat | s_num
             full_cov = len(claim_terms & src_terms) / len(claim_terms) if claim_terms else 0.0
-            anchors = c_lat | c_num
+            anchors = (
+                self._latin_name_anchors(claim, c_lat, capitalised_nouns) if latin_report else c_lat
+            ) | c_num
             anchor_cov = len(anchors & (s_lat | s_num)) / len(anchors) if anchors else 0.0
-            # The source "shares the language" when it has tokens in the claim's primary script.
+            # The source "shares the language" when it is in the report's language and has
+            # tokens in the claim's primary script.
             primary = self._primary(c_cyr, c_cjk, c_lat)
-            shares = (
+            shares = not all_foreign and (
                 (primary == "cyr" and s_cyr)
                 or (primary == "cjk" and s_cjk)
                 or (primary == "lat" and s_lat)
@@ -113,6 +146,11 @@ class CitationAuditAgent:
                 checks.append((claim, "no"))     # enough anchors to judge, and they're absent
             else:
                 checks.append((claim, "unverified"))  # foreign source, too few anchors to judge
+            # The shared-language verdict judged the native sources, not the foreign ones.
+            disproved = not shares and checks[-1][1] == "no"
+            for source_id in cited:
+                if foreign[source_id]:
+                    foreign_grounded[source_id] = foreign_grounded.get(source_id, False) or not disproved
 
         supported = sum(1 for _, s in checks if s == "ok")
         unsupported_claims = [c for c, s in checks if s == "no"]
@@ -125,8 +163,9 @@ class CitationAuditAgent:
                 url=(sources_by_id.get(source_id) or {}).get("url", "") or "",
                 title=(sources_by_id.get(source_id) or {}).get("title", "") or "",
                 quote=quote,
-                # Never red-flag a citation we couldn't read (foreign-language source).
-                supported=single_ok or foreign.get(source_id, False),
+                # Never red-flag a citation we couldn't read (foreign-language source), but
+                # do flag one whose anchors were checked and found absent.
+                supported=single_ok or foreign_grounded.get(source_id, False),
             )
             for source_id, (_score, quote, single_ok) in best.items()
         ]
@@ -142,9 +181,45 @@ class CitationAuditAgent:
     # ── matching ────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _is_foreign(content: str, report_language: str) -> bool:
+        """Whether a source is confidently in another language than the report.
+
+        A foreign source is never flagged, so a wrong 'foreign' hides a fabricated citation:
+        the default detector calls any hint-less Latin snippet 'en' and used to call Chinese
+        with one stray kana 'ja'. So the language must be detected confidently, or else the
+        script must differ (a Latin snippet is foreign to a Russian or Chinese report, whichever
+        Latin language it is in); an unsure same-script source is judged as the report's."""
+        source_language = detect_language(content, strict=True)
+        if source_language != "unknown":
+            return source_language != report_language
+        source_script = dominant_script(content)
+        report_script = language_script(report_language)
+        return bool(source_script and report_script and source_script != report_script)
+
+    @staticmethod
     def _primary(cyr: set, cjk: set, lat: set) -> str:
         counts = {"cyr": len(cyr), "cjk": len(cjk), "lat": len(lat)}
         return max(counts, key=counts.get)
+
+    @staticmethod
+    def _latin_name_anchors(
+        claim: str, latin_tokens: set[str], capitalised_nouns: bool = False
+    ) -> set[str]:
+        """Latin tokens of ``claim`` that look like names, acronyms or model ids.
+
+        ``capitalised_nouns``: the claim's language capitalises every noun (German), so a
+        capital initial alone does not make a word name-like."""
+        anchors: set[str] = set()
+        for index, match in enumerate(_LATIN_WORD.finditer(claim)):
+            word = match.group(0)
+            name_like = (
+                any(char.isdigit() for char in word)
+                or any(char.isupper() for char in word[1:])
+                or (index > 0 and word[0].isupper() and not capitalised_nouns)
+            )
+            if name_like and word.lower() in latin_tokens:
+                anchors.add(word.lower())
+        return anchors
 
     @staticmethod
     def _clean(content: str) -> str:

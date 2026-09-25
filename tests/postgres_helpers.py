@@ -9,11 +9,9 @@ from src.config import settings
 # revision (e.g. an unfinished feature branch), which breaks migrations and leaks
 # test data into real work.
 POSTGRES_TEST_DATABASE = "mas_postgres_tests"
-
-
-def create_postgres_session_factory():
-    engine = create_engine(settings.resolved_database_url, pool_pre_ping=True)
-    return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
+# A host that drops packets (rather than refusing) otherwise stalls the first
+# connection for minutes before the "server unreachable" skip.
+_PROBE_CONNECT_ARGS = {"connect_timeout": 5}
 
 
 def server_base_url() -> str:
@@ -38,8 +36,28 @@ def drop_throwaway_database(base_url: str, name: str) -> None:
         pass  # best-effort cleanup
 
 
-def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
-    """Create a throwaway database migrated to head; skips the test if no Postgres.
+def migrate_throwaway_database(name: str, revision: str = "head", *, downgrade: bool = False) -> None:
+    """Run alembic upgrade (or downgrade) to ``revision`` on a throwaway database.
+
+    Migrates in-process: alembic's env is pointed at the throwaway DB via the live
+    settings object, then whatever the developer had configured is restored."""
+    from alembic import command
+    from alembic.config import Config
+
+    original_db = settings.postgres_db
+    original_url = settings.database_url
+    settings.database_url = ""
+    settings.postgres_db = name
+    try:
+        migrate = command.downgrade if downgrade else command.upgrade
+        migrate(Config("alembic.ini"), revision)
+    finally:
+        settings.postgres_db = original_db
+        settings.database_url = original_url
+
+
+def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE, revision: str = "head"):
+    """Create a throwaway database migrated to ``revision``; skips the test if no Postgres.
 
     Returns (engine, session_factory). Call drop_throwaway_database() when done."""
     import pytest
@@ -47,7 +65,10 @@ def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
     base_url = server_base_url()
     try:
         server = create_engine(
-            f"{base_url}/postgres", isolation_level="AUTOCOMMIT", pool_pre_ping=True
+            f"{base_url}/postgres",
+            isolation_level="AUTOCOMMIT",
+            pool_pre_ping=True,
+            connect_args=_PROBE_CONNECT_ARGS,
         )
         with server.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
@@ -56,20 +77,7 @@ def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
     except SQLAlchemyError as exc:
         pytest.skip(f"Postgres integration test skipped (server unreachable): {exc}")
 
-    # Migrate in-process; point alembic's env at the throwaway DB via the live
-    # settings object, then restore whatever the developer had configured.
-    original_db = settings.postgres_db
-    original_url = settings.database_url
-    settings.database_url = ""
-    settings.postgres_db = name
-    try:
-        from alembic import command
-        from alembic.config import Config
-
-        command.upgrade(Config("alembic.ini"), "head")
-    finally:
-        settings.postgres_db = original_db
-        settings.database_url = original_url
+    migrate_throwaway_database(name, revision)
 
     engine = create_engine(f"{base_url}/{name}", pool_pre_ping=True)
     return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -86,11 +94,15 @@ def require_postgres(session_factory) -> None:
 
 
 def truncate_runtime_tables(session_factory) -> None:
+    # Every table a store writes: the admin views count and sort every account, usage row,
+    # worker heartbeat and cache entry, so rows left by an earlier test would change their
+    # results. (alembic_version is the only table kept.)
     with session_factory() as session:
         session.execute(
             text(
-                "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches, "
+                "user_events, user_sessions, admin_audit_logs, llm_usage_logs, users, worker_heartbeats, "
+                "search_cache RESTART IDENTITY CASCADE"
             )
         )
         session.commit()

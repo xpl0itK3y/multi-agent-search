@@ -61,29 +61,99 @@ def _script(ch: str) -> str:
     return "other"
 
 
-def detect_language(text: str) -> str:
-    """Dominant-script + stopword language guess. Returns an ISO 639-1 code or 'unknown'."""
+# Japanese text mixes kana into its kanji; Chinese has none, bar a stray の in a name or a
+# slogan. Below this kana share of the han+kana letters the text is Chinese.
+_JA_MIN_KANA_SHARE = 0.10
+# Strict mode (see detect_language): the dominant script's share of the letters, the
+# words in the sample, and the language-distinctive hint words a Latin guess needs.
+_STRICT_MIN_SCRIPT_SHARE = 0.60
+_STRICT_MIN_WORDS = 8
+_STRICT_MIN_DISTINCT_HINTS = 2
+
+
+def detect_language(text: str, *, strict: bool = False) -> str:
+    """Dominant-script + stopword language guess. Returns an ISO 639-1 code or 'unknown'.
+
+    The default always guesses: Latin text with no hint words is 'en'. ``strict=True``
+    answers only on a confident detection and returns 'unknown' otherwise — for decisions
+    where a wrong language is worse than none (the citation audit exempts a source it
+    believes is in another language from being flagged). Confident means the dominant
+    script clearly dominates, a han text's kana share is clearly Japanese or nil, and a
+    Latin guess rests on at least two hint words that its runner-up does not share, twice
+    as many as the runner-up's own, in a sample of some length."""
     sample = (text or "")[:2000]
     counts = Counter(_script(c) for c in sample if c.isalpha())
     counts.pop("other", None)
     if not counts:
         return "unknown"
-    dominant = counts.most_common(1)[0][0]
-    if dominant == "kana":
-        return "ja"
-    if dominant == "han":
-        return "ja" if counts.get("kana") else "zh"
+    dominant, dominant_count = counts.most_common(1)[0]
+    if strict and dominant_count < _STRICT_MIN_SCRIPT_SHARE * sum(counts.values()):
+        return "unknown"
+    if dominant in ("kana", "han"):
+        kana = counts.get("kana", 0)
+        if kana >= _JA_MIN_KANA_SHARE * (kana + counts.get("han", 0)):
+            return "ja"
+        # A few kana among the kanji: a stray の in Chinese, or kanji-heavy Japanese.
+        return "unknown" if strict and kana else "zh"
     if dominant in _SCRIPT_LANG:
         return _SCRIPT_LANG[dominant]
     if dominant == "latin":
-        words = set(re.findall(r"[a-zà-ÿ]+", sample.lower()))
+        word_list = re.findall(r"[a-zà-ÿ]+", sample.lower())
+        words = set(word_list)
         best, best_score = "en", 0
         for lang, hints in _LATIN_HINTS.items():
             score = len(words & hints)
             if score > best_score:
                 best, best_score = lang, score
+        if strict and not _confident_latin_guess(best, words, len(word_list)):
+            return "unknown"
         return best
     return "unknown"
+
+
+# Writing system of each language the detector returns (han and kana are one family).
+_LANGUAGE_SCRIPT = {
+    **{lang: "latin" for lang in _LATIN_HINTS},
+    **{lang: script for script, lang in _SCRIPT_LANG.items()},
+    "zh": "cjk",
+    "ja": "cjk",
+}
+
+
+def language_script(language: str | None) -> str | None:
+    """The script ``language`` is written in ('latin', 'cyrillic', 'cjk', ...), or None."""
+    return _LANGUAGE_SCRIPT.get(language or "")
+
+
+def dominant_script(text: str) -> str | None:
+    """The script that clearly dominates the letters of ``text`` (han and kana counted as
+    'cjk'), or None when there are no letters or no script has a clear majority."""
+    sample = (text or "")[:2000]
+    counts = Counter(
+        "cjk" if script in ("han", "kana") else script
+        for script in (_script(c) for c in sample if c.isalpha())
+    )
+    counts.pop("other", None)
+    if not counts:
+        return None
+    script, count = counts.most_common(1)[0]
+    return script if count >= _STRICT_MIN_SCRIPT_SHARE * sum(counts.values()) else None
+
+
+def _confident_latin_guess(best: str, words: set[str], word_count: int) -> bool:
+    """Whether ``best`` clearly beats every other Latin language on hint words the two do
+    not share (es and pt share que/para/como/por, fr/es/it share la), not by a tie-break."""
+    if word_count < _STRICT_MIN_WORDS:
+        return False
+    best_hints = _LATIN_HINTS[best]
+    for lang, hints in _LATIN_HINTS.items():
+        if lang == best:
+            continue
+        own = len(words & (best_hints - hints))
+        other = len(words & (hints - best_hints))
+        if own < _STRICT_MIN_DISTINCT_HINTS or own < 2 * other:
+            return False
+    return True
 
 
 class CrossLanguageAgent:

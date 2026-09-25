@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { api } from "@/lib/api";
+import { startTelemetry, stopTelemetry } from "@/lib/telemetry";
 import type { AuthUser } from "@/lib/types";
 
 export const useAuthStore = defineStore("auth", () => {
@@ -10,6 +11,7 @@ export const useAuthStore = defineStore("auth", () => {
   async function fetchMe() {
     try {
       user.value = await api.me();
+      startTelemetry(user.value.id);
     } catch {
       user.value = null;
     } finally {
@@ -19,13 +21,17 @@ export const useAuthStore = defineStore("auth", () => {
 
   async function login(email: string, password: string) {
     user.value = (await api.login(email, password)).user;
+    startTelemetry(user.value.id, { newSession: true });
   }
 
   async function register(email: string, password: string) {
     user.value = (await api.register(email, password)).user;
+    startTelemetry(user.value.id, { newSession: true });
   }
 
   async function logout() {
+    // Before the request: nothing may be sent once the session is gone.
+    stopTelemetry();
     try {
       await api.logout();
     } catch {

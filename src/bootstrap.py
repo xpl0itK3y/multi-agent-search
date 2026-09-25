@@ -16,6 +16,8 @@ from src.agents.cross_language import CrossLanguageAgent
 from src.agents.replan import ReplanAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.api.dependencies import LOCAL_USER
+from src.auth.admin_identity import admin_emails
 from src.brokers.redis_broker import RedisBroker
 from src.config import settings
 from src.observability import configure_logging
@@ -48,18 +50,48 @@ def _create_broker() -> RedisBroker | None:
         return None
 
 
+def _llm_usage_sink(task_store):
+    """DeepSeekProvider usage sink: one llm_usage_logs row per LLM call (USAGE-ACCOUNTING),
+    in the API process (decompose, optimize, clarify, chat) as well as the workers."""
+
+    def record(*, research_id, user_id, prompt_tokens, completion_tokens, **usage) -> None:
+        task_store.record_llm_usage(
+            research_id=research_id,
+            # With auth disabled calls are bound to LOCAL_USER, which has no users row.
+            user_id=None if user_id == LOCAL_USER.id else user_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            **usage,
+        )
+
+    return record
+
+
 _INSECURE_SECRET_DEFAULT = "dev-insecure-secret-change-in-production"
 
 
 def _validate_security_config() -> None:
-    """Fail fast on insecure auth configuration when authentication is enabled."""
-    if settings.auth_disabled:
-        return
-    if settings.auth_secret_key == _INSECURE_SECRET_DEFAULT or len(settings.auth_secret_key) < 32:
+    """Fail fast on an insecure auth configuration: a default or short AUTH_SECRET_KEY
+    whenever a token grants anything. That is always the case with auth enabled, and also
+    with AUTH_DISABLED=true once ADMIN_EMAILS is set: the admin guard then still accepts
+    admin tokens, and anyone can sign one with the public default key."""
+    weak_secret = (
+        settings.auth_secret_key == _INSECURE_SECRET_DEFAULT or len(settings.auth_secret_key) < 32
+    )
+    if weak_secret and not settings.auth_disabled:
         raise RuntimeError(
             "Insecure auth configuration: AUTH_SECRET_KEY must be overridden with a strong "
             "(>=32 character) value when AUTH_DISABLED=false."
         )
+    if weak_secret and admin_emails():
+        raise RuntimeError(
+            "Insecure auth configuration: AUTH_SECRET_KEY must be overridden with a strong "
+            "(>=32 character) value when ADMIN_EMAILS is set, even with AUTH_DISABLED=true: "
+            "admin tokens are signed with it."
+        )
+    if settings.auth_disabled:
+        return
     if not settings.auth_cookie_secure:
         print(
             "Warning: AUTH_COOKIE_SECURE is false while auth is enabled — session cookies will "
@@ -83,6 +115,7 @@ def create_research_service() -> ResearchService:
     evidence_mapper = EvidenceMapperAgent()
     claim_verifier = ClaimVerifierAgent()
     report_critic = ReportCriticAgent()
+    llm: DeepSeekProvider | None = None
     llm_available = False
 
     if settings.smoke_analyzer_report:
@@ -112,6 +145,8 @@ def create_research_service() -> ResearchService:
         print(f"Warning: Failed to initialize agents: {exc}")
 
     task_store = create_task_store()
+    if llm is not None:
+        llm.set_usage_sink(_llm_usage_sink(task_store))
     broker = _create_broker()
     # Wire pub/sub so state changes (any process) wake SSE streams instead of DB polling.
     if broker is not None and hasattr(task_store, "set_event_notifier"):

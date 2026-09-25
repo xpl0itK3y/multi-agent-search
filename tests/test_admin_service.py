@@ -2,6 +2,8 @@ import pytest
 
 from src.repositories.in_memory_task_store import InMemoryTaskStore
 from src.agents.catalog import AGENTS_CATALOG
+from src.domain import MaintenanceActionRequest
+from src.services import ResearchService
 
 
 def test_agents_catalog_integrity():
@@ -55,15 +57,15 @@ def test_in_memory_task_store_admin_methods():
     assert logs[0].action == "cleanup_old_jobs"
     assert logs[0].details["deleted"] == 5
 
-    # 3. Dry-run maintenance preview & execute
+    # 3. Dry-run maintenance preview; executing goes through the service job paths
+    # (ADMIN-MAINTENANCE), which then writes the audit row.
     preview = store.preview_maintenance_action("cleanup_old_jobs", {"days": 7})
     assert preview.dry_run is True
     assert preview.action == "cleanup_old_jobs"
 
-    executed = store.execute_maintenance_action(
-        "cleanup_old_jobs",
+    executed = ResearchService(task_store=store).execute_maintenance_action(
+        MaintenanceActionRequest(action="cleanup_old_jobs", params={"days": 7}),
         actor_email="admin@test.com",
-        params={"days": 7},
     )
     assert executed.dry_run is False
 
@@ -71,25 +73,17 @@ def test_in_memory_task_store_admin_methods():
     logs2 = store.get_admin_audit_logs()
     assert len(logs2) == 2
 
-    # 4. Overview
-    overview = store.get_admin_overview()
+    # 4. Overview: health is the service's (it adds the LLM/broker probes)
+    overview = ResearchService(task_store=store).get_admin_overview()
     assert "overall" in overview.system_health
 
 
-def test_sqlalchemy_task_store_admin_methods():
-    from sqlalchemy.orm import sessionmaker
-    from src.db import create_engine_from_settings
+@pytest.mark.postgres
+def test_sqlalchemy_task_store_admin_methods(postgres_session_factory):
+    # The throwaway test database, never the developer's DATABASE_URL.
     from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
 
-    try:
-        engine = create_engine_from_settings()
-        with engine.connect():
-            pass
-    except Exception:
-        pytest.skip("PostgreSQL not available")
-
-    factory = sessionmaker(bind=engine)
-    store = SQLAlchemyTaskStore(factory)
+    store = SQLAlchemyTaskStore(postgres_session_factory)
 
     # 1. Audit log
     audit_id = store.record_admin_audit(
@@ -104,7 +98,7 @@ def test_sqlalchemy_task_store_admin_methods():
     assert any(entry.id == audit_id for entry in logs)
 
     # 2. Overview
-    overview = store.get_admin_overview()
+    overview = ResearchService(task_store=store).get_admin_overview()
     assert overview.system_health.get("postgres") == "ok"
 
     # 3. Dry-run preview
@@ -114,3 +108,40 @@ def test_sqlalchemy_task_store_admin_methods():
     # 4. Token analytics
     analytics = store.get_admin_token_analytics()
     assert analytics.page == 1
+
+
+def test_token_analytics_reuses_its_aggregates_across_page_changes(monkeypatch):
+    """The totals and breakdowns scan all of llm_usage_logs; a page change within the
+    cache window reads only the research page, and the aggregates refresh after it."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from src.api.schemas import ResearchRequest, SearchDepth
+
+    clock = [1000.0]
+    monkeypatch.setattr("src.services.research_service.time", SimpleNamespace(monotonic=lambda: clock[0]))
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    for n in range(3):
+        research = store.add_research(ResearchRequest(prompt=f"topic {n}", depth=SearchDepth.EASY), task_ids=[])
+        store.researches[research.id].created_at = datetime(2026, 9, 1, tzinfo=timezone.utc) + timedelta(minutes=n)
+        store.record_llm_usage(research.id, None, "deepseek-chat", 10, 0, 10, 0.01)
+    full_scans = []
+    aggregate = store.get_admin_token_analytics
+    monkeypatch.setattr(store, "get_admin_token_analytics", lambda **kw: full_scans.append(kw) or aggregate(**kw))
+
+    first = service.get_admin_token_analytics(page=1, page_size=2)
+    store.record_llm_usage(None, None, "deepseek-chat", 5, 0, 5, 0.01)
+    clock[0] += ResearchService.TOKEN_ANALYTICS_CACHE_SECONDS - 1
+    second = service.get_admin_token_analytics(page=2, page_size=2)
+
+    assert len(full_scans) == 1
+    assert (first.total_tokens, second.total_tokens, second.total_researches) == (30, 30, 3)
+    assert (second.page, second.page_size) == (2, 2)
+    assert [r.prompt for r in second.researches] == ["topic 0"]  # the page itself is fresh
+    assert [r.prompt for r in first.researches] == ["topic 2", "topic 1"]
+
+    clock[0] += 2
+    third = service.get_admin_token_analytics(page=1, page_size=2)
+
+    assert len(full_scans) == 2 and third.total_tokens == 35

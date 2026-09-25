@@ -1,8 +1,9 @@
+import json
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 
 class SearchDepth(str, Enum):
@@ -484,11 +485,56 @@ class GraphExecutionSummary(BaseModel):
     follow_up_queries: List[str] = Field(default_factory=list)
 
 
+# Bounds of one TaskUpdate (SEC2-4): the admin PATCH /v1/tasks route takes it from the
+# request body, and the search workers build it for every write. Workers stay far below
+# them: a task keeps at most source_limit (24 at the deepest depth) results, each with its
+# content clipped to 10,000 characters, and writes counts of that order.
+TASK_UPDATE_MAX_RESULTS = 100
+TASK_UPDATE_MAX_RESULT_ITEM_BYTES = 128 * 1024  # one result, as UTF-8 JSON
+TASK_UPDATE_MAX_RESULTS_BYTES = 4 * 1024 * 1024  # all results together
+TASK_UPDATE_MAX_LOG_CHARS = 4000
+TASK_UPDATE_MAX_METRIC = 1_000_000
+
+
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
-    result: Optional[List[Dict[str, Any]]] = None
+    result: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TASK_UPDATE_MAX_RESULTS)
+    # Longer lines are clipped, not refused: a worker's "Error: <exception text>" line must
+    # never turn the write that marks a task FAILED into a validation error.
     log: Optional[str] = None
     search_metrics: Optional[SearchTaskMetrics] = None
+
+    @field_validator("log", mode="before")
+    @classmethod
+    def _clip_log(cls, value: Any) -> Any:
+        if isinstance(value, str) and len(value) > TASK_UPDATE_MAX_LOG_CHARS:
+            return value[: TASK_UPDATE_MAX_LOG_CHARS - 1] + "…"
+        return value
+
+    @field_validator("result")
+    @classmethod
+    def _bounded_result(cls, value: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+        total = 0
+        for item in value or []:
+            try:
+                size = len(json.dumps(item, ensure_ascii=False, default=str).encode("utf-8"))
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise ValueError("each result must be JSON-serializable") from exc
+            if size > TASK_UPDATE_MAX_RESULT_ITEM_BYTES:
+                raise ValueError(f"a result may be at most {TASK_UPDATE_MAX_RESULT_ITEM_BYTES} bytes of JSON")
+            total += size
+        if total > TASK_UPDATE_MAX_RESULTS_BYTES:
+            raise ValueError(f"results may be at most {TASK_UPDATE_MAX_RESULTS_BYTES} bytes of JSON in total")
+        return value
+
+    @field_validator("search_metrics")
+    @classmethod
+    def _bounded_metrics(cls, value: Optional[SearchTaskMetrics]) -> Optional[SearchTaskMetrics]:
+        # Checked here, not on SearchTaskMetrics, which also parses stored tasks.
+        for name, number in (value.model_dump() if value is not None else {}).items():
+            if not 0 <= number <= TASK_UPDATE_MAX_METRIC:  # also refuses NaN
+                raise ValueError(f"search_metrics.{name} must be between 0 and {TASK_UPDATE_MAX_METRIC}")
+        return value
 
 class DecomposeResponse(BaseModel):
     tasks: List[SearchTask]
@@ -580,6 +626,8 @@ class UserRecord(BaseModel):
     token_version: int = 0
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+    # Set by scripts/create_admin.py: the operator vouched for this ADMIN_EMAILS account.
+    admin_provisioned_at: Optional[datetime] = None
 
 
 class ResearchRecord(BaseModel):
@@ -1017,6 +1065,8 @@ class QueueMaintenanceResponse(BaseModel):
     deleted_finalize_job_ids: List[str] = Field(default_factory=list)
     compacted_graph_event_worker_names: List[str] = Field(default_factory=list)
     compacted_graph_trail_research_ids: List[str] = Field(default_factory=list)
+    # Researches the stalled sweep finalized or failed (nothing was left queued for them).
+    stalled_research_ids: List[str] = Field(default_factory=list)
     recovered_count: int = 0
     deleted_count: int = 0
     compacted_count: int = 0
@@ -1094,6 +1144,39 @@ class AdminTokenAnalyticsResponse(BaseModel):
     page_size: int = 20
 
 
+MaintenanceAction = Literal[
+    "recover_stale_finalize_jobs",
+    "recover_stale_search_jobs",
+    "cleanup_old_jobs",
+    "cleanup_search_cache",
+    "requeue_finalize_job",
+    "requeue_search_job",
+]
+REQUEUE_MAINTENANCE_ACTIONS = ("requeue_finalize_job", "requeue_search_job")
+
+
+class MaintenanceParams(BaseModel):
+    """Admin maintenance parameters. Omitted values take the service defaults; the
+    service also refuses a stale_seconds below the configured job timeout."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stale_seconds: Optional[int] = Field(default=None, ge=1, le=30 * 86400)
+    days: Optional[int] = Field(default=None, ge=1, le=3650)
+    target_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+
+
+class MaintenanceActionRequest(BaseModel):
+    action: MaintenanceAction
+    params: MaintenanceParams = Field(default_factory=MaintenanceParams)
+
+    @model_validator(mode="after")
+    def _requeue_needs_a_target(self) -> "MaintenanceActionRequest":
+        if self.action in REQUEUE_MAINTENANCE_ACTIONS and not self.params.target_id:
+            raise ValueError(f"{self.action} requires params.target_id")
+        return self
+
+
 class AdminDryRunResult(BaseModel):
     action: str
     dry_run: bool = True
@@ -1129,12 +1212,79 @@ class AgentMetadataItem(BaseModel):
 
 
 
+# ── client telemetry (POST /v1/telemetry/event) ──────────────────────────────
+# Event names the SPA telemetry client (web/src/lib/telemetry.ts) sends; anything else is
+# a 422. Above all a client must never write the server's own prompt copies, which the
+# admin Prompt log trusts as real research and chat prompts.
+CLIENT_TELEMETRY_EVENTS = frozenset({"session_start", "session_end", "heartbeat", "tab_focus", "tab_blur"})
+CLIENT_TELEMETRY_CATEGORIES = frozenset({"general", "system", "ui"})
+# The server's copies of research/chat prompt text (details: research_id, prompt). They
+# are deleted with their research; user_events has no FK to researches to cascade.
+PROMPT_EVENT_NAMES = ("chat_prompt", "research_prompt")
+SERVER_TELEMETRY_EVENTS = frozenset(PROMPT_EVENT_NAMES)
+TELEMETRY_DETAILS_MAX_KEYS = 20
+TELEMETRY_DETAILS_MAX_BYTES = 2048
+# Server-captured values the stores clip before writing telemetry, session and activity
+# rows (user_events.user_agent is VARCHAR(255), every ip column VARCHAR(64)): an odd
+# User-Agent must not make the write fail.
+TELEMETRY_IP_MAX_LENGTH = 64
+TELEMETRY_USER_AGENT_MAX_LENGTH = 255
+# users.last_seen_at/last_ip are refreshed at most this often per user (in-process gate in
+# the API middleware, plus a WHERE clause in the stores for the other workers). The admin
+# "online" window is 2 minutes, so presence stays accurate.
+USER_ACTIVITY_TOUCH_INTERVAL_SECONDS = 60
+
+
+def clip_text(value: Optional[str], max_length: int) -> Optional[str]:
+    """``value`` cut to at most ``max_length`` characters; None stays None."""
+    return value[:max_length] if value else value
+
+
+class TelemetryDeviceInfo(BaseModel):
+    """What getClientDeviceInfo() reports; lengths match the user_sessions columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_type: Optional[str] = Field(None, max_length=32)
+    browser: Optional[str] = Field(None, max_length=64)
+    os: Optional[str] = Field(None, max_length=64)
+    screen_res: Optional[str] = Field(None, max_length=32)
+    viewport: Optional[str] = Field(None, max_length=32)
+    language: Optional[str] = Field(None, max_length=16)
+    timezone: Optional[str] = Field(None, max_length=64)
+
+
 class UserTelemetryEventInput(BaseModel):
-    session_id: Optional[str] = None
-    event_name: str
-    event_category: str = "general"
+    session_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    event_name: str = Field(..., max_length=64)
+    event_category: str = Field("general", max_length=32)
     details: Dict[str, Any] = Field(default_factory=dict)
-    device_info: Optional[Dict[str, Any]] = None
+    device_info: Optional[TelemetryDeviceInfo] = None
+
+    @field_validator("event_name")
+    @classmethod
+    def _client_event_name(cls, value: str) -> str:
+        if value in SERVER_TELEMETRY_EVENTS:
+            raise ValueError(f"{value!r} is recorded by the server and cannot be sent by clients")
+        if value not in CLIENT_TELEMETRY_EVENTS:
+            raise ValueError(f"unknown telemetry event {value!r}")
+        return value
+
+    @field_validator("event_category")
+    @classmethod
+    def _client_event_category(cls, value: str) -> str:
+        if value not in CLIENT_TELEMETRY_CATEGORIES:
+            raise ValueError(f"unknown telemetry category {value!r}")
+        return value
+
+    @field_validator("details")
+    @classmethod
+    def _bounded_details(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if len(value) > TELEMETRY_DETAILS_MAX_KEYS:
+            raise ValueError(f"details may have at most {TELEMETRY_DETAILS_MAX_KEYS} keys")
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > TELEMETRY_DETAILS_MAX_BYTES:
+            raise ValueError(f"details may be at most {TELEMETRY_DETAILS_MAX_BYTES} bytes of JSON")
+        return value
 
 
 class AdminUserListItem(BaseModel):

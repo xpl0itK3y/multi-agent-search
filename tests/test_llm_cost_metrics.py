@@ -2,22 +2,7 @@ import threading
 
 import pytest
 
-from src.observability.context import bind_observability_context
-from src.observability import metrics
 from src.providers.deepseek import DeepSeekProvider
-
-
-def test_llm_cost_metric_uses_user_research_and_model_labels(mocker):
-    counter = mocker.patch.object(metrics, "LLM_COST_USD_TOTAL")
-    with bind_observability_context(user_id="user-7", research_id="research-9"):
-        metrics.observe_llm_cost(0.125, "deepseek-test")
-
-    counter.labels.assert_called_once_with(
-        user_id="user-7",
-        research_id="research-9",
-        model="deepseek-test",
-    )
-    counter.labels.return_value.inc.assert_called_once_with(0.125)
 
 
 def test_deepseek_usage_increments_cost_metric(mocker):

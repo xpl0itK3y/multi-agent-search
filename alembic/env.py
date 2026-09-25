@@ -10,7 +10,9 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.resolved_database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Keep the app's loggers: the test suite migrates in-process, and the default
+    # disable_existing_loggers=True silenced every src.* logger for the rest of the run.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
@@ -33,6 +35,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        hide_parameters=True,  # as the app's engines: no bound values in error text
     )
 
     with connectable.connect() as connection:

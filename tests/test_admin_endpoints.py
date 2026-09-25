@@ -105,7 +105,7 @@ def test_admin_endpoints_require_admin_when_auth_enabled(monkeypatch):
 
         # Register users in task_store
         app.state.research_service.task_store.create_user("u1", "regular@user.com", "hash")
-        app.state.research_service.task_store.create_user("a1", "admin@super.com", "hash")
+        app.state.research_service.task_store.create_user("a1", "admin@super.com", "hash", admin_provisioned=True)
 
         # Non-admin user is rejected with 403
         user_token = create_token("u1", email="regular@user.com")

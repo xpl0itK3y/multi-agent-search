@@ -1,10 +1,13 @@
+import hashlib
 import inspect
 import logging
+import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from src.domain.errors import ConflictError, NotFoundError, ServiceUnavailableError
+from src.domain.errors import ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableError
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.claim_verifier import ClaimVerifierAgent
@@ -22,6 +25,7 @@ from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.agents.trail_text import TRAIL_DETAILS, research_language, trail_detail
 from src.brokers.redis_broker import RedisBroker
 from src.services.auth_mixin import AuthMixin
 from src.services.operational_health_mixin import OperationalHealthMixin
@@ -36,6 +40,7 @@ from src.domain import (
     AdminOverviewResponse,
     AdminTokenAnalyticsResponse,
     AgentMetadataItem,
+    MaintenanceActionRequest,
     MaintenanceSummary,
     OperationalHealth,
     DecomposeResponse,
@@ -65,6 +70,7 @@ from src.domain import (
     ResearchFinalizeJob,
     SearchJobStatus,
     SearchSourcePreview,
+    SourceCriticSummary,
     SearchTaskJob,
     SearchTaskSummary,
     SearchDepth,
@@ -155,6 +161,8 @@ class ResearchService(
         self.reputation_auditor = SourceReputationAgent()
         self.retraction_agent = RetractionAgent()
         self._crossref_cache: dict[str, dict | None] = {}
+        # (time.monotonic() when computed, response): see get_admin_token_analytics.
+        self._token_analytics_cache: tuple[float, AdminTokenAnalyticsResponse] | None = None
         self.numeric_checker = NumericCheckAgent()
         self.confidence_agent = ConfidenceAgent()
         self.broker = broker
@@ -336,6 +344,7 @@ class ResearchService(
                 logger.warning("promote_payload_invalid research_id=%s error=%s", item.id, exc)
                 self.task_store.update_research_status(item.id, ResearchStatus.FAILED, "Queued research plan was invalid.")
                 continue
+            self._mark_decompose_requested(item.id)  # it may have queued for longer than recovery waits
             _threading.Thread(
                 target=self.decompose_and_enqueue, args=(item.id, request),
                 daemon=True, name=f"promote-{item.id[:8]}",
@@ -430,13 +439,16 @@ class ResearchService(
                     logger.info("decompose_skipped_terminal research_id=%s status=%s", research_id, research.status.value)
                     return
                 graph_state = (research.graph_state if research else None) or {}
+                language = self._research_language(research) if research else detect_language(
+                    request.prompt
+                )
                 self._emit_plan_progress(
                     research_id,
                     "plan_start",
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="analyze_prompt",
-                    detail="Анализ темы исследования и постановка исследовательских задач",
+                    detail=trail_detail("plan_start", language),
                 )
                 # Clarify step (plan-first only, once): ask up to 3 questions before planning.
                 if (
@@ -453,7 +465,7 @@ class ResearchService(
                             agent="ClarifierAgent",
                             phase="plan",
                             action="generate_questions",
-                            detail=f"Сформировано {len(questions)} уточняющих вопросов для фокуса исследования",
+                            detail=trail_detail("clarify", language, count=len(questions)),
                             metrics={"question_count": len(questions)},
                         )
                         logger.info(
@@ -462,16 +474,13 @@ class ResearchService(
                         )
                         return
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
-                language = self._research_language(research) if research else detect_language(
-                    request.prompt
-                )
                 self._emit_plan_progress(
                     research_id,
                     "decompose",
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="decompose_topics",
-                    detail=f"Декомпозиция темы на направления (глубина: {request.depth.value})",
+                    detail=trail_detail("decompose", language, depth=request.depth.value),
                     metrics={"depth": request.depth.value},
                 )
                 tasks_raw = self._run_decompose(
@@ -493,7 +502,7 @@ class ResearchService(
                         agent="OrchestratorAgent",
                         phase="plan",
                         action="awaiting_approval",
-                        detail=f"Сформирован черновик плана из {len(tasks_raw)} пунктов. Ожидание утверждения.",
+                        detail=trail_detail("plan_review", language, count=len(tasks_raw)),
                         metrics={"task_count": len(tasks_raw)},
                     )
                     logger.info(
@@ -501,11 +510,14 @@ class ResearchService(
                         research_id, len(tasks_raw), request.depth.value,
                     )
                     return
+                if not any(self._is_searchable(task_dict) for task_dict in tasks_raw):
+                    self._fail_unsearchable_plan(research_id, len(tasks_raw))
+                    return
                 task_ids = []
                 registered_tasks = []
                 for task_dict in tasks_raw:
                     task_dict["research_id"] = research_id
-                    task = self.task_store.add_task(task_dict)
+                    task = self.task_store.add_task(self._planned_task(task_dict))
                     registered_tasks.append(task)
                     task_ids.append(task.id)
                 self.task_store.set_research_task_ids(research_id, task_ids)
@@ -516,7 +528,9 @@ class ResearchService(
                         if self.broker:
                             self.broker.push_search_job(job.id)
                         enqueued_jobs += 1
-                # Clear crash-recovery marker now that decompose ran.
+                # Clear the crash-recovery marker (and the stored request) only now that the
+                # plan has search jobs: a research failed before this point keeps its request,
+                # so a retry decomposes it again instead of searching a plan with nothing in it.
                 self._clear_decompose_pending(research_id)
                 self._emit_plan_progress(
                     research_id,
@@ -524,24 +538,9 @@ class ResearchService(
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="tasks_enqueued",
-                    detail=f"План утвержден: создано {len(registered_tasks)} поисковых задач, запущен параллельный сбор данных",
+                    detail=trail_detail("plan_ready", language, count=len(registered_tasks)),
                     metrics={"task_count": len(registered_tasks), "enqueued_jobs": enqueued_jobs},
                 )
-                if enqueued_jobs == 0:
-                    # Decompose produced no searchable queries (e.g. the model was
-                    # unavailable / a degenerate fallback came back). Fail cleanly instead
-                    # of leaving the research stuck in 'processing' forever.
-                    logger.warning(
-                        "research_decompose_no_queries research_id=%s task_count=%s",
-                        research_id, len(registered_tasks),
-                    )
-                    self.task_store.update_research_status(
-                        research_id,
-                        ResearchStatus.FAILED,
-                        "Could not generate a search plan (no searchable queries). "
-                        "Check the model/API key and try again.",
-                    )
-                    return
                 logger.info(
                     "research_decomposed research_id=%s task_count=%s depth=%s",
                     research_id,
@@ -552,60 +551,142 @@ class ResearchService(
                 logger.error("research_decompose_failed research_id=%s error=%s", research_id, str(exc))
                 self.task_store.update_research_status(research_id, ResearchStatus.FAILED, self._failure_message(exc))
 
+    NO_SEARCH_PLAN_REPORT = (
+        "Could not generate a search plan (no searchable queries). "
+        "Check the model/API key and try again."
+    )
+
+    @staticmethod
+    def _is_searchable(task_raw: dict) -> bool:
+        """A planned task that gets a search job: PENDING with at least one query (the
+        orchestrator's parse fallback is a FAILED task, some plans come back without queries)."""
+        status = TaskStatus(task_raw.get("status") or TaskStatus.PENDING)
+        return status == TaskStatus.PENDING and bool(task_raw.get("queries"))
+
+    NO_QUERIES_TASK_LOG = "No search queries were planned for this task: nothing to search."
+
+    @classmethod
+    def _planned_task(cls, task_raw: dict) -> dict:
+        """A plan item as it is stored. A PENDING one without queries gets no search job and
+        _search_settled counts no PENDING task, so stored as it came it kept its research from
+        finalizing until the stalled sweep failed it, although every search that could run had
+        finished. It is stored settled instead: COMPLETED with no results, which is what a
+        search job over no queries would have left (a retry then leaves it alone too)."""
+        status = TaskStatus(task_raw.get("status") or TaskStatus.PENDING)
+        if status != TaskStatus.PENDING or task_raw.get("queries"):
+            return task_raw
+        return {
+            **task_raw,
+            "status": TaskStatus.COMPLETED,
+            "logs": [*(task_raw.get("logs") or []), cls.NO_QUERIES_TASK_LOG],
+        }
+
+    def _fail_unsearchable_plan(self, research_id: str, task_count: int) -> None:
+        """The decomposition produced nothing to search (non-JSON model output, tasks without
+        queries). Fail cleanly instead of leaving the research stuck in 'processing', and
+        persist none of the plan: the stored request stays, so a retry decomposes again."""
+        logger.warning("research_decompose_no_queries research_id=%s task_count=%s", research_id, task_count)
+        # Guarded: a cancel that landed during the decomposition stands.
+        self.task_store.transition_research_status(
+            research_id, [ResearchStatus.PROCESSING], ResearchStatus.FAILED, self.NO_SEARCH_PLAN_REPORT
+        )
+        self.task_store.merge_research_graph_state(
+            research_id, remove_keys=["decompose_pending", "decompose_requested_at"]
+        )
+
     def _clear_decompose_pending(self, research_id: str) -> None:
         """Remove the crash-recovery marker from graph_state after decompose completes."""
         self.task_store.merge_research_graph_state(
-            research_id, remove_keys=["decompose_pending", "decompose_payload"]
+            research_id, remove_keys=["decompose_pending", "decompose_payload", "decompose_requested_at"]
         )
+
+    @staticmethod
+    def _decompose_marker(request: ResearchRequest | None = None) -> dict[str, Any]:
+        """The crash-recovery marker for a decomposition starting now. Recovery ages it on
+        decompose_requested_at: a research that waited in the queue, for clarification
+        answers or for a retry has an old created_at, and aging on that started a second,
+        concurrent decomposition next to the one just launched."""
+        marker: dict[str, Any] = {
+            "decompose_pending": True,
+            "decompose_requested_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if request is not None:
+            marker["decompose_payload"] = request.model_dump(mode="json")
+        return marker
+
+    def _mark_decompose_requested(self, research_id: str, request: ResearchRequest | None = None) -> None:
+        self.task_store.merge_research_graph_state(research_id, self._decompose_marker(request))
+
+    @staticmethod
+    def _decompose_requested_at(research: ResearchRecord) -> datetime:
+        stamp = (research.graph_state or {}).get("decompose_requested_at") or research.created_at
+        if isinstance(stamp, str):
+            try:
+                stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            except ValueError:
+                # Unreadable: age it on the row's last write, which came no earlier than
+                # the stamp. Skipping it left the research unrecovered and unswept for good.
+                stamp = research.updated_at
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp
+
+    # Researches decomposition recovery handles per pass (at startup and on every queue
+    # maintenance pass), least recently updated first: a replayed one is re-stamped and a
+    # finished one loses its marker, so a backlog drains over a few passes.
+    DECOMPOSE_RECOVERY_BATCH = 50
 
     def recover_pending_decompositions(self) -> int:
         """Re-schedule decompositions lost during a process crash.
 
-        Scans recent PROCESSING researches for those that have ``decompose_pending=True``
-        in graph_state, have no tasks yet, and were created more than
-        ``settings.decompose_recovery_minutes`` minutes ago.  For each such research a
-        fresh daemon thread is launched to replay ``decompose_and_enqueue``.
+        Takes the PROCESSING researches whose graph_state carries ``decompose_pending``
+        from the store, whatever their age: scanning the 50 newest researches missed a
+        retried one (usually older than that), and the stalled sweep leaves every research
+        with the marker to this recovery, so a missed one stayed PROCESSING for good.
+        One that has tasks already only lost the marker, which is cleared. Otherwise, once
+        its decomposition was requested (or, without ``decompose_requested_at``, it was
+        created) more than ``settings.decompose_recovery_minutes`` minutes ago, the request
+        time is re-stamped and a fresh daemon thread replays ``decompose_and_enqueue``, so
+        the next pass does not start a second one. One whose stored request cannot be
+        replayed is failed instead, which makes it retryable: left as it was, it would also
+        head every later batch.
 
         Returns the number of researches for which recovery was triggered.
         """
         import threading as _threading
 
         stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=settings.decompose_recovery_minutes)
-        recent = self.task_store.list_researches(limit=50)
         recovered = 0
 
-        for item in recent:
-            research = self.task_store.get_research(item.id)
-            if not research:
-                continue
+        for research_id in self.task_store.list_pending_decomposition_ids(limit=self.DECOMPOSE_RECOVERY_BATCH):
+            research = self.task_store.get_research(research_id)
+            if not research or research.status != ResearchStatus.PROCESSING:
+                continue  # deleted or moved on after the listing
             graph_state = research.graph_state or {}
-            if not graph_state.get("decompose_pending"):
-                continue
+            if "decompose_pending" not in graph_state:
+                continue  # the decomposition finished after the listing
             # Tasks already exist — decompose ran; the flag is just stale.
             if research.task_ids:
                 self._clear_decompose_pending(research.id)
                 continue
             # Too recent — the background task may still be running.
-            created_at = research.created_at
-            if isinstance(created_at, str):
-                try:
-                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                except Exception:
-                    continue
-            if created_at and created_at > stale_threshold:
+            if self._decompose_requested_at(research) > stale_threshold:
                 continue
-            payload = graph_state.get("decompose_payload")
-            if not payload:
-                continue
-            try:
-                req = ResearchRequest.model_validate(payload)
-            except Exception as exc:
-                logger.warning(
-                    "decompose_recovery_invalid_payload research_id=%s error=%s",
-                    research.id, exc,
-                )
+            req = self._recoverable_decompose_request(research)
+            if req is None:
+                # Guarded on no write since the threshold: a decomposition that is still
+                # emitting progress events wins.
+                if self.task_store.transition_research_status(
+                    research.id,
+                    [ResearchStatus.PROCESSING],
+                    ResearchStatus.FAILED,
+                    self.STALLED_RESEARCH_REPORT,
+                    updated_before=stale_threshold,
+                ):
+                    logger.warning("decompose_recovery_failed_unreplayable research_id=%s", research.id)
                 continue
             logger.info("decompose_recovery_triggered research_id=%s", research.id)
+            self._mark_decompose_requested(research.id)
             _threading.Thread(
                 target=self.decompose_and_enqueue,
                 args=(research.id, req),
@@ -617,6 +698,21 @@ class ResearchService(
         if recovered:
             logger.info("decompose_recovery_completed count=%d", recovered)
         return recovered
+
+    @staticmethod
+    def _recoverable_decompose_request(research: ResearchRecord) -> ResearchRequest | None:
+        payload = (research.graph_state or {}).get("decompose_payload")
+        if not payload:
+            logger.warning("decompose_recovery_missing_payload research_id=%s", research.id)
+            return None
+        try:
+            return ResearchRequest.model_validate(payload)
+        except Exception as exc:
+            logger.warning(
+                "decompose_recovery_invalid_payload research_id=%s error=%s",
+                research.id, exc,
+            )
+            return None
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         return self.task_store.list_researches(limit=limit, user_id=user_id)
@@ -656,16 +752,60 @@ class ResearchService(
         logger.info("research_cancelled research_id=%s", research_id)
         return updated or research
 
+    # What a failed finalization leaves in graph_state: its graph checkpoint (a retry runs
+    # a fresh pass rather than resuming the attempt that failed) and the trust artifacts
+    # the panels would otherwise keep serving. The decompose marker goes too; a retry that
+    # decomposes again sets it anew with decompose_requested_at, which recovery ages on.
+    # canonical_sources goes back to "not computed": any stored list is the authoritative
+    # [Sn] table, so the failed attempt's would keep serving /sources, verification and
+    # chat until the retried analyze replaced it (never, if the retry fails before that).
+    # llm_token_usage is the per-attempt figure; the retried finalize writes its own.
+    _RETRY_RESET_GRAPH_STATE_KEYS = (
+        "canonical_sources",
+        "llm_token_usage",
+        "error",
+        "report",
+        "step",
+        "resume_after_stale_recovery",
+        "analyze_attempts",
+        "replan_attempts",
+        "tie_break_attempts",
+        "should_replan",
+        "should_tie_break",
+        "should_retry_analysis",
+        "branch_stalled",
+        "finalize_deadline",
+        "replan_recommendations",
+        "tie_break_recommendations",
+        "detected_conflicts",
+        "source_summary",
+        "evidence_summary",
+        "red_team",
+        "citation_audit",
+        "source_integrity",
+        "source_independence",
+        "source_reputation",
+        "numeric_check",
+        "comparison",
+        "stance_balance",
+        "cross_language",
+        "decompose_pending",
+        "decompose_requested_at",
+    )
+
     def retry_research(
         self,
         research_id: str,
         user_id: str | None = None,
         background_tasks: Any | None = None,
     ) -> ResearchRecord:
-        """Retry a failed or timed-out research.
-        If all search tasks are completed, retries finalization.
-        If some tasks failed, requeues them.
-        If no tasks were created, re-runs decomposition."""
+        """Retry a failed research from where it failed: finalization when every search
+        task completed, the unfinished search tasks otherwise, and decomposition when no
+        task was ever created or dispatched.
+
+        The retry is admitted like any activation (ADMIT-ATOMIC): FAILED -> PROCESSING is a
+        CAS under the admission lock that counts against the per-user and global limits,
+        so of two concurrent retries exactly one wins and the other gets 409."""
         research = (
             self._ensure_research_access(research_id, user_id)
             if user_id is not None
@@ -673,64 +813,123 @@ class ResearchService(
         )
         if not research:
             raise NotFoundError("Research not found")
-        if research.status not in (ResearchStatus.FAILED, ResearchStatus.TIMEOUT):
-            raise ConflictError("Only failed or timed out research can be retried")
+        if research.status != ResearchStatus.FAILED:
+            raise ConflictError("Only failed research can be retried")
 
-        tasks = self.task_store.get_tasks_by_research(research_id)
-        finalize_job = self.task_store.get_latest_research_finalize_job(research_id)
+        # Chat follow-up searches are not part of the report: a failed one must not force the
+        # search path (it would be redispatched as a report search), nor a completed one feed
+        # the retried report, and they survive a replan along with the chat they answered.
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
+        # A plan none of whose tasks was ever dispatched is what a failed decomposition used
+        # to persist ('Could not generate a search plan'): searching it would only run the
+        # parse fallback or empty tasks, so it is dropped and the request decomposed again.
+        replan = not tasks or all(self._never_dispatched(task) for task in tasks)
+        finalize_only = not replan and all(task.status == TaskStatus.COMPLETED for task in tasks)
+        # Fail fast, before taking a capacity slot, when the retry path cannot run here.
+        if replan:
+            self.require_agent(self.orchestrator, "Orchestrator")
+        elif finalize_only:
+            self.require_agent(self.analyzer, "Analyzer")
 
-        # Case 1: Tasks exist and all completed -> retry finalization
-        completed_tasks = [t for t in tasks if t.status == TaskStatus.COMPLETED]
-        if tasks and len(completed_tasks) == len(tasks):
-            updated = self.task_store.reset_research_for_retry(
-                research_id, status=ResearchStatus.ANALYZING
-            )
-            if finalize_job is not None:
-                requeued = self.task_store.requeue_research_finalize_job(finalize_job.id)
-                if requeued and self.broker:
-                    self.broker.push_finalize_job(requeued.id)
-            else:
-                self.enqueue_research_finalization(research_id)
-            logger.info("research_retry_finalization research_id=%s", research_id)
-            return updated or research
-
-        # Case 2: Tasks exist but some failed/pending -> requeue tasks
-        updated = self.task_store.reset_research_for_retry(
-            research_id, status=ResearchStatus.PROCESSING
+        self._admit_or_raise(research_id, ResearchStatus.FAILED)
+        reset = self.task_store.reset_research_for_retry(
+            research_id,
+            ResearchStatus.PROCESSING,
+            list(self._RETRY_RESET_GRAPH_STATE_KEYS),
         )
-        if tasks:
-            for task in tasks:
-                if task.status in (TaskStatus.FAILED, TaskStatus.PENDING):
-                    self.task_store.update_task_status(
-                        task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried")
-                    )
-                    search_job = self.task_store.get_latest_search_task_job(task.id)
-                    if search_job:
-                        requeued_job = self.task_store.requeue_search_task_job(search_job.id)
-                        if requeued_job and self.broker:
-                            self.broker.push_search_job(requeued_job.id)
-                    elif self.broker:
-                        job = self.task_store.add_search_task_job(
-                            research_id, task.id, settings.job_max_attempts
-                        )
-                        self.broker.push_search_job(job.id)
-        else:
-            # Case 3: Failed before decomposition
-            from src.domain.models import ResearchRequest
+        if reset is None:
+            raise ConflictError("Research state changed. Please retry.")
 
-            payload = ResearchRequest(
+        if replan:
+            if tasks:
+                self.task_store.delete_research_tasks(research_id, [task.id for task in tasks])
+            self._retry_decomposition(reset, background_tasks)
+        elif finalize_only:
+            self._retry_finalization(research_id)
+        else:
+            self._redispatch_search_tasks(tasks, reset.depth)
+        logger.info(
+            "research_retried research_id=%s path=%s",
+            research_id,
+            "decompose" if replan else "finalize" if finalize_only else "search",
+        )
+        return self.task_store.get_research(research_id) or reset
+
+    def _never_dispatched(self, task: SearchTask) -> bool:
+        """Planned but never sent to a search worker: no job, no results and no log line
+        (every search, retry or recovery writes one; job rows are cleaned up after a day)."""
+        return (
+            task.status in (TaskStatus.PENDING, TaskStatus.FAILED)
+            and not task.result
+            and not task.logs
+            and self.task_store.get_latest_search_task_job(task.id) is None
+        )
+
+    def _retry_finalization(self, research_id: str) -> None:
+        # The CAS is taken from PROCESSING (the admission state); pre-setting ANALYZING
+        # would make try_begin_finalization refuse and leave no job at all.
+        if not self.task_store.try_begin_finalization(research_id):
+            return  # cancelled between the admission and here
+        try:
+            job = self._dispatch_finalize_job(research_id)
+        except Exception as exc:
+            # ANALYZING with no job would be stuck (stale recovery needs a RUNNING job and
+            # retry a FAILED research): hand it back as FAILED so it can be retried at once.
+            # A crash here instead is caught by the stalled-research sweep.
+            self.task_store.transition_research_status(
+                research_id, [ResearchStatus.ANALYZING], ResearchStatus.FAILED, self._failure_message(exc)
+            )
+            raise
+        logger.info("research_retry_finalization finalize_job_id=%s", job.id)
+
+    def _redispatch_search_tasks(self, tasks: list[SearchTask], depth: SearchDepth) -> None:
+        """Send every unfinished task back to the search workers: FAILED, PENDING, and
+        RUNNING without a running job (a replan/tie-break task runs inline in the finalize
+        worker with no job, so a dead worker leaves it RUNNING for good). Every one of them
+        is PENDING before the first job row is created or requeued: Postgres-polling workers
+        claim a row at once, and a search finishing while a sibling was still FAILED would
+        finalize the research without that sibling and drain its retry."""
+        redispatch: list[tuple[SearchTask, SearchTaskJob | None]] = []
+        for task in tasks:
+            if task.status == TaskStatus.COMPLETED:
+                continue
+            job = self.task_store.get_latest_search_task_job(task.id)
+            if job is not None and job.status == SearchJobStatus.RUNNING:
+                continue  # a worker still holds it: its outcome (or stale recovery) settles it
+            self.task_store.update_task(task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried"))
+            redispatch.append((task, job))
+        for task, job in redispatch:
+            # The job row always exists (Postgres-polling workers claim from it); the broker
+            # push is only the wake-up for Redis-mode workers.
+            if job is None or job.status == SearchJobStatus.COMPLETED:
+                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+            elif job.status != SearchJobStatus.PENDING:
+                job = self.task_store.requeue_search_task_job(job.id) or job
+            if self.broker:
+                self.broker.push_search_job(job.id)
+
+    def _retry_decomposition(self, research: ResearchRecord, background_tasks: Any | None) -> None:
+        # Replay the original request (plan_first, model, thread) when it is still stored.
+        graph_state = research.graph_state or {}
+        payload = graph_state.get("decompose_payload")
+        try:
+            request = ResearchRequest.model_validate(payload) if payload else None
+        except ValueError:
+            request = None
+        if request is None:
+            request = ResearchRequest(
                 prompt=research.prompt,
                 depth=research.depth,
-                model=(research.graph_state or {}).get("model"),
-                thread_id=(research.graph_state or {}).get("thread_id"),
+                model=graph_state.get("model"),
+                thread_id=graph_state.get("thread_id"),
             )
-            if background_tasks is not None:
-                background_tasks.add_task(self.decompose_and_enqueue, research_id, payload)
-            else:
-                self.decompose_and_enqueue(research_id, payload)
-
-        logger.info("research_retried research_id=%s", research_id)
-        return updated or research
+        # The decomposition runs in an API background task: if that process dies first,
+        # queue maintenance replays it from this marker (payload included).
+        self._mark_decompose_requested(research.id, request)
+        if background_tasks is not None:
+            background_tasks.add_task(self.decompose_and_enqueue, research.id, request)
+        else:
+            self.decompose_and_enqueue(research.id, request)
 
     def rename_research(self, research_id: str, title: str, user_id: str | None = None) -> ResearchRecord:
         research = self._ensure_research_access(research_id, user_id)
@@ -794,12 +993,7 @@ class ResearchService(
         # has finished — skip them while the research is still in progress (AUD-022) so an
         # on-demand /summary fetch mid-run doesn't burn LLM calls on premature suggestions.
         replan_recommendations = (
-            self.replan_agent.suggest_follow_up(
-                research.prompt,
-                research.depth,
-                tasks,
-                source_summary=source_critic_summary,
-            )
+            self._summary_follow_up(research, tasks, source_critic_summary)
             if finalize_ready
             else []
         )
@@ -839,6 +1033,77 @@ class ResearchService(
             tasks=task_summaries,
             llm_token_usage=(research.graph_state or {}).get("llm_token_usage", {}),
         )
+
+    # graph_state key for the /summary follow-ups. Not the graph's "replan_recommendations",
+    # which the finalize graph writes only when a replan branch is possible (else []).
+    _SUMMARY_FOLLOW_UP_KEY = "summary_follow_up"
+    # A result that fell back to template queries because the LLM failed is kept only this
+    # long: long enough that an outage does not cost LLM calls on every GET, short enough
+    # that the templates are not served for good once the LLM is back.
+    _SUMMARY_FOLLOW_UP_DEGRADED_TTL_SECONDS = 300
+
+    @staticmethod
+    def _tasks_fingerprint(tasks: list[SearchTask]) -> str:
+        """Changes whenever a task is added or changes status — the inputs the follow-up
+        recommendations are derived from (results only change with the status)."""
+        digest = hashlib.sha256()
+        for task in sorted(tasks, key=lambda item: item.id):
+            digest.update(f"{task.id}:{task.status.value};".encode("utf-8"))
+        return digest.hexdigest()
+
+    def _summary_follow_up(
+        self,
+        research: ResearchRecord,
+        tasks: list[SearchTask],
+        source_summary: SourceCriticSummary,
+    ) -> list[ReplanRecommendation]:
+        """Compute the follow-up recommendations once per task set and store them (SUMMARY-LLM):
+        they cost up to three LLM calls, and /summary used to pay that on every GET. A result
+        degraded by LLM failures carries `retry_after` and is recomputed once that passes."""
+        fingerprint = self._tasks_fingerprint(tasks)
+        stored = (research.graph_state or {}).get(self._SUMMARY_FOLLOW_UP_KEY) or {}
+        if stored.get("fingerprint") == fingerprint and not self._follow_up_retry_due(stored):
+            return [ReplanRecommendation.model_validate(item) for item in stored.get("recommendations") or []]
+        llm_failures: list[str] = []
+        kwargs: dict[str, Any] = {"source_summary": source_summary}
+        if self._accepts_keyword(self.replan_agent.suggest_follow_up, "llm_failures"):
+            kwargs["llm_failures"] = llm_failures
+        # Runs in the API process: bind the owner so the calls land in llm_usage_logs.
+        with bind_observability_context(research_id=research.id, user_id=research.user_id or "local"):
+            recommendations = self.replan_agent.suggest_follow_up(
+                research.prompt,
+                research.depth,
+                tasks,
+                **kwargs,
+            )
+        entry: dict[str, Any] = {
+            "fingerprint": fingerprint,
+            "recommendations": [item.model_dump() for item in recommendations],
+        }
+        if llm_failures:
+            entry["retry_after"] = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self._SUMMARY_FOLLOW_UP_DEGRADED_TTL_SECONDS)
+            ).isoformat()
+            logger.info(
+                "summary_follow_up_degraded research_id=%s failed_gaps=%s",
+                research.id, len(llm_failures),
+            )
+        self.task_store.merge_research_graph_state(research.id, {self._SUMMARY_FOLLOW_UP_KEY: entry})
+        return recommendations
+
+    @staticmethod
+    def _follow_up_retry_due(stored: dict) -> bool:
+        retry_after = stored.get("retry_after")
+        if not retry_after:
+            return False
+        try:
+            due = datetime.fromisoformat(str(retry_after))
+        except ValueError:
+            return True
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= due
 
     def get_research_status_summary(self, research_id: str) -> ResearchStatusSummary:
         """Cheap status snapshot for polling — no source-critic/evidence/claim/replan/LLM."""
@@ -940,7 +1205,7 @@ class ResearchService(
         self._admit_or_raise(research_id, ResearchStatus.CLARIFYING)
         self.task_store.merge_research_graph_state(
             research_id,
-            {"clarifications": clar, "clarified": True, "decompose_pending": True},
+            {"clarifications": clar, "clarified": True, **self._decompose_marker()},
         )
 
         import threading
@@ -1001,22 +1266,27 @@ class ResearchService(
         plan = (research.graph_state or {}).get("plan") or []
         if not plan:
             raise ConflictError("No plan to approve")
+        planned = [
+            {
+                "id": item.get("id") or str(uuid.uuid4()),
+                "research_id": research_id,
+                "description": item.get("description", ""),
+                "queries": [query for query in (item.get("queries") or []) if query],
+                "status": TaskStatus.PENDING,
+            }
+            for item in plan
+        ]
+        # Not one search job: the research would only wait for the stalled sweep to fail it.
+        # Refused before the admission, so it stays in review with no slot taken.
+        if not any(self._is_searchable(task_raw) for task_raw in planned):
+            raise ConflictError("The plan has no search queries to run")
 
         self._admit_or_raise(research_id, ResearchStatus.PLAN_REVIEW)
 
         registered_tasks = []
         task_ids = []
-        for item in plan:
-            queries = [query for query in (item.get("queries") or []) if query]
-            task = self.task_store.add_task(
-                {
-                    "id": item.get("id") or str(uuid.uuid4()),
-                    "research_id": research_id,
-                    "description": item.get("description", ""),
-                    "queries": queries,
-                    "status": TaskStatus.PENDING,
-                }
-            )
+        for task_raw in planned:
+            task = self.task_store.add_task(self._planned_task(task_raw))
             registered_tasks.append(task)
             task_ids.append(task.id)
         self.task_store.set_research_task_ids(research_id, task_ids)
@@ -1035,6 +1305,8 @@ class ResearchService(
         messages = (research.graph_state or {}).get("messages") or []
         return [ChatMessage.model_validate(message) for message in messages]
 
+    _CHAT_HISTORY_LIMIT = 40  # cap conversation history
+
     def append_research_message(
         self,
         research_id: str,
@@ -1042,15 +1314,13 @@ class ResearchService(
         content: str,
         sources: list[SearchSourcePreview] | None = None,
     ) -> None:
-        research = self.task_store.get_research(research_id)
-        if not research:
-            return
-        messages = list((research.graph_state or {}).get("messages") or [])
-        messages.append(
-            ChatMessage(role=role, content=content, sources=sources or []).model_dump()
-        )
-        self.task_store.merge_research_graph_state(
-            research_id, {"messages": messages[-40:]}  # cap conversation history
+        # Appended under the row lock: two concurrent chat turns each computing the list
+        # from their own earlier read would drop one another's message.
+        self.task_store.append_research_graph_state_item(
+            research_id,
+            "messages",
+            ChatMessage(role=role, content=content, sources=sources or []).model_dump(),
+            max_items=self._CHAT_HISTORY_LIMIT,
         )
 
     _CHAT_STOPWORDS = {
@@ -1062,8 +1332,6 @@ class ResearchService(
 
     def _question_needs_search(self, question: str, pool: list[dict]) -> bool:
         """Heuristic: True if the question's key terms aren't covered by the source pool."""
-        import re
-
         tokens = [
             token
             for token in re.findall(r"[^\W\d_]{4,}", (question or "").lower(), flags=re.UNICODE)
@@ -1078,8 +1346,6 @@ class ResearchService(
         return covered / len(set(tokens)) < 0.34
 
     def _chat_tokens(self, text: str) -> list[str]:
-        import re
-
         return [
             token
             for token in re.findall(r"[^\W\d_]{4,}", (text or "").lower(), flags=re.UNICODE)
@@ -1113,7 +1379,7 @@ class ResearchService(
         """Run a small follow-up web search for a chat question; persists results as a task."""
         task = self.task_store.add_task(
             {
-                "id": f"chat-{uuid.uuid4()}",
+                "id": f"{self._CHAT_TASK_PREFIX}{uuid.uuid4()}",
                 "research_id": research_id,
                 "description": f"Follow-up search: {question[:80]}",
                 "queries": [question],
@@ -1139,6 +1405,98 @@ class ResearchService(
         refreshed = self.task_store.get_task(task.id)
         return (refreshed.result if refreshed else None) or []
 
+    # Chat follow-up searches keep their sources in a chat-only [Sn] table next to the
+    # report's, never in canonical_sources: graph_state["chat_sources"] holds one batch per
+    # search, {"floor": <highest report source number then>, "sources": [<metadata>]},
+    # appended under the row lock. Ids are derived from the batch order, so every turn and
+    # reader numbers them alike and an id cited in the history keeps pointing at its URL.
+    # The list is never truncated (ids depend on it); a full table stops new searches.
+    _CHAT_SOURCE_LIMIT = 200
+    _CHAT_SOURCE_FIELDS = ("url", "title", "domain", "source_quality", "extraction_status")
+
+    @staticmethod
+    def _chat_batches(research: ResearchRecord) -> list[dict]:
+        batches = (research.graph_state or {}).get("chat_sources")
+        return [batch for batch in batches if isinstance(batch, dict)] if isinstance(batches, list) else []
+
+    @staticmethod
+    def _source_number(source_id: Any) -> int | None:
+        text = str(source_id or "")
+        return int(text[1:]) if text.startswith("S") and text[1:].isdigit() else None
+
+    def _chat_source_table(
+        self, batches: Any, report_pool: list[dict], content_by_url: dict[str, Any]
+    ) -> list[dict]:
+        """The chat-only [Sn] table: each URL once, numbered in batch order after its batch's
+        floor and after every earlier chat id, with content re-attached by URL. An id the
+        report has come to use as well (a retried report grew) is left to the report."""
+        report_ids = {source.get("source_id") for source in report_pool}
+        table: list[dict] = []
+        seen_urls: set[str] = set()
+        number = 0
+        for batch in batches if isinstance(batches, list) else []:
+            if not isinstance(batch, dict):
+                continue
+            floor = batch.get("floor")
+            number = max(number, floor if isinstance(floor, int) else 0)
+            for source in batch.get("sources") or []:
+                url = source.get("url") if isinstance(source, dict) else None
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                number += 1
+                source_id = f"S{number}"
+                if source_id in report_ids:
+                    continue
+                entry = {key: source.get(key) for key in self._CHAT_SOURCE_FIELDS if source.get(key) is not None}
+                entry["source_id"] = source_id
+                if content_by_url.get(url):
+                    entry["content"] = content_by_url[url]
+                table.append(entry)
+        return table
+
+    @staticmethod
+    def _chat_pool(report_pool: list[dict], chat_table: list[dict]) -> list[dict]:
+        """The report's sources, then the chat sources whose URL the report does not have."""
+        report_urls = {source.get("url") for source in report_pool if source.get("url")}
+        return [*report_pool, *(source for source in chat_table if source.get("url") not in report_urls)]
+
+    def _record_chat_sources(
+        self,
+        research_id: str,
+        report_pool: list[dict],
+        batches: list[dict],
+        new_sources: list[dict],
+    ) -> list[dict] | None:
+        """Append this search's new sources to the chat table as one batch. Returns every
+        batch as stored under the row lock (so concurrent turns agree on the ids), or None
+        when the search found nothing new or the research is gone."""
+        known = {source.get("url") for source in report_pool if source.get("url")}
+        known |= {
+            source.get("url")
+            for batch in batches
+            for source in batch.get("sources") or []
+            if isinstance(source, dict)
+        }
+        fresh: list[dict] = []
+        for source in new_sources:
+            url = source.get("url")
+            if not url or url in known:
+                continue
+            known.add(url)
+            fresh.append({key: source.get(key) for key in self._CHAT_SOURCE_FIELDS if source.get(key) is not None})
+        if not fresh:
+            return None
+        floor = max(
+            (number for source in report_pool if (number := self._source_number(source.get("source_id"))) is not None),
+            default=0,
+        )
+        return self.task_store.append_research_graph_state_item(
+            research_id, "chat_sources", {"floor": floor, "sources": fresh}
+        )
+
+    _CITED_SOURCE_ID = re.compile(r"\[(S\d+)\\?\]")
+
     def generate_research_answer(
         self,
         research_id: str,
@@ -1154,42 +1512,32 @@ class ResearchService(
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
-            self.task_store.merge_research_graph_state(
-                research_id,
-                {"canonical_sources": self._canonical_source_table(pool)},
-            )
-        if self._question_needs_search(question, pool):
+        # The report's pool is read-only here. Earlier chat searches' sources come after it,
+        # from the chat-only table: their ids stay what earlier answers (still in the history
+        # the model reads) cited, and they never enter the canonical table.
+        report_pool = self._report_source_pool(research, tasks)
+        content_by_url = {
+            source["url"]: source.get("content")
+            for source in self._build_research_source_pool(tasks)
+            if source.get("url")
+        }
+        batches = self._chat_batches(research)
+        chat_table = self._chat_source_table(batches, report_pool, content_by_url)
+        pool = self._chat_pool(report_pool, chat_table)
+        table_full = sum(len(batch.get("sources") or []) for batch in batches) >= self._CHAT_SOURCE_LIMIT
+        if not table_full and self._question_needs_search(question, pool):
             if status_callback:
                 status_callback("searching")
             new_sources = self._mini_search_for_chat(research_id, question, research.depth)
-            tasks = self.task_store.get_tasks_by_research(research_id)
-            seen_urls = {source.get("url") for source in pool if source.get("url")}
-            source_numbers = [
-                int(source_id[1:])
-                for source in pool
-                if (source_id := str(source.get("source_id") or "")).startswith("S")
-                and source_id[1:].isdigit()
-            ]
-            next_source_number = max(source_numbers, default=0) + 1
-            for source in new_sources:
-                url = source.get("url")
-                if not url or url in seen_urls:
-                    continue
-                pool.append({"source_id": f"S{next_source_number}", **source})
-                seen_urls.add(url)
-                next_source_number += 1
-            self.task_store.merge_research_graph_state(
-                research_id,
-                {"canonical_sources": self._canonical_source_table(pool)},
+            content_by_url.update(
+                {source["url"]: source.get("content") for source in new_sources if source.get("url")}
             )
+            stored = self._record_chat_sources(research_id, report_pool, batches, new_sources)
+            if stored is not None:
+                chat_table = self._chat_source_table(stored, report_pool, content_by_url)
+                pool = self._chat_pool(report_pool, chat_table)
         # Retrieve the most relevant sources for this question (not just the first 12).
-        pool = self._rank_sources_for_question(question, pool, 12)
+        ranked = self._rank_sources_for_question(question, pool, 12)
         sources = [
             {
                 "source_id": item.get("source_id"),
@@ -1200,7 +1548,7 @@ class ResearchService(
                 "extraction_status": item.get("extraction_status"),
                 "content": (item.get("content") or "")[:800],
             }
-            for item in pool
+            for item in ranked
             if item.get("source_id")
         ]
         history = list((research.graph_state or {}).get("messages") or [])
@@ -1217,6 +1565,22 @@ class ResearchService(
                 model=model,
                 streaming_callback=streaming_callback,
             )
+        # The model also sees the whole report and the history, so it can cite report or
+        # earlier chat ids outside the ranked 12; give every cited id its url/title (no
+        # content) so each one links.
+        cited_ids = set(self._CITED_SOURCE_ID.findall(answer or ""))
+        listed_ids = {source["source_id"] for source in sources}
+        cited_only = []
+        for item in [*report_pool, *chat_table]:
+            source_id = item.get("source_id")
+            if source_id in cited_ids and source_id not in listed_ids:
+                listed_ids.add(source_id)
+                cited_only.append(
+                    {
+                        key: item.get(key)
+                        for key in ("source_id", "title", "domain", "url", "source_quality", "extraction_status")
+                    }
+                )
         return ChatMessage(
             role="assistant",
             content=answer,
@@ -1230,7 +1594,7 @@ class ResearchService(
                     extraction_status=source.get("extraction_status"),
                     snippet=((source.get("content") or "")[:280] or None),
                 )
-                for source in sources
+                for source in sources + cited_only
                 if source.get("url")
             ],
         )
@@ -1241,12 +1605,7 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
+        pool = self._report_source_pool(research, tasks)
         return [
             SearchSourcePreview(
                 url=item.get("url", ""),
@@ -1287,12 +1646,7 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
+        pool = self._report_source_pool(research, tasks)
         evidence_pool = [
             {"source_id": item.get("source_id", ""), "content": item.get("content", "")}
             for item in pool
@@ -1308,7 +1662,9 @@ class ResearchService(
         claim_summary = self.claim_verifier.verify_and_downgrade(report, language, [], [])[1]
         return self.report_critic.build(
             research_id,
-            tasks,
+            # Plan coverage is over the report's plan; a chat follow-up search is not a
+            # sub-question the report was meant to answer.
+            self._report_tasks(tasks),
             evidence_groups,
             report,
             claim_summary=claim_summary,
@@ -1444,10 +1800,7 @@ class ResearchService(
     @staticmethod
     def _research_language(research: ResearchRecord) -> str:
         """Return the language stored at creation, with a fallback for legacy rows."""
-        language = getattr(research, "language", None)
-        if language and language != "unknown":
-            return language
-        return detect_language(research.prompt)
+        return research_language(research)
 
     def _build_graph_execution_summary(self, tasks: list[SearchTask]) -> dict:
         follow_up_tasks = [task for task in tasks if task.id.startswith("replan-")]
@@ -1498,6 +1851,24 @@ class ResearchService(
             "qualified": "Qualified",
             "holds": "Holds",
         },
+        "es": {
+            "refuted": "Refutada",
+            "contested": "Cuestionada",
+            "qualified": "Con matices",
+            "holds": "Se sostiene",
+        },
+    }
+    # (heading, intro) of the red-team section, per report language (en for the rest).
+    _RED_TEAM_SECTION_TEXT = {
+        "ru": ("## Слабые места и контраргументы", "Ключевые утверждения отчёта проверены на опровержение."),
+        "en": (
+            "## Weaknesses & counter-arguments",
+            "The report's key claims were stress-tested against counter-evidence.",
+        ),
+        "es": (
+            "## Debilidades y contraargumentos",
+            "Las afirmaciones clave del informe se contrastaron con evidencia en contra.",
+        ),
     }
 
     def _maybe_red_team(self, report: str, research, tasks: list) -> str:
@@ -1601,12 +1972,7 @@ class ResearchService(
 
     def _render_red_team_section(self, red_team: RedTeamReport, language: str) -> str:
         labels = self._RED_TEAM_VERDICT_LABELS.get(language, self._RED_TEAM_VERDICT_LABELS["en"])
-        heading = "## Слабые места и контраргументы" if language == "ru" else "## Weaknesses & counter-arguments"
-        intro = (
-            "Ключевые утверждения отчёта проверены на опровержение."
-            if language == "ru"
-            else "The report's key claims were stress-tested against counter-evidence."
-        )
+        heading, intro = self._RED_TEAM_SECTION_TEXT.get(language, self._RED_TEAM_SECTION_TEXT["en"])
         lines = [heading, "", intro, ""]
         for finding in red_team.findings:
             verdict = labels.get(finding.verdict, finding.verdict)
@@ -1614,6 +1980,12 @@ class ResearchService(
             if finding.challenge:
                 lines.append(f"  {finding.challenge}")
         return "\n".join(lines)
+
+    _GRAPH_TRAIL_LABELS = {
+        "ru": ("## Трасса выполнения графа", "Шаг", "Детали"),
+        "en": ("## Graph Execution Trail", "Step", "Details"),
+        "es": ("## Traza de ejecución del grafo", "Paso", "Detalles"),
+    }
 
     def _inject_graph_execution_trail(self, report: str, research_id: str) -> str:
         research = self.task_store.get_research(research_id)
@@ -1628,10 +2000,9 @@ class ResearchService(
         ):
             return report
 
-        language = self._research_language(research)
-        heading = "## Трасса выполнения графа" if language == "ru" else "## Graph Execution Trail"
-        step_label = "Шаг" if language == "ru" else "Step"
-        detail_label = "Детали" if language == "ru" else "Details"
+        heading, step_label, detail_label = self._GRAPH_TRAIL_LABELS.get(
+            self._research_language(research), self._GRAPH_TRAIL_LABELS["en"]
+        )
         lines = [heading]
         # Exclude live search-progress steps — the trail in the report is the finalize graph.
         finalize_entries = [e for e in research.graph_trail if e.get("step") != "search"]
@@ -1651,9 +2022,9 @@ class ResearchService(
         ]:
             return research
 
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        # Chat follow-up tasks neither gate nor feed the report (see _report_tasks).
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
-        any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
         if not tasks:
             raise ConflictError("Research has no tasks to finalize")
@@ -1661,7 +2032,12 @@ class ResearchService(
         if not all_done:
             raise ConflictError("Research tasks are still in progress")
 
-        if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
+        # Judged on the tasks that had something to search: a query-less plan item is stored
+        # COMPLETED with no results (_planned_task), and counted here it turned a research
+        # whose every search failed into a report over no sources (the old rule stands when
+        # no task has queries).
+        searched = [t for t in tasks if t.queries] or tasks
+        if all(t.status == TaskStatus.FAILED for t in searched):
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.FAILED,
@@ -1678,18 +2054,26 @@ class ResearchService(
         user cannot make the server reach internal/loopback/metadata endpoints — and a host that
         DNS-rebinds between validation and connect still can't be reached (SEC-007).
         """
+        from src.net_safety import log_safe_url
+
+        # Incoming-webhook URLs carry their credential in the path, query or userinfo: the
+        # log lines name scheme://host only, in the same url= field as net_safety's.
+        target = log_safe_url(url)
         if not settings.webhook_allow_private_targets:
             from src.net_safety import safe_post_json
 
             if safe_post_json(url, payload, timeout=10.0):
-                logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+                logger.info("webhook_fired url=%s research_id=%s", target, research_id)
             return
         try:
             import httpx
             httpx.post(url, json=payload, timeout=10.0)
-            logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+            logger.info("webhook_fired url=%s research_id=%s", target, research_id)
         except Exception as exc:
-            logger.warning("webhook_failed url=%s error=%s", url, exc)
+            # The exception text is not logged: httpx repeats the request URL in it.
+            logger.warning(
+                "webhook_failed url=%s research_id=%s error=%s", target, research_id, type(exc).__name__
+            )
 
     def ensure_finalize_job_lease(
         self,
@@ -1707,25 +2091,21 @@ class ResearchService(
             "agent": "RedTeamAgent",
             "phase": "verify",
             "action": "stress_test",
-            "detail": "Анализ контраргументов и стресс-тестирование гипотез",
         },
         "audit": {
             "agent": "CitationAuditAgent",
             "phase": "verify",
             "action": "audit_citations",
-            "detail": "Аудит цитат, фактчекинг и проверка источников",
         },
         "viewpoints": {
             "agent": "StanceAgent",
             "phase": "verify",
             "action": "stance_detection",
-            "detail": "Оценка баланса точек зрения и выявление предвзятости",
         },
         "completed": {
             "agent": "System",
             "phase": "complete",
             "action": "finish",
-            "detail": "Исследование завершено, итоговый аналитический отчёт готов",
         },
     }
 
@@ -1740,11 +2120,13 @@ class ResearchService(
         action: str | None = None,
         detail: str | None = None,
         metrics: dict | None = None,
+        language: str | None = None,
     ) -> None:
         """Append a finalize-phase step to the live trail so the progress trace keeps moving
         during synthesis (and surfaces the trust/verification work as it happens). Labelled
-        by the frontend via trace.{step}. Trail failures are best-effort; a lost lease must
-        stop the fenced runner before it can publish a result."""
+        by the frontend via trace.{step}; the detail is written in the research's
+        ``language``. Trail failures are best-effort; a lost lease must stop the fenced
+        runner before it can publish a result."""
         self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
         store = self.task_store
         if not research_id or not hasattr(store, "append_research_graph_event"):
@@ -1755,7 +2137,7 @@ class ResearchService(
             "agent": agent or meta.get("agent", "FinalizeRunner"),
             "phase": phase or meta.get("phase", "verify"),
             "action": action or meta.get("action", step),
-            "detail": detail or meta.get("detail", ""),
+            "detail": detail or (trail_detail(step, language) if step in TRAIL_DETAILS else ""),
         }
         if metrics:
             event["metrics"] = metrics
@@ -1763,6 +2145,59 @@ class ResearchService(
             store.append_research_graph_event(research_id, event)
         except Exception:
             pass
+
+    def _raise_if_cancelled(self, research_id: str) -> None:
+        research = self.task_store.get_research(research_id)
+        if research is not None and research.status == ResearchStatus.CANCELLED:
+            raise FinalizeCancelled(research_id)
+
+    def _finalize_stopped_cancelled(self, research_id: str) -> ResearchRecord:
+        latest = self.task_store.get_research(research_id)
+        if latest is None:
+            raise NotFoundError("Research not found")
+        logger.info("finalize_stopped_cancelled research_id=%s", research_id)
+        return latest
+
+    def _run_trust_suite(
+        self,
+        report: str,
+        research: ResearchRecord,
+        tasks: list[SearchTask],
+        aggregated: list[dict] | None,
+        finalize_job_id: str | None,
+        lease_epoch: int | None,
+    ) -> str:
+        """Red-team, audits and viewpoint passes over the finished draft. A cancel is
+        checked before every step (CANCEL-TRUST-SUITE), so a research cancelled during the
+        last graph step stops spending here too; FinalizeCancelled ends the suite."""
+        research_id = research.id
+        language = self._research_language(research)
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "redteam", finalize_job_id, lease_epoch, language=language)
+        report = self._maybe_red_team(report, research, tasks)
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "audit", finalize_job_id, lease_epoch, language=language)
+        # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
+        # fall back to the persisted canonical table or deterministic reconstruction.
+        if aggregated is None:
+            aggregated = self._aggregated_sources(research, tasks)
+        audit_steps = (
+            lambda: self._audit_citations(report, research, tasks, aggregated=aggregated),
+            lambda: self._analyze_source_independence(research, tasks, aggregated=aggregated),
+            lambda: self._assess_source_reputation(research, tasks, aggregated=aggregated),
+            lambda: self._check_numbers(report, research, tasks, aggregated=aggregated),
+            lambda: self._check_retractions(research, tasks, aggregated=aggregated),
+            lambda: self._maybe_build_comparison(report, research),
+        )
+        for step in audit_steps:
+            self._raise_if_cancelled(research_id)
+            step()
+        self._raise_if_cancelled(research_id)
+        self._emit_finalize_progress(research_id, "viewpoints", finalize_job_id, lease_epoch, language=language)
+        self._maybe_assess_stance(research, tasks, aggregated=aggregated)
+        self._raise_if_cancelled(research_id)
+        self._analyze_cross_language(research, tasks, aggregated=aggregated)
+        return report
 
     def complete_research_finalization(
         self,
@@ -1784,7 +2219,8 @@ class ResearchService(
                 # the (cancelled) record so the contract stays ResearchRecord, never None (AUD-033)
                 return research
 
-            tasks = self.task_store.get_tasks_by_research(research_id)
+            # The report is built from its own plan only, never from chat follow-up searches.
+            tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
             analyzer = self.require_agent(self.analyzer, "Analyzer")
 
             # reset token counter before this analysis run
@@ -1810,11 +2246,7 @@ class ResearchService(
                     effective_prompt = research.prompt
                     final_tasks = tasks
             except FinalizeCancelled:
-                latest = self.task_store.get_research(research_id)
-                if latest is None:
-                    raise NotFoundError("Research not found")
-                logger.info("finalize_stopped_cancelled research_id=%s", research_id)
-                return latest
+                return self._finalize_stopped_cancelled(research_id)
 
             tasks = final_tasks
             source_state: dict[str, Any] = {
@@ -1827,28 +2259,12 @@ class ResearchService(
             self.task_store.merge_research_graph_state(research_id, source_state)
             research = self.task_store.get_research(research_id) or research
 
-            self._emit_finalize_progress(
-                research_id, "redteam", finalize_job_id, lease_epoch
-            )
-            report = self._maybe_red_team(report, research, tasks)
-            self._emit_finalize_progress(
-                research_id, "audit", finalize_job_id, lease_epoch
-            )
-            # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
-            # fall back to the persisted canonical table or deterministic reconstruction.
-            if aggregated is None:
-                aggregated = self._aggregated_sources(research, tasks)
-            self._audit_citations(report, research, tasks, aggregated=aggregated)
-            self._analyze_source_independence(research, tasks, aggregated=aggregated)
-            self._assess_source_reputation(research, tasks, aggregated=aggregated)
-            self._check_numbers(report, research, tasks, aggregated=aggregated)
-            self._check_retractions(research, tasks, aggregated=aggregated)
-            self._maybe_build_comparison(report, research)
-            self._emit_finalize_progress(
-                research_id, "viewpoints", finalize_job_id, lease_epoch
-            )
-            self._maybe_assess_stance(research, tasks, aggregated=aggregated)
-            self._analyze_cross_language(research, tasks, aggregated=aggregated)
+            try:
+                report = self._run_trust_suite(
+                    report, research, tasks, aggregated, finalize_job_id, lease_epoch
+                )
+            except FinalizeCancelled:
+                return self._finalize_stopped_cancelled(research_id)
             report = self._inject_graph_execution_trail(report, research_id)
             # The "Report Notes" / "Примечания к отчёту" section is an INTERNAL quality
             # signal (the finalize graph re-drafts while it's present). It must never
@@ -1863,7 +2279,9 @@ class ResearchService(
             if latest is not None and latest.status == ResearchStatus.CANCELLED:
                 logger.info("finalize_discarded_cancelled research_id=%s", research_id)
                 return latest
-            # persist token usage into graph_state (U-3)
+            # persist token usage into graph_state (U-3). This is the per-research figure the
+            # UI shows; llm_usage_logs gets one row per call from the provider's usage sink,
+            # so nothing is written there from here (that would count the calls twice).
             if analyzer_llm is not None and hasattr(analyzer_llm, "token_usage"):
                 usage = analyzer_llm.token_usage
                 logger.info(
@@ -1877,18 +2295,6 @@ class ResearchService(
                 # wipe them (AUD-014), replacing the old re-fetch-then-replace workaround.
                 self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
                 self.task_store.merge_research_graph_state(research_id, {"llm_token_usage": usage})
-                try:
-                    self.task_store.record_llm_usage(
-                        research_id=research_id,
-                        user_id=research.user_id if research else None,
-                        model=getattr(analyzer_llm, "model", "deepseek-chat"),
-                        prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                        completion_tokens=int(usage.get("completion_tokens", 0)),
-                        total_tokens=int(usage.get("total_tokens", 0)),
-                        estimated_cost_usd=float(usage.get("estimated_cost_usd", 0.0)),
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to record llm_usage_log for %s: %s", research_id, exc)
 
             if finalize_job_id is not None and lease_epoch is not None:
                 completed_job = self.task_store.complete_research_finalize_job(
@@ -1908,30 +2314,37 @@ class ResearchService(
                     report,
                 )
 
-            self._emit_finalize_progress(
-                research_id, "completed", finalize_job_id, lease_epoch
+            # The commit above was the last fenced write; the job is no longer RUNNING, so
+            # a lease renewal from here on could only fail (LEASE-COMPLETED). Post-commit
+            # work is best-effort and must never reach the caller's failure or lease-lost
+            # handling for a finalization that has already been committed.
+            try:
+                return self._after_finalize_commit(research_id, research)
+            except Exception as exc:
+                logger.warning("finalize_post_commit_failed error=%s", exc)
+                return research
+
+    def _after_finalize_commit(self, research_id: str, research: ResearchRecord) -> ResearchRecord:
+        finalized_research = self.task_store.get_research(research_id) or research
+        if finalized_research.status == ResearchStatus.CANCELLED:
+            logger.info("finalize_discarded_cancelled research_id=%s", research_id)
+            return finalized_research
+
+        self._emit_finalize_progress(
+            research_id, "completed", language=self._research_language(finalized_research)
+        )
+        logger.info("research_finalize_completed")
+
+        # fire webhook if configured (F-1)
+        webhook_url = (research.graph_state or {}).get("webhook_url")
+        if webhook_url:
+            self._fire_webhook(
+                webhook_url,
+                research_id,
+                {"research_id": research_id, "status": "completed"},
             )
 
-            finalized_research = self.task_store.get_research(research_id)
-            if finalized_research is None:
-                raise NotFoundError("Research not found")
-            if finalized_research.status == ResearchStatus.CANCELLED:
-                logger.info("finalize_discarded_cancelled research_id=%s", research_id)
-                return finalized_research
-
-            logger.info("research_finalize_completed")
-
-            # fire webhook if configured (F-1)
-            gs = (research.graph_state or {})
-            webhook_url = gs.get("webhook_url")
-            if webhook_url:
-                self._fire_webhook(
-                    webhook_url,
-                    research_id,
-                    {"research_id": research_id, "status": "completed"},
-                )
-
-            return finalized_research
+        return finalized_research
 
     @staticmethod
     def _failure_message(exc: Exception) -> str:
@@ -1959,15 +2372,35 @@ class ResearchService(
         # Atomic single-winner transition into ANALYZING. Concurrent callers across replicas
         # (or a re-delivered search job completing the same research) lose the CAS and must NOT
         # enqueue a duplicate finalize job. Also rejects terminal/already-finalizing states.
-        if not self.task_store.try_begin_finalization(research_id):
+        # The store checks again that every search is settled, under the lock an admin
+        # requeue takes: one committed between the settled read above and this CAS left a
+        # PENDING task and job, and finalizing then drained the requeued search. That job's
+        # own settling calls back here once it is done.
+        if not self.task_store.try_begin_finalization(research_id, require_settled_searches=True):
             return research, None
 
         with bind_observability_context(research_id=research_id):
-            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
-            if self.broker:
-                self.broker.push_finalize_job(job.id)
+            job = self._dispatch_finalize_job(research_id)
             logger.info("research_finalize_enqueued finalize_job_id=%s", job.id)
             return self.task_store.get_research(research_id), job
+
+    def _dispatch_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+        """The finalize job for a research that just won the ANALYZING CAS: its latest job
+        while that is still queued or held by a runner (never a second one), the latest one
+        requeued when it stopped (DEAD_LETTER/FAILED: store-guarded, lease bumped), else a
+        fresh job. Reusing the stopped job keeps it from lingering in the dead-letter list
+        after a retry, where requeueing it would rewind the research."""
+        latest = self.task_store.get_latest_research_finalize_job(research_id)
+        job = None
+        if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
+            job = latest
+        elif latest is not None:
+            job = self.task_store.requeue_research_finalize_job(latest.id)  # None when COMPLETED
+        if job is None:
+            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+        if self.broker and job.status == FinalizeJobStatus.PENDING:
+            self.broker.push_finalize_job(job.id)
+        return job
 
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.task_store.get_research_finalize_job(job_id)
@@ -2169,7 +2602,7 @@ class ResearchService(
                 event_type = "resolved"
                 event_note = resolution_note
             maintenance_summary["recent_operational_recommendations"] = recommendations
-            maintenance_summary["recent_operational_recommendation_events"] = self._append_operational_recommendation_event(
+            events = self._append_operational_recommendation_event(
                 maintenance_summary.get("recent_operational_recommendation_events") or [],
                 code=str(updated_recommendation.get("code") or code),
                 event_type=event_type,
@@ -2177,6 +2610,11 @@ class ResearchService(
                 timestamp=current_timestamp,
                 note=event_note,
             )
+            # JSON-ready: the SQL store writes this dict straight into a JSONB column, where
+            # the RecommendationEvent models raised TypeError (ack/resolve were a 500).
+            maintenance_summary["recent_operational_recommendation_events"] = [
+                event.model_dump(mode="json") for event in events
+            ]
         self.touch_worker_heartbeat(
             "maintenance",
             heartbeat.processed_jobs,
@@ -2336,11 +2774,6 @@ class ResearchService(
                 extraction_timeout_seconds=settings.search_extraction_timeout_seconds,
             )
             agent.run_task(task_id)
-            # Auto-finalize once every search task for this research is done — nothing
-            # else triggers it, so without this the research stalls in 'processing'.
-            task = self.task_store.get_task(task_id)
-            if task and task.research_id:
-                self._maybe_enqueue_finalization(task.research_id)
 
     def _maybe_enqueue_finalization(self, research_id: str) -> None:
         research = self.task_store.get_research(research_id)
@@ -2348,12 +2781,28 @@ class ResearchService(
             ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
         ):
             return
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         if not tasks:
             return
-        if all(t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED) for t in tasks):
+        if all(self._search_settled(task) for task in tasks):
             logger.info("research_search_complete_auto_finalize research_id=%s task_count=%s", research_id, len(tasks))
             self.enqueue_research_finalization(research_id)  # idempotent via status guard
+
+    _ACTIVE_SEARCH_JOB_STATUSES = (SearchJobStatus.PENDING, SearchJobStatus.RUNNING)
+
+    def _search_settled(self, task: SearchTask) -> bool:
+        """COMPLETED, or FAILED with no search job left to run. SearchAgent marks a task
+        FAILED before its worker records the failure and schedules the retry; counting it
+        settled in that window let a sibling finalize the research and the retry be drained.
+        Every job settles through process_search_task_job, which re-checks afterwards, so
+        a dead-lettered task still lets the research finalize. Only FAILED tasks cost a
+        job lookup; replan/tie-break tasks have no job and are settled as they stand."""
+        if task.status == TaskStatus.COMPLETED:
+            return True
+        if task.status != TaskStatus.FAILED:
+            return False
+        job = self.task_store.get_latest_search_task_job(task.id)
+        return job is None or job.status not in self._ACTIVE_SEARCH_JOB_STATUSES
 
     def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.task_store.get_search_task_job(job_id)
@@ -2368,20 +2817,30 @@ class ResearchService(
                 SearchJobStatus.FAILED,
                 "Task not found",
             )
+        task_id, research_id = task.id, task.research_id
 
-        with bind_observability_context(job_id=job.id, task_id=task.id, research_id=task.research_id):
+        with bind_observability_context(job_id=job.id, task_id=task_id, research_id=research_id):
             # If the user cancelled (or the research otherwise ended) while this job sat in
             # the queue, don't spend search/extraction on it — drain the job and move on.
-            research = self.task_store.get_research(task.research_id) if task.research_id else None
-            if research is not None and research.status in self._TERMINAL_STATUSES:
+            # Once finalization has begun (ANALYZING) a late retry would only run alongside
+            # it and its results would never be used, so it is drained the same way.
+            research = self.task_store.get_research(research_id) if research_id else None
+            if research is not None and (
+                research.status in self._TERMINAL_STATUSES
+                or research.status == ResearchStatus.ANALYZING
+            ):
                 logger.info("search_job_skipped_terminal status=%s", research.status.value)
                 return self.task_store.update_search_task_job(
                     job_id, SearchJobStatus.COMPLETED, "Research no longer active — search skipped"
                 )
+            # Auto-finalize runs only after the retry decision (JOB-RETRY-ORDER): SearchAgent
+            # records a failure as a FAILED task without raising, and finalizing on that
+            # before the job is rescheduled would finish the research without the retry.
+            # Nothing else triggers finalization, so every settled outcome below calls it.
             try:
                 logger.info("search_job_processing depth=%s", job.depth.value)
-                self.run_search_task(task.id, job.depth)
-                task = self.task_store.get_task(task.id)
+                self.run_search_task(task_id, job.depth)
+                task = self.task_store.get_task(task_id)
                 if task is not None and task.status == TaskStatus.FAILED:
                     failed_job = self.task_store.record_search_task_job_failure(
                         job_id,
@@ -2392,22 +2851,17 @@ class ResearchService(
                         failed_job.status.value if failed_job else "missing",
                     )
                     if failed_job and failed_job.status == SearchJobStatus.PENDING:
-                        self.task_store.update_task(
-                            task.id,
-                            TaskUpdate(
-                                status=TaskStatus.PENDING,
-                                log="Search job scheduled for retry",
-                            ),
-                        )
-                        if self.broker:
-                            self.broker.push_search_job(failed_job.id)
-                        logger.info("search_job_retry_scheduled")
+                        self._schedule_search_retry(task_id, failed_job)
                     if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                         logger.error("search_job_dead_letter")
+                        # Out of retries: the FAILED task is settled and the research can
+                        # finalize on what the other tasks found.
+                        self._maybe_finalize_after_search(research_id)
                     return failed_job
 
                 completed_job = self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
                 logger.info("search_job_completed")
+                self._maybe_finalize_after_search(research_id)
                 return completed_job
             except Exception as exc:
                 failed_job = self.task_store.record_search_task_job_failure(job_id, str(exc))
@@ -2417,30 +2871,71 @@ class ResearchService(
                     failed_job.status.value if failed_job else "missing",
                 )
                 if failed_job and failed_job.status == SearchJobStatus.PENDING:
-                    self.task_store.update_task(
-                        task.id,
-                        TaskUpdate(
-                            status=TaskStatus.PENDING,
-                            log="Search job scheduled for retry",
-                        ),
-                    )
-                    if self.broker:
-                        self.broker.push_search_job(failed_job.id)
-                    logger.info("search_job_retry_scheduled")
+                    self._schedule_search_retry(task_id, failed_job)
                 if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
                     logger.error("search_job_dead_letter")
+                    # The exception can leave the task RUNNING; settle it as FAILED first,
+                    # or the research would wait on it in 'processing' forever.
+                    self.task_store.update_task(
+                        task_id,
+                        TaskUpdate(
+                            status=TaskStatus.FAILED,
+                            log="Search job failed after all retries",
+                        ),
+                    )
+                    self._maybe_finalize_after_search(research_id)
                 return failed_job
+
+    def _schedule_search_retry(self, task_id: str, job: SearchTaskJob) -> None:
+        self.task_store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.PENDING,
+                log="Search job scheduled for retry",
+            ),
+        )
+        if self.broker:
+            self.broker.push_search_job(job.id)
+        logger.info("search_job_retry_scheduled")
+
+    def _maybe_finalize_after_search(self, research_id: str | None) -> None:
+        if research_id:
+            self._maybe_enqueue_finalization(research_id)
 
     # ── Admin Panel Methods ───────────────────────────────────────────────────
     def get_admin_overview(self) -> AdminOverviewResponse:
-        return self.task_store.get_admin_overview()
+        """Store counters plus the dependency probes /health uses (OPS-BOOT-HEALTH): the
+        store sees neither the LLM nor the broker, so it must not decide overall health."""
+        overview = self.task_store.get_admin_overview()
+        health = self.get_health_summary()
+        dependencies = health["dependencies"]
+        healthy = health["status"] == "ok" and overview.failed_tasks_count == 0
+        system_health = {
+            "postgres": dependencies["database"],
+            "redis": dependencies["redis"],
+            "llm": dependencies["llm"],
+            "overall": "healthy" if healthy else "degraded",
+        }
+        return overview.model_copy(update={"system_health": system_health})
+
+    # The totals and breakdowns of the admin Tokens tab aggregate all of llm_usage_logs
+    # (one row per LLM call), and the tab asks again on every page change: they are reused
+    # for this long in a process, while the per-research page is always read fresh.
+    TOKEN_ANALYTICS_CACHE_SECONDS = 30.0
 
     def get_admin_token_analytics(
         self,
         page: int = 1,
         page_size: int = 20,
     ) -> AdminTokenAnalyticsResponse:
-        return self.task_store.get_admin_token_analytics(page=page, page_size=page_size)
+        now = time.monotonic()
+        cached = self._token_analytics_cache
+        if cached is not None and now - cached[0] < self.TOKEN_ANALYTICS_CACHE_SECONDS:
+            researches = self.task_store.get_admin_token_research_usage(page=page, page_size=page_size)
+            return cached[1].model_copy(update={"researches": researches, "page": page, "page_size": page_size})
+        analytics = self.task_store.get_admin_token_analytics(page=page, page_size=page_size)
+        self._token_analytics_cache = (now, analytics)
+        return analytics
 
     def get_admin_audit_logs(
         self,
@@ -2456,25 +2951,87 @@ class ResearchService(
             actor_email=actor_email,
         )
 
-    def preview_maintenance_action(
-        self,
-        action: str,
-        params: dict | None = None,
-    ) -> AdminDryRunResult:
-        return self.task_store.preview_maintenance_action(action, params)
+    # Defaults when an admin action omits its window: the job timeouts for stale recovery,
+    # and the same age limits the admin panel offers for cleanup.
+    _MAINTENANCE_DEFAULT_DAYS = {"cleanup_old_jobs": 7, "cleanup_search_cache": 3}
+
+    def _resolve_maintenance_params(self, request: MaintenanceActionRequest) -> dict:
+        """Fill in defaults and refuse a stale window below the configured job timeout:
+        recovering a younger RUNNING job re-dispatches work that is still making progress
+        (and fences a live finalize runner)."""
+        params = request.params.model_dump(exclude_none=True)
+        timeout = {
+            "recover_stale_finalize_jobs": settings.finalize_job_timeout_seconds,
+            "recover_stale_search_jobs": settings.search_job_timeout_seconds,
+        }.get(request.action)
+        if timeout is not None:
+            params.setdefault("stale_seconds", timeout)
+            if params["stale_seconds"] < timeout:
+                raise UnprocessableError(
+                    f"stale_seconds must be at least the job timeout ({timeout} seconds)"
+                )
+        if request.action in self._MAINTENANCE_DEFAULT_DAYS:
+            params.setdefault("days", self._MAINTENANCE_DEFAULT_DAYS[request.action])
+        return params
+
+    def preview_maintenance_action(self, request: MaintenanceActionRequest) -> AdminDryRunResult:
+        params = self._resolve_maintenance_params(request)
+        return self.task_store.preview_maintenance_action(request.action, params)
 
     def execute_maintenance_action(
         self,
-        action: str,
+        request: MaintenanceActionRequest,
         actor_email: str,
-        params: dict | None = None,
         ip_address: str | None = None,
     ) -> AdminDryRunResult:
-        return self.task_store.execute_maintenance_action(
-            action=action,
+        """Run an admin maintenance action through the same service paths the workers use
+        (ADMIN-MAINTENANCE): recovery and requeue re-dispatch to the broker, keep the
+        dead-letter guard and reset task/research status; the store only counts and audits."""
+        params = self._resolve_maintenance_params(request)
+        action = request.action
+        sample_ids: list[str] = []
+        if action == "recover_stale_finalize_jobs":
+            recovery = self.recover_stale_research_finalize_jobs(stale_seconds=params["stale_seconds"])
+            affected, sample_ids = recovery.recovered_count, recovery.recovered_job_ids
+            summary = f"Recovered {affected} stale finalize jobs"
+        elif action == "recover_stale_search_jobs":
+            recovery = self.recover_stale_search_task_jobs(stale_seconds=params["stale_seconds"])
+            affected, sample_ids = recovery.recovered_count, recovery.recovered_job_ids
+            summary = f"Recovered {affected} stale search jobs"
+        elif action == "cleanup_old_jobs":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=params["days"])
+            finalize = self.cleanup_old_research_finalize_jobs(older_than=cutoff)
+            search = self.cleanup_old_search_task_jobs(older_than=cutoff)
+            sample_ids = finalize.deleted_job_ids + search.deleted_job_ids
+            affected = len(sample_ids)
+            summary = f"Deleted {finalize.deleted_count} finalize and {search.deleted_count} search jobs"
+        elif action == "cleanup_search_cache":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=params["days"])
+            affected = self.cleanup_search_cache(older_than=cutoff)
+            summary = f"Cleaned up {affected} search cache entries"
+        elif action == "requeue_finalize_job":
+            sample_ids = [self.requeue_research_finalize_job(params["target_id"]).id]
+            affected = 1
+            summary = f"Requeued finalize job {params['target_id']}"
+        else:  # requeue_search_job
+            sample_ids = [self.requeue_search_task_job(params["target_id"]).id]
+            affected = 1
+            summary = f"Requeued search job {params['target_id']}"
+
+        self.task_store.record_admin_audit(
             actor_email=actor_email,
-            params=params,
+            action=action,
+            target_type="maintenance",
+            target_id=params.get("target_id"),
+            details={"params": params, "affected_count": affected, "summary": summary},
             ip_address=ip_address,
+        )
+        return AdminDryRunResult(
+            action=action,
+            dry_run=False,
+            affected_count=affected,
+            sample_affected_ids=sample_ids[:10],
+            summary=summary,
         )
 
     def get_agents_catalog(self) -> list[AgentMetadataItem]:

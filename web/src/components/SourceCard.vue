@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { SourcePreview } from "@/lib/types";
+import { safeHttpUrl } from "@/lib/url";
 
 defineProps<{ source: SourcePreview; index: number }>();
 
@@ -15,7 +16,7 @@ function quality(q?: string | null) {
 
 <template>
   <a
-    :href="source.url"
+    :href="safeHttpUrl(source.url) ?? undefined"
     target="_blank"
     rel="noopener noreferrer"
     class="block rounded-lg border border-bd bg-surface/50 p-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-accentSoft/40 hover:bg-surface"

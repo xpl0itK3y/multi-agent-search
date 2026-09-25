@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from src.api.app import create_app
+from src.api.app import create_app, reset_activity_touch_gate
 from src.core.llm import LLMProvider
 from tests.postgres_helpers import truncate_runtime_tables
 
@@ -21,12 +21,22 @@ def _isolate_auth_settings(monkeypatch):
     """Pin auth settings to test defaults so a developer's local .env (which may set
     AUTH_DISABLED=false or Google OAuth creds) cannot change test behavior. Tests that
     need auth enabled / OAuth configured override these via mocker.patch."""
+    from src.auth.admin_rate_limit import reset_admin_rate_limiter
+    from src.auth.login_rate_limit import reset_auth_rate_limiter
+    from src.auth.telemetry_rate_limit import reset_telemetry_rate_limiter
     from src.config import settings
 
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
     monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     monkeypatch.setattr(settings, "google_client_id", "", raising=False)
     monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
+    # The auth limiters are process-wide: without a reset, one test's login/register hits
+    # (all from the same test client address) push a later test over the limit. The
+    # activity gate likewise would skip a later test's first touch for a reused user id.
+    reset_auth_rate_limiter()
+    reset_admin_rate_limiter()
+    reset_telemetry_rate_limiter()
+    reset_activity_touch_gate()
 
 
 @pytest.fixture

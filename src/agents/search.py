@@ -3,6 +3,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
+from src.agents.trail_text import research_language, trail_detail
 from src.config import settings
 from src.providers.search import SearchProvider, ContentExtractor
 from src.domain import SearchTaskMetrics, TaskStatus, TaskUpdate
@@ -299,6 +300,16 @@ class SearchAgent:
         except Exception:  # progress events must never break a search
             pass
 
+    def _trail_language(self, research_id: str | None) -> str | None:
+        """The research's stored language for progress text (None: no research to report to)."""
+        if not research_id:
+            return None
+        try:
+            research = self.task_store.get_research(research_id)
+        except Exception:  # progress text must never break a search
+            return None
+        return research_language(research) if research is not None else None
+
     @staticmethod
     def _result_previews(results: list[dict]) -> list[dict]:
         """Top {domain, title} previews of search results for the live progress map."""
@@ -336,9 +347,10 @@ class SearchAgent:
         topics = self._detect_topics(task)
 
         research_id = getattr(task, "research_id", None)
+        language = self._trail_language(research_id)
         self._emit_progress(
             research_id,
-            f"Запуск направления: {task.description}",
+            trail_detail("search_task_start", language, task=task.description),
             action="task_start",
             agent="SearchAgent",
             phase="search",
@@ -349,7 +361,7 @@ class SearchAgent:
                 search_results = self._search_with_cache(query)
                 self._emit_progress(
                     research_id,
-                    f"Поиск: «{query}» — найдено {len(search_results)} страниц",
+                    trail_detail("search_query", language, query=query, count=len(search_results)),
                     sources=self._result_previews(search_results),
                     action="query",
                     agent="SearchAgent",
@@ -480,7 +492,7 @@ class SearchAgent:
                             domain = urlparse(url).netloc.lower().removeprefix("www.")
                             self._emit_progress(
                                 research_id,
-                                f"Сканирование: {domain} ({len(content)} симв.)",
+                                trail_detail("search_scrape", language, domain=domain, chars=len(content)),
                                 action="scrape",
                                 agent="SearchAgent",
                                 phase="search",
@@ -517,7 +529,9 @@ class SearchAgent:
             selected_results = self._select_best_results(all_results)
             self._emit_progress(
                 research_id,
-                f"Направление «{task.description}» обработано: отобрано {len(selected_results)} источников",
+                trail_detail(
+                    "search_task_complete", language, task=task.description, count=len(selected_results)
+                ),
                 action="task_complete",
                 agent="SearchAgent",
                 phase="search",

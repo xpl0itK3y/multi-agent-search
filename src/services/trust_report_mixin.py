@@ -11,6 +11,7 @@ import uuid
 from src.domain.errors import NotFoundError
 
 from src.agents.cross_language import detect_language
+from src.agents.trail_text import trail_detail
 from src.config import settings
 from src.domain import (
     AuditQuery,
@@ -69,10 +70,19 @@ class TrustReportMixin:
             if source.get("source_id") and source.get("url")
         ]
 
+    # Chat follow-up searches are stored as research tasks with this id prefix; they answer a
+    # chat turn and are never sources of the report.
+    _CHAT_TASK_PREFIX = "chat-"
+
+    def _report_tasks(self, tasks: list) -> list:
+        return [task for task in tasks if not str(task.id).startswith(self._CHAT_TASK_PREFIX)]
+
     def _stored_canonical_sources(self, research, tasks: list) -> list[dict] | None:
+        """The persisted [Sn] table with content re-attached, or None while it is not computed.
+
+        Absent or None means "not computed" (legacy runs, and finalization before analyze
+        has built it); only a stored list, even an empty one, is the report's table."""
         state = research.graph_state or {}
-        if "canonical_sources" not in state:
-            return None
         canonical = state.get("canonical_sources")
         if not isinstance(canonical, list):
             return None
@@ -89,7 +99,8 @@ class TrustReportMixin:
         ]
 
     def _aggregated_sources(self, research, tasks: list) -> list | None:
-        """Return the persisted canonical [Sn] pool, falling back for legacy runs."""
+        """Return the persisted canonical [Sn] pool, falling back to the analyzer's
+        reconstruction while it is not computed (legacy runs, finalization before analyze)."""
         stored = self._stored_canonical_sources(research, tasks)
         if stored is not None:
             return stored
@@ -99,11 +110,22 @@ class TrustReportMixin:
             return None
         try:
             effective_prompt = (research.graph_state or {}).get("effective_prompt") or research.prompt
-            aggregated, _ = prepare(effective_prompt, tasks, research.depth)
+            aggregated, _ = prepare(effective_prompt, self._report_tasks(tasks), research.depth)
             return aggregated
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("aggregate_sources_failed research_id=%s error=%s", research.id, exc)
             return None
+
+    def _report_source_pool(self, research, tasks: list) -> list[dict]:
+        """The report's [Sn] source pool for the read endpoints and chat: the canonical table,
+        else the analyzer's reconstruction, else the task pool numbered in task order."""
+        pool = self._aggregated_sources(research, tasks)
+        if pool is not None:
+            return pool
+        return [
+            {"source_id": f"S{index}", **item}
+            for index, item in enumerate(self._build_research_source_pool(self._report_tasks(tasks)), start=1)
+        ]
 
     def _audit_citations(self, report: str, research, tasks: list, aggregated: list | None = None) -> None:
         """Check each [Sn] citation against its source text; store grounding + integrity.
@@ -127,7 +149,9 @@ class TrustReportMixin:
                 for source in aggregated
                 if source.get("source_id")
             }
-            audit = self.citation_auditor.audit(report, sources_by_id)
+            audit = self.citation_auditor.audit(
+                report, sources_by_id, language=self._research_language(research)
+            )
             audit.research_id = research.id
             self.task_store.merge_research_graph_state(research.id, {"citation_audit": audit.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive
@@ -174,7 +198,11 @@ class TrustReportMixin:
                         "agent": "SourceIndependenceAgent",
                         "phase": "critic",
                         "action": "cluster_origins",
-                        "detail": f"Проверка независимости источников: обнаружено {len(independence.clusters)} независимых кластеров",
+                        "detail": trail_detail(
+                            "independence",
+                            self._research_language(research),
+                            count=len(independence.clusters),
+                        ),
                         "metrics": {"clusters": len(independence.clusters)},
                     },
                 )
@@ -218,7 +246,7 @@ class TrustReportMixin:
                         "agent": "SourceReputationAgent",
                         "phase": "critic",
                         "action": "score_reputation",
-                        "detail": "Оценка академического и экспертного авторитета источников",
+                        "detail": trail_detail("reputation", self._research_language(research)),
                     },
                 )
         except Exception as exc:  # pragma: no cover - defensive
@@ -323,7 +351,7 @@ class TrustReportMixin:
                         "agent": "CrossLanguageAgent",
                         "phase": "plan",
                         "action": "multilingual_expansion",
-                        "detail": f"Мультиязычное расширение: поиск на {', '.join(langs)}",
+                        "detail": trail_detail("cross_language", query_lang, languages=", ".join(langs)),
                         "metrics": {"languages": langs, "query_count": len(queries)},
                     },
                 )
@@ -377,7 +405,7 @@ class TrustReportMixin:
                         "agent": "CrossLanguageAgent",
                         "phase": "verify",
                         "action": "language_audit",
-                        "detail": f"Сравнение зарубежных и локальных источников ({foreign_count} иноязычных)",
+                        "detail": trail_detail("cross_language_analysis", query_lang, count=foreign_count),
                         "metrics": {"foreign_sources": foreign_count, "by_language": by_lang},
                     },
                 )
@@ -476,8 +504,13 @@ class TrustReportMixin:
                         "agent": "NumericCheckAgent",
                         "phase": "verify",
                         "action": "validate_data",
-                        "detail": f"Кросс-проверка численных фактов: верифицировано {len(check.figures)} показателей",
-                        "metrics": {"figures_count": len(check.figures)},
+                        "detail": trail_detail(
+                            "numeric_check",
+                            self._research_language(research),
+                            supported=check.supported,
+                            total=check.total,
+                        ),
+                        "metrics": {"figures_count": check.total, "figures_supported": check.supported},
                     },
                 )
         except Exception as exc:  # pragma: no cover - defensive
@@ -502,7 +535,9 @@ class TrustReportMixin:
         tasks = self.task_store.get_tasks_by_research(research_id)
         state = research.graph_state or {}
 
-        plan = [t.description for t in tasks if (t.description or "").strip()]
+        # The plan and its queries are the report's; chat follow-up searches are not.
+        report_tasks = self._report_tasks(tasks)
+        plan = [t.description for t in report_tasks if (t.description or "").strip()]
         queries = [
             AuditQuery(
                 task=t.description or "",
@@ -510,7 +545,7 @@ class TrustReportMixin:
                 status=getattr(t.status, "value", str(t.status)),
                 result_count=len(t.result or []),
             )
-            for t in tasks
+            for t in report_tasks
         ]
 
         sources = self._audit_sources(research, tasks)

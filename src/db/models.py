@@ -36,6 +36,11 @@ class UserORM(Base):
     last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_device: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Set by scripts/create_admin.py; with google_subject, what verifies an ADMIN_EMAILS
+    # address (src/auth/admin_identity.py).
+    admin_provisioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ResearchORM(Base):
@@ -99,6 +104,8 @@ Index(
     ResearchORM.user_id,
     ResearchORM.created_at.desc(),
 )
+# The admin Tokens list/export and the prompts export's keyset cursor: newest first.
+Index("ix_researches_created_id", ResearchORM.created_at, ResearchORM.id)
 
 
 class SearchTaskORM(Base):
@@ -311,6 +318,7 @@ class LLMUsageLogORM(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    cache_hit_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     estimated_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default=text("0.0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -347,13 +355,15 @@ class UserSessionORM(Base):
     __table_args__ = (
         Index("ix_user_sessions_started_at", "started_at"),
         Index("ix_user_sessions_last_active", "last_active_at"),
+        # One row per client session id per account: the upsert's ON CONFLICT arbiter.
+        Index("uq_user_sessions_session_user", "session_id", "user_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     device_type: Mapped[str] = mapped_column(
@@ -404,3 +414,12 @@ class UserEventORM(Base):
         default=utcnow,
         index=True,
     )
+
+
+# Finds a research's prompt copies when it is deleted or expires (delete_research,
+# cleanup_old_researches); partial, so the other event rows do not pay for it.
+Index(
+    "ix_user_events_prompt_research_id",
+    UserEventORM.details["research_id"].astext,
+    postgresql_where=text("event_name IN ('chat_prompt', 'research_prompt')"),
+)

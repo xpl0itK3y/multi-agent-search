@@ -1,14 +1,17 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 import random
 import threading
 import time
+from typing import Callable
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from src.config import settings
 from src.core.llm import LLMProvider
-from src.observability import maybe_wrap_openai_client, observe_llm_cost
+from src.model_catalog import get_model
+from src.observability import get_observability_context, maybe_wrap_openai_client, observe_llm_cost
 from src.providers.rate_limit import get_llm_limiter
 
 logger = logging.getLogger(__name__)
@@ -29,9 +32,51 @@ _DEEPSEEK_MODEL_PRICING: dict[str, dict[str, tuple[float, float, float]]] = {
     },
 }
 
+# Per-call usage sink (USAGE-ACCOUNTING); bootstrap points it at the task store. It is
+# called with keyword arguments: research_id and user_id as bound in the observability
+# context, the model actually sent, the token counts and the unrounded cost.
+LLMUsageSink = Callable[..., None]
+
 # Legacy fallback rates for test mocks (e.g. "deepseek-test" in test_llm_cost_metrics.py)
 _DEFAULT_PRICE_INPUT_PER_M = 0.14
 _DEFAULT_PRICE_OUTPUT_PER_M = 1.10
+
+# Pricing tier of the model ids that are not in the user catalog. DeepSeek serves the
+# legacy ids as deepseek-v4-flash: deepseek-chat in non-thinking mode and
+# deepseek-reasoner in thinking mode (api-docs.deepseek.com/updates, 2026-04-24), both at
+# the flash rates; thinking mode costs no extra.
+_LEGACY_MODEL_TIERS: dict[str, str] = {
+    "deepseek-chat": "flash",
+    "deepseek-reasoner": "flash",
+}
+
+
+def _known_tier(model_id: str) -> str | None:
+    """Tier of a known id: the catalog's (aliases included), then the legacy ids."""
+    option = get_model(model_id)
+    if option is not None:
+        return option.tier
+    return _LEGACY_MODEL_TIERS.get(model_id)
+
+
+def _pricing_tier(model: str | None) -> str | None:
+    """Pricing tier ("pro" or "flash") of a model id, or None for a test mock.
+
+    Known ids are billed from the explicit map. Only an id this module does not know
+    is guessed from its name, and one naming no tier takes the base model's tier.
+    """
+    m = (model or "").strip().lower()
+    tier = _known_tier(m)
+    if tier is not None:
+        return tier
+    if "pro" in m:
+        return "pro"
+    if "flash" in m or "chat" in m:
+        return "flash"
+    if "test" in m:
+        return None
+    base = (settings.deepseek_model or "").strip().lower()
+    return _known_tier(base) or ("pro" if "pro" in base else "flash")
 
 
 def is_deepseek_peak_hours(dt: datetime | None = None) -> bool:
@@ -54,15 +99,9 @@ def calculate_deepseek_cost(
     at_time: datetime | None = None,
 ) -> float:
     """Calculate the estimated USD cost of an LLM call according to DeepSeek's model-specific pricing and context caching."""
-    m = (model or "").lower()
-    if "pro" in m:
-        tier = "pro"
-    elif "flash" in m or "chat" in m:
-        tier = "flash"
-    elif "test" in m:
+    tier = _pricing_tier(model)
+    if tier is None:
         return (prompt_tokens * _DEFAULT_PRICE_INPUT_PER_M + completion_tokens * _DEFAULT_PRICE_OUTPUT_PER_M) / 1_000_000
-    else:
-        tier = "pro" if "pro" in settings.deepseek_model.lower() else "flash"
 
     period = "peak" if is_deepseek_peak_hours(at_time) else "off_peak"
     miss_rate, hit_rate, out_rate = _DEEPSEEK_MODEL_PRICING[tier][period]
@@ -98,6 +137,7 @@ class DeepSeekProvider(LLMProvider):
         self._completion_tokens: int = 0
         self._cache_hit_tokens: int = 0
         self._cost_usd: float = 0.0
+        self._usage_sink: LLMUsageSink | None = None
 
     # ── token tracking ────────────────────────────────────────────────────────
 
@@ -129,6 +169,38 @@ class DeepSeekProvider(LLMProvider):
             self._cache_hit_tokens  = getattr(self, "_cache_hit_tokens", 0) + cache_hit_tokens
             self._cost_usd          = getattr(self, "_cost_usd", 0.0) + cost
         observe_llm_cost(cost, model)
+        self._emit_usage(model, prompt_tokens, completion_tokens, cache_hit_tokens, cost)
+
+    def set_usage_sink(self, sink: LLMUsageSink | None) -> None:
+        self._usage_sink = sink
+
+    def _emit_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cache_hit_tokens: int,
+        cost: float,
+    ) -> None:
+        """Hand one call's usage to the sink, attributed to the research/user the caller
+        bound (the shared counters above cannot tell concurrent calls apart)."""
+        sink = getattr(self, "_usage_sink", None)
+        if sink is None:
+            return
+        context = get_observability_context()
+        try:
+            sink(
+                research_id=context.get("research_id"),
+                user_id=context.get("user_id"),
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cache_hit_tokens=cache_hit_tokens,
+                estimated_cost_usd=cost,
+            )
+        except Exception:
+            # Accounting must never fail the call it accounts for.
+            logger.warning("llm_usage_record_failed model=%s", model, exc_info=True)
 
     @property
     def token_usage(self) -> dict:
@@ -154,6 +226,33 @@ class DeepSeekProvider(LLMProvider):
 
     # ── generate ──────────────────────────────────────────────────────────────
 
+    def _trusted_model_ids(self) -> set[str]:
+        """Operator-configured models an internal call may name besides the user catalog
+        (the reasoner, repair and red-team models). Read at call time, not import time."""
+        configured = (
+            self.model,
+            settings.deepseek_model,
+            settings.deepseek_reasoner_model,
+            settings.deepseek_repair_model,
+            settings.red_team_model,
+        )
+        return {model_id for model_id in configured if model_id}
+
+    @contextmanager
+    def _llm_slot(self, model: str):
+        """The global LLM concurrency slot for one attempt. The usage the attempt reports
+        (appended to the yielded list) is recorded once the slot is released: the usage sink
+        writes to the database, and a slow pool or a stalled Postgres must not keep a slot
+        from the next call. Reported tokens are billed, so they count even if the call
+        then fails."""
+        reported: list[tuple[int, int, int]] = []
+        try:
+            with get_llm_limiter().slot():
+                yield reported
+        finally:
+            for prompt_tokens, completion_tokens, cache_hit_tokens in reported:
+                self._record_usage(prompt_tokens, completion_tokens, model, cache_hit_tokens=cache_hit_tokens)
+
     def generate(
         self,
         system_prompt: str,
@@ -164,10 +263,15 @@ class DeepSeekProvider(LLMProvider):
     ) -> str:
         # Per-call model override (e.g. a reasoner for planning); pop so it doesn't
         # collide with the explicit model= below.
-        from src.model_catalog import resolve_model_id
+        from src.model_catalog import resolve_trusted_model_id
 
-        raw_model = kwargs.pop("model", None) or self.model
-        model = resolve_model_id(raw_model, self.model)
+        requested = kwargs.pop("model", None) or self.model
+        model = resolve_trusted_model_id(requested, self._trusted_model_ids())
+        if model is None:
+            # Neither selectable nor operator-configured (e.g. an id stored before the
+            # request boundary validated it): never send it raw, but say so.
+            logger.warning("deepseek_model_override_rejected requested=%r using=%s", requested, self.model)
+            model = self.model
         # Streaming is also needed when we only want reasoning tokens.
         use_stream = streaming_callback is not None or reasoning_callback is not None
         if use_stream:
@@ -182,7 +286,7 @@ class DeepSeekProvider(LLMProvider):
             try:
                 # Hold a global concurrency slot for the whole call (incl. streaming) so a
                 # burst of researches can't overrun the provider into 429s.
-                with get_llm_limiter().slot():
+                with self._llm_slot(model) as reported_usage:
                     response = self.client.chat.completions.create(
                         model=model,
                         messages=[
@@ -195,13 +299,7 @@ class DeepSeekProvider(LLMProvider):
 
                     if not use_stream:
                         if response.usage:
-                            pt, ct, cht = self._extract_usage(response.usage)
-                            self._record_usage(
-                                pt,
-                                ct,
-                                model,
-                                cache_hit_tokens=cht,
-                            )
+                            reported_usage.append(self._extract_usage(response.usage))
                         return response.choices[0].message.content
 
                     accumulated = ""
@@ -209,13 +307,7 @@ class DeepSeekProvider(LLMProvider):
                     for chunk in response:
                         # final usage chunk (stream_options include_usage)
                         if chunk.usage:
-                            pt, ct, cht = self._extract_usage(chunk.usage)
-                            self._record_usage(
-                                pt,
-                                ct,
-                                model,
-                                cache_hit_tokens=cht,
-                            )
+                            reported_usage.append(self._extract_usage(chunk.usage))
                         if not chunk.choices:
                             continue
                         delta = chunk.choices[0].delta

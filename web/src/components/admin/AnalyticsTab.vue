@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
+import { saveFile } from "@/lib/download";
 import type { AdminTokenAnalyticsResponse } from "@/lib/types";
 
 const { t } = useI18n();
@@ -37,8 +38,8 @@ async function fetchAnalytics() {
     loading.value = true;
     error.value = null;
     analytics.value = await adminApi.getTokens(page.value, pageSize.value);
-  } catch (err: any) {
-    error.value = err.message || "Failed to load token analytics";
+  } catch (err) {
+    error.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }
@@ -57,8 +58,22 @@ const totalPages = computed(() => {
   return Math.ceil(analytics.value.total_researches / pageSize.value);
 });
 
-function exportCsv() {
-  window.open(adminApi.exportTokensCsvUrl(), "_blank");
+// Fetched with the bearer token (window.open sends only the cookie); a failed
+// export is shown instead of opening a tab with a raw 401.
+const exporting = ref(false);
+const exportError = ref<string | null>(null);
+
+async function exportCsv() {
+  if (exporting.value) return;
+  exporting.value = true;
+  exportError.value = null;
+  try {
+    saveFile(await adminApi.exportTokensCsv(), "token_usage.csv");
+  } catch (err) {
+    exportError.value = apiErrorMessage(err, t);
+  } finally {
+    exporting.value = false;
+  }
 }
 </script>
 
@@ -72,13 +87,16 @@ function exportCsv() {
       </div>
 
       <button
-        class="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-accent/90"
+        class="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+        :disabled="exporting"
         @click="exportCsv"
       >
         <span>📥</span>
         <span>{{ t("admin.analytics.exportCsv") }}</span>
       </button>
     </div>
+
+    <p v-if="exportError" class="text-right text-xs text-red-400">{{ exportError }}</p>
 
     <!-- Error state -->
     <div v-if="error" class="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">

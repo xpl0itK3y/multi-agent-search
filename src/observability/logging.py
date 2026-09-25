@@ -1,9 +1,36 @@
 import logging
 import json
+import re
 from datetime import datetime, timezone
 
 from src.config import settings
 from src.observability.context import get_observability_context
+
+# Public share links carry their bearer token in the URL path, and access logs are
+# shipped to Loki. A client picks the exact spelling of the path it sends, and uvicorn
+# logs it verbatim even when no route matches, so the pattern takes any letter case and
+# any run of separators, including percent-encoded ones: '//v1/public/research/<t>',
+# '/V1//public/research/<t>', '/v1/public/research%2F<t>'. /v1/public/research counts
+# anywhere in the text ('path=/v1/...', behind a proxy prefix); `/r/<token>`, the SPA
+# share route, only at the start of a path (after whitespace, a quote, '=' or a URL's
+# host), not as an arbitrary `/r/` segment.
+# The filter runs on the event loop for every request line, and the client picks that
+# text, so the pattern must stay linear in its length. Each run of separators is read
+# from one start only, right after a fixed anchor ('v1', 'public', 'research', 'r', a
+# delimiter or a host). Hence one separator before 'v1' (a longer run still matches from
+# its last separator) and no '%' in a URL's host, which would swallow a run of '%2f' and
+# hand it back one separator at a time. A run opening the pattern made it quadratic
+# (about 1 s for 8 KB of '/'). The nginx maps (web/nginx.conf) follow the same rule.
+_PATH_SEPARATOR = r"(?:/|%(?:25)?2f)"
+_PATH_SEPARATORS = rf"{_PATH_SEPARATOR}+"
+_SHARE_TOKEN_PATH_RE = re.compile(
+    r"(?P<prefix>"
+    rf"{_PATH_SEPARATOR}v1{_PATH_SEPARATORS}public{_PATH_SEPARATORS}research{_PATH_SEPARATORS}"
+    rf"|(?:^|[\s\"'=(\[,;]|://[^/%\s\"']+){_PATH_SEPARATORS}r{_PATH_SEPARATORS}"
+    r")[^/?#&\s\"']+",
+    re.IGNORECASE,
+)
+REDACTED_SHARE_TOKEN = "[redacted]"
 
 
 class ObservabilityContextFilter(logging.Filter):
@@ -20,6 +47,37 @@ class ObservabilityContextFilter(logging.Filter):
         for key, default in self.DEFAULTS.items():
             setattr(record, key, context.get(key, default))
         return True
+
+
+def redact_share_tokens(text: str) -> str:
+    return _SHARE_TOKEN_PATH_RE.sub(lambda match: match.group("prefix") + REDACTED_SHARE_TOKEN, text)
+
+
+class ShareTokenRedactionFilter(logging.Filter):
+    """Strip public share tokens from request lines before any handler sees them.
+
+    uvicorn logs ``'%s - "%s %s HTTP/%s" %d'`` with the path as a separate argument and
+    its AccessFormatter unpacks ``record.args`` positionally, so the arguments are
+    redacted in place instead of pre-formatting the message.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_share_tokens(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_share_tokens(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+        return True
+
+
+def install_access_log_redaction() -> None:
+    # A logger-level filter (not a handler one) survives uvicorn's dictConfig, which
+    # replaces handlers but keeps logger filters, and covers every uvicorn worker
+    # process because each runs the app lifespan that calls configure_logging().
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(existing, ShareTokenRedactionFilter) for existing in access_logger.filters):
+        access_logger.addFilter(ShareTokenRedactionFilter())
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -58,3 +116,5 @@ def configure_logging() -> None:
             handler.addFilter(ObservabilityContextFilter())
         if settings.log_format.strip().lower() == "json":
             handler.setFormatter(JsonLogFormatter())
+
+    install_access_log_redaction()
