@@ -2,6 +2,7 @@
 
 import io
 import logging
+import time
 
 import pytest
 from uvicorn.logging import AccessFormatter
@@ -64,10 +65,46 @@ def access_logger():
         (f"%2Fr%2F{TOKEN}", "%2Fr%2F[redacted]"),
         (f"path=/r/{TOKEN}&x=1", "path=/r/[redacted]&x=1"),
         (f"HTTPS://Example.com//r/{TOKEN}", "HTTPS://Example.com//r/[redacted]"),
+        (f"https://h.example%2fr%2f{TOKEN}", "https://h.example%2fr%2f[redacted]"),
+        (f"///v1/public/research/{TOKEN}", "///v1/public/research/[redacted]"),
+        (f"%2f%2F%252fv1/public/research/{TOKEN}", "%2f%2F%252fv1/public/research/[redacted]"),
     ],
 )
 def test_redact_share_tokens(line, expected):
     assert redact_share_tokens(line) == expected
+
+
+# Far past any real request line (nginx and uvicorn cap one near 8 KB): a pattern that
+# backtracks through a run of separators from every start in it takes about a minute on
+# this, a linear one a few milliseconds.
+ADVERSARIAL_LENGTH = 64 * 1024
+REDACTION_BUDGET_SECONDS = 0.05
+
+
+def _redaction_seconds(line: str) -> float:
+    """Best of three runs, to ride out a noisy machine; a run far over the budget is not
+    noise and is not repeated."""
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        redact_share_tokens(line)
+        best = min(best, time.perf_counter() - started)
+        if best < REDACTION_BUDGET_SECONDS or best > 20 * REDACTION_BUDGET_SECONDS:
+            break
+    return best
+
+
+@pytest.mark.parametrize("separator", ["/", "%2f", "%2F", "%252f"])
+@pytest.mark.parametrize(
+    "head",
+    ["", "/v1", "/v1/public", "/v1/public/research", "/x?a=", "/x?redirect=", "https://h.example", "/r"],
+)
+def test_redaction_stays_linear_on_a_run_of_separators(head, separator):
+    """SEC3-1: the filter runs on the event loop for every access-log line, and the client
+    picks the path, so one request must not be able to stall the worker."""
+    line = head + separator * (ADVERSARIAL_LENGTH // len(separator))
+
+    assert _redaction_seconds(line) < REDACTION_BUDGET_SECONDS
 
 
 def test_database_errors_do_not_carry_bound_parameters():

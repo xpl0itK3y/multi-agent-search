@@ -14,11 +14,19 @@ from src.observability.context import get_observability_context
 # anywhere in the text ('path=/v1/...', behind a proxy prefix); `/r/<token>`, the SPA
 # share route, only at the start of a path (after whitespace, a quote, '=' or a URL's
 # host), not as an arbitrary `/r/` segment.
-_PATH_SEPARATORS = r"(?:/|%(?:25)?2f)+"
+# The filter runs on the event loop for every request line, and the client picks that
+# text, so the pattern must stay linear in its length. Each run of separators is read
+# from one start only, right after a fixed anchor ('v1', 'public', 'research', 'r', a
+# delimiter or a host). Hence one separator before 'v1' (a longer run still matches from
+# its last separator) and no '%' in a URL's host, which would swallow a run of '%2f' and
+# hand it back one separator at a time. A run opening the pattern made it quadratic
+# (about 1 s for 8 KB of '/'). The nginx maps (web/nginx.conf) follow the same rule.
+_PATH_SEPARATOR = r"(?:/|%(?:25)?2f)"
+_PATH_SEPARATORS = rf"{_PATH_SEPARATOR}+"
 _SHARE_TOKEN_PATH_RE = re.compile(
     r"(?P<prefix>"
-    rf"{_PATH_SEPARATORS}v1{_PATH_SEPARATORS}public{_PATH_SEPARATORS}research{_PATH_SEPARATORS}"
-    rf"|(?:^|[\s\"'=(\[,;]|://[^/\s\"']+){_PATH_SEPARATORS}r{_PATH_SEPARATORS}"
+    rf"{_PATH_SEPARATOR}v1{_PATH_SEPARATORS}public{_PATH_SEPARATORS}research{_PATH_SEPARATORS}"
+    rf"|(?:^|[\s\"'=(\[,;]|://[^/%\s\"']+){_PATH_SEPARATORS}r{_PATH_SEPARATORS}"
     r")[^/?#&\s\"']+",
     re.IGNORECASE,
 )
