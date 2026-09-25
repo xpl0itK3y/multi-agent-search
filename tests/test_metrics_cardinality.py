@@ -42,6 +42,39 @@ async def test_public_share_request_is_recorded_by_route_template_not_token(clie
 
 
 @pytest.mark.anyio
+async def test_arbitrary_http_methods_share_one_other_label(client):
+    # h11 accepts any token as a method and nginx proxies it: labelling the raw method
+    # let an anonymous client add a counter and a histogram per string, forever.
+    async def send(method: str) -> None:
+        await client.request(method, "/health")
+        await client.request(method, f"/v1/nowhere-{uuid.uuid4().hex}")
+
+    await send("ZZWARMUP")  # creates the OTHER label sets the loop below uses
+    before = _mas_series()
+    methods = [f"ZZMETHOD{index}" for index in range(30)] + ["get-ish", "M-SEARCH", "PROPFIND"]
+    for method in methods:
+        await send(method)
+    after = _mas_series()
+
+    assert after == before
+    assert any('method="OTHER"' in series for series in after)
+    assert not any(method.upper() in series for series in after for method in methods + ["ZZWARMUP"])
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+def test_standard_http_methods_keep_their_label(method):
+    assert metrics.metric_http_method(method) == method
+    assert metrics.metric_http_method(method.lower()) == method
+
+
+def test_missing_method_is_labelled_get_and_unknown_ones_other():
+    assert metrics.metric_http_method(None) == "GET"
+    assert metrics.metric_http_method("") == "GET"
+    assert metrics.metric_http_method("CONNECT") == "OTHER"
+    assert metrics.metric_http_method("TRACE") == "OTHER"
+
+
+@pytest.mark.anyio
 async def test_series_count_does_not_grow_over_50_researches(client):
     store = client._transport.app.state.research_service.task_store
 

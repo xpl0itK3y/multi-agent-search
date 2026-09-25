@@ -54,10 +54,20 @@ else:  # pragma: no cover
     LLM_COST_USD_TOTAL = None
 
 
+# The method label takes one of these or "OTHER". h11 accepts any token as a method, so
+# a raw label would let an anonymous client add a counter and a histogram per string.
+_METRIC_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def metric_http_method(method: str | None) -> str:
+    normalized = (method or "GET").upper()
+    return normalized if normalized in _METRIC_HTTP_METHODS else "OTHER"
+
+
 def observe_api_request(method: str, path: str, status_code: int, elapsed_seconds: float) -> None:
     if API_REQUESTS_TOTAL is None or API_REQUEST_DURATION_SECONDS is None:
         return
-    normalized_method = (method or "GET").upper()
+    normalized_method = metric_http_method(method)
     normalized_path = path or "/"
     API_REQUESTS_TOTAL.labels(
         method=normalized_method,
