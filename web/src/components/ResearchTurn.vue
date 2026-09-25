@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { api, apiErrorMessage } from "@/lib/api";
+import { api, ApiError, apiErrorMessage } from "@/lib/api";
 import { openResearchStream } from "@/lib/stream";
 import { createTraceDeduper, reconnectDelayMs, traceFromGraph } from "@/lib/trace";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
@@ -44,7 +44,8 @@ const planBusy = ref(false);
 const clarification = ref<Clarification | null>(null);
 const clarifyBusy = ref(false);
 
-const DONE = new Set(["completed", "failed", "timeout", "cancelled"]);
+// "not_found" is client-side only: the research no longer exists (see markGone).
+const DONE = new Set(["completed", "failed", "timeout", "cancelled", "not_found"]);
 const queuePos = ref<number | null>(null);
 const cancelling = ref(false);
 const promptExpanded = ref(false);
@@ -94,8 +95,8 @@ function startQueuePoll() {
       status.value = s.status;
       queuePos.value = s.queue_position ?? null;
       if (s.status !== "queued") stopQueuePoll();
-    } catch {
-      /* transient — keep polling */
+    } catch (e) {
+      if (isGone(e)) markGone(); // otherwise transient — keep polling
     }
   }, 4000);
 }
@@ -167,8 +168,30 @@ async function onApprove(items: PlanItem[]) {
   } catch (e) { errorMsg.value = apiErrorMessage(e, t); } finally { planBusy.value = false; }
 }
 
+// 404/403: the research was deleted (another tab, its owner removed, the retention
+// sweep) or is no longer ours. Network errors and 5xx are transient, never this.
+function isGone(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 404 || e.status === 403);
+}
+
+// Settle a research that no longer exists: stop streaming, reconnecting and polling,
+// and tell the thread it is over so its composer is released.
+function markGone() {
+  clearReconnect();
+  close?.();
+  close = undefined;
+  stopQueuePoll();
+  streamLost.value = false;
+  errorMsg.value = t("research.notFound");
+  status.value = "not_found";
+  if (!done.value) {
+    done.value = true;
+    emit("done", "not_found");
+  }
+}
+
 // Fetch the current status/report (also used to catch up after a dropped stream). Returns
-// true if the research is already in a terminal state (no live stream needed).
+// true if the research is already in a terminal state (no live stream needed) — or gone.
 async function syncStatus(): Promise<boolean> {
   try {
     const s = await api.getStatus(props.id);
@@ -203,7 +226,11 @@ async function syncStatus(): Promise<boolean> {
       }
       return true;
     }
-  } catch {
+  } catch (e) {
+    if (isGone(e)) {
+      markGone();
+      return true;
+    }
     /* SSE still drives status/report */
   }
   return false;
@@ -377,7 +404,7 @@ onBeforeUnmount(() => {
           :class="{
             'bg-emerald-400': status === 'completed',
             'bg-red-400': status === 'failed' || status === 'timeout',
-            'bg-muted': status === 'cancelled',
+            'bg-muted': status === 'cancelled' || status === 'not_found',
             'bg-accent animate-pulse': !DONE.has(status),
           }"
         />

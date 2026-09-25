@@ -15,9 +15,15 @@ const mocks = vi.hoisted(() => ({
   openResearchStream: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => ({ api: mocks.api, apiErrorMessage: () => "error" }));
+// The real ApiError (ResearchTurn tells a deleted research from a transient failure by it).
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ApiError: (await importOriginal<typeof import("@/lib/api")>()).ApiError,
+  api: mocks.api,
+  apiErrorMessage: () => "error",
+}));
 vi.mock("@/lib/stream", () => ({ openResearchStream: mocks.openResearchStream }));
 
+import { ApiError } from "@/lib/api";
 import ResearchTurn from "./ResearchTurn.vue";
 
 const trail: TraceEntry[] = [
@@ -103,5 +109,67 @@ describe("ResearchTurn live stream", () => {
     handlers(0).onTrace?.({ ...trail[0] });
     await flushPromises();
     expect(wrapper.findComponent({ name: "AgentActivityConsole" }).props("entries")).toHaveLength(1);
+  });
+
+  describe("a research that no longer exists", () => {
+    const gone = () => new ApiError(404, "Research not found");
+
+    it("stops reconnecting once /status says 404 and releases the thread", async () => {
+      const wrapper = await mountRunning();
+      mocks.api.getStatus.mockRejectedValue(gone());
+
+      handlers(0).onError?.("connection lost"); // /events answered 404: EventSource closed
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(1);
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + the one catch-up
+      expect(wrapper.emitted("done")).toEqual([["not_found"]]);
+      expect(wrapper.text()).toContain(i18n.global.t("research.notFound"));
+      expect(wrapper.text()).not.toContain(i18n.global.t("research.resume"));
+    });
+
+    it("never opens a stream when it is already gone on mount", async () => {
+      mocks.api.getStatus.mockRejectedValue(new ApiError(403, "Forbidden"));
+      const wrapper = await mountRunning();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.openResearchStream).not.toHaveBeenCalled();
+      expect(wrapper.emitted("done")).toEqual([["not_found"]]);
+    });
+
+    it("drops the reconnect the server's not-found stream error scheduled", async () => {
+      await mountRunning();
+      mocks.api.getStatus.mockRejectedValue(gone());
+
+      // Auth-disabled servers stream an error, then done:"failed", for a missing research.
+      handlers(0).onError?.("not found");
+      await handlers(0).onDone?.("failed");
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(1);
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops polling a queued research that was deleted", async () => {
+      mocks.api.getStatus.mockResolvedValueOnce({ status: "queued", prompt: "Topic", llm_token_usage: null });
+      await mountRunning();
+      mocks.api.getStatus.mockRejectedValue(gone());
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + one poll
+    });
+
+    it("keeps retrying through transient server and network errors", async () => {
+      await mountRunning();
+      mocks.api.getStatus.mockRejectedValueOnce(new ApiError(500, "boom")).mockRejectedValueOnce(new TypeError("fetch failed"));
+
+      handlers(0).onError?.("connection lost");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(2);
+      handlers(1).onError?.("connection lost");
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(3);
+    });
   });
 });

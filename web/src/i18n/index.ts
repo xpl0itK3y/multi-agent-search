@@ -92,6 +92,7 @@ const ru = {
     failed: "Ошибка",
     timeout: "Превышено время ожидания",
     cancelled: "Отменено",
+    not_found: "Не найдено",
   },
   plan: {
     tag: "План исследования",
@@ -346,6 +347,7 @@ const ru = {
     cancelling: "Отмена…",
     resume: "Возобновить",
     notifyReady: "Отчёт готов",
+    notFound: "Этого исследования больше нет — возможно, его удалили",
     showMore: "Показать полностью",
     showLess: "Свернуть",
     costTitle: "Оценка расхода LLM",
@@ -1218,6 +1220,7 @@ const en: typeof ru = {
     completed: "Done",
     failed: "Error",
     timeout: "Timed out",
+    not_found: "Not found",
   },
   plan: {
     tag: "Research plan",
@@ -1472,6 +1475,7 @@ const en: typeof ru = {
     cancelling: "Cancelling…",
     resume: "Resume",
     notifyReady: "Your report is ready",
+    notFound: "This research no longer exists — it may have been deleted",
     showMore: "Show full",
     showLess: "Collapse",
     costTitle: "Estimated LLM usage",
@@ -2344,6 +2348,7 @@ const es: typeof ru = {
     completed: "Listo",
     failed: "Error",
     timeout: "Tiempo agotado",
+    not_found: "No encontrado",
   },
   plan: {
     tag: "Plan de investigación",
@@ -2598,6 +2603,7 @@ const es: typeof ru = {
     cancelling: "Cancelando…",
     resume: "Reanudar",
     notifyReady: "Tu informe está listo",
+    notFound: "Esta investigación ya no existe — puede que se haya eliminado",
     showMore: "Mostrar completo",
     showLess: "Contraer",
     costTitle: "Uso estimado de LLM",
