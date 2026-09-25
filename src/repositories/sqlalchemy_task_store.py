@@ -736,6 +736,9 @@ class SQLAlchemyTaskStore:
             status=getattr(task_data.get("status"), "value", task_data.get("status", "pending")),
             logs=task_data.get("logs", []),
             search_metrics=task_data.get("search_metrics") or {},
+            # Stored like update_task's, so a task created with its results keeps them
+            # (the in-memory store always did).
+            results=search_result_dicts_to_orm(task_data["id"], task_data.get("result") or []),
         )
         with self.session_scope() as session:
             session.add(task)

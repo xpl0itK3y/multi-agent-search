@@ -341,6 +341,30 @@ def test_task_crud_and_owner_scoping(store):
     assert store.get_task(task.id, user_id=user.id) is not None
 
 
+def test_task_results_read_back_alike_from_add_and_update(store):
+    """The SQL add_task used to drop `result` (the in-memory one kept it), and an emptied
+    result read back [] in memory but None on SQL: GET /v1/tasks/{id} differed too."""
+    source = {"url": "https://real.example/page", "title": "Real title", "content": "Fetched page text"}
+
+    def sources(task):
+        return [(item["url"], item["title"], item["content"]) for item in task.result]
+
+    seeded = store.add_task(
+        {"id": "seeded", "description": "d", "queries": ["q"], "status": TaskStatus.COMPLETED, "result": [source]}
+    )
+    expected = [("https://real.example/page", "Real title", "Fetched page text")]
+    assert sources(seeded) == sources(store.get_task("seeded")) == expected
+
+    # No results read back as None, however the task got there.
+    created_empty = store.add_task({"id": "created-empty", "description": "d", "queries": ["q"], "result": []})
+    assert created_empty.result is None and store.get_task("created-empty").result is None
+    assert _task(store).result is None
+    emptied = store.update_task("seeded", TaskUpdate(status=TaskStatus.FAILED, result=[]))
+    assert emptied.result is None and store.get_task("seeded").result is None
+    refilled = store.update_task("seeded", TaskUpdate(result=[source]))
+    assert sources(refilled) == sources(store.get_task("seeded")) == expected
+
+
 # ── search jobs ───────────────────────────────────────────────────────────────
 
 

@@ -176,7 +176,7 @@ async def test_an_admin_rewrites_any_task_with_an_audit_row(client, auth_on):
 
     assert response.status_code == 200, response.text
     task = store.get_task(task_id)
-    assert task.status == TaskStatus.FAILED and task.result == []
+    assert task.status == TaskStatus.FAILED and task.result is None  # emptied: None on both stores
     assert len(task.logs[-1]) == TASK_UPDATE_MAX_LOG_CHARS
     [audit] = _audits(store, task_id)
     assert audit.actor_email == auth_on["admin_email"]

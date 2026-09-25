@@ -584,7 +584,8 @@ class InMemoryTaskStore:
         return True
 
     def add_task(self, task_data: dict) -> SearchTask:
-        task = SearchTask(**task_data)
+        # No results read back as None, as on the SQL store (where they are rows).
+        task = SearchTask(**{**task_data, "result": task_data.get("result") or None})
         self.tasks[task.id] = task
         return task
 
@@ -1233,7 +1234,7 @@ class InMemoryTaskStore:
         if update.status is not None:
             task.status = update.status
         if update.result is not None:
-            task.result = update.result
+            task.result = update.result or None  # emptied: None, as the SQL store reads it back
         if update.search_metrics is not None:
             task.search_metrics = update.search_metrics
         if update.log:
