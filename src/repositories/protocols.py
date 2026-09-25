@@ -27,6 +27,9 @@ from src.domain import (
     UserRecord,
 )
 
+# The error a stale finalize job is closed with when its research has already ended.
+STALE_FINALIZE_CLOSED_ERROR = "Research no longer active — stale job closed"
+
 
 class TaskStore(Protocol):
     def add_research(
@@ -219,6 +222,9 @@ class TaskStore(Protocol):
     # the finalize variant also bumps lease_epoch to fence a runner on the old lease.
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
+    # RUNNING jobs not renewed since `stale_before`: requeued (PENDING, lease bumped), or
+    # closed (COMPLETED with STALE_FINALIZE_CLOSED_ERROR) when their research is already
+    # COMPLETED/FAILED/CANCELLED. Returns both kinds; the status tells them apart.
     def recover_stale_research_finalize_jobs(
         self,
         stale_before: datetime,

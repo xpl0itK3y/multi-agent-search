@@ -4,6 +4,7 @@ import uuid
 
 from src.auth.admin_identity import has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
+from src.repositories.protocols import STALE_FINALIZE_CLOSED_ERROR
 from src.domain import (
     AdminAuditLogItem,
     AdminDryRunResult,
@@ -819,12 +820,15 @@ class InMemoryTaskStore:
         recovered_jobs = []
         for job in self.finalize_jobs.values():
             if job.status == FinalizeJobStatus.RUNNING and job.updated_at < stale_before:
-                job.status = FinalizeJobStatus.PENDING
+                research = self.researches.get(job.research_id)
+                # An ended research keeps its status: close the job instead of requeueing it.
+                ended = research is not None and research.status in self._TERMINAL_RESEARCH_STATUSES
+                job.status = FinalizeJobStatus.COMPLETED if ended else FinalizeJobStatus.PENDING
                 job.lease_epoch += 1
-                job.error = None
+                job.error = STALE_FINALIZE_CLOSED_ERROR if ended else None
                 job.updated_at = datetime.now(timezone.utc)
                 recovered_jobs.append(job)
-        return recovered_jobs
+        return sorted(recovered_jobs, key=lambda item: item.created_at)
 
     def cleanup_old_research_finalize_jobs(
         self,

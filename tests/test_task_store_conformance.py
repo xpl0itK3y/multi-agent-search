@@ -38,7 +38,7 @@ from src.db.models import (
     WorkerHeartbeatORM,
 )
 from src.repositories.in_memory_task_store import InMemoryTaskStore
-from src.repositories.protocols import TaskStore
+from src.repositories.protocols import STALE_FINALIZE_CLOSED_ERROR, TaskStore
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
 from tests.postgres_helpers import truncate_runtime_tables
 
@@ -507,6 +507,34 @@ def test_finalize_job_stale_recovery_bumps_lease_epoch(store):
     bumped = store.get_research_finalize_job(job.id)
     assert bumped.status == FinalizeJobStatus.PENDING
     assert bumped.lease_epoch == 1
+
+
+@pytest.mark.parametrize(
+    "ended", [ResearchStatus.CANCELLED, ResearchStatus.COMPLETED, ResearchStatus.FAILED]
+)
+def test_finalize_stale_recovery_closes_the_job_of_an_ended_research(store, ended):
+    live = _research(store)
+    live_job = store.add_research_finalize_job(live.id)
+    store.claim_research_finalize_job_by_id(live_job.id)
+    done = _research(store)
+    done_job = store.add_research_finalize_job(done.id)
+    store.claim_research_finalize_job_by_id(done_job.id)
+    store.update_research_status(done.id, ended, "ended while the job hung")
+
+    recovered = {
+        item.id: item
+        for item in store.recover_stale_research_finalize_jobs(datetime.now(timezone.utc) + timedelta(hours=1))
+    }
+
+    assert recovered[live_job.id].status == FinalizeJobStatus.PENDING
+    assert recovered[done_job.id].status == FinalizeJobStatus.COMPLETED
+    closed = store.get_research_finalize_job(done_job.id)
+    assert closed.status == FinalizeJobStatus.COMPLETED
+    assert closed.error == STALE_FINALIZE_CLOSED_ERROR
+    assert closed.lease_epoch == 1  # a runner still holding the old lease is fenced
+    assert store.get_research(done.id).status == ended
+    assert store.get_research(done.id).final_report == "ended while the job hung"
+    assert store.claim_next_research_finalize_job().id == live_job.id
 
 
 def test_finalize_job_latest_listings_and_cleanup(store):

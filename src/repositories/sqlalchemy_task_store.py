@@ -60,6 +60,7 @@ from src.db.models import (
 )
 from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
+from src.repositories.protocols import STALE_FINALIZE_CLOSED_ERROR
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
     research_orm_to_record,
@@ -1072,23 +1073,42 @@ class SQLAlchemyTaskStore:
         self,
         stale_before: datetime,
     ) -> list[ResearchFinalizeJob]:
+        stale = (
+            ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
+            ResearchFinalizeJobORM.updated_at < stale_before,
+        )
+        ended = select(ResearchORM.id).where(
+            ResearchORM.status.in_([status.value for status in self._TERMINAL_RESEARCH_STATUSES])
+        )
+        now = datetime.now(timezone.utc)
         with self.session_scope() as session:
-            statement = (
+            # A research that was cancelled, completed or failed meanwhile keeps its status:
+            # its stale job is closed, not handed to a new runner that would finish it.
+            closed = session.execute(
                 update(ResearchFinalizeJobORM)
-                .where(
-                    ResearchFinalizeJobORM.status == FinalizeJobStatus.RUNNING.value,
-                    ResearchFinalizeJobORM.updated_at < stale_before,
+                .where(*stale, ResearchFinalizeJobORM.research_id.in_(ended))
+                .values(
+                    status=FinalizeJobStatus.COMPLETED.value,
+                    lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
+                    error=STALE_FINALIZE_CLOSED_ERROR,
+                    updated_at=now,
                 )
+                .returning(ResearchFinalizeJobORM)
+                .execution_options(synchronize_session=False)
+            ).scalars().all()
+            requeued = session.execute(
+                update(ResearchFinalizeJobORM)
+                .where(*stale)
                 .values(
                     status=FinalizeJobStatus.PENDING.value,
                     lease_epoch=ResearchFinalizeJobORM.lease_epoch + 1,
                     error=None,
-                    updated_at=datetime.now(timezone.utc),
+                    updated_at=now,
                 )
                 .returning(ResearchFinalizeJobORM)
-            )
-            jobs = session.execute(statement).scalars().all()
-            jobs.sort(key=lambda item: item.created_at)
+                .execution_options(synchronize_session=False)
+            ).scalars().all()
+            jobs = sorted([*closed, *requeued], key=lambda item: item.created_at)
             return [research_finalize_job_orm_to_schema(job) for job in jobs]
 
     def cleanup_old_research_finalize_jobs(

@@ -73,28 +73,38 @@ class JobQueueMixin:
 
     def recover_stale_research_finalize_jobs(self, stale_seconds: int | None = None) -> JobRecoveryResponse:
         stale_before = self._stale_before(settings.finalize_job_timeout_seconds, stale_seconds)
-        recovered_jobs = self.task_store.recover_stale_research_finalize_jobs(stale_before)
-        for job in recovered_jobs:
-            self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
+        recovered_jobs = []
+        for job in self.task_store.recover_stale_research_finalize_jobs(stale_before):
+            if job.status != FinalizeJobStatus.PENDING:
+                # The store closed it: the research was cancelled, completed or failed while
+                # the job hung, and a new runner would have finished it anyway.
+                logger.warning("finalize_job_closed_research_ended job_id=%s research_id=%s", job.id, job.research_id)
+                continue
+            recovered_jobs.append(job)
+            # Never overwrite a status the runner does not own: this moves only a research
+            # that is still in flight (normally already ANALYZING) and leaves a cancel that
+            # landed meanwhile alone; the next runner's start-of-run check then closes the job.
+            self.task_store.try_begin_finalization(job.research_id)
             research = self.task_store.get_research(job.research_id)
-            graph_state = (research.graph_state if research else None) or {}
-            resume_step = graph_state.get("step") or "unknown"
-            # Patch only the flag: merging the snapshot read above back would rewrite every
-            # key with its pre-read value, racing the fenced runner that may still write.
-            self.checkpoint_graph_state(
-                job.research_id,
-                {"resume_after_stale_recovery": True},
-                {
-                    "step": "stale_recovered",
-                    "detail": trail_detail(
-                        "stale_recovered",
-                        self._research_language(research) if research else None,
-                        job_id=job.id,
-                        step=resume_step,
-                    ),
-                    "metrics": {"resume_from": resume_step},
-                },
-            )
+            if research is not None and research.status == ResearchStatus.ANALYZING:
+                graph_state = research.graph_state or {}
+                resume_step = graph_state.get("step") or "unknown"
+                # Patch only the flag: merging the snapshot read above back would rewrite
+                # every key with its pre-read value, racing the fenced runner that may still write.
+                self.checkpoint_graph_state(
+                    job.research_id,
+                    {"resume_after_stale_recovery": True},
+                    {
+                        "step": "stale_recovered",
+                        "detail": trail_detail(
+                            "stale_recovered",
+                            self._research_language(research),
+                            job_id=job.id,
+                            step=resume_step,
+                        ),
+                        "metrics": {"resume_from": resume_step},
+                    },
+                )
             # Re-dispatch to Redis (see search-job recovery note above).
             if self.broker:
                 self.broker.push_finalize_job(job.id)

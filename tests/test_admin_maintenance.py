@@ -52,9 +52,9 @@ def _execute(service, action, **params):
     )
 
 
-def _running_finalize_job(store, age_seconds, max_attempts=3):
+def _running_finalize_job(store, age_seconds, max_attempts=3, status=ResearchStatus.FAILED):
     research = store.add_research(ResearchRequest(prompt="maintenance topic", depth=SearchDepth.EASY), task_ids=[])
-    store.update_research_status(research.id, ResearchStatus.FAILED, "stuck")
+    store.update_research_status(research.id, status, "stuck")
     job = store.add_research_finalize_job(research.id, max_attempts=max_attempts)
     store.claim_research_finalize_job_by_id(job.id)
     job.updated_at = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
@@ -63,7 +63,11 @@ def _running_finalize_job(store, age_seconds, max_attempts=3):
 
 def test_recover_stale_finalize_redispatches_and_fences_the_old_runner():
     store, broker, service = _service()
-    research, stale = _running_finalize_job(store, settings.finalize_job_timeout_seconds + 60)
+    # A hung finalization leaves its research ANALYZING; recovery never revives an ended
+    # (failed/cancelled/completed) one, it closes that job instead.
+    research, stale = _running_finalize_job(
+        store, settings.finalize_job_timeout_seconds + 60, status=ResearchStatus.ANALYZING
+    )
     _, busy = _running_finalize_job(store, settings.finalize_job_timeout_seconds - 60)
 
     result = _execute(service, "recover_stale_finalize_jobs")
