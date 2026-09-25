@@ -6,6 +6,7 @@ from src.domain import (
     AdminDryRunResult,
     AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptItem,
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
@@ -507,5 +508,14 @@ class TaskStore(Protocol):
         user_id: str | None = None,
         prompt_type: str | None = None,
     ) -> AdminPromptsResponse: ...
+
+    # The streamed prompts export: the next ``limit`` prompts of get_admin_prompts' order
+    # (unfiltered) after ``after``, the last item of the previous page. Keyset paging, and
+    # no total count: a page costs O(limit) instead of a COUNT and a sort of every prompt.
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]: ...
 
 

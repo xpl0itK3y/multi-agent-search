@@ -104,6 +104,8 @@ Index(
     ResearchORM.user_id,
     ResearchORM.created_at.desc(),
 )
+# The admin Tokens list/export and the prompts export's keyset cursor: newest first.
+Index("ix_researches_created_id", ResearchORM.created_at, ResearchORM.id)
 
 
 class SearchTaskORM(Base):

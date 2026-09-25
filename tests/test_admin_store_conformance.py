@@ -350,6 +350,31 @@ def test_prompts_page_in_sql(store):
         assert "UNION ALL" in page_query and "LIMIT" in page_query
 
 
+def test_prompts_export_pages_by_cursor_in_the_listing_order(store):
+    """The export's keyset pages add up to exactly the listing (ties on created_at broken
+    by the item id in both), without the listing's COUNT or an OFFSET per page."""
+    r1, _r2, r3 = _prompt_log(store)
+    tie = next(p for p in store.get_admin_prompts(page_size=10).prompts if p.research_id == r3.id)
+    _chat_prompt(store, "p-user", r1.id, "same instant as the third research", datetime.fromisoformat(tie.created_at))
+    listing = store.get_admin_prompts(page=1, page_size=10).prompts
+
+    pages, after = [], None
+    with _statements(store) as statements:
+        while True:
+            page = store.get_admin_prompts_after(after, limit=2)
+            pages.append(page)
+            if len(page) < 2:
+                break
+            after = page[-1]
+
+    assert [len(page) for page in pages] == [2, 2, 2, 0]
+    assert [item for page in pages for item in page] == listing
+    assert pages[0][0].created_at == pages[0][1].created_at  # the tie spans the first page
+    assert (pages[2][1].total_tokens, pages[2][1].cost_usd) == (42, 0.1235)  # usage per page
+    if statements is not None:
+        assert not [sql for sql in statements if "count(*)" in sql or "OFFSET" in sql]
+
+
 # ── token analytics ───────────────────────────────────────────────────────────
 
 

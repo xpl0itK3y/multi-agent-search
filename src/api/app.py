@@ -47,6 +47,7 @@ from src.api.schemas import (
     MaintenanceActionRequest,
     AdminEventLogResponse,
     AdminOverviewResponse,
+    AdminPromptItem,
     AdminPromptsResponse,
     AdminTelemetrySummaryResponse,
     AdminTokenAnalyticsResponse,
@@ -1094,12 +1095,22 @@ def register_routes(app: FastAPI) -> None:
     def admin_prompts_export(request: Request, admin_user: AuthUser = Depends(enforce_admin_rate_limit)):
         record_admin_action(request, admin_user, "export_prompts", target_type="export")
         store = get_research_service(request).task_store
+        last_exported: list[AdminPromptItem] = []  # the keyset cursor
+
+        def next_page(_page: int) -> list[AdminPromptItem]:
+            # From the previous page's last row: no COUNT and no sort before an OFFSET per page.
+            after = last_exported[0] if last_exported else None
+            items = store.get_admin_prompts_after(after, limit=ADMIN_EXPORT_PAGE_SIZE)
+            if items:
+                last_exported[:] = [items[-1]]
+            return items
+
         rows = stream_csv(
             [
                 "id", "prompt_type", "research_id", "user_id", "user_email", "user_name",
                 "prompt", "depth", "status", "total_tokens", "cost_usd", "created_at",
             ],
-            lambda page: store.get_admin_prompts(page=page, page_size=ADMIN_EXPORT_PAGE_SIZE).prompts,
+            next_page,
             lambda p: [
                 p.id,
                 p.prompt_type,

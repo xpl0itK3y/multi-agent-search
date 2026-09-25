@@ -2715,25 +2715,23 @@ class SQLAlchemyTaskStore:
                 page_size=limit,
             )
 
-    def get_admin_prompts(
-        self,
-        page: int = 1,
-        page_size: int = 25,
+    @staticmethod
+    def _admin_prompt_branches(
         search: str | None = None,
         user_id: str | None = None,
         prompt_type: str | None = None,
-    ) -> AdminPromptsResponse:
-        """Research prompts and chat follow-up prompts (chat_prompt events) as one list,
-        newest first. Paginated in SQL: a UNION ALL of the two sources ordered and sliced
-        by the database, a separate COUNT, and usage summed for the page's researches only."""
+    ) -> list[tuple]:
+        """The two prompt sources as (select, created_at, item_id) per wanted branch: the
+        research prompts and the chat follow-up prompts (chat_prompt events)."""
         term = (search or "").strip()
         pattern = _contains_pattern(term) if term else None
         branches = []
         if not prompt_type or prompt_type in ("all", "research"):
+            research_item_id = func.concat("res_", ResearchORM.id)
             research_branch = (
                 select(
                     literal("research").label("prompt_type"),
-                    func.concat("res_", ResearchORM.id).label("item_id"),
+                    research_item_id.label("item_id"),
                     ResearchORM.prompt.label("prompt"),
                     ResearchORM.id.label("research_id"),
                     ResearchORM.user_id.label("user_id"),
@@ -2756,13 +2754,14 @@ class SQLAlchemyTaskStore:
                         UserORM.name.ilike(pattern, escape="\\"),
                     )
                 )
-            branches.append(research_branch)
+            branches.append((research_branch, ResearchORM.created_at, research_item_id))
         if not prompt_type or prompt_type in ("all", "chat"):
             chat_prompt = func.coalesce(UserEventORM.details["prompt"].astext, "")
+            chat_item_id = func.concat("chat_", UserEventORM.id)
             chat_branch = (
                 select(
                     literal("chat").label("prompt_type"),
-                    func.concat("chat_", UserEventORM.id).label("item_id"),
+                    chat_item_id.label("item_id"),
                     chat_prompt.label("prompt"),
                     func.coalesce(UserEventORM.details["research_id"].astext, "").label("research_id"),
                     UserEventORM.user_id.label("user_id"),
@@ -2786,23 +2785,11 @@ class SQLAlchemyTaskStore:
                         UserORM.name.ilike(pattern, escape="\\"),
                     )
                 )
-            branches.append(chat_branch)
-        if not branches:  # an unknown prompt_type matches nothing
-            return AdminPromptsResponse(prompts=[], total_count=0, page=page, page_size=page_size)
+            branches.append((chat_branch, UserEventORM.created_at, chat_item_id))
+        return branches
 
-        prompts = (union_all(*branches) if len(branches) > 1 else branches[0]).subquery("prompts")
-        with self.session_scope() as session:
-            total_count = session.execute(select(func.count()).select_from(prompts)).scalar_one()
-            rows = session.execute(
-                select(prompts)
-                .order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc())
-                .offset(max(0, (page - 1) * page_size))
-                .limit(page_size)
-            ).all()
-            usage_by_research = self._usage_by_research(
-                session, [row.research_id for row in rows if row.prompt_type == "research"]
-            )
-
+    @staticmethod
+    def _admin_prompt_items(rows, usage_by_research: dict[str, tuple[int, float, int]]) -> list[AdminPromptItem]:
         items: list[AdminPromptItem] = []
         for row in rows:
             tokens, cost = 0, 0.0
@@ -2824,12 +2811,64 @@ class SQLAlchemyTaskStore:
                     created_at=row.created_at.isoformat(),
                 )
             )
+        return items
+
+    def get_admin_prompts(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        search: str | None = None,
+        user_id: str | None = None,
+        prompt_type: str | None = None,
+    ) -> AdminPromptsResponse:
+        """Research prompts and chat follow-up prompts (chat_prompt events) as one list,
+        newest first. Paginated in SQL: a UNION ALL of the two sources ordered and sliced
+        by the database, a separate COUNT, and usage summed for the page's researches only."""
+        branches = [branch for branch, _created_at, _item_id in self._admin_prompt_branches(search, user_id, prompt_type)]
+        if not branches:  # an unknown prompt_type matches nothing
+            return AdminPromptsResponse(prompts=[], total_count=0, page=page, page_size=page_size)
+
+        prompts = (union_all(*branches) if len(branches) > 1 else branches[0]).subquery("prompts")
+        with self.session_scope() as session:
+            total_count = session.execute(select(func.count()).select_from(prompts)).scalar_one()
+            rows = session.execute(
+                select(prompts)
+                .order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc())
+                .offset(max(0, (page - 1) * page_size))
+                .limit(page_size)
+            ).all()
+            usage_by_research = self._usage_by_research(
+                session, [row.research_id for row in rows if row.prompt_type == "research"]
+            )
         return AdminPromptsResponse(
-            prompts=items,
+            prompts=self._admin_prompt_items(rows, usage_by_research),
             total_count=total_count,
             page=page,
             page_size=page_size,
         )
+
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]:
+        """Each branch reads its next ``limit`` rows from the cursor on (the leading
+        created_at bound can use the created_at indexes), and only those are merged."""
+        cursor = None if after is None else (datetime.fromisoformat(after.created_at), after.id)
+        limited = []
+        for branch, created_at, item_id in self._admin_prompt_branches():
+            if cursor is not None:
+                branch = branch.where(created_at <= cursor[0], or_(created_at < cursor[0], item_id < cursor[1]))
+            limited.append(select(branch.order_by(created_at.desc(), item_id.desc()).limit(limit).subquery()))
+        prompts = union_all(*limited).subquery("prompts")
+        with self.session_scope() as session:
+            rows = session.execute(
+                select(prompts).order_by(prompts.c.created_at.desc(), prompts.c.item_id.desc()).limit(limit)
+            ).all()
+            usage_by_research = self._usage_by_research(
+                session, [row.research_id for row in rows if row.prompt_type == "research"]
+            )
+        return self._admin_prompt_items(rows, usage_by_research)
 
     def get_user_token_analytics(self, user_id: str) -> dict:
         with self.session_scope() as session:

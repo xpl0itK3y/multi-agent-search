@@ -131,6 +131,32 @@ async def test_prompts_export_quotes_research_and_chat_prompts(client):
 
 
 @pytest.mark.anyio
+async def test_prompts_export_pages_through_every_prompt_once(client, monkeypatch):
+    monkeypatch.setattr("src.api.app.ADMIN_EXPORT_PAGE_SIZE", 1)
+    store = client._transport.app.state.research_service.task_store
+    marker = uuid.uuid4().hex[:8]
+    research_ids = [
+        store.add_research(ResearchRequest(prompt=f"export {marker} {n}", depth=SearchDepth.EASY), task_ids=[]).id
+        for n in range(3)
+    ]
+    for research_id in research_ids[:2]:
+        store.record_user_event(
+            event_name="chat_prompt",
+            event_category="prompt",
+            details={"research_id": research_id, "prompt": f"follow-up {marker}"},
+        )
+
+    response = await client.get("/v1/admin/prompts/export")
+
+    assert response.status_code == 200
+    mine = [row for row in _rows(response.text)[1:] if row[2] in research_ids]
+    assert sorted((row[1], row[2]) for row in mine) == sorted(
+        [("research", rid) for rid in research_ids] + [("chat", rid) for rid in research_ids[:2]]
+    )
+    assert len({row[0] for row in mine}) == 5  # each once
+
+
+@pytest.mark.anyio
 async def test_tokens_export_quotes_prompts_and_pages(client, monkeypatch):
     monkeypatch.setattr("src.api.app.ADMIN_EXPORT_PAGE_SIZE", 1)
     store = client._transport.app.state.research_service.task_store

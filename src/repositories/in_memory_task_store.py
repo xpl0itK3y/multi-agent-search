@@ -1974,6 +1974,17 @@ class InMemoryTaskStore:
             page_size=page_size,
         )
 
+    def get_admin_prompts_after(
+        self,
+        after: AdminPromptItem | None = None,
+        limit: int = 500,
+    ) -> list[AdminPromptItem]:
+        prompts = self.get_admin_prompts(page=1, page_size=len(self.researches) + len(self.user_events)).prompts
+        if after is not None:
+            cursor = (datetime.fromisoformat(after.created_at), after.id)
+            prompts = [item for item in prompts if (datetime.fromisoformat(item.created_at), item.id) < cursor]
+        return prompts[:limit]
+
     def get_user_token_analytics(self, user_id: str) -> dict:
         logs = [u for u in self.llm_usage_logs if u.get("user_id") == user_id]
         total_prompt = sum(u.get("prompt_tokens", 0) for u in logs)
