@@ -2862,8 +2862,9 @@ def test_get_or_create_oauth_user_is_idempotent():
     u2, created2 = service.get_or_create_oauth_user("person@gmail.com", "google-123")
     assert u2.id == u1.id and created2 is False  # same account, not a duplicate
 
-    # After setting a password the user can also log in with email + password.
-    service.set_user_password(u1.id, "newpass1")
+    # After setting a password (a first one needs a fresh Google sign-in, SEC2-3) the user
+    # can also log in with email + password.
+    service.set_user_password(u1.id, "newpass1", fresh_google_auth=True)
     assert service.authenticate_user("person@gmail.com", "newpass1").id == u1.id
 
 
