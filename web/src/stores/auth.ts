@@ -45,5 +45,15 @@ export const useAuthStore = defineStore("auth", () => {
     return user.value;
   }
 
-  return { user, checked, fetchMe, login, register, logout, updateProfile };
+  // A password reset revokes every session of its account and signs nobody in (api drops
+  // the stored token): whoever was signed in here is signed out, as after a logout.
+  async function resetPassword(token: string, password: string) {
+    await api.resetPassword(token, password);
+    if (user.value) {
+      stopTelemetry();
+      user.value = null;
+    }
+  }
+
+  return { user, checked, fetchMe, login, register, logout, updateProfile, resetPassword };
 });

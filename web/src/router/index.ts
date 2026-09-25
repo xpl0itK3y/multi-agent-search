@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { googleReturnRedirect } from "@/lib/googleSignIn";
+import { holdLinkToken } from "@/lib/linkToken";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -12,6 +13,14 @@ const router = createRouter({
       name: "forgot-password",
       component: () => import("@/views/ForgotPasswordView.vue"),
       meta: { public: true, bare: true },
+    },
+    // meta.linkToken: opened from an emailed link, whose one-time token the guard below
+    // takes out of the address (lib/linkToken.ts).
+    {
+      path: "/reset-password",
+      name: "reset-password",
+      component: () => import("@/views/ResetPasswordView.vue"),
+      meta: { public: true, bare: true, linkToken: true },
     },
     { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
@@ -60,6 +69,10 @@ router.beforeEach((to) => {
     pageLoadNavigation = false;
     const back = googleReturnRedirect(to, auth.user !== null);
     if (back) return back;
+  }
+  if (to.meta.linkToken && to.hash) {
+    holdLinkToken(String(to.name), to.hash);
+    return { path: to.path, query: to.query, hash: "", replace: true };
   }
   if (to.meta.public) return true;
   if (to.name !== "login" && !auth.user) {

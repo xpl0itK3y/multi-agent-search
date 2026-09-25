@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const stubView = vi.hoisted(() => () => ({ default: { render: () => null } }));
 vi.mock("@/views/LoginView.vue", stubView);
 vi.mock("@/views/ForgotPasswordView.vue", stubView);
+vi.mock("@/views/ResetPasswordView.vue", stubView);
 vi.mock("@/views/SetPasswordView.vue", stubView);
 vi.mock("@/views/HomeView.vue", stubView);
 vi.mock("@/views/ResearchView.vue", stubView);
@@ -87,7 +88,7 @@ describe("router: signed-out account pages", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it.each(["/forgot-password"])("opens %s without a session, outside the app shell", async (path) => {
+  it.each(["/forgot-password", "/reset-password"])("opens %s without a session, outside the app shell", async (path) => {
     const router = await loadApp(false);
 
     await router.push(path);
@@ -96,7 +97,7 @@ describe("router: signed-out account pages", () => {
     expect(router.currentRoute.value.meta).toMatchObject({ public: true, bare: true });
   });
 
-  it.each(["/forgot-password"])("keeps a signed-in user on %s", async (path) => {
+  it.each(["/forgot-password", "/reset-password"])("keeps a signed-in user on %s", async (path) => {
     const router = await loadApp(true);
 
     await router.push(path);
@@ -111,5 +112,64 @@ describe("router: signed-out account pages", () => {
     for (const path of ["/", "/settings", "/r/share-token", "/set-password"]) {
       expect(router.resolve(path).meta.bare, path).toBeUndefined();
     }
+  });
+});
+
+describe("router: an emailed link's one-time token", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  // The page load of a link: the browser opened this address, the router starts there.
+  async function openLink(address: string, signedIn = false) {
+    window.history.replaceState(null, "", address);
+    const router = await loadApp(signedIn);
+    await router.push(router.options.history.location);
+    const { takeLinkToken } = await import("@/lib/linkToken");
+    return { router, takeLinkToken };
+  }
+
+  it.each([false, true])("takes it out of the address before the page renders (signed in: %s)", async (signedIn) => {
+    const { router, takeLinkToken } = await openLink("/reset-password?lang=en#token=secret-tok", signedIn);
+
+    expect(router.currentRoute.value.fullPath).toBe("/reset-password?lang=en");
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/reset-password?lang=en");
+    // vue-router's own record of the entry, which it writes back on the next navigation.
+    expect(JSON.stringify(window.history.state)).not.toContain("secret-tok");
+    expect(takeLinkToken("reset-password")).toBe("secret-tok");
+  });
+
+  it("replaces the link's history entry instead of adding one", async () => {
+    const { router } = await openLink("/reset-password#token=secret-tok");
+
+    expect(window.history.state.replaced).toBe(true);
+    expect(router.currentRoute.value.redirectedFrom?.hash).toBe("#token=secret-tok");
+  });
+
+  it("never brings it back when the user moves on", async () => {
+    const { router } = await openLink("/reset-password#token=secret-tok");
+
+    await router.push("/login");
+    expect(JSON.stringify(window.history.state)).not.toContain("secret-tok");
+
+    const back = new Promise((resolve) => window.addEventListener("popstate", resolve, { once: true }));
+    window.history.back();
+    await back;
+    expect(window.location.hash).toBe("");
+    expect(window.location.pathname).toBe("/reset-password");
+  });
+
+  it("drops any other fragment of such a page", async () => {
+    const { router, takeLinkToken } = await openLink("/reset-password#section");
+
+    expect(router.currentRoute.value.fullPath).toBe("/reset-password");
+    expect(takeLinkToken("reset-password")).toBeNull();
+  });
+
+  it("leaves the fragments of other pages alone", async () => {
+    const { router, takeLinkToken } = await openLink("/forgot-password#token=not-a-link");
+
+    expect(router.currentRoute.value.fullPath).toBe("/forgot-password#token=not-a-link");
+    expect(takeLinkToken("forgot-password")).toBeNull();
   });
 });

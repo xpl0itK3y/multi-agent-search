@@ -11,6 +11,7 @@ vi.mock("@/lib/api", () => ({
     login: vi.fn(async () => ({ access_token: "t", user })),
     register: vi.fn(async () => ({ access_token: "t", user })),
     logout: vi.fn(async () => ({ status: "ok" })),
+    resetPassword: vi.fn(async () => ({ status: "ok" })),
   },
 }));
 
@@ -54,5 +55,43 @@ describe("auth store telemetry hooks", () => {
     await useAuthStore().logout();
 
     expect(order).toEqual(["stop", "logout"]);
+  });
+});
+
+describe("auth store password reset", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("signs out whoever was signed in here: the reset revoked every session", async () => {
+    const auth = useAuthStore();
+    auth.user = user;
+
+    await auth.resetPassword("reset-tok", "new-password");
+
+    expect(api.resetPassword).toHaveBeenCalledWith("reset-tok", "new-password");
+    expect(auth.user).toBeNull();
+    expect(telemetry.stopTelemetry).toHaveBeenCalledOnce();
+    // No logout call: the server ended the session already, and a logout (which signs out
+    // every device) of another account's session would reach well beyond this page.
+    expect(api.logout).not.toHaveBeenCalled();
+  });
+
+  it("keeps the session when the reset is refused", async () => {
+    vi.mocked(api.resetPassword).mockRejectedValueOnce(new Error("400 reset_token_invalid"));
+    const auth = useAuthStore();
+    auth.user = user;
+
+    await expect(auth.resetPassword("dead-tok", "new-password")).rejects.toThrow();
+
+    expect(auth.user).toEqual(user);
+    expect(telemetry.stopTelemetry).not.toHaveBeenCalled();
+  });
+
+  it("a signed-out reset touches no telemetry", async () => {
+    await useAuthStore().resetPassword("reset-tok", "new-password");
+
+    expect(telemetry.stopTelemetry).not.toHaveBeenCalled();
   });
 });

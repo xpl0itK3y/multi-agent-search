@@ -157,7 +157,7 @@ describe("api request error handling", () => {
   });
 
   // The account pages a signed-out visitor opens, in the spellings vue-router matches.
-  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/"];
+  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/", "/reset-password"];
 
   it("on 401 on public routes (/r/…, /login, account pages): no redirect loop", async () => {
     for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
