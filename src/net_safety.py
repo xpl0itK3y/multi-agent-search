@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 def _classify_ip(ip_str: str) -> str | None:
-    """Return a rejection reason if ``ip_str`` is a non-public/routable address, else None."""
+    """Return a rejection reason if ``ip_str`` is not a globally routable unicast address,
+    else None."""
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
@@ -23,13 +24,19 @@ def _classify_ip(ip_str: str) -> str | None:
     # Normalise IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) before classifying.
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    # is_global catches what the named checks miss, such as the shared address space
+    # 100.64.0.0/10 (carrier-grade NAT, Tailscale, some cloud-internal services), which
+    # is neither private nor reserved. The named checks stay, because is_global alone
+    # passes multicast, NAT64 64:ff9b::/96 and the deprecated site-local fec0::/10.
     if (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
+        or (isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local)
     ):
         return f"resolves to non-public address {ip}"
     return None
@@ -39,8 +46,9 @@ def is_safe_public_url(url: str) -> tuple[bool, str]:
     """Return (ok, reason). ``ok`` is True only for http(s) URLs whose host
     resolves exclusively to public, routable IP addresses.
 
-    Rejects loopback, private, link-local (incl. cloud metadata 169.254.169.254),
-    reserved, multicast and unspecified addresses across IPv4 and IPv6.
+    Rejects every address that is not globally routable across IPv4 and IPv6: loopback,
+    private, shared (100.64.0.0/10), link-local (incl. cloud metadata 169.254.169.254),
+    reserved, multicast and unspecified ones among them.
     """
     if not url or not isinstance(url, str):
         return False, "empty URL"
