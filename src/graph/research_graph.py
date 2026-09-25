@@ -611,11 +611,14 @@ class FinalizeGraphRunner:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
 
     def _report_needs_retry(self, report: str) -> bool:
+        # The report-notes heading in every language the analyzer writes it in
+        # (AnalyzerAgent._REPORT_NOTES_HEADINGS), plus the ru spelling without ё.
         normalized = report.lower()
         return (
             "## report notes" in normalized
             or "## примечания к отчёту" in normalized
             or "## примечания к отчету" in normalized
+            or "## notas del informe" in normalized
             or "weakly supported" in normalized
             or "слабо подтверж" in normalized
         )

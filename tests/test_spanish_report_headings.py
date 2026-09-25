@@ -71,3 +71,19 @@ def test_other_languages_fall_back_to_english_headings():
     assert ResearchService(task_store=InMemoryTaskStore())._render_red_team_section(
         RedTeamReport(findings=[RedTeamFinding(claim="A", verdict="holds")]), "de"
     ).startswith("## Weaknesses & counter-arguments")
+
+
+@pytest.mark.parametrize("language", sorted(AnalyzerAgent._REPORT_NOTES_HEADINGS))
+def test_report_notes_in_every_report_language_trigger_the_verify_retry(language):
+    """The finalize graph retries analysis when the draft carries report notes. b01294b
+    gave es its own notes heading; a note that is not a weak-support one (missing
+    conclusion, small subset) must still send an es draft back for another pass."""
+    from src.graph import FinalizeGraphRunner
+
+    agent = AnalyzerAgent(_NoopLLM())
+    runner = FinalizeGraphRunner(ResearchService(task_store=InMemoryTaskStore()))
+    draft = f"## Resumen\n\nTexto [S1].\n\n{agent._sources_heading(language)}\n- [S1] https://example.com"
+    note = agent._quality_note_messages(language)["missing_conclusion"]
+
+    assert runner._report_needs_retry(draft) is False
+    assert runner._report_needs_retry(agent._inject_report_notes(draft, [note], language)) is True
