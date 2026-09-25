@@ -1181,6 +1181,27 @@ class InMemoryTaskStore:
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]:
         return [task for task in self.tasks.values() if task.research_id == research_id]
 
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None:
+                return 0
+            deleted = {
+                task_id
+                for task_id in task_ids
+                if task_id in self.tasks and self.tasks[task_id].research_id == research_id
+            }
+            for task_id in deleted:
+                del self.tasks[task_id]
+            for job_id in [job_id for job_id, job in self.search_jobs.items() if job.task_id in deleted]:
+                del self.search_jobs[job_id]
+            if deleted:
+                research.task_ids = [task_id for task_id in research.task_ids if task_id not in deleted]
+                research.updated_at = datetime.now(timezone.utc)
+        if deleted:
+            self._emit_change(research_id)
+        return len(deleted)
+
     def update_task(
         self,
         task_id: str,

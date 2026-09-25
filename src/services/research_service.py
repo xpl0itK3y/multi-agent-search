@@ -507,6 +507,9 @@ class ResearchService(
                         research_id, len(tasks_raw), request.depth.value,
                     )
                     return
+                if not any(self._is_searchable(task_dict) for task_dict in tasks_raw):
+                    self._fail_unsearchable_plan(research_id, len(tasks_raw))
+                    return
                 task_ids = []
                 registered_tasks = []
                 for task_dict in tasks_raw:
@@ -522,7 +525,9 @@ class ResearchService(
                         if self.broker:
                             self.broker.push_search_job(job.id)
                         enqueued_jobs += 1
-                # Clear crash-recovery marker now that decompose ran.
+                # Clear the crash-recovery marker (and the stored request) only now that the
+                # plan has search jobs: a research failed before this point keeps its request,
+                # so a retry decomposes it again instead of searching a plan with nothing in it.
                 self._clear_decompose_pending(research_id)
                 self._emit_plan_progress(
                     research_id,
@@ -533,21 +538,6 @@ class ResearchService(
                     detail=trail_detail("plan_ready", language, count=len(registered_tasks)),
                     metrics={"task_count": len(registered_tasks), "enqueued_jobs": enqueued_jobs},
                 )
-                if enqueued_jobs == 0:
-                    # Decompose produced no searchable queries (e.g. the model was
-                    # unavailable / a degenerate fallback came back). Fail cleanly instead
-                    # of leaving the research stuck in 'processing' forever.
-                    logger.warning(
-                        "research_decompose_no_queries research_id=%s task_count=%s",
-                        research_id, len(registered_tasks),
-                    )
-                    self.task_store.update_research_status(
-                        research_id,
-                        ResearchStatus.FAILED,
-                        "Could not generate a search plan (no searchable queries). "
-                        "Check the model/API key and try again.",
-                    )
-                    return
                 logger.info(
                     "research_decomposed research_id=%s task_count=%s depth=%s",
                     research_id,
@@ -557,6 +547,31 @@ class ResearchService(
             except Exception as exc:
                 logger.error("research_decompose_failed research_id=%s error=%s", research_id, str(exc))
                 self.task_store.update_research_status(research_id, ResearchStatus.FAILED, self._failure_message(exc))
+
+    NO_SEARCH_PLAN_REPORT = (
+        "Could not generate a search plan (no searchable queries). "
+        "Check the model/API key and try again."
+    )
+
+    @staticmethod
+    def _is_searchable(task_raw: dict) -> bool:
+        """A planned task that gets a search job: PENDING with at least one query (the
+        orchestrator's parse fallback is a FAILED task, some plans come back without queries)."""
+        status = TaskStatus(task_raw.get("status") or TaskStatus.PENDING)
+        return status == TaskStatus.PENDING and bool(task_raw.get("queries"))
+
+    def _fail_unsearchable_plan(self, research_id: str, task_count: int) -> None:
+        """The decomposition produced nothing to search (non-JSON model output, tasks without
+        queries). Fail cleanly instead of leaving the research stuck in 'processing', and
+        persist none of the plan: the stored request stays, so a retry decomposes again."""
+        logger.warning("research_decompose_no_queries research_id=%s task_count=%s", research_id, task_count)
+        # Guarded: a cancel that landed during the decomposition stands.
+        self.task_store.transition_research_status(
+            research_id, [ResearchStatus.PROCESSING], ResearchStatus.FAILED, self.NO_SEARCH_PLAN_REPORT
+        )
+        self.task_store.merge_research_graph_state(
+            research_id, remove_keys=["decompose_pending", "decompose_requested_at"]
+        )
 
     def _clear_decompose_pending(self, research_id: str) -> None:
         """Remove the crash-recovery marker from graph_state after decompose completes."""
@@ -732,7 +747,7 @@ class ResearchService(
     ) -> ResearchRecord:
         """Retry a failed research from where it failed: finalization when every search
         task completed, the unfinished search tasks otherwise, and decomposition when no
-        tasks were ever created.
+        task was ever created or dispatched.
 
         The retry is admitted like any activation (ADMIT-ATOMIC): FAILED -> PROCESSING is a
         CAS under the admission lock that counts against the per-user and global limits,
@@ -748,9 +763,13 @@ class ResearchService(
             raise ConflictError("Only failed research can be retried")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        finalize_only = bool(tasks) and all(task.status == TaskStatus.COMPLETED for task in tasks)
+        # A plan none of whose tasks was ever dispatched is what a failed decomposition used
+        # to persist ('Could not generate a search plan'): searching it would only run the
+        # parse fallback or empty tasks, so it is dropped and the request decomposed again.
+        replan = not tasks or all(self._never_dispatched(task) for task in tasks)
+        finalize_only = not replan and all(task.status == TaskStatus.COMPLETED for task in tasks)
         # Fail fast, before taking a capacity slot, when the retry path cannot run here.
-        if not tasks:
+        if replan:
             self.require_agent(self.orchestrator, "Orchestrator")
         elif finalize_only:
             self.require_agent(self.analyzer, "Analyzer")
@@ -764,7 +783,9 @@ class ResearchService(
         if reset is None:
             raise ConflictError("Research state changed. Please retry.")
 
-        if not tasks:
+        if replan:
+            if tasks:
+                self.task_store.delete_research_tasks(research_id, [task.id for task in tasks])
             self._retry_decomposition(reset, background_tasks)
         elif finalize_only:
             self._retry_finalization(research_id)
@@ -773,9 +794,19 @@ class ResearchService(
         logger.info(
             "research_retried research_id=%s path=%s",
             research_id,
-            "decompose" if not tasks else "finalize" if finalize_only else "search",
+            "decompose" if replan else "finalize" if finalize_only else "search",
         )
         return self.task_store.get_research(research_id) or reset
+
+    def _never_dispatched(self, task: SearchTask) -> bool:
+        """Planned but never sent to a search worker: no job, no results and no log line
+        (every search, retry or recovery writes one; job rows are cleaned up after a day)."""
+        return (
+            task.status in (TaskStatus.PENDING, TaskStatus.FAILED)
+            and not task.result
+            and not task.logs
+            and self.task_store.get_latest_search_task_job(task.id) is None
+        )
 
     def _retry_finalization(self, research_id: str) -> None:
         # The CAS is taken from PROCESSING (the admission state); pre-setting ANALYZING

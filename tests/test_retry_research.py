@@ -563,7 +563,11 @@ def _route_research(store, monkeypatch, *tasks):
 @pytest.mark.anyio
 async def test_retry_route_retries_a_failed_research(client, monkeypatch):
     store = client._transport.app.state.research_service.task_store
-    failed_task = {"id": f"route-{uuid.uuid4().hex[:8]}", "status": TaskStatus.FAILED}
+    failed_task = {
+        "id": f"route-{uuid.uuid4().hex[:8]}",
+        "status": TaskStatus.FAILED,
+        "logs": ["Agent started search process", "Error: search provider down"],
+    }
     research = _route_research(store, monkeypatch, failed_task)
 
     response = await client.post(f"/v1/research/{research.id}/retry")

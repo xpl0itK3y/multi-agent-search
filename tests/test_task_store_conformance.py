@@ -509,6 +509,25 @@ def test_finalize_job_stale_recovery_bumps_lease_epoch(store):
     assert bumped.lease_epoch == 1
 
 
+def test_delete_research_tasks_removes_only_that_researchs_tasks_and_their_jobs(store):
+    record = _research(store)
+    other = _research(store)
+    doomed, kept = _task(store, record.id), _task(store, record.id)
+    foreign = _task(store, other.id)
+    store.set_research_task_ids(record.id, [doomed.id, kept.id])
+    job = store.add_search_task_job(doomed.id, SearchDepth.EASY.value)
+
+    deleted = store.delete_research_tasks(record.id, [doomed.id, foreign.id, "missing-task"])
+
+    assert deleted == 1
+    assert [task.id for task in store.get_tasks_by_research(record.id)] == [kept.id]
+    assert store.get_research(record.id).task_ids == [kept.id]
+    assert store.get_task(doomed.id) is None and store.get_search_task_job(job.id) is None
+    assert store.get_task(foreign.id) is not None
+    assert store.delete_research_tasks(record.id, []) == 0
+    assert store.delete_research_tasks("missing-research", [kept.id]) == 0
+
+
 def test_transition_research_status_is_a_guarded_cas(store):
     record = _research(store)
     store.update_research_status(record.id, ResearchStatus.PROCESSING, "partial")

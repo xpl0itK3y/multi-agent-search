@@ -346,6 +346,11 @@ class TaskStore(Protocol):
 
     def get_tasks_by_research(self, research_id: str) -> list[SearchTask]: ...
 
+    # Delete these tasks of `research_id` (their search jobs and results go with them) and
+    # drop them from its task_ids, in one transaction; ids of other researches' tasks are
+    # ignored. Returns how many tasks were deleted.
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int: ...
+
     def update_task(
         self,
         task_id: str,

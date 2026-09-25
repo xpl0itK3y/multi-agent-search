@@ -1637,6 +1637,31 @@ class SQLAlchemyTaskStore:
             tasks = session.execute(statement).scalars().all()
             return [search_task_orm_to_schema(task) for task in tasks]
 
+    def delete_research_tasks(self, research_id: str, task_ids: list[str]) -> int:
+        if not task_ids:
+            return 0
+        with self.session_scope() as session:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None:
+                return 0
+            # Jobs and results go with the rows (ON DELETE CASCADE).
+            deleted = set(
+                session.execute(
+                    delete(SearchTaskORM)
+                    .where(SearchTaskORM.research_id == research_id, SearchTaskORM.id.in_(task_ids))
+                    .returning(SearchTaskORM.id)
+                    .execution_options(synchronize_session=False)
+                ).scalars().all()
+            )
+            if deleted:
+                research.task_ids = [task_id for task_id in research.task_ids or [] if task_id not in deleted]
+                research.updated_at = datetime.now(timezone.utc)
+        if deleted:
+            self._emit_change(research_id)
+        return len(deleted)
+
     def update_task(
         self,
         task_id: str,
