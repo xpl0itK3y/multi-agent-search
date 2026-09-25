@@ -91,6 +91,26 @@ describe("admin UsersTab", () => {
     expect(wrapper.text()).toContain(t("errors.api.server"));
   });
 
+  it("filters the live feed only by categories the server writes", async () => {
+    // "prompt" (src/api/app.py prompt copies) plus CLIENT_TELEMETRY_CATEGORIES
+    // (src/domain/models.py); the server matches the category exactly.
+    const serverCategories = new Set(["prompt", "general", "system", "ui"]);
+    adminApi.getUserEvents.mockResolvedValue({ events: [], total_count: 0, page: 1, page_size: 40 });
+    const wrapper = await mountTab();
+    await button(wrapper, t("admin.users.tabLiveFeed")).trigger("click");
+    await flushPromises();
+
+    for (const key of ["catUi", "catPrompts", "catSystem"]) {
+      const chip = wrapper.findAll("button").find((el) => el.text() === t(`admin.users.${key}`));
+      await chip!.trigger("click");
+      await flushPromises();
+    }
+
+    const sent = adminApi.getUserEvents.mock.calls.map((call) => call[4]).filter((c) => c !== undefined);
+    expect(sent).toEqual(["ui", "prompt", "system"]);
+    expect(sent.filter((c) => !serverCategories.has(c))).toEqual([]);
+  });
+
   it("shows CSV export and delete failures inline instead of alert()", async () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     vi.spyOn(window, "confirm").mockReturnValue(true);

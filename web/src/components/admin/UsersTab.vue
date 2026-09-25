@@ -53,6 +53,8 @@ const events = ref<AdminEventLogItem[]>([]);
 const eventsTotal = ref(0);
 const eventsLoading = ref(false);
 const eventsError = ref<string | null>(null);
+// Live-feed filter: "" (all) or a server event_category — "prompt" for the research/chat
+// prompt copies the API writes, "ui"/"system" for client telemetry.
 const eventCategory = ref("");
 const autoRefresh = ref(true);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -1134,10 +1136,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'research' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
-            @click="eventCategory = 'research'"
+            :class="eventCategory === 'prompt' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            @click="eventCategory = 'prompt'"
           >
-            {{ t("admin.users.catResearch") }}
+            {{ t("admin.users.catPrompts") }}
           </button>
           <button
             type="button"
@@ -1179,10 +1181,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               <span
                 class="rounded-full px-2 py-0.5 font-mono text-[10px] font-bold uppercase"
                 :class="{
-                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'research',
+                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
                   'bg-blue-500/15 text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
                   'bg-purple-500/15 text-purple-400 border border-purple-500/30': ev.event_category === 'system',
-                  'bg-surface text-muted border border-bd': !['research', 'ui', 'system'].includes(ev.event_category),
+                  'bg-surface text-muted border border-bd': !['prompt', 'ui', 'system'].includes(ev.event_category),
                 }"
               >
                 {{ ev.event_category }}
