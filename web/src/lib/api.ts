@@ -208,8 +208,12 @@ const API_STATUS_KEYS: Record<number, string> = {
 // server sends no error codes, so these match the English error texts raised in
 // src/services; any other detail gets the status's generic text, never the raw one.
 const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
-  // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
-  403: [[/^This email is reserved for an administrator\b/, "adminEmailReserved"]],
+  403: [
+    // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
+    [/^This email is reserved for an administrator\b/, "adminEmailReserved"],
+    // A password change that needs a fresh Google sign-in (see isReauthRequired).
+    [/^reauth_required/, "reauthRequired"],
+  ],
   409: [
     [/^A research is already in progress\b/, "researchInProgress"],
     [/^Research capacity is currently full\b/, "capacityFull"],
@@ -218,6 +222,13 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
     [/^Only dead-letter \w+ jobs can be requeued\b/, "notDeadLetter"],
   ],
 };
+
+// POST /v1/auth/set-password refused until the user signs in with Google again: the
+// first password of a Google-only account, or a reset without the current password on
+// a Google-linked one, needs a session from a Google sign-in of the last few minutes.
+export function isReauthRequired(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && err.detail.startsWith("reauth_required");
+}
 
 // Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
 // statuses get a translated text (a specific one for known details); anything

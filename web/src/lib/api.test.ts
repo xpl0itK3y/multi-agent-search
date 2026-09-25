@@ -325,4 +325,20 @@ describe("apiErrorMessage", () => {
     for (const { value } of LOCALES) expect(i18n.global.te("errors.api.adminEmailReserved", value)).toBe(true);
     expect(apiErrorMessage(new ApiError(403, "Admin privileges required"), t)).toBe("[errors.api.forbidden]");
   });
+
+  it("recognizes a set-password refused until a fresh Google sign-in", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage, isReauthRequired } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    for (const detail of ["reauth_required", "reauth_required: sign in with Google again"]) {
+      expect(isReauthRequired(new ApiError(403, detail)), detail).toBe(true);
+      expect(apiErrorMessage(new ApiError(403, detail), t)).toBe("[errors.api.reauthRequired]");
+    }
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.reauthRequired", value)).toBe(true);
+    // Only a 403 whose detail starts with the code.
+    expect(isReauthRequired(new ApiError(401, "reauth_required"))).toBe(false);
+    expect(isReauthRequired(new ApiError(403, "Forbidden: reauth_required"))).toBe(false);
+    expect(isReauthRequired(new Error("403 reauth_required"))).toBe(false);
+  });
 });

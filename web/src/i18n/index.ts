@@ -548,6 +548,7 @@ const ru = {
     or: "или",
     oauthConflict: "Аккаунт с этим email уже зарегистрирован с паролем — войдите по email и паролю.",
     oauthFailed: "Не удалось войти через Google. Попробуйте ещё раз.",
+    reauthGoogle: "Войти через Google ещё раз",
   },
   admin: {
     title: "Панель управления",
@@ -1113,6 +1114,7 @@ const ru = {
       unauthorized: "Неверный email или пароль, либо сессия истекла — войдите заново",
       forbidden: "Недостаточно прав для этого действия",
       adminEmailReserved: "Этот email зарезервирован для администратора — войдите через Google или попросите оператора создать аккаунт",
+      reauthRequired: "В целях безопасности, чтобы задать или сбросить пароль, нужно заново войти через Google. Войдите ещё раз: вы вернётесь сюда, и у вас будет 10 минут, чтобы задать пароль.",
       notFound: "Не найдено",
       conflict: "Действие конфликтует с текущим состоянием — обновите страницу и попробуйте снова",
       researchInProgress: "Уже идёт исследование — дождитесь его завершения, прежде чем запускать новое",
@@ -1677,6 +1679,7 @@ const en: typeof ru = {
     or: "or",
     oauthConflict: "An account with this email already exists with a password — sign in with email and password.",
     oauthFailed: "Google sign-in failed. Please try again.",
+    reauthGoogle: "Sign in with Google again",
   },
   admin: {
     title: "Admin Panel",
@@ -2242,6 +2245,7 @@ const en: typeof ru = {
       unauthorized: "Wrong email or password, or the session has expired — please sign in again",
       forbidden: "You don't have permission to do this",
       adminEmailReserved: "This email is reserved for an administrator — sign in with Google or ask the operator to provision the account",
+      reauthRequired: "For your security, setting or resetting a password needs a fresh Google sign-in. Sign in with Google again: you will come back here and have 10 minutes to set the password.",
       notFound: "Not found",
       conflict: "This conflicts with the current state — refresh and try again",
       researchInProgress: "A research is already running — wait for it to finish before starting another",
@@ -2806,6 +2810,7 @@ const es: typeof ru = {
     or: "o",
     oauthConflict: "Ya existe una cuenta con este email y contraseña — inicia sesión con email y contraseña.",
     oauthFailed: "No se pudo iniciar sesión con Google. Inténtalo de nuevo.",
+    reauthGoogle: "Volver a iniciar sesión con Google",
   },
   admin: {
     title: "Panel de control",
@@ -3371,6 +3376,7 @@ const es: typeof ru = {
       unauthorized: "Email o contraseña incorrectos, o la sesión ha expirado — inicia sesión de nuevo",
       forbidden: "No tienes permiso para hacer esto",
       adminEmailReserved: "Este email está reservado para un administrador — inicia sesión con Google o pide al operador que cree la cuenta",
+      reauthRequired: "Por seguridad, para establecer o restablecer la contraseña necesitas iniciar sesión de nuevo con Google. Volverás aquí y tendrás 10 minutos para establecerla.",
       notFound: "No encontrado",
       conflict: "Esto entra en conflicto con el estado actual — actualiza la página e inténtalo de nuevo",
       researchInProgress: "Ya hay una investigación en curso — espera a que termine antes de iniciar otra",

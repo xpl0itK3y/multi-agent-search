@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { googleReturnRedirect } from "@/lib/googleSignIn";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -40,11 +41,20 @@ const router = createRouter({
   ],
 });
 
+// The first navigation of a page load may be the landing of a Google sign-in that a
+// page started to come back to (see lib/googleSignIn.ts).
+let pageLoadNavigation = true;
+
 // Redirect to /login when unauthenticated (auth.user is set even in single-tenant mode).
 // Public routes (a shared read-only report) are reachable without a session.
 router.beforeEach((to) => {
-  if (to.meta.public) return true;
   const auth = useAuthStore();
+  if (pageLoadNavigation) {
+    pageLoadNavigation = false;
+    const back = googleReturnRedirect(to, auth.user !== null);
+    if (back) return back;
+  }
+  if (to.meta.public) return true;
   if (to.name !== "login" && !auth.user) {
     return { name: "login", query: { redirect: to.fullPath } };
   }

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Locale } from "@/i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore, THEMES } from "@/stores/ui";
-import { api, ApiError, apiErrorMessage } from "@/lib/api";
+import { api, ApiError, apiErrorMessage, isReauthRequired } from "@/lib/api";
 import { saveFile } from "@/lib/download";
 import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
 import type { Depth, UserTokenStats } from "@/lib/types";
+import GoogleReauthNotice from "@/components/GoogleReauthNotice.vue";
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
@@ -26,7 +28,9 @@ function credentialErrorMessage(e: unknown, sentPassword: boolean): string {
 }
 
 type TabId = "profile" | "research" | "appearance" | "analytics" | "security";
-const activeTab = ref<TabId>("profile");
+const TAB_IDS: readonly TabId[] = ["profile", "research", "appearance", "analytics", "security"];
+// ?tab=<id> opens that tab, e.g. back from the Google sign-in a password change asked for.
+const activeTab = ref<TabId>(TAB_IDS.find((id) => id === route.query.tab) ?? "profile");
 
 // ── Profile Tab State ─────────────────────────────────────────────────────────
 const name = ref(auth.user?.name || "");
@@ -175,9 +179,14 @@ const confirmPassword = ref("");
 const passwordBusy = ref(false);
 const passwordSuccess = ref(false);
 const passwordError = ref<string | null>(null);
+// The server wants a fresh Google sign-in first (a first password on a Google-only
+// account, or a reset without the current password on a Google-linked one).
+const passwordNeedsReauth = ref(false);
+const REAUTH_RETURN_TO = "/settings?tab=security";
 
 async function changePassword() {
   passwordError.value = null;
+  passwordNeedsReauth.value = false;
   passwordSuccess.value = false;
 
   if (newPassword.value.length < 8) {
@@ -199,7 +208,8 @@ async function changePassword() {
     confirmPassword.value = "";
     setTimeout(() => (passwordSuccess.value = false), 3000);
   } catch (e) {
-    passwordError.value = credentialErrorMessage(e, current !== undefined);
+    if (isReauthRequired(e)) passwordNeedsReauth.value = true;
+    else passwordError.value = credentialErrorMessage(e, current !== undefined);
   } finally {
     passwordBusy.value = false;
   }
@@ -844,6 +854,7 @@ onUnmounted(() => {
                 <div v-if="passwordError" class="rounded-lg bg-red-500/15 border border-red-500/30 p-2.5 text-xs text-red-400">
                   {{ passwordError }}
                 </div>
+                <GoogleReauthNotice v-if="passwordNeedsReauth" :return-to="REAUTH_RETURN_TO" class="text-xs" />
 
                 <button
                   :disabled="passwordBusy || !newPassword"

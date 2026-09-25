@@ -2,9 +2,10 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { api, apiErrorMessage } from "@/lib/api";
+import { api, apiErrorMessage, isReauthRequired } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import SparkLogo from "@/components/SparkLogo.vue";
+import GoogleReauthNotice from "@/components/GoogleReauthNotice.vue";
 
 // Shown right after a first-time Google sign-in: let the user set a password so
 // they can also log in with email + password next time (optional — skippable).
@@ -16,6 +17,9 @@ const password = ref("");
 const confirm = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
+// That sign-in must be recent: coming back to this page later (or from an old tab)
+// the server asks for a new Google sign-in, which returns here.
+const needsReauth = ref(false);
 
 async function submit() {
   if (busy.value) return;
@@ -29,11 +33,13 @@ async function submit() {
   }
   busy.value = true;
   error.value = null;
+  needsReauth.value = false;
   try {
     await api.setPassword(password.value);
     router.push("/");
   } catch (e) {
-    error.value = apiErrorMessage(e, t);
+    if (isReauthRequired(e)) needsReauth.value = true;
+    else error.value = apiErrorMessage(e, t);
   } finally {
     busy.value = false;
   }
@@ -73,6 +79,7 @@ function skip() {
         <p v-if="error === 'min6'" class="text-sm text-red-400">{{ $t("setPassword.min6") }}</p>
         <p v-else-if="error === 'mismatch'" class="text-sm text-red-400">{{ $t("setPassword.mismatch") }}</p>
         <p v-else-if="error" class="text-sm text-red-400">{{ error }}</p>
+        <GoogleReauthNotice v-if="needsReauth" return-to="/set-password" class="text-sm" />
         <button
           type="submit"
           :disabled="busy"
