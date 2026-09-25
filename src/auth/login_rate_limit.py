@@ -29,17 +29,35 @@ from src.config import settings
 # Keys one limiter tracks at most. Keys are caller-chosen (an email typed into the login
 # form, a client address), so the table must not grow with every distinct value: keys
 # whose hits all left the window are dropped as they age out, and past this cap the key
-# idle longest goes first. About 1 KB per key, so the cap bounds a limiter near 10 MB.
+# idle longest goes first, unless it is locked out (see SlidingWindowLimiter). About
+# 1 KB per key, so the cap bounds a limiter near 10 MB.
 DEFAULT_MAX_KEYS = 10_000
 
 
 class SlidingWindowLimiter:
+    """Per-key sliding-window counter with a bounded key table.
+
+    A key that reached its limit (locked out) is never evicted while it still has a hit
+    in the window: otherwise a flood of fresh keys, such as typed emails, would push a
+    brute-forced account out of the table and hand it a fresh budget. At the cap the
+    unlocked key idle longest goes; when every tracked key is locked out, a new key is
+    refused like an over-limit one until the oldest lockout leaves the window. Memory
+    stays bounded and a lockout is never forgotten early, at the price of refusing new
+    keys during a flood that locks out the whole table (max_keys keys, each at its
+    limit). A key counts as locked out from the hit that reaches the limit of that call
+    (each limiter passes one fixed limit).
+    """
+
     def __init__(self, window_seconds: float = 60.0, max_keys: int = DEFAULT_MAX_KEYS) -> None:
         self._window = window_seconds
         self._max_keys = max(1, max_keys)
-        # Ordered by each key's latest hit, oldest first (a key moves to the end whenever
-        # it records a hit), so expired keys, and the one to evict at the cap, sit in front.
+        # Keys below their limit, ordered by latest hit, oldest first (a key moves to the
+        # end whenever it records a hit), so expired keys, and the one to evict at the cap,
+        # sit in front.
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
+        # Keys at their limit, in the order they reached it. A refusal records nothing,
+        # so that is also the order of their latest hit: expired keys sit in front too.
+        self._locked: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def allow(self, key: str, limit: int) -> bool:
@@ -47,38 +65,45 @@ class SlidingWindowLimiter:
             # Read the clock under the lock, so hits land in time order across threads.
             now = time.monotonic()
             cutoff = now - self._window
-            self._drop_expired(cutoff)
-            hits = self._hits.get(key)
+            self._drop_expired(self._hits, cutoff)
+            self._drop_expired(self._locked, cutoff)
+            table = self._hits if key in self._hits else self._locked
+            hits = table.get(key)
             if hits is None:
                 if limit <= 0:
                     return False
-                if len(self._hits) >= self._max_keys:
+                if len(self._hits) + len(self._locked) >= self._max_keys:
+                    if not self._hits:
+                        return False  # every key is locked out: forget none of them
                     self._hits.popitem(last=False)
-                self._hits[key] = deque((now,))
+                (self._hits if limit > 1 else self._locked)[key] = deque((now,))
                 return True
             while hits and hits[0] < cutoff:
                 hits.popleft()
             if len(hits) >= limit:
                 return False
             hits.append(now)
-            self._hits.move_to_end(key)
+            del table[key]
+            (self._hits if len(hits) < limit else self._locked)[key] = hits
             return True
 
-    def _drop_expired(self, cutoff: float) -> None:
+    @staticmethod
+    def _drop_expired(table: OrderedDict[str, deque[float]], cutoff: float) -> None:
         """Forget every key whose latest hit left the window (they are all at the front)."""
-        while self._hits:
-            _key, hits = next(iter(self._hits.items()))
+        while table:
+            _key, hits = next(iter(table.items()))
             if hits and hits[-1] >= cutoff:
                 return
-            self._hits.popitem(last=False)
+            table.popitem(last=False)
 
     def __len__(self) -> int:
         with self._lock:
-            return len(self._hits)
+            return len(self._hits) + len(self._locked)
 
     def reset(self) -> None:
         with self._lock:
             self._hits.clear()
+            self._locked.clear()
 
 
 _auth_limiter = SlidingWindowLimiter()

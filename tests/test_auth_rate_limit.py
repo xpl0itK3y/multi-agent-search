@@ -9,7 +9,7 @@ from starlette.requests import Request
 from src.api.schemas import AuthUser
 from src.auth import llm_rate_limit
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
-from src.auth.login_rate_limit import SlidingWindowLimiter, enforce_auth_rate_limit
+from src.auth.login_rate_limit import DEFAULT_MAX_KEYS, SlidingWindowLimiter, enforce_auth_rate_limit
 from src.config import settings
 
 
@@ -219,17 +219,48 @@ def test_sliding_window_forgets_keys_whose_hits_left_the_window(clock):
 def test_sliding_window_caps_keys_and_evicts_the_longest_idle_first(clock):
     limiter = SlidingWindowLimiter(window_seconds=60, max_keys=3)
     for key in ("a", "b", "c"):
-        assert limiter.allow(key, 1)
+        assert limiter.allow(key, 3)
         clock.now += 1
-    assert not limiter.allow("a", 1)  # a refusal records nothing and keeps "a" oldest
-    assert limiter.allow("b", 2)  # "b" hit again: now the most recent
+    assert limiter.allow("a", 3)  # "a" hit again: now the most recent, "b" idle longest
 
-    assert limiter.allow("d", 1)
+    assert limiter.allow("d", 3)
 
     assert len(limiter) == 3
-    assert limiter.allow("a", 1)  # "a" was evicted, so its budget is fresh again
-    assert not limiter.allow("b", 2)  # "b" kept both hits
+    # "a" kept both hits, "c" and "d" their one each, so "b" was the one evicted.
+    assert not limiter.allow("a", 2)
+    assert not limiter.allow("c", 1)
     assert not limiter.allow("d", 1)
+
+
+def test_sliding_window_never_evicts_a_locked_out_key_inside_its_window(clock):
+    """SEC3-3: at the cap a flood of fresh keys (typed emails) must not push a brute-forced
+    account out of the table, which would hand it a fresh budget."""
+    limiter = SlidingWindowLimiter()
+    assert [limiter.allow("victim@example.com", 10) for _ in range(11)] == [True] * 10 + [False]
+
+    for i in range(2 * DEFAULT_MAX_KEYS):
+        clock.now += 0.001
+        limiter.allow(f"flood-{i}@example.com", 10)
+
+    assert len(limiter) == DEFAULT_MAX_KEYS
+    assert not limiter.allow("victim@example.com", 10)
+    clock.now = 1000.0 + 61  # its hits left the window: a fresh budget, and only now
+    assert limiter.allow("victim@example.com", 10)
+
+
+def test_sliding_window_full_of_locked_out_keys_refuses_a_new_one(clock):
+    limiter = SlidingWindowLimiter(window_seconds=60, max_keys=3)
+    for key in ("a", "b", "c"):
+        assert limiter.allow(key, 1)
+        clock.now += 1
+
+    assert not limiter.allow("d", 1)  # rather than forgetting the lockout of "a"
+    assert not limiter.allow("a", 1)
+    assert len(limiter) == 3
+
+    clock.now += 58  # "a" is 61 s old: its lockout ended, so its slot is free again
+    assert limiter.allow("d", 1)
+    assert not limiter.allow("b", 1) and not limiter.allow("c", 1)
 
 
 def test_sliding_window_with_zero_limit_records_no_key(clock):
