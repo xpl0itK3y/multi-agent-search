@@ -211,7 +211,8 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
   403: [
     // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
     [/^This email is reserved for an administrator\b/, "adminEmailReserved"],
-    // A password change that needs a fresh Google sign-in (see isReauthRequired).
+    // An action that needs a fresh Google sign-in (see isReauthRequired). The text
+    // speaks of passwords; the account deletion shows its own (SettingsView).
     [/^reauth_required/, "reauthRequired"],
   ],
   409: [
@@ -228,9 +229,10 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
   ],
 };
 
-// POST /v1/auth/set-password refused until the user signs in with Google again: the
-// first password of a Google-only account, or a reset without the current password on
-// a Google-linked one, needs a session from a Google sign-in of the last few minutes.
+// Refused until the user signs in with Google again: POST /v1/auth/set-password for
+// the first password of a Google-only account, or a reset without the current password
+// on a Google-linked one, and DELETE /v1/auth/account for a passwordless account. They
+// need a session from a Google sign-in of the last few minutes.
 export function isReauthRequired(err: unknown): boolean {
   return err instanceof ApiError && err.status === 403 && err.detail.startsWith("reauth_required");
 }

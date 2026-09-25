@@ -246,17 +246,29 @@ const showDeleteModal = ref(false);
 const deletePassword = ref("");
 const deleteBusy = ref(false);
 const deleteError = ref<string | null>(null);
+// A passwordless (Google-only) account confirms the deletion with a fresh Google
+// sign-in instead of a password: the server refuses it until then (reauth_required).
+const deleteNeedsReauth = ref(false);
+
+function closeDeleteModal() {
+  showDeleteModal.value = false;
+  deletePassword.value = "";
+  deleteError.value = null;
+  deleteNeedsReauth.value = false;
+}
 
 async function confirmDeleteAccount() {
   deleteBusy.value = true;
   deleteError.value = null;
+  deleteNeedsReauth.value = false;
   const current = deletePassword.value || undefined;
   try {
     await api.deleteAccount(current);
     await auth.logout();
     router.push("/login");
   } catch (e) {
-    deleteError.value = credentialErrorMessage(e, current !== undefined);
+    if (isReauthRequired(e)) deleteNeedsReauth.value = true;
+    else deleteError.value = credentialErrorMessage(e, current !== undefined);
   } finally {
     deleteBusy.value = false;
   }
@@ -953,11 +965,17 @@ onUnmounted(() => {
         <div v-if="deleteError" class="text-xs text-red-400">
           {{ deleteError }}
         </div>
+        <GoogleReauthNotice
+          v-if="deleteNeedsReauth"
+          :return-to="REAUTH_RETURN_TO"
+          :message="t('settings.security.deleteReauthRequired')"
+          class="text-xs"
+        />
 
         <div class="flex items-center justify-end gap-2.5 pt-2">
           <button
             class="px-3.5 py-1.5 rounded-lg border border-bd text-xs text-muted hover:text-ink"
-            @click="showDeleteModal = false; deletePassword = ''; deleteError = null;"
+            @click="closeDeleteModal"
           >
             {{ t("common.cancel") }}
           </button>

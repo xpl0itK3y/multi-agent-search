@@ -114,6 +114,87 @@ describe("SettingsView", () => {
     expect(wrapper.text()).not.toContain(t("auth.reauthGoogle"));
   });
 
+  function buttonByText(wrapper: Awaited<ReturnType<typeof mountSettings>>, key: string) {
+    const found = wrapper.findAll("button").find((b) => b.text() === t(key));
+    if (!found) throw new Error(`no button "${key}"`);
+    return found;
+  }
+
+  async function confirmDeletion(wrapper: Awaited<ReturnType<typeof mountSettings>>, password?: string) {
+    await buttonByText(wrapper, "settings.security.deleteAccount").trigger("click");
+    if (password !== undefined) await wrapper.findAll('input[type="password"]').at(-1)!.setValue(password);
+    await buttonByText(wrapper, "settings.security.confirmDelete").trigger("click");
+    await flushPromises();
+  }
+
+  it("asks a passwordless account to sign in with Google again before deleting it", async () => {
+    mocks.deleteAccount.mockRejectedValue(
+      new ApiError(403, "reauth_required: deleting the account needs a Google sign-in from the last 10 minutes"),
+    );
+    const wrapper = await mountSettings("/settings?tab=security");
+
+    await confirmDeletion(wrapper);
+
+    expect(mocks.deleteAccount).toHaveBeenCalledWith(undefined);
+    expect(mocks.logout).not.toHaveBeenCalled();
+    expect(wrapper.vm.$router.currentRoute.value.fullPath).toBe("/settings?tab=security");
+    // The deletion's own text, not the set-password one, the generic 403 or the raw detail.
+    expect(wrapper.text()).toContain(t("settings.security.deleteReauthRequired"));
+    expect(wrapper.text()).not.toContain(t("errors.api.reauthRequired"));
+    expect(wrapper.text()).not.toContain(t("errors.api.forbidden"));
+    expect(wrapper.text()).not.toContain("reauth_required");
+
+    await buttonByText(wrapper, "auth.reauthGoogle").trigger("click");
+    expect(startGoogleSignIn).toHaveBeenCalledWith("/settings?tab=security");
+  });
+
+  it("drops the Google sign-in offer when the delete modal is closed", async () => {
+    mocks.deleteAccount.mockRejectedValue(new ApiError(403, "reauth_required"));
+    const wrapper = await mountSettings("/settings?tab=security");
+
+    await confirmDeletion(wrapper);
+    expect(wrapper.text()).toContain(t("settings.security.deleteReauthRequired"));
+
+    await buttonByText(wrapper, "common.cancel").trigger("click");
+    expect(wrapper.text()).not.toContain(t("settings.security.deleteTitle"));
+    await buttonByText(wrapper, "settings.security.deleteAccount").trigger("click");
+    expect(wrapper.text()).toContain(t("settings.security.deleteTitle"));
+    expect(wrapper.text()).not.toContain(t("settings.security.deleteReauthRequired"));
+    expect(wrapper.text()).not.toContain(t("auth.reauthGoogle"));
+  });
+
+  it("keeps the password and generic errors of a deletion without a Google sign-in offer", async () => {
+    const wrapper = await mountSettings("/settings?tab=security");
+
+    mocks.deleteAccount.mockRejectedValueOnce(new ApiError(401, "Current password is incorrect"));
+    await confirmDeletion(wrapper, "wrong-password");
+    expect(mocks.deleteAccount).toHaveBeenLastCalledWith("wrong-password");
+    expect(wrapper.text()).toContain(t("settings.errors.wrongCurrentPassword"));
+    expect(wrapper.text()).not.toContain(t("auth.reauthGoogle"));
+
+    mocks.deleteAccount.mockRejectedValueOnce(new ApiError(403, "Forbidden"));
+    await buttonByText(wrapper, "settings.security.confirmDelete").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain(t("errors.api.forbidden"));
+    expect(wrapper.text()).not.toContain(t("settings.errors.wrongCurrentPassword"));
+    expect(wrapper.text()).not.toContain(t("settings.security.deleteReauthRequired"));
+    expect(wrapper.text()).not.toContain(t("auth.reauthGoogle"));
+  });
+
+  it("clears the Google sign-in offer when a retried deletion fails otherwise", async () => {
+    const wrapper = await mountSettings("/settings?tab=security");
+
+    mocks.deleteAccount.mockRejectedValueOnce(new ApiError(403, "reauth_required"));
+    await confirmDeletion(wrapper);
+    expect(wrapper.text()).toContain(t("settings.security.deleteReauthRequired"));
+
+    mocks.deleteAccount.mockRejectedValueOnce(new ApiError(500, "boom"));
+    await buttonByText(wrapper, "settings.security.confirmDelete").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain(t("errors.api.server"));
+    expect(wrapper.text()).not.toContain(t("settings.security.deleteReauthRequired"));
+  });
+
   it("opens the tab named by ?tab= and ignores unknown ones", async () => {
     const security = await mountSettings("/settings?tab=security");
     expect(security.text()).toContain(t("settings.security.passwordTitle"));
