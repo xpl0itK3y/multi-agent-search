@@ -1,4 +1,6 @@
 """AUD-029: double-submit CSRF check for cookie-authenticated mutations."""
+import uuid
+
 import pytest
 from starlette.requests import Request
 
@@ -68,3 +70,63 @@ def test_cookie_auth_with_mismatched_token_is_blocked(auth_on):
 
 def test_no_cookie_no_header_is_blocked(auth_on):
     assert _is_csrf_violation(_req()) is True
+
+
+def _raw_req(authorization: bytes, cookies=None, method="POST", path="/v1/research"):
+    """Like _req, with the Authorization value as raw header bytes (Starlette decodes them
+    as latin-1, so b"\\xa0" arrives as a lone NBSP, which str.strip() removes)."""
+    request = _req(method=method, path=path, cookies=cookies)
+    request.scope["headers"].append((b"authorization", authorization))
+    return request
+
+
+# SEC2-7: the exemption and _extract_token agree on what counts as a bearer request.
+BLANK_BEARERS = [b"Bearer \xa0", b"Bearer    ", b"bearer \t", b"Bearer \x85"]
+
+
+@pytest.mark.parametrize("value", BLANK_BEARERS)
+def test_blank_bearer_is_no_exemption(auth_on, value):
+    req = _raw_req(value, cookies={"csrf_token": "tok123", "access_token": "cookie.session.jwt"})
+    assert _is_csrf_violation(req) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [*BLANK_BEARERS, b"Bearer abc.def.ghi", b"bearer  abc", b"Basic dXNlcjpwdw==", b"Bearer", b"Bearerabc"],
+)
+def test_exemption_matches_what_authentication_uses(auth_on, value):
+    from src.api.dependencies import _extract_token
+
+    req = _raw_req(value, cookies={"csrf_token": "tok123", "access_token": "cookie.session.jwt"})
+    authenticates_with_header = _extract_token(req) != "cookie.session.jwt"
+    assert _is_csrf_violation(req) is (not authenticates_with_header)
+
+
+@pytest.mark.anyio
+async def test_blank_bearer_cannot_skip_csrf_on_a_cookie_session(monkeypatch):
+    import httpx
+
+    from src.api.app import create_app
+
+    monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
+    monkeypatch.setattr(settings, "auth_secret_key", "csrf-test-secret-" + "x" * 40, raising=False)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            email = f"csrf-nbsp-{uuid.uuid4().hex[:8]}@example.com"
+            registered = await client.post("/v1/auth/register", json={"email": email, "password": "secret123"})
+            assert registered.status_code == 200  # the client now holds the cookie session
+
+            blank = await client.patch(
+                "/v1/auth/profile", json={"name": "forged"}, headers={"Authorization": b"Bearer \xa0"}
+            )
+            with_token = await client.patch(
+                "/v1/auth/profile",
+                json={"name": "mine"},
+                headers={"Authorization": b"Bearer \xa0", "X-CSRF-Token": client.cookies["csrf_token"]},
+            )
+
+    assert blank.status_code == 403
+    assert with_token.status_code == 200
+    assert with_token.json()["name"] == "mine"

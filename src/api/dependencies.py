@@ -14,14 +14,25 @@ def get_research_service(request: Request) -> ResearchService:
     return request.app.state.research_service
 
 
-def _extract_token(request: Request) -> str | None:
-    """JWT from the ``Authorization: Bearer`` header, falling back to the cookie."""
+def request_bearer_token(request: Request) -> str | None:
+    """The token of the ``Authorization: Bearer <token>`` header, or None when there is no
+    such header or its token is blank after strip().
+
+    The one rule for "this request authenticates with a bearer token": _extract_token uses
+    it, and so does the CSRF exemption for bearer requests (app._is_csrf_violation). If the
+    two disagreed, a value that str.strip() empties (e.g. a lone NBSP) would skip the CSRF
+    check and still authenticate with the session cookie."""
     auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
     if auth_header:
         scheme, _, value = auth_header.partition(" ")
         if scheme.lower() == "bearer" and value.strip():
             return value.strip()
-    return request.cookies.get(settings.auth_cookie_name)
+    return None
+
+
+def _extract_token(request: Request) -> str | None:
+    """JWT from the ``Authorization: Bearer`` header, falling back to the cookie."""
+    return request_bearer_token(request) or request.cookies.get(settings.auth_cookie_name)
 
 
 def _user_from_token(request: Request, token: str | None) -> AuthUser | None:

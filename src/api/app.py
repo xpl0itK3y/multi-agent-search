@@ -22,6 +22,7 @@ from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
+    request_bearer_token,
     request_token_subject,
     require_admin,
     resolve_request_user_id,
@@ -129,12 +130,14 @@ _CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
 
 def _is_csrf_violation(request: Request) -> bool:
     """Double-submit CSRF check for cookie-authenticated mutations. Bearer-token requests are
-    exempt (the header can't be forged cross-site); the check is off when auth is disabled."""
+    exempt (the header can't be forged cross-site); the check is off when auth is disabled.
+    "Bearer-token request" follows the rule authentication uses (request_bearer_token): a
+    header whose token is blank falls back to the cookie there, so it is no exemption."""
     if settings.auth_disabled or request.method in _CSRF_SAFE_METHODS:
         return False
     if request.url.path in _CSRF_EXEMPT_PATHS:
         return False
-    if request.headers.get("authorization", "").lower().startswith("bearer "):
+    if request_bearer_token(request):
         return False
     cookie = request.cookies.get(settings.csrf_cookie_name)
     header = request.headers.get("x-csrf-token")
