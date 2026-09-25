@@ -14,6 +14,9 @@ citing sources in another, so matching is LANGUAGE-AWARE:
 
 "Foreign" compares each source's detected language with the report language, for every
 language pair (an English source is foreign to a Spanish report as much as to a Russian one).
+Only a confident detection (``detect_language(strict=True)``) or a different script makes a
+source foreign: a short or hint-less snippet in the report's script counts as the report's
+language, so it is judged, not exempted.
 
 Integrity is scored over VERIFIABLE claims only (supported / (supported + unsupported)).
 This is a lexical match, not a truth judgement: it catches citations whose source never
@@ -23,7 +26,7 @@ from __future__ import annotations
 
 import re
 
-from src.agents.cross_language import detect_language
+from src.agents.cross_language import detect_language, dominant_script, language_script
 from src.domain import CitationAudit, CitationGround
 
 _CITATION = re.compile(r"\[S(\d+)\]")
@@ -103,8 +106,7 @@ class CitationAuditAgent:
                 s_lat |= t_lat
                 s_num |= t_num
                 if source_id not in foreign:
-                    source_language = detect_language(content)
-                    foreign[source_id] = source_language not in ("unknown", report_language)
+                    foreign[source_id] = self._is_foreign(content, report_language)
                 all_foreign = all_foreign and foreign[source_id]
                 quote, score = self._best_passage(claim_terms, content)
                 if source_id not in best or score > best[source_id][0]:
@@ -160,6 +162,22 @@ class CitationAuditAgent:
         )
 
     # ── matching ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_foreign(content: str, report_language: str) -> bool:
+        """Whether a source is confidently in another language than the report.
+
+        A foreign source is never flagged, so a wrong 'foreign' hides a fabricated citation:
+        the default detector calls any hint-less Latin snippet 'en' and used to call Chinese
+        with one stray kana 'ja'. So the language must be detected confidently, or else the
+        script must differ (a Latin snippet is foreign to a Russian or Chinese report, whichever
+        Latin language it is in); an unsure same-script source is judged as the report's."""
+        source_language = detect_language(content, strict=True)
+        if source_language != "unknown":
+            return source_language != report_language
+        source_script = dominant_script(content)
+        report_script = language_script(report_language)
+        return bool(source_script and report_script and source_script != report_script)
 
     @staticmethod
     def _primary(cyr: set, cjk: set, lat: set) -> str:

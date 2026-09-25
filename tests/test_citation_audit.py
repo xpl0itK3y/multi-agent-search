@@ -95,7 +95,15 @@ def test_english_report_listing_a_russian_title_still_flags_weak_citations():
 
 def test_spanish_report_citing_an_english_source_is_unverified_not_flagged():
     report = "Los sistemas atraviesan una etapa de transición y escalamiento en toda la industria [S1]."
-    sources = {"S1": {"content": "The market is transitioning through a scaling phase across the industry."}}
+    # Clearly English (a same-script source is foreign only on a confident detection).
+    sources = {
+        "S1": {
+            "content": (
+                "The market is transitioning through a scaling phase across the industry, and that "
+                "shift comes from demand for storage with this kind of capacity."
+            )
+        }
+    }
     audit = CitationAuditAgent().audit(report, sources, language="es")
     assert audit.unverified == 1 and audit.total == 0
     assert audit.unsupported_claims == []
@@ -144,3 +152,52 @@ def test_citation_audit_uses_the_stored_research_language(mocker):
     )
 
     assert spy.call_args.kwargs["language"] == "es"
+
+
+# ── foreign only on a confident detection (C7-2) ───────────────────────────────
+
+
+def test_spanish_report_citing_an_unrelated_short_spanish_snippet_is_flagged():
+    # No es hint words: the default detector calls it 'en', which made it foreign to the
+    # Spanish report, so the fabricated citation came out 'unverified' and grounded.
+    report = "La inflación mensual bajó de forma sostenida durante el último trimestre del año [S1]."
+    sources = {"S1": {"content": "Récord histórico en Argentina: 211 % anual según INDEC."}}
+    audit = CitationAuditAgent().audit(report, sources, language="es")
+    assert audit.total == 1 and audit.supported == 0 and audit.unverified == 0
+    assert audit.unsupported_claims
+    assert audit.grounding[0].supported is False
+
+
+def test_spanish_report_citing_a_spanish_snippet_with_portuguese_hint_words_is_flagged():
+    # 'de/que/para/por' score higher for pt than for es; that is a tie-break, not a detection.
+    report = "El gobierno aprobó un nuevo presupuesto para la educación pública del país [S1]."
+    sources = {"S1": {"content": "Reportaje de que para por turismo de playa que para por verano de costa."}}
+    audit = CitationAuditAgent().audit(report, sources, language="es")
+    assert audit.total == 1 and audit.supported == 0
+    assert audit.grounding[0].supported is False
+
+
+def test_english_report_citing_an_english_snippet_with_italian_looking_words_is_flagged():
+    report = "The central bank raised interest rates twice during the last quarter of the year [S1]."
+    sources = {"S1": {"content": "Per capita income con la data from the regional statistics office."}}
+    audit = CitationAuditAgent().audit(report, sources, language="en")
+    assert audit.total == 1 and audit.supported == 0
+    assert audit.grounding[0].supported is False
+
+
+def test_chinese_report_citing_a_chinese_source_with_one_kana_is_flagged():
+    # One stray の made the whole Chinese source 'ja', foreign to the zh report.
+    report = "中国 电动汽车 销量 大幅 增长 [S1]"
+    sources = {"S1": {"content": "北京 天气 预报：今天 下雨，气温 较低，风力 の 三级，空气 质量 良好，适合 出行"}}
+    audit = CitationAuditAgent().audit(report, sources, language="zh")
+    assert audit.total == 1 and audit.supported == 0 and audit.unverified == 0
+    assert audit.grounding[0].supported is False
+
+
+def test_russian_report_citing_a_short_english_snippet_is_still_exempt():
+    # The language of a hint-less Latin snippet is unsure, but its script is not Cyrillic.
+    report = "Системы находятся на переходном этапе развития и масштабирования всей отрасли [S1]."
+    sources = {"S1": {"content": "Market transitioning through scaling phase."}}
+    audit = CitationAuditAgent().audit(report, sources, language="ru")
+    assert audit.unverified == 1 and audit.unsupported_claims == []
+    assert audit.grounding[0].supported is True
