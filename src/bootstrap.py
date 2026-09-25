@@ -17,6 +17,7 @@ from src.agents.replan import ReplanAgent
 from src.agents.report_critic import ReportCriticAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.api.dependencies import LOCAL_USER
+from src.auth.admin_identity import admin_emails
 from src.brokers.redis_broker import RedisBroker
 from src.config import settings
 from src.observability import configure_logging
@@ -71,14 +72,26 @@ _INSECURE_SECRET_DEFAULT = "dev-insecure-secret-change-in-production"
 
 
 def _validate_security_config() -> None:
-    """Fail fast on insecure auth configuration when authentication is enabled."""
-    if settings.auth_disabled:
-        return
-    if settings.auth_secret_key == _INSECURE_SECRET_DEFAULT or len(settings.auth_secret_key) < 32:
+    """Fail fast on an insecure auth configuration: a default or short AUTH_SECRET_KEY
+    whenever a token grants anything. That is always the case with auth enabled, and also
+    with AUTH_DISABLED=true once ADMIN_EMAILS is set: the admin guard then still accepts
+    admin tokens, and anyone can sign one with the public default key."""
+    weak_secret = (
+        settings.auth_secret_key == _INSECURE_SECRET_DEFAULT or len(settings.auth_secret_key) < 32
+    )
+    if weak_secret and not settings.auth_disabled:
         raise RuntimeError(
             "Insecure auth configuration: AUTH_SECRET_KEY must be overridden with a strong "
             "(>=32 character) value when AUTH_DISABLED=false."
         )
+    if weak_secret and admin_emails():
+        raise RuntimeError(
+            "Insecure auth configuration: AUTH_SECRET_KEY must be overridden with a strong "
+            "(>=32 character) value when ADMIN_EMAILS is set, even with AUTH_DISABLED=true: "
+            "admin tokens are signed with it."
+        )
+    if settings.auth_disabled:
+        return
     if not settings.auth_cookie_secure:
         print(
             "Warning: AUTH_COOKIE_SECURE is false while auth is enabled — session cookies will "
