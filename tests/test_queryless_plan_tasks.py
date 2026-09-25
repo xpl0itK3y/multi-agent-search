@@ -38,7 +38,11 @@ class _MixedPlan:
 class _Analyzer:
     llm = None
 
+    def __init__(self):
+        self.calls = 0
+
     def run_analysis(self, prompt, tasks, **kwargs):
+        self.calls += 1
         return "report over " + ",".join(sorted(t.description for t in tasks if t.result))
 
 
@@ -183,3 +187,61 @@ def test_a_retry_after_a_failed_analysis_finalizes_without_searching_the_queryle
     assert broker.search == []
     _run_jobs(service, broker)
     assert store.get_research(research_id).status == ResearchStatus.COMPLETED
+
+
+def _start_decomposed(service):
+    request = ResearchRequest(prompt="mixed plan", depth=SearchDepth.EASY)
+    _, research_id = service.start_research(request)
+    service.decompose_and_enqueue(research_id, request)
+    return research_id
+
+
+def _start_approved(service):
+    request = ResearchRequest(prompt="mixed plan", depth=SearchDepth.EASY, plan_first=True)
+    _, research_id = service.start_research(request)
+    service.decompose_and_enqueue(research_id, request)
+    first, second = service.get_research_plan(research_id).items
+    service.update_research_plan(
+        research_id,
+        ResearchPlanUpdate(
+            items=[
+                ResearchPlanItem(id=first.id, description="a", queries=["q1"]),
+                ResearchPlanItem(id=second.id, description="b", queries=[]),
+            ]
+        ),
+    )
+    service.approve_research_plan(research_id)
+    return research_id
+
+
+def _drain_search_jobs(store, service, broker):
+    """Claim and run every queued search job, retries included, as a worker would."""
+    while broker.search:
+        job_id = broker.search.pop(0)
+        store.claim_search_task_job_by_id(job_id)
+        service.process_search_task_job(job_id)
+
+
+@pytest.mark.parametrize("start", [_start_decomposed, _start_approved], ids=["decompose", "approve"])
+def test_a_mixed_plan_whose_every_search_failed_fails_rather_than_reports_on_nothing(start):
+    """The query-less item is COMPLETED from the start: counted by the 'All tasks failed'
+    rule, it finished a research whose only search dead-lettered with a zero-source report."""
+    store, broker, service = _service()
+    service.run_search_task = lambda task_id, depth: store.update_task(
+        task_id, TaskUpdate(status=TaskStatus.FAILED, log="Error: search provider down")
+    )
+    research_id = start(service)
+
+    _drain_search_jobs(store, service, broker)
+
+    searchable, queryless = _tasks(store, research_id)
+    assert store.get_latest_search_task_job(searchable.id).status == SearchJobStatus.DEAD_LETTER
+    research = store.get_research(research_id)
+    assert research.status == ResearchStatus.FAILED and research.final_report == "All tasks failed."
+    assert service.analyzer.calls == 0 and broker.finalize == []
+    _assert_settled_without_a_job(store, queryless)
+
+    service.retry_research(research_id)
+
+    assert [store.get_search_task_job(job_id).task_id for job_id in broker.search] == [searchable.id]
+    _assert_settled_without_a_job(store, store.get_task(queryless.id))

@@ -2025,7 +2025,6 @@ class ResearchService(
         # Chat follow-up tasks neither gate nor feed the report (see _report_tasks).
         tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
-        any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
         if not tasks:
             raise ConflictError("Research has no tasks to finalize")
@@ -2033,7 +2032,12 @@ class ResearchService(
         if not all_done:
             raise ConflictError("Research tasks are still in progress")
 
-        if any_failed and all(t.status == TaskStatus.FAILED for t in tasks):
+        # Judged on the tasks that had something to search: a query-less plan item is stored
+        # COMPLETED with no results (_planned_task), and counted here it turned a research
+        # whose every search failed into a report over no sources (the old rule stands when
+        # no task has queries).
+        searched = [t for t in tasks if t.queries] or tasks
+        if all(t.status == TaskStatus.FAILED for t in searched):
             self.task_store.update_research_status(
                 research_id,
                 ResearchStatus.FAILED,
