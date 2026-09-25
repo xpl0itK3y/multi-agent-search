@@ -204,3 +204,82 @@ def test_retry_is_skipped_once_finalization_has_begun(flaky_agent):
     assert drained.status == SearchJobStatus.COMPLETED
     assert drained.error == "Research no longer active — search skipped"
     assert flaky_agent.calls == {}
+
+
+# RETRY-WINDOW: a FAILED task is not settled while its job is still deciding on a retry.
+
+
+def test_a_sibling_finishing_before_the_retry_is_scheduled_does_not_finalize(flaky_agent, monkeypatch):
+    store, broker = InMemoryTaskStore(), _FakeBroker()
+    service = ResearchService(task_store=store, analyzer=_StubAnalyzer(), broker=broker)
+    research = _research_with_tasks(
+        store, {"id": "a", "status": TaskStatus.PENDING}, {"id": "b", "status": TaskStatus.PENDING}
+    )
+    job_a = store.add_search_task_job("a", SearchDepth.EASY.value)
+    job_b = store.add_search_task_job("b", SearchDepth.EASY.value)
+    record_failure = store.record_search_task_job_failure
+    sibling_outcome = {}
+
+    def fail_a_once_then_let_b_finish_first(job_id, error):
+        # Called after run_search_task returned with task a FAILED and before a's retry
+        # is scheduled: the window in which sibling b completes.
+        if job_id == job_a.id and not sibling_outcome:
+            _work(store, service, job_b.id)
+            sibling_outcome["research"] = store.get_research(research.id).status
+        return record_failure(job_id, error)
+
+    monkeypatch.setattr(store, "record_search_task_job_failure", fail_a_once_then_let_b_finish_first)
+    # a fails its first run and then succeeds; b succeeds at once.
+    flaky_agent.failures_before_success = 0
+    flaky_agent.calls = {"a": -1}
+
+    first = _work(store, service, job_a.id)
+
+    assert sibling_outcome["research"] == ResearchStatus.PROCESSING
+    assert first.status == SearchJobStatus.PENDING
+    assert broker.finalize == []
+    retried = _work(store, service, job_a.id)
+    assert retried.status == SearchJobStatus.COMPLETED and retried.error is None
+    finalize_job = store.get_latest_research_finalize_job(research.id)
+    service.process_finalize_job(finalize_job.id)
+    final = store.get_research(research.id)
+    assert final.status == ResearchStatus.COMPLETED and final.final_report == "report over a,b"
+    assert store.get_task("a").status == TaskStatus.COMPLETED
+
+
+def test_retry_resets_every_task_before_the_first_job_can_run(flaky_agent):
+    """A redispatched search that finishes while a later task is still FAILED must not
+    finalize the research (Postgres-polling workers claim a job row as soon as it exists)."""
+    from src.domain.models import FinalizeJobStatus
+
+    flaky_agent.failures_before_success = 0
+    store, broker = InMemoryTaskStore(), _FakeBroker()
+    service = ResearchService(task_store=store, analyzer=_StubAnalyzer(), broker=broker)
+    research = _research_with_tasks(
+        store, {"id": "a", "status": TaskStatus.FAILED}, {"id": "b", "status": TaskStatus.FAILED}
+    )
+    for task_id in ("a", "b"):
+        job = store.add_search_task_job(task_id, SearchDepth.EASY.value, max_attempts=1)
+        store.claim_search_task_job_by_id(job.id)
+        store.record_search_task_job_failure(job.id, "boom")
+    store.update_research_status(research.id, ResearchStatus.FAILED, "Research failed during analysis.")
+    add_job, requeue_job = store.add_search_task_job, store.requeue_search_task_job
+    states_when_a_job_appeared = []
+
+    def watch(original):
+        def wrapper(*args, **kwargs):
+            states_when_a_job_appeared.append({t.id: t.status for t in store.get_tasks_by_research(research.id)})
+            return original(*args, **kwargs)
+        return wrapper
+
+    store.add_search_task_job, store.requeue_search_task_job = watch(add_job), watch(requeue_job)
+
+    service.retry_research(research.id)
+
+    assert states_when_a_job_appeared[0] == {"a": TaskStatus.PENDING, "b": TaskStatus.PENDING}
+    for job_id in list(broker.search):
+        _work(store, service, job_id)
+    finalize_job = store.get_latest_research_finalize_job(research.id)
+    assert finalize_job is not None and finalize_job.status == FinalizeJobStatus.PENDING
+    service.process_finalize_job(finalize_job.id)
+    assert store.get_research(research.id).final_report == "report over a,b"

@@ -740,9 +740,7 @@ class ResearchService(
         elif finalize_only:
             self._retry_finalization(research_id)
         else:
-            for task in tasks:
-                if task.status in (TaskStatus.FAILED, TaskStatus.PENDING):
-                    self._redispatch_search_task(task, reset.depth)
+            self._redispatch_search_tasks(tasks, reset.depth)
         logger.info(
             "research_retried research_id=%s path=%s",
             research_id,
@@ -758,19 +756,29 @@ class ResearchService(
         job = self._dispatch_finalize_job(research_id)
         logger.info("research_retry_finalization finalize_job_id=%s", job.id)
 
-    def _redispatch_search_task(self, task: SearchTask, depth: SearchDepth) -> None:
-        job = self.task_store.get_latest_search_task_job(task.id)
-        if job is not None and job.status == SearchJobStatus.RUNNING:
-            return  # a worker still holds it; its outcome settles the task
-        self.task_store.update_task(task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried"))
-        # The job row always exists (Postgres-polling workers claim from it); the broker
-        # push is only the wake-up for Redis-mode workers.
-        if job is None or job.status == SearchJobStatus.COMPLETED:
-            job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
-        elif job.status != SearchJobStatus.PENDING:
-            job = self.task_store.requeue_search_task_job(job.id) or job
-        if self.broker:
-            self.broker.push_search_job(job.id)
+    def _redispatch_search_tasks(self, tasks: list[SearchTask], depth: SearchDepth) -> None:
+        """Send the failed and stalled tasks back to the search workers. Every one of them
+        is PENDING before the first job row is created or requeued: Postgres-polling workers
+        claim a row at once, and a search finishing while a sibling was still FAILED would
+        finalize the research without that sibling and drain its retry."""
+        redispatch: list[tuple[SearchTask, SearchTaskJob | None]] = []
+        for task in tasks:
+            if task.status not in (TaskStatus.FAILED, TaskStatus.PENDING):
+                continue
+            job = self.task_store.get_latest_search_task_job(task.id)
+            if job is not None and job.status == SearchJobStatus.RUNNING:
+                continue  # a worker still holds it; its outcome settles the task
+            self.task_store.update_task(task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried"))
+            redispatch.append((task, job))
+        for task, job in redispatch:
+            # The job row always exists (Postgres-polling workers claim from it); the broker
+            # push is only the wake-up for Redis-mode workers.
+            if job is None or job.status == SearchJobStatus.COMPLETED:
+                job = self.task_store.add_search_task_job(task.id, depth.value, settings.job_max_attempts)
+            elif job.status != SearchJobStatus.PENDING:
+                job = self.task_store.requeue_search_task_job(job.id) or job
+            if self.broker:
+                self.broker.push_search_job(job.id)
 
     def _retry_decomposition(self, research: ResearchRecord, background_tasks: Any | None) -> None:
         # Replay the original request (plan_first, model, thread) when it is still stored.
@@ -2508,9 +2516,25 @@ class ResearchService(
         tasks = self.task_store.get_tasks_by_research(research_id)
         if not tasks:
             return
-        if all(t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED) for t in tasks):
+        if all(self._search_settled(task) for task in tasks):
             logger.info("research_search_complete_auto_finalize research_id=%s task_count=%s", research_id, len(tasks))
             self.enqueue_research_finalization(research_id)  # idempotent via status guard
+
+    _ACTIVE_SEARCH_JOB_STATUSES = (SearchJobStatus.PENDING, SearchJobStatus.RUNNING)
+
+    def _search_settled(self, task: SearchTask) -> bool:
+        """COMPLETED, or FAILED with no search job left to run. SearchAgent marks a task
+        FAILED before its worker records the failure and schedules the retry; counting it
+        settled in that window let a sibling finalize the research and the retry be drained.
+        Every job settles through process_search_task_job, which re-checks afterwards, so
+        a dead-lettered task still lets the research finalize. Only FAILED tasks cost a
+        job lookup; replan/tie-break tasks have no job and are settled as they stand."""
+        if task.status == TaskStatus.COMPLETED:
+            return True
+        if task.status != TaskStatus.FAILED:
+            return False
+        job = self.task_store.get_latest_search_task_job(task.id)
+        return job is None or job.status not in self._ACTIVE_SEARCH_JOB_STATUSES
 
     def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.task_store.get_search_task_job(job_id)
