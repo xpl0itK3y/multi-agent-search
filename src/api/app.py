@@ -37,7 +37,7 @@ from src.auth.admin_identity import has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.telemetry_rate_limit import telemetry_user_id
-from src.auth.security import create_token, decode_token
+from src.auth.security import OAUTH_STATE_PURPOSE, create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
@@ -526,7 +526,9 @@ def register_routes(app: FastAPI) -> None:
         # CSRF state bound to the browser: a short-lived signed token carried in BOTH the URL
         # and an httpOnly SameSite=Lax cookie. The callback requires them to match, so a state
         # minted for one browser can't be used to complete a login in another (login-CSRF).
-        state = create_token(secrets.token_urlsafe(8), ttl_seconds=600)
+        # Its own purpose claim: signed with the session key, it must never pass as a
+        # session token (and cost an identity lookup or a limiter slot as one).
+        state = create_token(secrets.token_urlsafe(8), ttl_seconds=600, purpose=OAUTH_STATE_PURPOSE)
         redirect = RedirectResponse(build_authorization_url(state), status_code=302)
         redirect.set_cookie(
             "oauth_state", state, max_age=600, httponly=True,
@@ -546,7 +548,12 @@ def register_routes(app: FastAPI) -> None:
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         cookie_state = request.cookies.get("oauth_state")
-        if not code or decode_token(state) is None or not cookie_state or cookie_state != state:
+        if (
+            not code
+            or decode_token(state, purpose=OAUTH_STATE_PURPOSE) is None
+            or not cookie_state
+            or cookie_state != state
+        ):
             logger.warning("google_oauth_invalid_state")
             return _oauth_failure("oauth_failed")
         try:

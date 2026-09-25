@@ -58,14 +58,22 @@ def _encode_segment(data: dict) -> str:
     return _b64encode(json.dumps(data, separators=(",", ":")).encode())
 
 
+# ``purpose`` claim of the OAuth CSRF state token. Session tokens carry no purpose claim,
+# and decode_token accepts a token only for the purpose it was minted for: every token is
+# signed with the same AUTH_SECRET_KEY, so a state token must never pass as a session.
+OAUTH_STATE_PURPOSE = "oauth_state"
+
+
 def create_token(
     user_id: str,
     *,
     email: str | None = None,
     ttl_seconds: int | None = None,
     token_version: int = 0,
+    purpose: str | None = None,
 ) -> str:
-    """Issue a signed HS256 JWT for ``user_id`` with iat/exp claims."""
+    """Issue a signed HS256 JWT for ``user_id`` with iat/exp claims. A session token has
+    no ``purpose``; any other token names its purpose (e.g. OAUTH_STATE_PURPOSE)."""
     ttl = ttl_seconds if ttl_seconds is not None else settings.auth_token_ttl_seconds
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
@@ -77,12 +85,16 @@ def create_token(
     }
     if email:
         payload["email"] = email
+    if purpose:
+        payload["purpose"] = purpose
     signing_input = f"{_encode_segment(header)}.{_encode_segment(payload)}"
     return f"{signing_input}.{_sign(signing_input)}"
 
 
-def decode_token(token: str) -> dict | None:
-    """Return the JWT claims if the token is well-formed, HS256-signed and unexpired."""
+def decode_token(token: str, *, purpose: str | None = None) -> dict | None:
+    """Return the JWT claims if the token is well-formed, HS256-signed, unexpired and minted
+    for ``purpose``. The default (None) means a session token: one with a purpose claim,
+    such as an OAuth state token, is rejected."""
     try:
         header_b64, payload_b64, signature = token.split(".")
         signing_input = f"{header_b64}.{payload_b64}"
@@ -94,12 +106,14 @@ def decode_token(token: str) -> dict | None:
         payload = json.loads(_b64decode(payload_b64))
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
+        if payload.get("purpose") != purpose:
+            return None
         return payload
     except Exception:
         return None
 
 
 def verify_token(token: str) -> str | None:
-    """Return the subject (user id) if the JWT is valid and unexpired, else None."""
+    """Return the subject (user id) if the session JWT is valid and unexpired, else None."""
     claims = decode_token(token)
     return claims.get("sub") if claims else None
