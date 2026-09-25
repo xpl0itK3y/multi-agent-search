@@ -102,7 +102,19 @@ it stays out of shell history and `ps`. Locally, run
 Usage telemetry (`POST /v1/telemetry/event`, which feeds the admin analytics)
 is accepted only from signed-in users with a valid CSRF token; the web UI sends
 it only while you are logged in, so anonymous visitors and public share-link
-viewers are not tracked.
+viewers are not tracked. Each user gets `TELEMETRY_RATE_LIMIT_PER_MINUTE`
+events per minute (default 120); heartbeats refresh the session row instead of
+adding event rows.
+
+Every admin mutation (queue maintenance, requeue/recover/cleanup, user
+deletion) and every CSV export writes an admin audit row and shares the
+`ADMIN_RATE_LIMIT_PER_MINUTE` budget (default 10). Accounts listed in
+`ADMIN_EMAILS` cannot be deleted from the admin panel.
+
+LLM spend is recorded per call in `llm_usage_logs` (actual model id, tokens,
+cache hits, cost), including API-side calls such as decompose, optimize and
+chat. `DEEPSEEK_REASONER_MODEL` and `DEEPSEEK_REPAIR_MODEL` are sent to the
+provider as configured; they are operator settings, never user-selectable.
 
 ## Requirements
 

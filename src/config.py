@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # Cloud Console; set the client id/secret and the EXACT redirect URI you registered.
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8501/v1/auth/google/callback"
+    google_redirect_uri: str = "http://localhost:8502/v1/auth/google/callback"
     oauth_post_login_redirect: str = "/"
     # New OAuth users land here to optionally set a password for email/password login.
     oauth_new_user_redirect: str = "/set-password"
