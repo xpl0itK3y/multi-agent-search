@@ -134,7 +134,7 @@ async function executeRequeue() {
           <button
             class="rounded-lg bg-surface border border-bd px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80 disabled:opacity-50"
             :disabled="actionLoading"
-            @click="triggerDryRun('recover_stale_finalize_jobs', { stale_seconds: 300 })"
+            @click="triggerDryRun('recover_stale_finalize_jobs')"
           >
             {{ t("admin.operations.previewBtn") }}
           </button>
@@ -156,7 +156,7 @@ async function executeRequeue() {
           <button
             class="rounded-lg bg-surface border border-bd px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80 disabled:opacity-50"
             :disabled="actionLoading"
-            @click="triggerDryRun('recover_stale_search_jobs', { stale_seconds: 300 })"
+            @click="triggerDryRun('recover_stale_search_jobs')"
           >
             {{ t("admin.operations.previewBtn") }}
           </button>
