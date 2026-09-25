@@ -214,8 +214,14 @@ async function ensureComparison() {
 // Citation grounding, living-research diff and the comparison table load once final.
 watch(
   () => props.isFinal,
-  (final) => {
+  (final, wasFinal) => {
     if (final) {
+      // While finalizing, /sources serves a fallback pool; the canonical [Sn] table lands with
+      // the report, so a list fetched before completion is refetched once.
+      if (wasFinal === false && sources.value) {
+        sources.value = null;
+        ensureSources();
+      }
       ensureCitations();
       ensureIndependence();
       ensureReputation();

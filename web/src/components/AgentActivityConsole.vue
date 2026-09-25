@@ -216,7 +216,8 @@ function isLoopback(entry?: TraceEntry | null): boolean {
   if (!entry) return false;
   const s = entry.step || "";
   const a = entry.action || "";
-  const d = entry.detail || "";
+  // Loop-backs are identified by their step/action codes only: trail details are written in
+  // the research's language and must never be parsed.
   return (
     s === "replan" ||
     s === "tie_break" ||
@@ -224,10 +225,7 @@ function isLoopback(entry?: TraceEntry | null): boolean {
     a.includes("loop") ||
     a.includes("replan") ||
     a.includes("tie_break") ||
-    a.includes("revision") ||
-    d.includes("↩") ||
-    d.includes("возврат") ||
-    d.includes("вернул")
+    a.includes("revision")
   );
 }
 
