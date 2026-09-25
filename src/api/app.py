@@ -5,6 +5,7 @@ import hmac
 import io
 import json
 import logging
+import re
 import secrets
 import uuid
 import time
@@ -392,6 +393,19 @@ def parse_trail_cursor(value: str | None) -> TrailCursor | None:
     return timestamp, int(count)
 
 
+# The only shape of client X-Request-ID that is kept. The id is bound into every log record
+# of the request and echoed back, so a free-form value could forge key=value fields in text
+# logs, collide with other requests' ids or inflate each log line by kilobytes.
+_CLIENT_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def accepted_request_id(client_value: str | None) -> str:
+    """The client's X-Request-ID if it matches ^[A-Za-z0-9._-]{1,64}$, else a new id."""
+    if client_value and _CLIENT_REQUEST_ID.fullmatch(client_value):
+        return client_value
+    return uuid.uuid4().hex
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
@@ -413,7 +427,7 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def correlation_middleware(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        request_id = accepted_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         started_at = time.perf_counter()
         with bind_observability_context(
