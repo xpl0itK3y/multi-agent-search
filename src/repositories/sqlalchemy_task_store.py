@@ -545,6 +545,70 @@ class SQLAlchemyTaskStore:
         self._emit_change(research_id)  # after commit so SSE re-reads the new state
         return result
 
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None:
+        with self.session_scope() as session:
+            research = session.execute(
+                select(ResearchORM).where(ResearchORM.id == research_id).with_for_update()
+            ).scalar_one_or_none()
+            if research is None or research.status not in [item.value for item in expected]:
+                return None
+            if updated_before is not None and research.updated_at >= updated_before:
+                return None
+            research.status = status.value
+            if report is not None:
+                research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
+            research.updated_at = datetime.now(timezone.utc)
+            session.flush()
+            session.refresh(research)
+            result = research_orm_to_record(research)
+        self._emit_change(research_id)
+        return result
+
+    _ACTIVE_JOB_STATUSES = (FinalizeJobStatus.PENDING.value, FinalizeJobStatus.RUNNING.value)
+
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]:
+        finalize_active = (
+            select(ResearchFinalizeJobORM.id)
+            .where(
+                ResearchFinalizeJobORM.research_id == ResearchORM.id,
+                ResearchFinalizeJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+            )
+            .exists()
+        )
+        search_active = (
+            select(SearchTaskJobORM.id)
+            .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
+            .where(
+                SearchTaskORM.research_id == ResearchORM.id,
+                SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+            )
+            .exists()
+        )
+        statement = (
+            select(ResearchORM.id)
+            .where(
+                ResearchORM.status.in_([ResearchStatus.PROCESSING.value, ResearchStatus.ANALYZING.value]),
+                ResearchORM.updated_at < stale_before,
+                ~ResearchORM.graph_state.has_key("decompose_pending"),
+                ~finalize_active,
+                ~search_active,
+            )
+            .order_by(ResearchORM.updated_at.asc(), ResearchORM.id.asc())
+            .limit(limit)
+        )
+        with self.session_scope() as session:
+            return list(session.execute(statement).scalars().all())
+
     def reset_research_for_retry(
         self,
         research_id: str,

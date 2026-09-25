@@ -1020,6 +1020,8 @@ class QueueMaintenanceResponse(BaseModel):
     deleted_finalize_job_ids: List[str] = Field(default_factory=list)
     compacted_graph_event_worker_names: List[str] = Field(default_factory=list)
     compacted_graph_trail_research_ids: List[str] = Field(default_factory=list)
+    # Researches the stalled sweep finalized or failed (nothing was left queued for them).
+    stalled_research_ids: List[str] = Field(default_factory=list)
     recovered_count: int = 0
     deleted_count: int = 0
     compacted_count: int = 0

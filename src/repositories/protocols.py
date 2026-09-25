@@ -99,6 +99,25 @@ class TaskStore(Protocol):
         report: str | None = None,
     ) -> ResearchRecord | None: ...
 
+    # Status CAS under the row lock: move to `status` only while the research is in one of
+    # `expected` and, with `updated_before`, has not been written since then. `report`
+    # replaces final_report as in update_research_status. None when a guard fails.
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None: ...
+
+    # PROCESSING/ANALYZING researches not written since `stale_before` that nothing will
+    # move: no PENDING/RUNNING search job for any of their tasks, no PENDING/RUNNING
+    # finalize job and no decomposition in flight (a decompose_pending key in graph_state).
+    # Least recently updated first, at most `limit`.
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]: ...
+
     # Status-guarded reset for a retry, under the row lock: clears the reports and drops
     # `remove_graph_state_keys`, only while the research is in `expected_status`.
     def reset_research_for_retry(

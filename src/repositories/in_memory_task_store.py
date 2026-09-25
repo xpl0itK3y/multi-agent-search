@@ -455,6 +455,56 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
         return research
 
+    def transition_research_status(
+        self,
+        research_id: str,
+        expected: list[ResearchStatus],
+        status: ResearchStatus,
+        report: str | None = None,
+        *,
+        updated_before: datetime | None = None,
+    ) -> ResearchRecord | None:
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status not in expected:
+                return None
+            if updated_before is not None and research.updated_at >= updated_before:
+                return None
+            research.status = status
+            if report is not None:
+                research.final_report = report
+                research.partial_report = None
+                research.partial_reasoning = None
+            research.updated_at = datetime.now(timezone.utc)
+        self._emit_change(research_id)
+        return research
+
+    _ACTIVE_FINALIZE_STATUSES = (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING)
+    _ACTIVE_SEARCH_STATUSES = (SearchJobStatus.PENDING, SearchJobStatus.RUNNING)
+
+    def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]:
+        busy = {
+            job.research_id
+            for job in self.finalize_jobs.values()
+            if job.status in self._ACTIVE_FINALIZE_STATUSES
+        }
+        for job in self.search_jobs.values():
+            task = self.tasks.get(job.task_id)
+            if job.status in self._ACTIVE_SEARCH_STATUSES and task is not None and task.research_id:
+                busy.add(task.research_id)
+        stalled = sorted(
+            (
+                research
+                for research in self.researches.values()
+                if research.status in (ResearchStatus.PROCESSING, ResearchStatus.ANALYZING)
+                and research.updated_at < stale_before
+                and "decompose_pending" not in (research.graph_state or {})
+                and research.id not in busy
+            ),
+            key=lambda research: (research.updated_at, research.id),
+        )
+        return [research.id for research in stalled[:limit]]
+
     def reset_research_for_retry(
         self,
         research_id: str,

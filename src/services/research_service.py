@@ -702,8 +702,8 @@ class ResearchService(
         background_tasks: Any | None = None,
     ) -> ResearchRecord:
         """Retry a failed research from where it failed: finalization when every search
-        task completed, the failed/stalled search tasks otherwise, and decomposition when
-        no tasks were ever created.
+        task completed, the unfinished search tasks otherwise, and decomposition when no
+        tasks were ever created.
 
         The retry is admitted like any activation (ADMIT-ATOMIC): FAILED -> PROCESSING is a
         CAS under the admission lock that counts against the per-user and global limits,
@@ -757,17 +757,19 @@ class ResearchService(
         logger.info("research_retry_finalization finalize_job_id=%s", job.id)
 
     def _redispatch_search_tasks(self, tasks: list[SearchTask], depth: SearchDepth) -> None:
-        """Send the failed and stalled tasks back to the search workers. Every one of them
+        """Send every unfinished task back to the search workers: FAILED, PENDING, and
+        RUNNING without a running job (a replan/tie-break task runs inline in the finalize
+        worker with no job, so a dead worker leaves it RUNNING for good). Every one of them
         is PENDING before the first job row is created or requeued: Postgres-polling workers
         claim a row at once, and a search finishing while a sibling was still FAILED would
         finalize the research without that sibling and drain its retry."""
         redispatch: list[tuple[SearchTask, SearchTaskJob | None]] = []
         for task in tasks:
-            if task.status not in (TaskStatus.FAILED, TaskStatus.PENDING):
+            if task.status == TaskStatus.COMPLETED:
                 continue
             job = self.task_store.get_latest_search_task_job(task.id)
             if job is not None and job.status == SearchJobStatus.RUNNING:
-                continue  # a worker still holds it; its outcome settles the task
+                continue  # a worker still holds it: its outcome (or stale recovery) settles it
             self.task_store.update_task(task.id, TaskUpdate(status=TaskStatus.PENDING, log="Task retried"))
             redispatch.append((task, job))
         for task, job in redispatch:

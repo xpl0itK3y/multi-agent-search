@@ -257,10 +257,80 @@ class JobQueueMixin:
                 logger.info("telemetry_cleaned table=%s deleted_count=%s", table, deleted[table])
         return deleted
 
+    # Researches the stalled sweep handles per maintenance pass (it runs every
+    # queue_maintenance_interval_seconds, so a backlog drains over a few passes).
+    STALLED_RESEARCH_SWEEP_LIMIT = 50
+    STALLED_RESEARCH_REPORT = (
+        "Research stopped making progress: no search or analysis was left queued for it. "
+        "Please try again."
+    )
+
+    def _stalled_before(self) -> datetime:
+        """Well past the admission stale cutoff and both job timeouts: a research with a
+        live job is never a candidate, and every live step writes the research row."""
+        seconds = max(
+            settings.research_stale_active_seconds,
+            settings.search_job_timeout_seconds,
+            settings.finalize_job_timeout_seconds,
+        )
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
+    def sweep_stalled_researches(self) -> list[str]:
+        """Safety net for work lost between steps: a crash between a status change and the
+        job it should come with, a replan task orphaned RUNNING by a dead finalize worker,
+        a decomposition whose marker is gone. A PROCESSING/ANALYZING research with no
+        pending/running job, no decomposition in flight and no write since the cutoff
+        cannot move. One whose searches all settled only lost its finalize enqueue and is
+        finalized; any other is FAILED, which makes it retryable. Returns the ids handled."""
+        stale_before = self._stalled_before()
+        handled: list[str] = []
+        for research_id in self.task_store.list_stalled_research_ids(
+            stale_before, limit=self.STALLED_RESEARCH_SWEEP_LIMIT
+        ):
+            research = self.task_store.get_research(research_id)
+            if research is None:
+                continue
+            if research.status == ResearchStatus.PROCESSING and self._finalize_stalled_search(research_id):
+                handled.append(research_id)
+                continue
+            # Guarded on the status and on no write since the cutoff: anything that started
+            # the research moving again in the meantime wrote the row and wins.
+            failed = self.task_store.transition_research_status(
+                research_id,
+                [ResearchStatus.PROCESSING, ResearchStatus.ANALYZING],
+                ResearchStatus.FAILED,
+                self.STALLED_RESEARCH_REPORT,
+                updated_before=stale_before,
+            )
+            if failed is not None:
+                handled.append(research_id)
+                logger.warning(
+                    "research_stalled_failed research_id=%s previous_status=%s", research_id, research.status.value
+                )
+        return handled
+
+    def _finalize_stalled_search(self, research_id: str) -> bool:
+        tasks = self.task_store.get_tasks_by_research(research_id)
+        if not tasks or not all(self._search_settled(task) for task in tasks):
+            return False
+        try:
+            _, job = self.enqueue_research_finalization(research_id)
+        except Exception as exc:  # e.g. no analyzer in this process: fail it, retry can finalize
+            logger.warning("research_stalled_finalize_failed research_id=%s error=%s", research_id, exc)
+            return False
+        if job is None:
+            # Lost the CAS, or every task had failed and the research is now FAILED.
+            current = self.task_store.get_research(research_id)
+            return current is not None and current.status != ResearchStatus.PROCESSING
+        logger.warning("research_stalled_finalize_enqueued research_id=%s finalize_job_id=%s", research_id, job.id)
+        return True
+
     def run_queue_maintenance(self) -> QueueMaintenanceResponse:
         self.recover_pending_decompositions()
         search_recovery = self.recover_stale_search_task_jobs()
         finalize_recovery = self.recover_stale_research_finalize_jobs()
+        # After the stale-job recovery, so a research whose job was just requeued is busy.
+        stalled_research_ids = self.sweep_stalled_researches()
         search_cleanup = self.cleanup_old_search_task_jobs()
         finalize_cleanup = self.cleanup_old_research_finalize_jobs()
         self.cleanup_search_cache()
@@ -279,10 +349,11 @@ class JobQueueMixin:
             deleted_finalize_job_ids=finalize_cleanup.deleted_job_ids,
             compacted_graph_event_worker_names=compacted_worker_names,
             compacted_graph_trail_research_ids=compacted_research_ids,
+            stalled_research_ids=stalled_research_ids,
             recovered_count=recovered_count,
             deleted_count=deleted_count,
             compacted_count=compacted_count,
-            total_count=recovered_count + deleted_count + compacted_count,
+            total_count=recovered_count + deleted_count + compacted_count + len(stalled_research_ids),
         )
 
     def get_latest_search_task_job(

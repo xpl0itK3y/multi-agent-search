@@ -509,6 +509,77 @@ def test_finalize_job_stale_recovery_bumps_lease_epoch(store):
     assert bumped.lease_epoch == 1
 
 
+def test_transition_research_status_is_a_guarded_cas(store):
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING, "partial")
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    assert store.transition_research_status(record.id, [ResearchStatus.ANALYZING], ResearchStatus.FAILED) is None
+    # Written after the cutoff: somebody moved it again, the CAS must lose.
+    assert store.transition_research_status(
+        record.id, [ResearchStatus.PROCESSING], ResearchStatus.FAILED, "stalled", updated_before=cutoff
+    ) is None
+    assert store.get_research(record.id).status == ResearchStatus.PROCESSING
+
+    _backdate(store, "research", record.id, updated_at=cutoff - timedelta(minutes=5))
+    moved = store.transition_research_status(
+        record.id,
+        [ResearchStatus.PROCESSING, ResearchStatus.ANALYZING],
+        ResearchStatus.FAILED,
+        "stalled",
+        updated_before=cutoff,
+    )
+
+    assert moved.status == ResearchStatus.FAILED and moved.final_report == "stalled"
+    current = store.get_research(record.id)
+    assert current.status == ResearchStatus.FAILED and current.updated_at > cutoff
+    kept = store.transition_research_status(record.id, [ResearchStatus.FAILED], ResearchStatus.ANALYZING)
+    assert kept.status == ResearchStatus.ANALYZING and kept.final_report == "stalled"
+    assert store.transition_research_status("missing", [ResearchStatus.PROCESSING], ResearchStatus.FAILED) is None
+
+
+def test_list_stalled_research_ids_finds_only_researches_nothing_will_move(store):
+    now = datetime.now(timezone.utc)
+
+    def research(status=ResearchStatus.PROCESSING, **graph_state):
+        record = _research(store)
+        if graph_state:
+            store.merge_research_graph_state(record.id, graph_state)
+        if status != ResearchStatus.PROCESSING:
+            store.update_research_status(record.id, status)
+        return record.id
+
+    def search_job(research_id, status):
+        task = _task(store, research_id)
+        job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+        store.update_search_task_job(job.id, status)
+
+    idle = research()
+    lost_finalize = research(ResearchStatus.ANALYZING)
+    _dead_letter_finalize_job(store, lost_finalize)
+    searched = research()
+    search_job(searched, SearchJobStatus.COMPLETED)
+    searching = research()
+    search_job(searching, SearchJobStatus.PENDING)
+    analyzing = research(ResearchStatus.ANALYZING)
+    running = store.add_research_finalize_job(analyzing)
+    store.claim_research_finalize_job_by_id(running.id)
+    decomposing = research(decompose_pending=True)
+    failed = research(ResearchStatus.FAILED)
+    in_review = research(ResearchStatus.PLAN_REVIEW)
+    for minutes, research_id in enumerate(
+        [idle, lost_finalize, searched, searching, analyzing, decomposing, failed, in_review]
+    ):
+        _backdate(store, "research", research_id, updated_at=now - timedelta(hours=2) + timedelta(minutes=minutes))
+    fresh = research()
+
+    cutoff = now - timedelta(minutes=10)
+    assert store.list_stalled_research_ids(cutoff) == [idle, lost_finalize, searched]
+    assert store.list_stalled_research_ids(cutoff, limit=2) == [idle, lost_finalize]
+    # The fresh one is left out only by its age.
+    assert store.list_stalled_research_ids(datetime.now(timezone.utc) + timedelta(minutes=1))[-1] == fresh
+
+
 def _dead_letter_finalize_job(store, research_id):
     job = store.add_research_finalize_job(research_id, max_attempts=1)
     claimed = store.claim_research_finalize_job_by_id(job.id)
