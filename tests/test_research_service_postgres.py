@@ -1,5 +1,8 @@
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
+from sqlalchemy import update
 
 from src.api.schemas import (
     FinalizeJobStatus,
@@ -10,6 +13,7 @@ from src.api.schemas import (
     TaskStatus,
     TaskUpdate,
 )
+from src.db.models import ResearchFinalizeJobORM, SearchTaskJobORM
 from src.repositories import SQLAlchemyTaskStore
 from src.services.research_service import ResearchService
 
@@ -117,6 +121,12 @@ def test_research_service_postgres_admin_job_operations(postgres_session_factory
     store.update_search_task_job(running_search.id, SearchJobStatus.RUNNING)
     running_finalize = store.add_research_finalize_job(research.id)
     store.update_research_finalize_job(running_finalize.id, FinalizeJobStatus.RUNNING)
+    # Idle for a minute: with a zero window a job stamped in the same clock tick as the
+    # recovery (about 15 ms on Windows) is not "before" it yet.
+    a_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    with store.session_scope() as session:
+        for model, job_id in ((SearchTaskJobORM, running_search.id), (ResearchFinalizeJobORM, running_finalize.id)):
+            session.execute(update(model).where(model.id == job_id).values(updated_at=a_minute_ago))
 
     monkeypatch.setattr("src.services.research_service.settings.search_job_timeout_seconds", -1)
     monkeypatch.setattr("src.services.research_service.settings.finalize_job_timeout_seconds", -1)
