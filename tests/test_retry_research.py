@@ -44,6 +44,9 @@ STALE_KEYS = {
     "red_team": {"findings": []},
     "stance_balance": {"balance": "one-sided"},
     "numeric_check": {"issues": 1},
+    # The failed attempt's [Sn] table: any stored list is authoritative for the readers.
+    "canonical_sources": [{"source_id": "S7", "url": "https://old.example/7"}],
+    "llm_token_usage": {"prompt_tokens": 10, "completion_tokens": 5},
 }
 
 
@@ -210,6 +213,32 @@ def test_search_retry_resets_failed_and_stalled_tasks_and_always_creates_job_row
         assert sorted(broker.search) == sorted([dead.id, fresh.id])
     pending = {store.claim_next_search_task_job().id, store.claim_next_search_task_job().id}
     assert pending == {dead.id, fresh.id}
+
+
+def test_search_retry_serves_the_task_pool_not_the_failed_attempts_source_table():
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = _failed_research(
+        store,
+        {
+            "id": "done",
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {"url": "https://one.example/a", "title": "One", "content": "first source text"},
+                {"url": "https://two.example/b", "title": "Two", "content": "second source text"},
+            ],
+        },
+        {"id": "failed", "status": TaskStatus.FAILED},
+    )
+    assert [s.source_id for s in service.get_research_sources(research.id)] == ["S7"]
+
+    service.retry_research(research.id)
+
+    assert "canonical_sources" not in store.get_research(research.id).graph_state
+    assert [(s.source_id, s.url) for s in service.get_research_sources(research.id)] == [
+        ("S1", "https://one.example/a"),
+        ("S2", "https://two.example/b"),
+    ]
 
 
 def test_search_retry_leaves_a_job_that_is_still_running_alone():

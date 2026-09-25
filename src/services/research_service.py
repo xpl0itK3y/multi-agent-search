@@ -711,7 +711,13 @@ class ResearchService(
     # a fresh pass rather than resuming the attempt that failed) and the trust artifacts
     # the panels would otherwise keep serving. The decompose marker goes too; a retry that
     # decomposes again sets it anew with decompose_requested_at, which recovery ages on.
+    # canonical_sources goes back to "not computed": any stored list is the authoritative
+    # [Sn] table, so the failed attempt's would keep serving /sources, verification and
+    # chat until the retried analyze replaced it (never, if the retry fails before that).
+    # llm_token_usage is the per-attempt figure; the retried finalize writes its own.
     _RETRY_RESET_GRAPH_STATE_KEYS = (
+        "canonical_sources",
+        "llm_token_usage",
         "error",
         "report",
         "step",
