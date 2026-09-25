@@ -6,6 +6,7 @@ without the row lock, left finalize-only retries in ANALYZING with no job and cr
 search jobs with swapped arguments.
 """
 import threading
+import uuid
 
 import pytest
 
@@ -358,10 +359,21 @@ def test_retry_route_is_llm_rate_limited():
     assert enforce_llm_rate_limit in [dependency.call for dependency in route.dependant.dependencies]
 
 
+def _route_research(store, monkeypatch, *tasks):
+    """A failed research owned by a fresh user. The route tests also run in postgres-smoke,
+    on a database shared with every other test: fixed ids would collide there, and other
+    tests' researches would count against the global capacity."""
+    monkeypatch.setattr(settings, "max_global_active_researches", 0)
+    user_id = f"retry-owner-{uuid.uuid4().hex[:8]}"
+    store.create_user(user_id, f"{user_id}@example.com", None)
+    return _failed_research(store, *tasks, user_id=user_id)
+
+
 @pytest.mark.anyio
-async def test_retry_route_retries_a_failed_research(client):
+async def test_retry_route_retries_a_failed_research(client, monkeypatch):
     store = client._transport.app.state.research_service.task_store
-    research = _failed_research(store, {"id": "route-task", "status": TaskStatus.FAILED})
+    failed_task = {"id": f"route-{uuid.uuid4().hex[:8]}", "status": TaskStatus.FAILED}
+    research = _route_research(store, monkeypatch, failed_task)
 
     response = await client.post(f"/v1/research/{research.id}/retry")
 
@@ -372,10 +384,12 @@ async def test_retry_route_retries_a_failed_research(client):
 
 
 @pytest.mark.anyio
-async def test_retry_route_without_an_analyzer_fails_before_taking_a_slot(client):
-    # The test app has no LLM configured, so a finalize-only retry cannot run here.
-    store = client._transport.app.state.research_service.task_store
-    research = _failed_research(store, _completed_task("route-done"))
+async def test_retry_route_without_an_analyzer_fails_before_taking_a_slot(client, monkeypatch):
+    service = client._transport.app.state.research_service
+    # Explicit: whether the test app has an LLM depends on DEEPSEEK_API_KEY in the env.
+    monkeypatch.setattr(service, "analyzer", None)
+    store = service.task_store
+    research = _route_research(store, monkeypatch, _completed_task(f"route-{uuid.uuid4().hex[:8]}"))
 
     response = await client.post(f"/v1/research/{research.id}/retry")
 

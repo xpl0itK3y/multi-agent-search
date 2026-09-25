@@ -1,6 +1,14 @@
+"""Store reads go through TaskStore methods, so these also run in postgres-smoke (the
+app's store is SQLAlchemyTaskStore on a database shared with every other test)."""
 import uuid
+from datetime import datetime
+
 import pytest
 from src.config import settings
+
+
+def _event_count(store) -> int:
+    return store.get_admin_event_logs(limit=1).total_count
 
 
 async def _register(client, prefix="telem"):
@@ -20,13 +28,14 @@ async def test_telemetry_event_ingestion(client, monkeypatch):
     # Anonymous ingestion is refused: telemetry is authenticated-only. With no credential
     # at all the CSRF check answers first (403); a bogus bearer reaches auth (401).
     anon_event = {"session_id": "anon-sess-123", "event_name": "session_start", "event_category": "system"}
+    events_before = _event_count(store)
     no_credentials = await client.post("/v1/telemetry/event", json=anon_event)
     bogus_bearer = await client.post(
         "/v1/telemetry/event", json=anon_event, headers={"Authorization": "Bearer not.a.token"}
     )
     assert no_credentials.status_code == 403
     assert bogus_bearer.status_code == 401
-    assert store.user_events == []
+    assert _event_count(store) == events_before
 
     session = await _register(client)
     headers = {"Authorization": f"Bearer {session['access_token']}"}
@@ -50,7 +59,10 @@ async def test_telemetry_event_ingestion(client, monkeypatch):
     )
     assert auth_resp.status_code == 200
     assert auth_resp.json()["status"] == "ok"
-    assert store.user_events[-1]["user_id"] == session["user"]["id"]
+    assert _event_count(store) == events_before + 1
+    assert [e.event_name for e in store.get_admin_event_logs(user_id=session["user"]["id"]).events] == [
+        "session_start"
+    ]
 
     store.delete_user(session["user"]["id"])
 
@@ -95,7 +107,7 @@ async def test_telemetry_is_rate_limited_per_user(client, monkeypatch):
 
     assert statuses == [200, 200, 429]
     assert other.status_code == 200  # the budget is per user, not global
-    assert len([e for e in store.user_events if e["user_id"] == first["user"]["id"]]) == 2
+    assert store.get_admin_event_logs(user_id=first["user"]["id"]).total_count == 2
 
     store.delete_user(first["user"]["id"])
     store.delete_user(second["user"]["id"])
@@ -244,6 +256,7 @@ async def test_revoked_token_attributes_no_activity_or_telemetry(client):
     # A password change bumps token_version, revoking every token minted before it.
     service.set_user_password(user_id, "rotated-pass1", current_password="secret123")
 
+    events_before = _event_count(store)
     await client.get("/v1/auth/config", headers=stale)
     event = await client.post(
         "/v1/telemetry/event",
@@ -258,9 +271,10 @@ async def test_revoked_token_attributes_no_activity_or_telemetry(client):
 
     assert event.status_code == 200
     assert event.json()["status"] == "ignored"
-    assert user_id not in store.user_telemetry
-    assert store.user_events == []
-    assert not [s for s in store.user_sessions if s["user_id"] == user_id]
+    detail = store.get_admin_user_detail(user_id)
+    assert detail.user.last_seen_at is None
+    assert detail.sessions == []
+    assert _event_count(store) == events_before
 
 
 @pytest.mark.anyio
@@ -269,6 +283,7 @@ async def test_revoked_token_is_rejected_when_auth_enabled(client, monkeypatch):
     service = client._transport.app.state.research_service
     session = await _register(client, "revoked_on")
     service.set_user_password(session["user"]["id"], "rotated-pass1", current_password="Password123!")
+    events_before = _event_count(service.task_store)
 
     event = await client.post(
         "/v1/telemetry/event",
@@ -277,7 +292,7 @@ async def test_revoked_token_is_rejected_when_auth_enabled(client, monkeypatch):
     )
 
     assert event.status_code == 401
-    assert service.task_store.user_events == []
+    assert _event_count(service.task_store) == events_before
     service.task_store.delete_user(session["user"]["id"])
 
 
@@ -300,9 +315,9 @@ async def test_heartbeat_bumps_the_session_instead_of_adding_an_event(client):
         },
         headers=headers,
     )
-    started = next(s for s in store.user_sessions if s["user_id"] == user_id)
-    started_active_at = started["last_active_at"]
-    events_before = len(store.user_events)
+    [started] = store.get_admin_user_detail(user_id).sessions
+    started_active_at = datetime.fromisoformat(started["last_active_at"])
+    events_before = _event_count(store)
 
     beats = [
         await client.post(
@@ -314,10 +329,10 @@ async def test_heartbeat_bumps_the_session_instead_of_adding_an_event(client):
     ]
 
     assert [b.status_code for b in beats] == [200, 200, 200]
-    assert len(store.user_events) == events_before  # no heartbeat rows
-    sessions = [s for s in store.user_sessions if s["user_id"] == user_id]
+    assert _event_count(store) == events_before  # no heartbeat rows
+    sessions = store.get_admin_user_detail(user_id).sessions
     assert len(sessions) == 1
-    assert sessions[0]["last_active_at"] >= started_active_at
+    assert datetime.fromisoformat(sessions[0]["last_active_at"]) >= started_active_at
     assert sessions[0]["screen_res"] == "1920x1080"  # session_start details kept
 
     # A heartbeat whose session_start never arrived still records the session.
@@ -326,8 +341,8 @@ async def test_heartbeat_bumps_the_session_instead_of_adding_an_event(client):
         json={"session_id": "hb-orphan", "event_name": "heartbeat", "event_category": "system"},
         headers=headers,
     )
-    orphan = next(s for s in store.user_sessions if s["session_id"] == "hb-orphan")
-    assert (orphan["user_id"], orphan["browser"], orphan["os"]) == (user_id, "Chrome", "Windows")
-    assert len(store.user_events) == events_before
+    orphan = next(s for s in store.get_admin_user_detail(user_id).sessions if s["session_id"] == "hb-orphan")
+    assert (orphan["browser"], orphan["os"]) == ("Chrome", "Windows")
+    assert _event_count(store) == events_before
 
     store.delete_user(user_id)

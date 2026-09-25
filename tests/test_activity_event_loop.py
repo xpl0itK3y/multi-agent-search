@@ -48,7 +48,7 @@ async def test_activity_touch_hits_the_store_once_per_interval_per_user(client, 
     reset_activity_touch_gate()  # the interval has passed
     await client.get("/v1/auth/config", headers=first)
     assert calls == {"touch_user_activity": 3, "get_user_by_id": 3}
-    assert store.user_telemetry[first_id]["last_seen_at"] is not None
+    assert store.get_admin_user_detail(first_id).user.last_seen_at is not None
 
 
 @pytest.mark.anyio

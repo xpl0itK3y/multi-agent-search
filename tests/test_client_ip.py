@@ -1,4 +1,6 @@
 """Recorded client IPs come from the proxy-resolved peer, never from client-sent headers."""
+import uuid
+
 import pytest
 from starlette.requests import Request
 
@@ -59,7 +61,7 @@ async def test_admin_operations_execute_records_peer_ip(client):
 async def test_telemetry_and_last_ip_record_peer_ip(client):
     store = client._transport.app.state.research_service.task_store
     registered = await client.post(
-        "/v1/auth/register", json={"email": "ip-owner@example.com", "password": "secret123"}
+        "/v1/auth/register", json={"email": f"ip-owner-{uuid.uuid4().hex[:8]}@example.com", "password": "secret123"}
     )
     user_id = registered.json()["user"]["id"]
     headers = {"Authorization": f"Bearer {registered.json()['access_token']}", **SPOOFED}
@@ -71,5 +73,5 @@ async def test_telemetry_and_last_ip_record_peer_ip(client):
         headers=headers,
     )
 
-    assert store.user_telemetry[user_id]["last_ip"] == PEER
-    assert store.user_events[-1]["ip_address"] == PEER
+    assert store.get_admin_user_detail(user_id).user.last_ip == PEER
+    assert [event.ip_address for event in store.get_admin_event_logs(user_id=user_id).events] == [PEER]
