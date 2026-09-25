@@ -24,6 +24,7 @@ from src.api.dependencies import (
     get_current_user,
     get_research_service,
     request_bearer_token,
+    request_has_fresh_google_auth,
     request_token_subject,
     require_admin,
     resolve_request_user_id,
@@ -40,7 +41,7 @@ from src.auth.admin_identity import has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.telemetry_rate_limit import telemetry_user_id
-from src.auth.security import OAUTH_STATE_PURPOSE, create_token, decode_token
+from src.auth.security import AUTH_METHOD_GOOGLE, OAUTH_STATE_PURPOSE, create_token, decode_token
 from src.auth.google_oauth import build_authorization_url, fetch_userinfo
 from src.model_catalog import list_models as list_model_catalog
 from src.api.schemas import (
@@ -483,9 +484,10 @@ def create_app() -> FastAPI:
     return app
 
 
-def _issue_session(response: Response, user: AuthUser) -> str:
-    """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer)."""
-    token = create_token(user.id, email=user.email, token_version=user.token_version)
+def _issue_session(response: Response, user: AuthUser, *, amr: list[str] | None = None) -> str:
+    """Mint a JWT for the user, set it as an httpOnly cookie, and return it (Bearer).
+    ``amr`` names how the user just authenticated; only the Google callback passes it."""
+    token = create_token(user.id, email=user.email, token_version=user.token_version, amr=amr)
     response.set_cookie(
         key=settings.auth_cookie_name,
         value=token,
@@ -651,7 +653,9 @@ def register_routes(app: FastAPI) -> None:
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
         redirect.delete_cookie("oauth_state", path="/")
-        _issue_session(redirect, user)  # sets the JWT session cookie
+        # Sets the JWT session cookie. Its amr claim marks a fresh Google sign-in for the
+        # next few minutes (set-password, account deletion: is_fresh_google_auth).
+        _issue_session(redirect, user, amr=[AUTH_METHOD_GOOGLE])
         return redirect
 
     @app.post("/v1/auth/set-password", response_model=AuthSession)
@@ -661,10 +665,14 @@ def register_routes(app: FastAPI) -> None:
         request: Request,
         user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
+        """Set or change the password. A first password, or a reset without the current
+        one on a Google-linked account, needs a session from a Google sign-in of the last
+        10 minutes (403 reauth_required otherwise). The new session is a plain one."""
         updated_user = get_research_service(request).set_user_password(
             user.id,
             payload.password,
             current_password=payload.current_password,
+            fresh_google_auth=request_has_fresh_google_auth(request),
         )
         token = _issue_session(response, updated_user)
         return AuthSession(access_token=token, user=updated_user)
@@ -679,11 +687,13 @@ def register_routes(app: FastAPI) -> None:
         """Delete the account and all owned data (researches, results, share links).
 
         Throttled per user like set-password: whoever holds a stolen session could
-        otherwise guess current_password here without limit."""
+        otherwise guess current_password here without limit. A passwordless account
+        needs a Google sign-in of the last 10 minutes instead (403 reauth_required)."""
         get_research_service(request).delete_user_account(
             user.id,
             current_password=payload.current_password,
             confirm=payload.confirm,
+            fresh_google_auth=request_has_fresh_google_auth(request),
         )
         response.delete_cookie(settings.auth_cookie_name, path="/")
         response.delete_cookie(settings.csrf_cookie_name, path="/")

@@ -2,7 +2,7 @@ from fastapi import HTTPException, Request
 
 from src.api.schemas import AuthUser
 from src.auth.admin_identity import admin_emails
-from src.auth.security import decode_token
+from src.auth.security import decode_token, is_fresh_google_auth
 from src.config import settings
 from src.services import ResearchService
 
@@ -67,6 +67,16 @@ def request_token_subject(request: Request) -> str | None:
     claims = decode_token(token) if token else None
     subject = claims.get("sub") if claims else None
     return subject if isinstance(subject, str) and subject else None
+
+
+def request_has_fresh_google_auth(request: Request) -> bool:
+    """Whether the request's session token was minted by the Google OAuth callback within
+    the last FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS: the fresh proof of identity that setting a
+    first password, resetting one without the current password, or deleting a passwordless
+    account needs. Only the claims are read here; authenticate the same request with
+    get_current_user (which also checks revocation) before trusting the answer."""
+    token = _extract_token(request)
+    return is_fresh_google_auth(decode_token(token) if token else None)
 
 
 def get_current_user(request: Request) -> AuthUser:

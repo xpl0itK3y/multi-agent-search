@@ -16,6 +16,17 @@ from src.domain.errors import (
 from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.domain import AuthUser
 
+# Detail prefix of the 403 that asks for a fresh Google sign-in. The web UI keys on it
+# (isReauthRequired: a 403 whose detail starts with it) to offer signing in again.
+REAUTH_REQUIRED = "reauth_required"
+
+
+def _reauth_required(action: str) -> str:
+    from src.auth.security import FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS
+
+    minutes = FRESH_GOOGLE_AUTH_MAX_AGE_SECONDS // 60
+    return f"{REAUTH_REQUIRED}: {action} needs a Google sign-in from the last {minutes} minutes"
+
 
 class AuthMixin:
     def register_user(self, email: str, password: str) -> AuthUser:
@@ -97,8 +108,17 @@ class AuthMixin:
         user_id: str,
         password: str,
         current_password: str | None = None,
+        *,
+        fresh_google_auth: bool = False,
     ) -> AuthUser:
-        """Set/replace a user's password (e.g. after first Google sign-in)."""
+        """Set/replace a user's password (e.g. after first Google sign-in).
+
+        A password that exists is replaced with the current one, as before. Two changes
+        need ``fresh_google_auth`` (a session from a Google sign-in of the last few minutes,
+        see security.is_fresh_google_auth) instead, else ForbiddenError(reauth_required):
+        the first password of a passwordless account, and a reset without the current
+        password on a Google-linked account (recovery). A stolen session alone must not add
+        a password login that the owner then cannot rotate or remove (SEC2-3)."""
         from src.auth.security import hash_password, verify_password
 
         if len(password or "") < 6:
@@ -106,11 +126,17 @@ class AuthMixin:
         user = self.task_store.get_user_by_id(user_id)
         if user is None:
             raise UnauthorizedError("User not found")
-        if user.password_hash is not None:
-            if not current_password:
-                raise BadRequestError("Current password is required")
+        if user.password_hash is None:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("setting a first password"))
+        elif current_password:
             if not verify_password(current_password, user.password_hash):
                 raise UnauthorizedError("Current password is incorrect")
+        elif user.google_subject:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("resetting the password without the current one"))
+        else:
+            raise BadRequestError("Current password is required")
         updated = self.task_store.update_user_password(user_id, hash_password(password))
         if updated is None:
             raise UnauthorizedError("User not found")
@@ -169,12 +195,15 @@ class AuthMixin:
         *,
         current_password: str | None = None,
         confirm: bool = False,
+        fresh_google_auth: bool = False,
     ) -> None:
         """Delete the account and everything it owns (DATA-LIFECYCLE).
 
         The DB cascade removes researches, tasks, results and jobs — which also revokes
-        every public share token the user had minted. Password (when the account has
-        one) plus an explicit confirm flag guard against accidents and CSRF-style abuse.
+        every public share token the user had minted. The current password (when the
+        account has one) plus an explicit confirm flag guard against accidents and
+        CSRF-style abuse. A passwordless account needs ``fresh_google_auth`` instead (a
+        Google sign-in of the last few minutes), else ForbiddenError(reauth_required).
         """
         from src.auth.security import verify_password
 
@@ -183,7 +212,10 @@ class AuthMixin:
         user = self.task_store.get_user_by_id(user_id)
         if user is None:
             raise UnauthorizedError("User not found")
-        if user.password_hash is not None:
+        if user.password_hash is None:
+            if not fresh_google_auth:
+                raise ForbiddenError(_reauth_required("deleting the account"))
+        else:
             if not current_password:
                 raise BadRequestError("Current password is required")
             if not verify_password(current_password, user.password_hash):
