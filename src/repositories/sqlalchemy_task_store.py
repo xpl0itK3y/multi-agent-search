@@ -357,6 +357,19 @@ class SQLAlchemyTaskStore:
                 return None
             return _user_record(user)
 
+    def bump_user_token_version(self, user_id: str) -> UserRecord | None:
+        with self.session_scope() as session:
+            statement = (
+                update(UserORM)
+                .where(UserORM.id == user_id)
+                .values(token_version=UserORM.token_version + 1)
+                .returning(UserORM)
+            )
+            user = session.execute(statement).scalar_one_or_none()
+            if user is None:
+                return None
+            return _user_record(user)
+
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)

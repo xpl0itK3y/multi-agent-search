@@ -191,6 +191,48 @@ def test_revoke_user_sessions_keeps_a_passwordless_account_passwordless():
     assert service.revoke_user_sessions("no-such-user") is False
 
 
+class _PasswordChangeAfterFirstStoreCall:
+    """Proxies the store for revoke_user_sessions: right after its first store call returns,
+    another request's password change commits on the real store."""
+
+    def __init__(self, store, user_id: str, new_hash: str):
+        self._store, self._user_id, self._new_hash = store, user_id, new_hash
+        self.fired = False
+
+    def __getattr__(self, name):
+        method = getattr(self._store, name)
+
+        def call(*args, **kwargs):
+            result = method(*args, **kwargs)
+            if not self.fired:
+                self.fired = True
+                self._store.update_user_password(self._user_id, self._new_hash)
+            return result
+
+        return call
+
+
+def test_revoke_user_sessions_cannot_undo_a_concurrent_password_change():
+    """Revocation once read the user and wrote its password hash back, so a password change
+    committed between that read and write was silently reverted to the old password."""
+    from src.auth.security import hash_password
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store)
+    user = service.register_user("race@example.com", "old-secret")
+    new_hash = hash_password("new-secret")
+    service.task_store = racing = _PasswordChangeAfterFirstStoreCall(store, user.id, new_hash)
+
+    assert service.revoke_user_sessions(user.id) is True
+    assert racing.fired
+
+    service.task_store = store
+    after = store.get_user_by_id(user.id)
+    assert after.password_hash == new_hash
+    assert after.token_version == user.token_version + 2  # the revocation and the change
+    assert service.authenticate_user("race@example.com", "new-secret").id == user.id
+
+
 @pytest.mark.postgres
 def test_revoke_user_sessions_on_postgres(postgres_session_factory):
     from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore

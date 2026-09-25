@@ -717,6 +717,28 @@ def test_user_lifecycle_lookups_and_deletion(store):
     assert store.get_research(owned.id) is None  # cascade parity
 
 
+def test_token_version_bump_touches_nothing_else(store):
+    """Logout's revocation write (SEC2-2): token_version + 1 and no other column, so it
+    cannot write back a stale password hash, profile or provisioning stamp."""
+    tag = uuid.uuid4().hex[:8]
+    local = store.create_user(f"b-{tag}", f"b-{tag}@example.com", "hash-1", admin_provisioned=True)
+    store.update_user_profile(local.id, "Bumped", "https://avatar/b")
+    before = store.get_user_by_id(local.id)
+
+    bumped = store.bump_user_token_version(local.id)
+    assert bumped.token_version == before.token_version + 1
+    assert bumped.model_dump(exclude={"token_version"}) == before.model_dump(exclude={"token_version"})
+    assert store.get_user_by_id(local.id) == bumped
+    assert store.bump_user_token_version(local.id).token_version == before.token_version + 2
+
+    google = store.create_user(f"bg-{tag}", f"bg-{tag}@example.com", None, google_subject=f"sub-b-{tag}")
+    bumped_google = store.bump_user_token_version(google.id)
+    assert (bumped_google.token_version, bumped_google.password_hash) == (google.token_version + 1, None)
+    assert bumped_google.google_subject == f"sub-b-{tag}"
+
+    assert store.bump_user_token_version(f"missing-{tag}") is None
+
+
 def test_oauth_lookup_by_google_subject(store):
     tag = uuid.uuid4().hex[:8]
     user = store.create_user(f"g-{tag}", f"g-{tag}@example.com", None, google_subject=f"sub-{tag}")

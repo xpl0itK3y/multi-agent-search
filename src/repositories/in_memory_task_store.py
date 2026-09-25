@@ -67,6 +67,9 @@ class InMemoryTaskStore:
         self._admission_lock = threading.RLock()
         # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
         self._state_lock = threading.RLock()
+        # Serializes the user-row read-modify-writes (password, token_version, profile), so
+        # one cannot overwrite another's columns: SQL updates only the columns it sets.
+        self._user_lock = threading.RLock()
 
     def ping(self) -> bool:
         return True
@@ -292,30 +295,41 @@ class InMemoryTaskStore:
     def update_user_password(
         self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
     ) -> UserRecord | None:
-        user = self.users.get(user_id)
-        if user is None:
-            return None
-        patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
-        if admin_provisioned:
-            patch["admin_provisioned_at"] = datetime.now(timezone.utc)
-        updated = user.model_copy(update=patch)
-        self.users[user_id] = updated
-        return updated
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return None
+            patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
+            if admin_provisioned:
+                patch["admin_provisioned_at"] = datetime.now(timezone.utc)
+            updated = user.model_copy(update=patch)
+            self.users[user_id] = updated
+            return updated
+
+    def bump_user_token_version(self, user_id: str) -> UserRecord | None:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return None
+            updated = user.model_copy(update={"token_version": user.token_version + 1})
+            self.users[user_id] = updated
+            return updated
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
-        user = self.users.get(user_id)
-        if user:
-            patch = {}
-            if name is not None:
-                patch["name"] = name
-            if avatar_url is not None:
-                patch["avatar_url"] = avatar_url
-            if patch:
-                updated = user.model_copy(update=patch)
-                self.users[user_id] = updated
-                return updated
-            return user
-        return None
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user:
+                patch = {}
+                if name is not None:
+                    patch["name"] = name
+                if avatar_url is not None:
+                    patch["avatar_url"] = avatar_url
+                if patch:
+                    updated = user.model_copy(update=patch)
+                    self.users[user_id] = updated
+                    return updated
+                return user
+            return None
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)

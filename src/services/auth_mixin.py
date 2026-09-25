@@ -146,15 +146,10 @@ class AuthMixin:
         """Revoke every session token of the account (sign out on all devices) by bumping
         its token_version. False when the account does not exist.
 
-        The store has no token_version-only write, so this writes the stored password hash
-        back unchanged (None for a passwordless account) through update_user_password,
-        which bumps token_version in the same statement. A password change committed
-        between the read and this write would be overwritten by the old hash (its sessions
-        end either way); an atomic token_version-only store write would close that gap."""
-        user = self.task_store.get_user_by_id(user_id)
-        if user is None:
-            return False
-        return self.task_store.update_user_password(user_id, user.password_hash) is not None
+        One atomic store write that touches only token_version: writing the stored password
+        hash back (as this once did) could undo a password change committed between the
+        read and the write."""
+        return self.task_store.bump_user_token_version(user_id) is not None
 
     def provision_admin_account(self, email: str, password: str) -> tuple[AuthUser, bool]:
         """Operator path (scripts/create_admin.py): create an ADMIN_EMAILS account or replace
