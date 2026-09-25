@@ -58,6 +58,41 @@ describe("auth store telemetry hooks", () => {
   });
 });
 
+describe("auth store refresh", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("re-reads the signed-in user, without a new telemetry session", async () => {
+    const auth = useAuthStore();
+    auth.user = { ...user, email_verified: false };
+    vi.mocked(api.me).mockResolvedValueOnce({ ...user, email_verified: true });
+
+    await auth.refreshUser();
+
+    expect(auth.user).toEqual({ ...user, email_verified: true });
+    expect(telemetry.startTelemetry).not.toHaveBeenCalled();
+  });
+
+  it("keeps the user when the refresh fails", async () => {
+    const auth = useAuthStore();
+    auth.user = user;
+    vi.mocked(api.me).mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    await auth.refreshUser();
+
+    expect(auth.user).toEqual(user);
+  });
+
+  it("asks nothing while signed out", async () => {
+    await useAuthStore().refreshUser();
+
+    expect(api.me).not.toHaveBeenCalled();
+    expect(useAuthStore().user).toBeNull();
+  });
+});
+
 describe("auth store password reset", () => {
   beforeEach(() => {
     setActivePinia(createPinia());

@@ -45,6 +45,17 @@ export const useAuthStore = defineStore("auth", () => {
     return user.value;
   }
 
+  // Re-reads the signed-in user, e.g. once the email is verified. A failed refresh is no
+  // verdict on the session, so it keeps the user it had.
+  async function refreshUser() {
+    if (!user.value) return;
+    try {
+      user.value = await api.me();
+    } catch {
+      /* keep the current user */
+    }
+  }
+
   // A password reset revokes every session of its account and signs nobody in (api drops
   // the stored token): whoever was signed in here is signed out, as after a logout.
   async function resetPassword(token: string, password: string) {
@@ -55,5 +66,5 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  return { user, checked, fetchMe, login, register, logout, updateProfile, resetPassword };
+  return { user, checked, fetchMe, login, register, logout, updateProfile, refreshUser, resetPassword };
 });

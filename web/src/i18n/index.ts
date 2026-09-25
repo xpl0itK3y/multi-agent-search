@@ -365,6 +365,15 @@ const ru = {
     toLogin: "Войти",
     requestNew: "Запросить новую ссылку",
   },
+  verifyEmail: {
+    title: "Подтверждение email",
+    verifying: "Подтверждаем ваш email…",
+    verified: "Email подтверждён. Спасибо!",
+    continue: "Продолжить",
+    toLogin: "Войти",
+    toSettings: "Открыть настройки",
+    retry: "Попробовать ещё раз",
+  },
   research: {
     cancel: "Отменить",
     cancelling: "Отмена…",
@@ -1529,6 +1538,15 @@ const en: typeof ru = {
     toLogin: "Sign in",
     requestNew: "Request a new link",
   },
+  verifyEmail: {
+    title: "Email verification",
+    verifying: "Verifying your email…",
+    verified: "Your email is verified. Thank you!",
+    continue: "Continue",
+    toLogin: "Sign in",
+    toSettings: "Open Settings",
+    retry: "Try again",
+  },
   research: {
     cancel: "Cancel",
     cancelling: "Cancelling…",
@@ -2692,6 +2710,15 @@ const es: typeof ru = {
     done: "Tu contraseña se ha cambiado y se ha cerrado la sesión en todos los dispositivos. Inicia sesión con la contraseña nueva.",
     toLogin: "Iniciar sesión",
     requestNew: "Solicitar un enlace nuevo",
+  },
+  verifyEmail: {
+    title: "Verificación del email",
+    verifying: "Verificando tu email…",
+    verified: "Tu email está verificado. ¡Gracias!",
+    continue: "Continuar",
+    toLogin: "Iniciar sesión",
+    toSettings: "Abrir la configuración",
+    retry: "Intentar de nuevo",
   },
   research: {
     cancel: "Cancelar",

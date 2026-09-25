@@ -22,6 +22,12 @@ const router = createRouter({
       component: () => import("@/views/ResetPasswordView.vue"),
       meta: { public: true, bare: true, linkToken: true },
     },
+    {
+      path: "/verify-email",
+      name: "verify-email",
+      component: () => import("@/views/VerifyEmailView.vue"),
+      meta: { public: true, bare: true, linkToken: true },
+    },
     { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
     {

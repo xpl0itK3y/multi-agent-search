@@ -6,6 +6,7 @@ const stubView = vi.hoisted(() => () => ({ default: { render: () => null } }));
 vi.mock("@/views/LoginView.vue", stubView);
 vi.mock("@/views/ForgotPasswordView.vue", stubView);
 vi.mock("@/views/ResetPasswordView.vue", stubView);
+vi.mock("@/views/VerifyEmailView.vue", stubView);
 vi.mock("@/views/SetPasswordView.vue", stubView);
 vi.mock("@/views/HomeView.vue", stubView);
 vi.mock("@/views/ResearchView.vue", stubView);
@@ -88,7 +89,7 @@ describe("router: signed-out account pages", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it.each(["/forgot-password", "/reset-password"])("opens %s without a session, outside the app shell", async (path) => {
+  it.each(["/forgot-password", "/reset-password", "/verify-email"])("opens %s without a session, outside the app shell", async (path) => {
     const router = await loadApp(false);
 
     await router.push(path);
@@ -97,7 +98,7 @@ describe("router: signed-out account pages", () => {
     expect(router.currentRoute.value.meta).toMatchObject({ public: true, bare: true });
   });
 
-  it.each(["/forgot-password", "/reset-password"])("keeps a signed-in user on %s", async (path) => {
+  it.each(["/forgot-password", "/reset-password", "/verify-email"])("keeps a signed-in user on %s", async (path) => {
     const router = await loadApp(true);
 
     await router.push(path);
@@ -137,6 +138,21 @@ describe("router: an emailed link's one-time token", () => {
     // vue-router's own record of the entry, which it writes back on the next navigation.
     expect(JSON.stringify(window.history.state)).not.toContain("secret-tok");
     expect(takeLinkToken("reset-password")).toBe("secret-tok");
+  });
+
+  it("does the same for a verification link", async () => {
+    const { router, takeLinkToken } = await openLink("/verify-email#token=verify-tok");
+
+    expect(router.currentRoute.value.fullPath).toBe("/verify-email");
+    expect(window.location.hash).toBe("");
+    expect(JSON.stringify(window.history.state)).not.toContain("verify-tok");
+    expect(takeLinkToken("reset-password")).toBeNull();
+  });
+
+  it("holds a verification token for the verification page", async () => {
+    const { takeLinkToken } = await openLink("/verify-email#token=verify-tok");
+
+    expect(takeLinkToken("verify-email")).toBe("verify-tok");
   });
 
   it("replaces the link's history entry instead of adding one", async () => {
