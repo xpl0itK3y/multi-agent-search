@@ -1652,7 +1652,12 @@ class SQLAlchemyTaskStore:
                 stmt = stmt.where(AdminAuditLogORM.action == action)
             if actor_email:
                 stmt = stmt.where(AdminAuditLogORM.actor_email == actor_email)
-            stmt = stmt.order_by(AdminAuditLogORM.created_at.desc()).limit(limit).offset(offset)
+            # id breaks created_at ties, so LIMIT/OFFSET pages neither repeat nor skip rows.
+            stmt = (
+                stmt.order_by(AdminAuditLogORM.created_at.desc(), AdminAuditLogORM.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             records = session.execute(stmt).scalars().all()
             return [
                 AdminAuditLogItem(
@@ -2361,12 +2366,12 @@ class SQLAlchemyTaskStore:
             total_tokens = int(usage_row[0])
             total_cost = float(usage_row[1])
 
-            # Breakdowns from UserSessionORM
+            # Breakdowns from UserSessionORM; ties are ordered by name, so the top 10 is stable.
             os_rows = session.execute(
                 select(UserSessionORM.os, func.count())
                 .where(UserSessionORM.os.isnot(None))
                 .group_by(UserSessionORM.os)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.os)
                 .limit(10)
             ).all()
 
@@ -2374,7 +2379,7 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.browser, func.count())
                 .where(UserSessionORM.browser.isnot(None))
                 .group_by(UserSessionORM.browser)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.browser)
                 .limit(10)
             ).all()
 
@@ -2382,7 +2387,7 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.device_type, func.count())
                 .where(UserSessionORM.device_type.isnot(None))
                 .group_by(UserSessionORM.device_type)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.device_type)
                 .limit(10)
             ).all()
 
@@ -2390,20 +2395,20 @@ class SQLAlchemyTaskStore:
                 select(UserSessionORM.country, func.count())
                 .where(UserSessionORM.country.isnot(None))
                 .group_by(UserSessionORM.country)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), UserSessionORM.country)
                 .limit(10)
             ).all()
 
             depth_rows = session.execute(
                 select(ResearchORM.depth, func.count())
                 .group_by(ResearchORM.depth)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), ResearchORM.depth)
             ).all()
 
             model_rows = session.execute(
                 select(LLMUsageLogORM.model, func.count())
                 .group_by(LLMUsageLogORM.model)
-                .order_by(func.count().desc())
+                .order_by(func.count().desc(), LLMUsageLogORM.model)
                 .limit(10)
             ).all()
 
@@ -2463,7 +2468,12 @@ class SQLAlchemyTaskStore:
             count_stmt = select(func.count()).select_from(query.subquery())
             total_count = session.execute(count_stmt).scalar_one()
 
-            query = query.order_by(UserEventORM.created_at.desc()).offset(offset).limit(limit)
+            # id breaks created_at ties, so LIMIT/OFFSET pages neither repeat nor skip rows.
+            query = (
+                query.order_by(UserEventORM.created_at.desc(), UserEventORM.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
             rows = session.execute(query).all()
 
             items = [

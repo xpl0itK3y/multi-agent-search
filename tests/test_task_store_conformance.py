@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import update
 
 from src.api.schemas import (
     FinalizeJobStatus,
@@ -21,6 +22,17 @@ from src.api.schemas import (
     SearchJobStatus,
     TaskStatus,
     TaskUpdate,
+)
+from src.config import settings
+from src.db.models import (
+    AdminAuditLogORM,
+    ResearchFinalizeJobORM,
+    ResearchORM,
+    SearchCacheORM,
+    SearchTaskJobORM,
+    UserEventORM,
+    UserORM,
+    WorkerHeartbeatORM,
 )
 from src.repositories.in_memory_task_store import InMemoryTaskStore
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
@@ -76,6 +88,43 @@ def _user(store, tag=None):
     tag = tag or uuid.uuid4().hex[:8]
     store.delete_user(f"user-{tag}")  # users survive runtime truncation between runs
     return store.create_user(f"user-{tag}", f"user-{tag}@example.com", None)
+
+
+_SQL_ROWS = {
+    "research": (ResearchORM, ResearchORM.id),
+    "finalize_job": (ResearchFinalizeJobORM, ResearchFinalizeJobORM.id),
+    "search_job": (SearchTaskJobORM, SearchTaskJobORM.id),
+    "worker": (WorkerHeartbeatORM, WorkerHeartbeatORM.worker_name),
+    "cache": (SearchCacheORM, SearchCacheORM.cache_key),
+    "audit": (AdminAuditLogORM, AdminAuditLogORM.id),
+    "event": (UserEventORM, UserEventORM.id),
+    "user": (UserORM, UserORM.id),
+}
+
+
+def _backdate(store, kind, row_id, **timestamps):
+    """Set timestamp columns the stores stamp with now(), on either backend."""
+    if not isinstance(store, InMemoryTaskStore):
+        model, key = _SQL_ROWS[kind]
+        with store.session_scope() as session:
+            session.execute(update(model).where(key == row_id).values(**timestamps))
+        return
+    if kind == "user":  # users.last_seen_at lives in the telemetry side table
+        store.user_telemetry.setdefault(row_id, {}).update(timestamps)
+    elif kind == "cache":
+        store.search_cache[row_id] = (timestamps["created_at"], store.search_cache[row_id][1])
+    elif kind == "event":
+        next(e for e in store.user_events if e["id"] == row_id).update(timestamps)
+    else:
+        rows = {
+            "research": store.researches,
+            "finalize_job": store.finalize_jobs,
+            "search_job": store.search_jobs,
+            "worker": store.worker_heartbeats,
+            "audit": {item.id: item for item in store.admin_audit_logs},
+        }[kind]
+        for column, value in timestamps.items():
+            setattr(rows[row_id], column, value)
 
 
 # ── research lifecycle ────────────────────────────────────────────────────────
@@ -693,3 +742,290 @@ def test_telemetry_retention_deletes_across_batches(store):
 
     assert store.cleanup_old_user_events(datetime.now(timezone.utc) + timedelta(minutes=1)) == 5
     assert store.get_admin_event_logs(user_id=user.id).total_count == 0
+
+
+# ── retention, compaction, dead letters ───────────────────────────────────────
+
+
+def test_cleanup_old_researches_takes_only_terminal_researches_past_the_cutoff(store):
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    expired = _research(store, prompt="expired topic")
+    store.update_research_status(expired.id, ResearchStatus.COMPLETED, "done")
+    running = _research(store, prompt="running topic")
+    recent = _research(store, prompt="recent topic")
+    store.update_research_status(recent.id, ResearchStatus.FAILED, "failed")
+    _backdate(store, "research", expired.id, updated_at=old)
+    _backdate(store, "research", running.id, updated_at=old)
+
+    assert store.cleanup_old_researches(datetime.now(timezone.utc) - timedelta(days=1)) == [expired.id]
+    assert store.get_research(expired.id) is None
+    assert store.get_research(running.id) is not None and store.get_research(recent.id) is not None
+
+
+def test_compact_graph_trails_trims_only_recently_active_researches(store, monkeypatch):
+    two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    monkeypatch.setattr(settings, "graph_trail_retention_seconds", 86400)
+    active, idle = _research(store, prompt="active topic"), _research(store, prompt="idle topic")
+    for record in (active, idle):
+        store.append_research_graph_event(record.id, {"step": "search", "detail": "old", "timestamp": two_hours_ago})
+        store.append_research_graph_event(record.id, {"step": "analyze", "detail": "new"})
+    # The SQL sweep reads only rows updated within the retention window (a bounded set).
+    _backdate(store, "research", idle.id, updated_at=datetime.now(timezone.utc) - timedelta(hours=3))
+    monkeypatch.setattr(settings, "graph_trail_retention_seconds", 3600)
+
+    assert store.compact_research_graph_trails() == [active.id]
+    assert [event["detail"] for event in store.get_research(active.id).graph_trail] == ["new"]
+    assert [event["detail"] for event in store.get_research(idle.id).graph_trail] == ["old", "new"]
+    assert store.compact_research_graph_trails() == []  # nothing left to trim
+
+
+def test_dead_letter_finalize_jobs_are_listed(store):
+    record = _research(store)
+    dead = store.add_research_finalize_job(record.id, max_attempts=1)
+    claimed = store.claim_research_finalize_job_by_id(dead.id)
+    store.record_research_finalize_job_failure(dead.id, "boom", lease_epoch=claimed.lease_epoch)
+    store.add_research_finalize_job(record.id)  # still pending
+
+    assert [job.id for job in store.get_dead_letter_research_finalize_jobs()] == [dead.id]
+
+
+def test_finalize_job_update_with_a_lease_is_fenced(store):
+    record = _research(store)
+    job = store.add_research_finalize_job(record.id)
+    epoch = store.claim_research_finalize_job_by_id(job.id).lease_epoch
+
+    assert store.update_research_finalize_job(job.id, FinalizeJobStatus.FAILED, "stale", lease_epoch=epoch + 1) is None
+    updated = store.update_research_finalize_job(job.id, FinalizeJobStatus.FAILED, "boom", lease_epoch=epoch)
+    assert (updated.status, updated.error) == (FinalizeJobStatus.FAILED, "boom")
+    # No longer RUNNING: a lease-holder's late write is refused too.
+    assert store.update_research_finalize_job(job.id, FinalizeJobStatus.COMPLETED, lease_epoch=epoch) is None
+    assert store.update_research_finalize_job("missing-job", FinalizeJobStatus.COMPLETED) is None
+
+
+# ── admin overview & maintenance previews ─────────────────────────────────────
+
+
+def test_admin_overview_counts_and_worker_liveness(store):
+    _research(store, prompt="processing topic")
+    analyzing = _research(store, prompt="analyzing topic")
+    store.update_research_status(analyzing.id, ResearchStatus.ANALYZING)
+    task = _task(store)
+    store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    running = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.claim_search_task_job_by_id(running.id)
+    for status in (SearchJobStatus.DEAD_LETTER, SearchJobStatus.FAILED):
+        store.update_search_task_job(store.add_search_task_job(task.id, SearchDepth.EASY.value).id, status)
+    store.upsert_worker_heartbeat(
+        "conf-alive", processed_jobs=3, status="busy", last_error="boom", extraction_metrics={"attempts": 4}
+    )
+    store.upsert_worker_heartbeat("conf-gone", processed_jobs=1, status="idle")
+    _backdate(store, "worker", "conf-gone", last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+
+    overview = store.get_admin_overview()
+
+    assert (overview.active_researches_count, overview.pending_tasks_count, overview.failed_tasks_count) == (1, 1, 2)
+    workers = sorted(overview.workers, key=lambda worker: worker.worker_name)
+    assert [(w.worker_name, w.status, w.processed_jobs, w.last_error, w.is_alive) for w in workers] == [
+        ("conf-alive", "busy", 3, "boom", True),
+        ("conf-gone", "idle", 1, None, False),
+    ]
+    assert [(w.extraction_metrics, w.graph_metrics, w.maintenance_summary) for w in workers] == [
+        ({"attempts": 4}, {}, {}),
+        ({}, {}, {}),
+    ]
+    assert overview.is_dev_mode == settings.auth_disabled
+
+
+def _stale_running_job(store, kind):
+    """A RUNNING job idle for 10 minutes, next to one just claimed. Each finalize job gets
+    its own research: Postgres allows one RUNNING finalize job per research."""
+    if kind == "finalize_job":
+        stale, fresh = (store.add_research_finalize_job(_research(store).id) for _ in range(2))
+        claim = store.claim_research_finalize_job_by_id
+    else:
+        task = _task(store)
+        stale, fresh = (store.add_search_task_job(task.id, SearchDepth.EASY.value) for _ in range(2))
+        claim = store.claim_search_task_job_by_id
+    claim(stale.id)
+    claim(fresh.id)
+    _backdate(store, kind, stale.id, updated_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+    return stale.id
+
+
+@pytest.mark.parametrize(
+    ("action", "kind", "noun"),
+    [
+        ("recover_stale_finalize_jobs", "finalize_job", "finalize"),
+        ("recover_stale_search_jobs", "search_job", "search"),
+    ],
+)
+def test_preview_recover_counts_running_jobs_past_the_window(store, action, kind, noun):
+    stale_id = _stale_running_job(store, kind)
+
+    preview = store.preview_maintenance_action(action, {"stale_seconds": 300})
+
+    assert (preview.action, preview.dry_run, preview.affected_count) == (action, True, 1)
+    assert preview.sample_affected_ids == [stale_id]
+    assert preview.summary.startswith(f"Would recover 1 stale {noun} jobs running before ")
+
+
+def test_preview_cleanup_counts_old_completed_and_dead_jobs_and_cache(store):
+    record, task = _research(store), _task(store)
+    eight_days_ago = datetime.now(timezone.utc) - timedelta(days=8)
+    old_finalize = []
+    for status in (FinalizeJobStatus.COMPLETED, FinalizeJobStatus.DEAD_LETTER, FinalizeJobStatus.FAILED):
+        job = store.add_research_finalize_job(record.id)
+        store.update_research_finalize_job(job.id, status)
+        _backdate(store, "finalize_job", job.id, updated_at=eight_days_ago)
+        old_finalize.append(job.id)
+    old_search = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.update_search_task_job(old_search.id, SearchJobStatus.COMPLETED)
+    _backdate(store, "search_job", old_search.id, updated_at=eight_days_ago)
+    recent_search = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.update_search_task_job(recent_search.id, SearchJobStatus.COMPLETED)
+    store.put_cached_search("conf-old", [{"url": "https://example.com/old"}])
+    store.put_cached_search("conf-new", [{"url": "https://example.com/new"}])
+    _backdate(store, "cache", "conf-old", created_at=datetime.now(timezone.utc) - timedelta(days=4))
+
+    jobs = store.preview_maintenance_action("cleanup_old_jobs", {"days": 7})
+    cache = store.preview_maintenance_action("cleanup_search_cache", {"days": 3})
+
+    assert jobs.affected_count == 3
+    assert set(jobs.sample_affected_ids) == {old_finalize[0], old_finalize[1], old_search.id}
+    assert jobs.summary == "Would delete 2 finalize and 1 search jobs older than 7 days"
+    assert (cache.affected_count, cache.sample_affected_ids) == (1, [])
+    assert cache.summary == "Would delete 1 cached search entries older than 3 days"
+
+
+def test_preview_requeue_and_unknown_actions(store):
+    requeue = store.preview_maintenance_action("requeue_finalize_job", {"target_id": "job-x"})
+    assert (requeue.affected_count, requeue.sample_affected_ids, requeue.summary) == (
+        1, ["job-x"], "Would requeue job job-x",
+    )
+    assert store.preview_maintenance_action("requeue_search_job").affected_count == 0
+
+    unknown = store.preview_maintenance_action("drop_everything")
+    assert (unknown.affected_count, unknown.summary) == (0, "Unknown maintenance action: drop_everything")
+
+
+# ── admin audit & event logs ──────────────────────────────────────────────────
+
+
+def test_admin_audit_logs_filter_and_page_newest_first(store):
+    t0 = datetime.now(timezone.utc) - timedelta(hours=1)
+    first = store.record_admin_audit("x@example.com", "delete_user", "user", target_id="u1", details={"n": 1})
+    second = store.record_admin_audit("y@example.com", "cleanup_old_jobs", "maintenance", ip_address="10.0.0.1")
+    third = store.record_admin_audit("x@example.com", "cleanup_old_jobs", "maintenance")
+    for minutes, audit_id in enumerate((first, second, third)):
+        _backdate(store, "audit", audit_id, created_at=t0 + timedelta(minutes=minutes))
+
+    assert [item.id for item in store.get_admin_audit_logs()] == [third, second, first]
+    assert [item.id for item in store.get_admin_audit_logs(action="cleanup_old_jobs")] == [third, second]
+    assert [item.id for item in store.get_admin_audit_logs(actor_email="x@example.com")] == [third, first]
+    assert [item.id for item in store.get_admin_audit_logs(limit=1, offset=1)] == [second]
+    oldest = store.get_admin_audit_logs(offset=2)[0]
+    assert (oldest.actor_email, oldest.action, oldest.target_type, oldest.target_id, oldest.details) == (
+        "x@example.com", "delete_user", "user", "u1", {"n": 1},
+    )
+    assert store.get_admin_audit_logs(offset=1)[0].ip_address == "10.0.0.1"
+    # Equal timestamps (one clock tick) are ordered by id, so pages never repeat a row.
+    _backdate(store, "audit", first, created_at=t0 + timedelta(minutes=2))
+    assert [item.id for item in store.get_admin_audit_logs(actor_email="x@example.com")] == sorted(
+        [first, third], reverse=True
+    )
+
+
+def test_admin_event_logs_filter_page_and_join_the_email(store):
+    user = _user(store)
+    t0 = datetime.now(timezone.utc) - timedelta(hours=1)
+    focus = store.record_user_event("tab_focus", "ui", user_id=user.id, session_id="s1", details={"path": "/"})
+    start = store.record_user_event("session_start", "system", user_id=user.id, session_id="s1")
+    anonymous = store.record_user_event("tab_blur", "ui")
+    for minutes, event_id in enumerate((focus, start, anonymous)):
+        _backdate(store, "event", event_id, created_at=t0 + timedelta(minutes=minutes))
+
+    everything = store.get_admin_event_logs()
+    assert [e.id for e in everything.events] == [anonymous, start, focus]
+    assert (everything.total_count, everything.page, everything.page_size) == (3, 1, 50)
+    ui = store.get_admin_event_logs(category="ui")
+    assert ([e.id for e in ui.events], ui.total_count) == ([anonymous, focus], 2)
+    assert [e.id for e in store.get_admin_event_logs(event_name="session_start").events] == [start]
+    assert [e.id for e in store.get_admin_event_logs(user_id=user.id).events] == [start, focus]
+    paged = store.get_admin_event_logs(limit=1, offset=1)
+    assert ([e.id for e in paged.events], paged.total_count, paged.page, paged.page_size) == ([start], 3, 2, 1)
+    oldest = everything.events[2]
+    assert (oldest.user_id, oldest.user_email, oldest.session_id, oldest.event_category, oldest.details) == (
+        user.id, user.email, "s1", "ui", {"path": "/"},
+    )
+    assert (everything.events[0].user_id, everything.events[0].user_email) == (None, None)
+    _backdate(store, "event", focus, created_at=t0 + timedelta(minutes=1))  # a tie with `start`
+    assert [e.id for e in store.get_admin_event_logs(user_id=user.id).events] == sorted([focus, start], reverse=True)
+
+
+# ── admin users & telemetry summary ───────────────────────────────────────────
+
+
+def test_users_list_online_filter_and_last_seen_order(store):
+    stale, fresh, never = _user(store), _user(store), _user(store)
+    store.touch_user_activity(stale.id, ip_address="10.0.0.1", device="mobile")
+    store.touch_user_activity(fresh.id, ip_address="10.0.0.2")
+    _backdate(store, "user", stale.id, last_seen_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+    store.touch_user_activity("no-such-user", ip_address="10.0.0.3")  # updates no row
+
+    listing = store.get_admin_users_list()
+    by_id = {u.id: u for u in listing.users}
+    assert [u.id for u in listing.users] == [fresh.id, stale.id, never.id]  # never-seen last
+    assert (listing.total_users, listing.online_users) == (3, 1)
+    assert [(u.is_online, u.last_ip) for u in listing.users] == [(True, "10.0.0.2"), (False, "10.0.0.1"), (False, None)]
+    assert (by_id[stale.id].last_device, by_id[never.id].last_seen_at) == ("mobile", None)
+    online = store.get_admin_users_list(online_only=True)
+    assert ([u.id for u in online.users], online.total_users) == ([fresh.id], 1)
+    # created_at is the account's, not the time of the query.
+    created = {u.id: u.created_at for u in listing.users}
+    assert {u.id: u.created_at for u in store.get_admin_users_list().users} == created
+
+    store.delete_user(fresh.id)
+    assert store.get_admin_users_list().online_users == 0
+
+
+def test_deleting_a_user_keeps_their_llm_usage_unattributed(store):
+    user = _user(store)
+    store.record_llm_usage(None, user.id, "deepseek-chat", 3, 2, 5, 0.01)
+
+    assert store.delete_user(user.id) is True
+
+    assert store.get_user_token_analytics(user.id)["total_tokens"] == 0  # the FK is SET NULL
+    assert store.get_admin_token_analytics().total_tokens == 5
+
+
+def test_telemetry_summary_counts_users_and_leaves_unknowns_out(store):
+    seen_now, seen_days_ago, never = _user(store), _user(store), _user(store)
+    store.touch_user_activity(seen_now.id)
+    store.touch_user_activity(seen_days_ago.id)
+    _backdate(store, "user", seen_days_ago.id, last_seen_at=datetime.now(timezone.utc) - timedelta(days=3))
+    store.record_user_session(seen_now.id, "s1", browser="Firefox", os="Linux")
+    store.record_user_session(seen_now.id, "s2", browser="Chrome", os="Linux", device_type="mobile")
+    store.record_user_session(never.id, "s3")  # no browser/os reported
+    store.add_research(_request("ten chars!"), task_ids=[], user_id=never.id)
+    store.add_research(_request("twenty characters!!!", depth=SearchDepth.HARD), task_ids=[], user_id=never.id)
+    for model in ("deepseek-chat", "deepseek-v4-pro", "deepseek-chat"):
+        store.record_llm_usage(None, None, model, 10, 5, 15, 0.25)
+
+    summary = store.get_admin_telemetry_summary()
+
+    assert (summary.total_users, summary.total_researches) == (3, 2)
+    assert (summary.total_tokens, summary.total_cost_usd) == (45, 0.75)
+    # Per user (last_seen_at), not per session row.
+    assert (summary.online_now, summary.dau, summary.wau, summary.mau) == (1, 1, 2, 2)
+    assert (summary.online_users_now, summary.dau_today, summary.wau_7d, summary.mau_30d) == (1, 1, 2, 2)
+    assert summary.by_os == [{"name": "Linux", "count": 2}]
+    assert summary.by_browser == [{"name": "Chrome", "count": 1}, {"name": "Firefox", "count": 1}]
+    assert summary.by_device == [{"name": "desktop", "count": 2}, {"name": "mobile", "count": 1}]
+    assert summary.by_country == []
+    assert (summary.os_breakdown, summary.browser_breakdown) == ({"Linux": 2}, {"Chrome": 1, "Firefox": 1})
+    assert summary.device_breakdown == {"desktop": 2, "mobile": 1}
+    assert summary.depth_distribution == {"easy": 1, "hard": 1}
+    assert summary.popular_depths == [{"depth": "easy", "count": 1}, {"depth": "hard", "count": 1}]
+    assert summary.popular_models == [{"model": "deepseek-chat", "count": 2}, {"model": "deepseek-v4-pro", "count": 1}]
+    assert summary.avg_prompt_len == 15.0
+

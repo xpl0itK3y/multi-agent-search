@@ -62,6 +62,8 @@ class InMemoryTaskStore:
         self.finalize_jobs: dict[str, ResearchFinalizeJob] = {}
         self.search_jobs: dict[str, SearchTaskJob] = {}
         self.worker_heartbeats: dict[str, WorkerHeartbeat] = {}
+        # The heartbeat JSON columns as written: the admin overview returns them unparsed.
+        self._worker_heartbeat_json: dict[str, dict] = {}
         self.worker_graph_step_events: dict[str, list[dict]] = {}
         self.users: dict[str, UserRecord] = {}
         # users.created_at: UserRecord does not carry it, the admin views sort by it.
@@ -287,6 +289,11 @@ class InMemoryTaskStore:
             self.delete_research(research.id)
         self.user_sessions = [s for s in self.user_sessions if s.get("user_id") != user_id]
         self.user_events = [e for e in self.user_events if e.get("user_id") != user_id]
+        # The users row carried the activity columns; llm_usage_logs.user_id is SET NULL.
+        self.user_telemetry.pop(user_id, None)
+        for usage in self.llm_usage_logs:
+            if usage["user_id"] == user_id:
+                usage["user_id"] = None
         return True
 
     def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
@@ -607,8 +614,14 @@ class InMemoryTaskStore:
         return trail
 
     def compact_research_graph_trails(self) -> list[str]:
+        from src.config import settings
+
+        # Same working set as SQL: researches idle past the trail retention are skipped.
+        horizon = datetime.now(timezone.utc) - timedelta(seconds=settings.graph_trail_retention_seconds)
         compacted_ids: list[str] = []
         for research in self.researches.values():
+            if research.updated_at < horizon:
+                continue
             compacted_trail = compact_graph_trail(research.graph_trail, [])
             if compacted_trail != (research.graph_trail or []):
                 research.graph_trail = compacted_trail
@@ -1004,6 +1017,11 @@ class InMemoryTaskStore:
             maintenance_summary=maintenance_summary or {},
         )
         self.worker_heartbeats[worker_name] = heartbeat
+        self._worker_heartbeat_json[worker_name] = {
+            "extraction_metrics": extraction_metrics or {},
+            "graph_metrics": graph_metrics or {},
+            "maintenance_summary": maintenance_summary or {},
+        }
         self.worker_graph_step_events[worker_name] = compact_graph_step_events(
             self.worker_graph_step_events.get(worker_name, []),
             list(graph_step_events or []),
@@ -1177,7 +1195,8 @@ class InMemoryTaskStore:
             logs = [entry for entry in logs if entry.action == action]
         if actor_email:
             logs = [entry for entry in logs if entry.actor_email == actor_email]
-        sorted_logs = sorted(logs, key=lambda x: x.created_at, reverse=True)
+        # The SQL ORDER BY created_at DESC, id DESC.
+        sorted_logs = sorted(logs, key=lambda x: (x.created_at, x.id), reverse=True)
         return sorted_logs[offset : offset + limit]
 
     def get_admin_token_analytics(
@@ -1299,9 +1318,7 @@ class InMemoryTaskStore:
                     last_error=hb.last_error,
                     last_seen_at=hb.last_seen_at,
                     is_alive=is_alive,
-                    extraction_metrics=hb.extraction_metrics or {},
-                    graph_metrics=hb.graph_metrics or {},
-                    maintenance_summary=hb.maintenance_summary or {},
+                    **self._worker_heartbeat_json.get(hb.worker_name, {}),
                 )
             )
 
@@ -1330,7 +1347,7 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=len(stale),
                 sample_affected_ids=[j.id for j in stale[:10]],
-                summary=f"Would recover {len(stale)} stale finalize jobs",
+                summary=f"Would recover {len(stale)} stale finalize jobs running before {stale_dt.isoformat()}",
             )
         elif action == "recover_stale_search_jobs":
             stale_seconds = int(params.get("stale_seconds", 300))
@@ -1341,7 +1358,7 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=len(stale),
                 sample_affected_ids=[j.id for j in stale[:10]],
-                summary=f"Would recover {len(stale)} stale search jobs",
+                summary=f"Would recover {len(stale)} stale search jobs running before {stale_dt.isoformat()}",
             )
         elif action == "cleanup_old_jobs":
             days = int(params.get("days", 7))
@@ -1355,7 +1372,7 @@ class InMemoryTaskStore:
                 dry_run=True,
                 affected_count=tot,
                 sample_affected_ids=sample,
-                summary=f"Would delete {tot} old jobs",
+                summary=f"Would delete {len(old_f)} finalize and {len(old_s)} search jobs older than {days} days",
             )
         elif action == "cleanup_search_cache":
             days = int(params.get("days", 3))
@@ -1377,7 +1394,13 @@ class InMemoryTaskStore:
                 sample_affected_ids=[tid] if tid else [],
                 summary=f"Would requeue job {tid}",
             )
-        return AdminDryRunResult(action=action, dry_run=True, affected_count=0, sample_affected_ids=[], summary="Unknown action")
+        return AdminDryRunResult(
+            action=action,
+            dry_run=True,
+            affected_count=0,
+            sample_affected_ids=[],
+            summary=f"Unknown maintenance action: {action}",
+        )
 
     # ── user telemetry & activity tracking ───────────────────────────────────
     def record_user_session(
@@ -1670,80 +1693,68 @@ class InMemoryTaskStore:
             token_breakdown={"by_model": by_model},
         )
 
+    @staticmethod
+    def _ranked_counts(values, limit: int | None = 10) -> list[tuple[str, int]]:
+        """The SQL breakdowns: GROUP BY value ORDER BY count DESC, value, NULLs left out."""
+        counts: dict[str, int] = {}
+        for value in values:
+            if value is not None:
+                counts[value] = counts.get(value, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ranked if limit is None else ranked[:limit]
+
     def get_admin_telemetry_summary(self) -> AdminTelemetrySummaryResponse:
         now = datetime.now(timezone.utc)
-        total_users = len(self.users)
-        online_now = 0
-        dau_set = set()
-        wau_set = set()
-        mau_set = set()
+        # Activity is per user (users.last_seen_at in SQL), not per session row.
+        last_seen = [
+            entry["last_seen_at"]
+            for user_id, entry in self.user_telemetry.items()
+            if user_id in self.users and entry.get("last_seen_at") is not None
+        ]
 
-        os_counts: dict[str, int] = {}
-        browser_counts: dict[str, int] = {}
-        device_counts: dict[str, int] = {}
-        country_counts: dict[str, int] = {}
+        def active_within(window: timedelta) -> int:
+            return sum(1 for seen in last_seen if seen >= now - window)
 
-        for s in self.user_sessions:
-            uid = s.get("user_id")
-            active = s.get("last_active_at", now)
-            diff = (now - active).total_seconds()
-            if diff < 120:
-                online_now += 1
-            if diff < 86400 and uid:
-                dau_set.add(uid)
-            if diff < 7 * 86400 and uid:
-                wau_set.add(uid)
-            if diff < 30 * 86400 and uid:
-                mau_set.add(uid)
+        online_now = active_within(timedelta(minutes=2))
+        dau = active_within(timedelta(days=1))
+        wau = active_within(timedelta(days=7))
+        mau = active_within(timedelta(days=30))
 
-            os_name = s.get("os") or "macOS"
-            os_counts[os_name] = os_counts.get(os_name, 0) + 1
-
-            b_name = s.get("browser") or "Chrome"
-            browser_counts[b_name] = browser_counts.get(b_name, 0) + 1
-
-            d_name = s.get("device_type") or "desktop"
-            device_counts[d_name] = device_counts.get(d_name, 0) + 1
-
-            c_name = s.get("country") or "Local"
-            country_counts[c_name] = country_counts.get(c_name, 0) + 1
+        os_rows = self._ranked_counts(s.get("os") for s in self.user_sessions)
+        browser_rows = self._ranked_counts(s.get("browser") for s in self.user_sessions)
+        device_rows = self._ranked_counts(s.get("device_type") for s in self.user_sessions)
+        country_rows = self._ranked_counts(s.get("country") for s in self.user_sessions)
+        depth_rows = self._ranked_counts((r.depth.value for r in self.researches.values()), limit=None)
+        model_rows = self._ranked_counts(u["model"] for u in self.llm_usage_logs)
 
         total_tokens = sum(log_item.get("total_tokens", 0) for log_item in self.llm_usage_logs)
         total_cost = sum(log_item.get("estimated_cost_usd", 0.0) for log_item in self.llm_usage_logs)
-
-        depth_counts: dict[str, int] = {}
-        prompt_lens: list[int] = []
-        for r in self.researches.values():
-            d = r.depth or "medium"
-            depth_counts[d] = depth_counts.get(d, 0) + 1
-            if r.prompt:
-                prompt_lens.append(len(r.prompt))
-
+        prompt_lens = [len(r.prompt) for r in self.researches.values()]
         avg_prompt_len = round(sum(prompt_lens) / len(prompt_lens), 1) if prompt_lens else 0.0
 
         return AdminTelemetrySummaryResponse(
-            total_users=total_users,
+            total_users=len(self.users),
             online_now=online_now,
             online_users_now=online_now,
-            dau=len(dau_set),
-            dau_today=len(dau_set),
-            wau=len(wau_set),
-            wau_7d=len(wau_set),
-            mau=len(mau_set),
-            mau_30d=len(mau_set),
+            dau=dau,
+            dau_today=dau,
+            wau=wau,
+            wau_7d=wau,
+            mau=mau,
+            mau_30d=mau,
             total_researches=len(self.researches),
             total_tokens=total_tokens,
             total_cost_usd=round(total_cost, 4),
-            by_os=[{"name": k, "count": v} for k, v in os_counts.items()],
-            by_browser=[{"name": k, "count": v} for k, v in browser_counts.items()],
-            by_device=[{"name": k, "count": v} for k, v in device_counts.items()],
-            by_country=[{"name": k, "count": v} for k, v in country_counts.items()],
-            os_breakdown=os_counts,
-            browser_breakdown=browser_counts,
-            device_breakdown=device_counts,
-            depth_distribution=depth_counts,
-            popular_depths=[{"depth": k, "count": v} for k, v in depth_counts.items()],
-            popular_models=[],
+            by_os=[{"name": name, "count": count} for name, count in os_rows],
+            by_browser=[{"name": name, "count": count} for name, count in browser_rows],
+            by_device=[{"name": name, "count": count} for name, count in device_rows],
+            by_country=[{"name": name, "count": count} for name, count in country_rows],
+            os_breakdown={name: count for name, count in os_rows if name},
+            browser_breakdown={name: count for name, count in browser_rows if name},
+            device_breakdown={name: count for name, count in device_rows if name},
+            depth_distribution={depth: count for depth, count in depth_rows if depth},
+            popular_depths=[{"depth": depth, "count": count} for depth, count in depth_rows],
+            popular_models=[{"model": model, "count": count} for model, count in model_rows],
             avg_prompt_len=avg_prompt_len,
         )
 
@@ -1763,7 +1774,8 @@ class InMemoryTaskStore:
         if user_id:
             filtered = [e for e in filtered if e.get("user_id") == user_id]
 
-        filtered.reverse()
+        # The SQL ORDER BY created_at DESC, id DESC.
+        filtered.sort(key=lambda e: (e["created_at"], e["id"]), reverse=True)
         paged = filtered[offset : offset + limit]
 
         items = []
