@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { i18n, LOCALES } from "@/i18n";
+
 // api.ts touches localStorage / document.cookie at import time and
 // window.location on 401 recovery — stub the globals before each dynamic import.
 function stubEnv(token: string | null, pathname: string, search = "") {
@@ -252,5 +254,30 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage(new ApiError(418, ""), t)).toBe("[errors.api.unexpected]");
     expect(apiErrorMessage(new TypeError("fetch failed"), t)).toBe("[errors.api.network]");
     expect(apiErrorMessage(new Error("custom"), t)).toBe("custom");
+  });
+
+  it("names the known 409 reasons instead of one generic conflict text", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    // The server's ConflictError texts (src/services): they carry no error code.
+    const cases: [string, string][] = [
+      ["A research is already in progress. Please wait for it to finish before starting another.", "researchInProgress"],
+      ["Research capacity is currently full or the research state changed. Please retry.", "capacityFull"],
+      ["Email already registered", "emailTaken"],
+      ["An account with this email already exists", "emailTaken"],
+      ["Report is not ready yet", "reportNotReady"],
+      ["Only dead-letter finalize jobs can be requeued", "notDeadLetter"],
+      ["Only dead-letter search jobs can be requeued", "notDeadLetter"],
+      ["Research state changed. Please retry.", "conflict"],
+      ["<b>some other internal text</b>", "conflict"],
+    ];
+    for (const [detail, key] of cases) {
+      expect(apiErrorMessage(new ApiError(409, detail), t), detail).toBe(`[errors.api.${key}]`);
+      for (const { value } of LOCALES) expect(i18n.global.te(`errors.api.${key}`, value), `${value}: ${key}`).toBe(true);
+    }
+    // The detail refines only its own status.
+    expect(apiErrorMessage(new ApiError(404, "Report is not ready yet"), t)).toBe("[errors.api.notFound]");
   });
 });

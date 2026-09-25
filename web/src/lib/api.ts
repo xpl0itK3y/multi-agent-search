@@ -196,11 +196,27 @@ const API_STATUS_KEYS: Record<number, string> = {
   500: "server",
 };
 
+// Known server details of a mapped status → a more specific `errors.api.*` key. The
+// server sends no error codes, so these match the English ConflictError texts raised in
+// src/services; any other detail gets the status's generic text, never the raw one.
+const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
+  409: [
+    [/^A research is already in progress\b/, "researchInProgress"],
+    [/^Research capacity is currently full\b/, "capacityFull"],
+    [/^(?:Email already registered|An account with this email already exists)\b/, "emailTaken"],
+    [/^Report is not ready yet\b/, "reportNotReady"],
+    [/^Only dead-letter \w+ jobs can be requeued\b/, "notDeadLetter"],
+  ],
+};
+
 // Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
-// statuses get a translated text; anything else falls back to the server
-// detail, and network-level failures (fetch's TypeError) to a network text.
+// statuses get a translated text (a specific one for known details); anything
+// else falls back to the server detail, and network-level failures (fetch's
+// TypeError) to a network text.
 export function apiErrorMessage(err: unknown, t: (key: string) => string): string {
   if (err instanceof ApiError) {
+    const specific = API_DETAIL_KEYS[err.status]?.find(([pattern]) => pattern.test(err.detail));
+    if (specific) return t(`errors.api.${specific[1]}`);
     const key = API_STATUS_KEYS[err.status];
     if (key) return t(`errors.api.${key}`);
     return err.detail || t("errors.api.unexpected");
