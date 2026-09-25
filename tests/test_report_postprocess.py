@@ -1,3 +1,5 @@
+import pytest
+
 from src.agents.analyzer import AnalyzerAgent
 from src.core.llm import LLMProvider
 
@@ -211,3 +213,66 @@ def test_conflict_topic_and_quoted_sentences_are_kept_on_one_line():
 def test_one_line_keeps_a_leading_negative_figure():
     assert AnalyzerAgent._one_line("-5% versus +3%") == "-5% versus +3%"
     assert AnalyzerAgent._one_line("## 1. - Heading\n\ntext") == "Heading text"
+
+
+# ── Spanish structural headings (C7-8) ─────────────────────────────────────────
+
+_ES_SOURCES = [
+    {"source_id": "S1", "url": "https://a.example", "title": "A", "content": "cost 10"},
+    {"source_id": "S2", "url": "https://b.example", "title": "B", "content": "cost 20"},
+]
+
+
+@pytest.mark.parametrize(
+    "leaked_heading",
+    ["## Sources", "## Fuentes", "## Источники", "Fuentes:", "Sources:"],
+)
+def test_spanish_report_gets_exactly_one_spanish_sources_section(leaked_heading):
+    agent = _agent()
+    draft = f"## Resumen\nLos costes difieren [S1].\n\n{leaked_heading}\n- [S1] https://a.example"
+
+    report = agent._post_process_report(draft, "es")
+    rebuilt = agent._rebuild_sources_section(report, _ES_SOURCES, "es")
+    again = agent._rebuild_sources_section(rebuilt, _ES_SOURCES, "es")
+
+    for text in (rebuilt, again):
+        headings = [line for line in text.splitlines() if line.startswith("#")]
+        assert headings == ["## Resumen", "## Fuentes", "### Fuentes utilizadas", "### Fuentes adicionales relevantes"]
+
+
+def test_spanish_conflicts_and_notes_go_before_the_spanish_sources_heading():
+    agent = _agent()
+    report = agent._post_process_report("## Resumen\nLos costes difieren [S1].", "es")
+    assert report.endswith("## Fuentes")
+
+    with_conflicts = agent._inject_conflicts_section(report, [_COST_CONFLICT], "es")
+    with_notes = agent._inject_report_notes(with_conflicts, ["nota"], "es")
+
+    assert with_notes.index("## Contradicciones e incertidumbres") < with_notes.index("## Fuentes")
+    assert with_notes.index("## Notas del informe") < with_notes.index("## Fuentes")
+    assert agent.REPORT_NOTES_HEADING_PATTERN.search(with_notes)
+    assert agent._inject_report_notes(with_notes, ["nota"], "es") == with_notes  # not added twice
+    rebuilt = agent._rebuild_sources_section(with_notes, _ES_SOURCES, "es")
+    assert "## Contradicciones e incertidumbres" in rebuilt and "## Notas del informe" in rebuilt
+
+
+def test_spanish_notes_section_is_stripped_before_the_report_is_served():
+    from src.ui.report_utils import clean_report
+
+    agent = _agent()
+    report = agent._inject_report_notes("## Resumen\nTexto [S1].\n\n## Fuentes", ["nota interna"], "es")
+
+    assert "nota interna" not in clean_report(report)
+
+
+def test_spanish_structural_lines_do_not_require_citations():
+    agent = _agent()
+    assert not agent._line_requires_citation("Fuentes adicionales relevantes consultadas para este informe")
+    assert not agent._line_requires_citation("Notas del informe: algunas fuentes no se pudieron extraer bien")
+
+
+def test_empty_spanish_sources_section_is_noted():
+    agent = _agent()
+    notes = agent._report_quality_notes("## Resumen\nTexto sin citas.\n\n## Fuentes", [], "es")
+
+    assert agent._quality_note_messages("es")["empty_sources"] in notes

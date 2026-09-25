@@ -363,7 +363,7 @@ def generate_pdf(
         btype = block["type"]
 
         if btype == "h2":
-            if block["text"].lower() in ("sources", "источники"):
+            if block["text"].lower() in ("sources", "источники", "fuentes"):
                 story.append(Spacer(1, 6))
                 story.append(HRFlowable(width="100%", thickness=0.5, color=C_LIGHT))
             story.append(Paragraph(_md_to_rl(block["text"]), STYLES["h2"]))

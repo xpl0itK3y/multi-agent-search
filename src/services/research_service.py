@@ -1702,6 +1702,24 @@ class ResearchService(
             "qualified": "Qualified",
             "holds": "Holds",
         },
+        "es": {
+            "refuted": "Refutada",
+            "contested": "Cuestionada",
+            "qualified": "Con matices",
+            "holds": "Se sostiene",
+        },
+    }
+    # (heading, intro) of the red-team section, per report language (en for the rest).
+    _RED_TEAM_SECTION_TEXT = {
+        "ru": ("## Слабые места и контраргументы", "Ключевые утверждения отчёта проверены на опровержение."),
+        "en": (
+            "## Weaknesses & counter-arguments",
+            "The report's key claims were stress-tested against counter-evidence.",
+        ),
+        "es": (
+            "## Debilidades y contraargumentos",
+            "Las afirmaciones clave del informe se contrastaron con evidencia en contra.",
+        ),
     }
 
     def _maybe_red_team(self, report: str, research, tasks: list) -> str:
@@ -1805,12 +1823,7 @@ class ResearchService(
 
     def _render_red_team_section(self, red_team: RedTeamReport, language: str) -> str:
         labels = self._RED_TEAM_VERDICT_LABELS.get(language, self._RED_TEAM_VERDICT_LABELS["en"])
-        heading = "## Слабые места и контраргументы" if language == "ru" else "## Weaknesses & counter-arguments"
-        intro = (
-            "Ключевые утверждения отчёта проверены на опровержение."
-            if language == "ru"
-            else "The report's key claims were stress-tested against counter-evidence."
-        )
+        heading, intro = self._RED_TEAM_SECTION_TEXT.get(language, self._RED_TEAM_SECTION_TEXT["en"])
         lines = [heading, "", intro, ""]
         for finding in red_team.findings:
             verdict = labels.get(finding.verdict, finding.verdict)

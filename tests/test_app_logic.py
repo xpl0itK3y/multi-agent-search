@@ -2926,3 +2926,41 @@ def test_rank_sources_for_question_prefers_relevant():
     ranked = service._rank_sources_for_question("explain qubit superposition decoherence", pool, 3)
     assert ranked[0]["title"] == "Quantum"  # most relevant first, not just the first item
     assert len(ranked) == 3
+
+
+def test_spanish_analysis_writes_spanish_structural_headings_only():
+    # The writer may copy an English "## Sources" heading; a Spanish report must still end
+    # with one Spanish Sources section and its notes under the Spanish notes heading.
+    llm = RecordingLLM(
+        response=(
+            "## Resumen ejecutivo\nEl mercado de baterías para vehículos eléctricos creció con fuerza "
+            "durante el año según los datos disponibles para la región [S1].\n\n"
+            "## Sources\n- [S1] https://example.com/a"
+        )
+    )
+    agent = AnalyzerAgent(llm)
+
+    result, _, _ = agent.run_analysis(
+        "Analiza el mercado de baterías para vehículos eléctricos en la región",
+        [
+            SearchTask(
+                id="task-1",
+                description="mercado de baterías",
+                queries=["mercado de baterías"],
+                status=TaskStatus.COMPLETED,
+                result=[
+                    {"url": "https://example.com/a", "title": "A", "content": "El mercado de baterías creció con fuerza durante el año en la región."},
+                    {"url": "https://example.org/b", "title": "B", "content": "Datos adicionales sobre la cadena de suministro de baterías en la región."},
+                ],
+            )
+        ],
+        language="es",
+    )
+
+    headings = [line for line in result.splitlines() if line.startswith("#")]
+    assert headings.count("## Fuentes") == 1
+    assert "### Fuentes utilizadas" in headings
+    assert "### Fuentes adicionales relevantes" in headings
+    assert "## Notas del informe" in headings  # no conclusion heading, so a note is written
+    for english in ("## Sources", "### Used Sources", "### Additional Relevant Sources", "## Report Notes"):
+        assert english not in headings

@@ -45,9 +45,15 @@ class AnalyzerAgent(BaseAgent):
     {"decisions":[{"index":0,"conflict":true,"reason":"brief explanation"}]}
     Include one decision for every input index and do not alter or repeat source text.
     """
-    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники)\s*$.*\Z")
+    # The Sources heading in every report language (ru/es/en; en is the fallback for the rest),
+    # recognised whatever the report language: an English "## Sources" in an es report is
+    # still the list _rebuild_sources_section replaces, never a second one.
+    SOURCE_HEADING_PATTERN = re.compile(r"(?ims)\n##\s+(Sources|Источники|Fuentes)\s*$.*\Z")
+    SOURCE_HEADING_LINE_PATTERN = re.compile(r"(?im)^##\s+(Sources|Источники|Fuentes)\s*$")
     CONFLICT_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Conflicts And Uncertainties|Противоречия и неопределенности|Противоречия и неопределённости|Contradicciones e incertidumbres)\s*$")
-    REPORT_NOTES_HEADING_PATTERN = re.compile(r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту)\s*$")
+    REPORT_NOTES_HEADING_PATTERN = re.compile(
+        r"(?im)^##\s+(Report Notes|Примечания к отчету|Примечания к отчёту|Notas del informe)\s*$"
+    )
     # An opening summary or a closing bottom-line counts — the report now leads with an
     # "Executive summary" and may close with "Conclusion / Bottom line", so accept those
     # (and the ru/es equivalents) and don't require an exact, suffix-free heading.
@@ -610,7 +616,9 @@ class AnalyzerAgent(BaseAgent):
             normalized = re.sub(r"(?im)^sources:\s*$", localized_sources_heading, normalized)
         elif re.search(r"(?im)^источники:\s*$", normalized):
             normalized = re.sub(r"(?im)^источники:\s*$", localized_sources_heading, normalized)
-        elif re.search(r"(?im)^#*\s*(sources|источники)\s*$", normalized) is None:
+        elif re.search(r"(?im)^fuentes:\s*$", normalized):
+            normalized = re.sub(r"(?im)^fuentes:\s*$", localized_sources_heading, normalized)
+        elif re.search(r"(?im)^#*\s*(sources|источники|fuentes)\s*$", normalized) is None:
             normalized = f"{normalized}\n\n{localized_sources_heading}"
 
         normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
@@ -682,8 +690,27 @@ class AnalyzerAgent(BaseAgent):
             return rewritten
         return report
 
+    # Structural headings the analyzer writes itself, per report language (en for the rest).
+    # Every Sources/notes regex above recognises all of them.
+    _SOURCES_HEADINGS = {"ru": "## Источники", "en": "## Sources", "es": "## Fuentes"}
+    _REPORT_NOTES_HEADINGS = {
+        "ru": "## Примечания к отчёту",
+        "en": "## Report Notes",
+        "es": "## Notas del informe",
+    }
+    _USED_SOURCES_HEADINGS = {
+        "ru": "### Использованные источники",
+        "en": "### Used Sources",
+        "es": "### Fuentes utilizadas",
+    }
+    _ADDITIONAL_SOURCES_HEADINGS = {
+        "ru": "### Дополнительные релевантные источники",
+        "en": "### Additional Relevant Sources",
+        "es": "### Fuentes adicionales relevantes",
+    }
+
     def _sources_heading(self, language: str) -> str:
-        return "## Источники" if language == "ru" else "## Sources"
+        return self._SOURCES_HEADINGS.get(language, self._SOURCES_HEADINGS["en"])
 
     _CONFLICTS_HEADINGS = {
         "ru": "## Противоречия и неопределённости",
@@ -695,13 +722,13 @@ class AnalyzerAgent(BaseAgent):
         return self._CONFLICTS_HEADINGS.get(language, self._CONFLICTS_HEADINGS["en"])
 
     def _report_notes_heading(self, language: str) -> str:
-        return "## Примечания к отчёту" if language == "ru" else "## Report Notes"
+        return self._REPORT_NOTES_HEADINGS.get(language, self._REPORT_NOTES_HEADINGS["en"])
 
     def _used_sources_heading(self, language: str) -> str:
-        return "### Использованные источники" if language == "ru" else "### Used Sources"
+        return self._USED_SOURCES_HEADINGS.get(language, self._USED_SOURCES_HEADINGS["en"])
 
     def _additional_sources_heading(self, language: str) -> str:
-        return "### Дополнительные релевантные источники" if language == "ru" else "### Additional Relevant Sources"
+        return self._ADDITIONAL_SOURCES_HEADINGS.get(language, self._ADDITIONAL_SOURCES_HEADINGS["en"])
 
     def _quality_note_messages(self, language: str) -> dict[str, str]:
         if language == "ru":
@@ -896,6 +923,8 @@ class AnalyzerAgent(BaseAgent):
             or lowered.startswith("источники")
             or lowered.startswith("примечания к отчету")
             or lowered.startswith("примечания к отчёту")
+            or lowered.startswith("fuente")
+            or lowered.startswith("notas del informe")
         ):
             return False
         return bool(re.search(r"[A-Za-zА-Яа-я0-9]", stripped))
@@ -1342,7 +1371,7 @@ class AnalyzerAgent(BaseAgent):
             match.start()
             for match in (
                 self.CONCLUSION_HEADING_PATTERN.search(report),
-                re.search(r"(?im)^##\s+(Sources|Источники)\s*$", report),
+                self.SOURCE_HEADING_LINE_PATTERN.search(report),
             )
             if match
         ]
@@ -1372,9 +1401,8 @@ class AnalyzerAgent(BaseAgent):
             notes.append(messages["small_subset"])
         if unsupported_lines:
             notes.append(messages["weak_support"])
-        if ("## sources" in normalized or "## источники" in normalized) and report.strip().endswith(
-            self._sources_heading(language)
-        ):
+        has_sources_heading = any(heading.lower() in normalized for heading in self._SOURCES_HEADINGS.values())
+        if has_sources_heading and report.strip().endswith(self._sources_heading(language)):
             notes.append(messages["empty_sources"])
 
         return notes
@@ -1384,7 +1412,7 @@ class AnalyzerAgent(BaseAgent):
             return report
 
         section = self._report_notes_heading(language) + "\n" + "\n".join(f"- {note}" for note in notes)
-        sources_match = re.search(r"(?im)^##\s+(Sources|Источники)\s*$", report)
+        sources_match = self.SOURCE_HEADING_LINE_PATTERN.search(report)
         if sources_match:
             return f"{report[:sources_match.start()].rstrip()}\n\n{section}\n\n{report[sources_match.start():].lstrip()}"
         return f"{report.strip()}\n\n{section}"
