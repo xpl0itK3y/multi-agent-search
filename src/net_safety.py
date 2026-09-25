@@ -14,6 +14,23 @@ from urllib.parse import urljoin, urlparse
 logger = logging.getLogger(__name__)
 
 
+def log_safe_url(url: object) -> str:
+    """``scheme://host`` of ``url`` for log lines, never its userinfo, port, path or query.
+
+    Webhook URLs are often capabilities: Slack, Discord and Teams incoming webhooks carry
+    their credential in the path or query, and logs reach everyone with Loki access."""
+    scheme = host = None
+    if isinstance(url, str):
+        try:
+            parsed = urlparse(url)
+            scheme, host = parsed.scheme, parsed.hostname
+        except ValueError:  # e.g. an unclosed IPv6 bracket
+            pass
+    if not scheme or not host:
+        return "<invalid url>"
+    return f"{scheme}://[{host}]" if ":" in host else f"{scheme}://{host}"
+
+
 def _classify_ip(ip_str: str) -> str | None:
     """Return a rejection reason if ``ip_str`` is not a globally routable unicast address,
     else None."""
@@ -121,7 +138,7 @@ def safe_fetch_document(
             for _ in range(max_redirects + 1):
                 ok, reason = is_safe_public_url(current)
                 if not ok:
-                    logger.warning("safe_fetch_blocked url=%s reason=%s", current, reason)
+                    logger.warning("safe_fetch_blocked url=%s reason=%s", log_safe_url(current), reason)
                     return None
                 response = client.get(current)
                 if response.is_redirect:
@@ -133,14 +150,17 @@ def safe_fetch_document(
                 if not 200 <= response.status_code < 300:
                     return None
                 if len(response.content) > max_bytes:
-                    logger.warning("safe_fetch_too_large url=%s bytes=%s", current, len(response.content))
+                    logger.warning(
+                        "safe_fetch_too_large url=%s bytes=%s", log_safe_url(current), len(response.content)
+                    )
                     return None
                 return (
                     bytes(response.content),
                     _normalized_content_type(response.headers.get("content-type")),
                 )
     except Exception as exc:
-        logger.info("safe_fetch_failed url=%s error=%s", url, exc)
+        # The class only: httpx error text can repeat the full URL.
+        logger.info("safe_fetch_failed url=%s error=%s", log_safe_url(url), type(exc).__name__)
         return None
     return None  # exceeded max_redirects
 
@@ -217,7 +237,7 @@ def safe_post_json(url: str, payload: object, *, timeout: float = 10.0) -> bool:
     """
     ip, reason = resolve_validated_ip(url)
     if ip is None:
-        logger.warning("webhook_blocked_unsafe_url url=%s reason=%s", url, reason)
+        logger.warning("webhook_blocked_unsafe_url url=%s reason=%s", log_safe_url(url), reason)
         return False
 
     parsed = urlparse(url)
@@ -239,5 +259,6 @@ def safe_post_json(url: str, payload: object, *, timeout: float = 10.0) -> bool:
         )
         return True
     except Exception as exc:
-        logger.warning("webhook_failed url=%s error=%s", url, exc)
+        # The class only: httpx error text can repeat the pinned URL, path and query included.
+        logger.warning("webhook_failed url=%s error=%s", log_safe_url(url), type(exc).__name__)
         return False
