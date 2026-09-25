@@ -426,6 +426,88 @@ def test_decompose_retry_lost_with_its_api_process_is_replayed_by_maintenance(mo
     assert service.recover_pending_decompositions() == 0
 
 
+class _DiesWithTheProcess:
+    def add_task(self, func, *args):
+        pass  # the API process is killed before the background task runs
+
+
+def test_a_lost_retry_decomposition_behind_the_newest_fifty_researches_is_replayed(monkeypatch):
+    """Recovery scanned only the 50 newest researches. A retried one is usually older, and
+    the stalled sweep leaves every research with the marker to recovery: it stayed
+    PROCESSING for good."""
+    monkeypatch.setattr(settings, "decompose_recovery_minutes", 10)
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = _failed_research(store)
+    store.get_research(research.id).created_at -= timedelta(days=2)
+    for index in range(60):
+        newer = store.add_research(ResearchRequest(prompt=f"newer {index}", depth=SearchDepth.EASY), task_ids=[])
+        store.update_research_status(newer.id, ResearchStatus.COMPLETED, "done")
+    service.retry_research(research.id, background_tasks=_DiesWithTheProcess())
+    replayed = threading.Event()
+    calls = []
+
+    def decompose(research_id, request):
+        calls.append((research_id, request.prompt))
+        replayed.set()
+
+    monkeypatch.setattr(service, "decompose_and_enqueue", decompose)
+    _age_decompose_marker(store, research.id, minutes=11)
+
+    assert service.recover_pending_decompositions() == 1
+    assert replayed.wait(5)
+    assert calls == [(research.id, "retry this research")]
+
+
+def test_a_stale_decomposition_that_cannot_be_replayed_is_failed_so_it_can_be_retried(monkeypatch):
+    monkeypatch.setattr(settings, "decompose_recovery_minutes", 10)
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = store.add_research(ResearchRequest(prompt="request lost", depth=SearchDepth.EASY), task_ids=[])
+    # A marker without the request it would replay: it headed every recovery batch for good.
+    store.merge_research_graph_state(research.id, {"decompose_pending": True})
+    record = store.get_research(research.id)
+    record.created_at -= timedelta(minutes=11)
+
+    # Written since the threshold: a decomposition still emitting progress wins.
+    assert service.recover_pending_decompositions() == 0
+    assert store.get_research(research.id).status == ResearchStatus.PROCESSING
+
+    record.updated_at -= timedelta(minutes=11)
+    assert service.recover_pending_decompositions() == 0
+    failed = store.get_research(research.id)
+    assert failed.status == ResearchStatus.FAILED and failed.final_report == service.STALLED_RESEARCH_REPORT
+    assert store.list_pending_decomposition_ids() == []
+
+    started = []
+    monkeypatch.setattr(service, "decompose_and_enqueue", lambda research_id, req: started.append(req.prompt))
+    service.retry_research(research.id)
+    assert started == ["request lost"]
+
+
+def test_an_unreadable_decompose_stamp_ages_on_the_last_write(monkeypatch):
+    monkeypatch.setattr(settings, "decompose_recovery_minutes", 10)
+    store = InMemoryTaskStore()
+    service = _service(store)
+    request = ResearchRequest(prompt="stamp garbled", depth=SearchDepth.EASY)
+    research = store.add_research(request, task_ids=[])
+    store.merge_research_graph_state(
+        research.id,
+        {
+            "decompose_pending": True,
+            "decompose_requested_at": "not a date",
+            "decompose_payload": request.model_dump(mode="json"),
+        },
+    )
+    replayed = threading.Event()
+    monkeypatch.setattr(service, "decompose_and_enqueue", lambda research_id, req: replayed.set())
+
+    assert service.recover_pending_decompositions() == 0  # written just now
+    store.get_research(research.id).updated_at -= timedelta(minutes=11)
+    assert service.recover_pending_decompositions() == 1
+    assert replayed.wait(5)
+
+
 def test_a_decomposition_started_on_an_old_research_is_not_doubled_by_recovery(monkeypatch):
     monkeypatch.setattr(settings, "max_global_active_researches", 1)
     store = InMemoryTaskStore()

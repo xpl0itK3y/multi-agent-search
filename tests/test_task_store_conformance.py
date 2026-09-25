@@ -625,6 +625,36 @@ def test_list_stalled_research_ids_finds_only_researches_nothing_will_move(store
     assert store.list_stalled_research_ids(datetime.now(timezone.utc) + timedelta(minutes=1))[-1] == fresh
 
 
+def test_list_pending_decomposition_ids_finds_every_processing_research_with_the_marker(store):
+    now = datetime.now(timezone.utc)
+
+    def research(status=ResearchStatus.PROCESSING, **graph_state):
+        record = _research(store)
+        if graph_state:
+            store.merge_research_graph_state(record.id, graph_state)
+        if status != ResearchStatus.PROCESSING:
+            store.update_research_status(record.id, status)
+        return record.id
+
+    # Any age: the oldest (the ones the stalled sweep leaves to recovery for good) first.
+    ancient = research(decompose_pending=True, decompose_payload={"prompt": "p"})
+    with_tasks = research(decompose_pending=True)
+    store.set_research_task_ids(with_tasks, [_task(store, with_tasks).id])
+    recent = research(decompose_pending=True, decompose_requested_at=now.isoformat())
+    planned = research()
+    queued = research(ResearchStatus.QUEUED, decompose_pending=True)
+    failed = research(ResearchStatus.FAILED, decompose_pending=True)
+    for age, research_id in [(timedelta(days=30), ancient), (timedelta(hours=2), with_tasks)]:
+        _backdate(store, "research", research_id, updated_at=now - age)
+    for research_id in (planned, queued, failed):
+        _backdate(store, "research", research_id, updated_at=now - timedelta(days=60))
+
+    assert store.list_pending_decomposition_ids() == [ancient, with_tasks, recent]
+    assert store.list_pending_decomposition_ids(limit=2) == [ancient, with_tasks]
+    store.merge_research_graph_state(ancient, remove_keys=["decompose_pending"])
+    assert store.list_pending_decomposition_ids() == [with_tasks, recent]
+
+
 def _dead_letter_finalize_job(store, research_id):
     job = store.add_research_finalize_job(research_id, max_attempts=1)
     claimed = store.claim_research_finalize_job_by_id(job.id)

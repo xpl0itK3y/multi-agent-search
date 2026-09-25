@@ -600,60 +600,72 @@ class ResearchService(
         self.task_store.merge_research_graph_state(research_id, self._decompose_marker(request))
 
     @staticmethod
-    def _decompose_requested_at(research: ResearchRecord) -> datetime | None:
+    def _decompose_requested_at(research: ResearchRecord) -> datetime:
         stamp = (research.graph_state or {}).get("decompose_requested_at") or research.created_at
         if isinstance(stamp, str):
             try:
                 stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
             except ValueError:
-                return None
-        if stamp is not None and stamp.tzinfo is None:
+                # Unreadable: age it on the row's last write, which came no earlier than
+                # the stamp. Skipping it left the research unrecovered and unswept for good.
+                stamp = research.updated_at
+        if stamp.tzinfo is None:
             stamp = stamp.replace(tzinfo=timezone.utc)
         return stamp
+
+    # Researches decomposition recovery handles per pass (at startup and on every queue
+    # maintenance pass), least recently updated first: a replayed one is re-stamped and a
+    # finished one loses its marker, so a backlog drains over a few passes.
+    DECOMPOSE_RECOVERY_BATCH = 50
 
     def recover_pending_decompositions(self) -> int:
         """Re-schedule decompositions lost during a process crash.
 
-        Scans recent PROCESSING researches for those that have ``decompose_pending=True``
-        in graph_state, have no tasks yet, and whose decomposition was requested (or, for
-        a research without ``decompose_requested_at``, created) more than
-        ``settings.decompose_recovery_minutes`` minutes ago.  For each such research the
-        request time is re-stamped and a fresh daemon thread replays
-        ``decompose_and_enqueue``, so the next pass does not start a second one.
+        Takes the PROCESSING researches whose graph_state carries ``decompose_pending``
+        from the store, whatever their age: scanning the 50 newest researches missed a
+        retried one (usually older than that), and the stalled sweep leaves every research
+        with the marker to this recovery, so a missed one stayed PROCESSING for good.
+        One that has tasks already only lost the marker, which is cleared. Otherwise, once
+        its decomposition was requested (or, without ``decompose_requested_at``, it was
+        created) more than ``settings.decompose_recovery_minutes`` minutes ago, the request
+        time is re-stamped and a fresh daemon thread replays ``decompose_and_enqueue``, so
+        the next pass does not start a second one. One whose stored request cannot be
+        replayed is failed instead, which makes it retryable: left as it was, it would also
+        head every later batch.
 
         Returns the number of researches for which recovery was triggered.
         """
         import threading as _threading
 
         stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=settings.decompose_recovery_minutes)
-        recent = self.task_store.list_researches(limit=50)
         recovered = 0
 
-        for item in recent:
-            research = self.task_store.get_research(item.id)
-            if not research:
-                continue
+        for research_id in self.task_store.list_pending_decomposition_ids(limit=self.DECOMPOSE_RECOVERY_BATCH):
+            research = self.task_store.get_research(research_id)
+            if not research or research.status != ResearchStatus.PROCESSING:
+                continue  # deleted or moved on after the listing
             graph_state = research.graph_state or {}
-            if not graph_state.get("decompose_pending"):
-                continue
+            if "decompose_pending" not in graph_state:
+                continue  # the decomposition finished after the listing
             # Tasks already exist — decompose ran; the flag is just stale.
             if research.task_ids:
                 self._clear_decompose_pending(research.id)
                 continue
             # Too recent — the background task may still be running.
-            requested_at = self._decompose_requested_at(research)
-            if requested_at is None or requested_at > stale_threshold:
+            if self._decompose_requested_at(research) > stale_threshold:
                 continue
-            payload = graph_state.get("decompose_payload")
-            if not payload:
-                continue
-            try:
-                req = ResearchRequest.model_validate(payload)
-            except Exception as exc:
-                logger.warning(
-                    "decompose_recovery_invalid_payload research_id=%s error=%s",
-                    research.id, exc,
-                )
+            req = self._recoverable_decompose_request(research)
+            if req is None:
+                # Guarded on no write since the threshold: a decomposition that is still
+                # emitting progress events wins.
+                if self.task_store.transition_research_status(
+                    research.id,
+                    [ResearchStatus.PROCESSING],
+                    ResearchStatus.FAILED,
+                    self.STALLED_RESEARCH_REPORT,
+                    updated_before=stale_threshold,
+                ):
+                    logger.warning("decompose_recovery_failed_unreplayable research_id=%s", research.id)
                 continue
             logger.info("decompose_recovery_triggered research_id=%s", research.id)
             self._mark_decompose_requested(research.id)
@@ -668,6 +680,21 @@ class ResearchService(
         if recovered:
             logger.info("decompose_recovery_completed count=%d", recovered)
         return recovered
+
+    @staticmethod
+    def _recoverable_decompose_request(research: ResearchRecord) -> ResearchRequest | None:
+        payload = (research.graph_state or {}).get("decompose_payload")
+        if not payload:
+            logger.warning("decompose_recovery_missing_payload research_id=%s", research.id)
+            return None
+        try:
+            return ResearchRequest.model_validate(payload)
+        except Exception as exc:
+            logger.warning(
+                "decompose_recovery_invalid_payload research_id=%s error=%s",
+                research.id, exc,
+            )
+            return None
 
     def list_researches(self, limit: int = 20, user_id: str | None = None) -> list[ResearchHistoryItem]:
         return self.task_store.list_researches(limit=limit, user_id=user_id)

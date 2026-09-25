@@ -523,6 +523,18 @@ class InMemoryTaskStore:
         )
         return [research.id for research in stalled[:limit]]
 
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]:
+        pending = sorted(
+            (
+                research
+                for research in self.researches.values()
+                if research.status == ResearchStatus.PROCESSING
+                and "decompose_pending" in (research.graph_state or {})
+            ),
+            key=lambda research: (research.updated_at, research.id),
+        )
+        return [research.id for research in pending[:limit]]
+
     def reset_research_for_retry(
         self,
         research_id: str,

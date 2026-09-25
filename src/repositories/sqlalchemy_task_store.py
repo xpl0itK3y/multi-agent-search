@@ -652,6 +652,19 @@ class SQLAlchemyTaskStore:
         with self.session_scope() as session:
             return list(session.execute(statement).scalars().all())
 
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]:
+        statement = (
+            select(ResearchORM.id)
+            .where(
+                ResearchORM.status == ResearchStatus.PROCESSING.value,
+                ResearchORM.graph_state.has_key("decompose_pending"),
+            )
+            .order_by(ResearchORM.updated_at.asc(), ResearchORM.id.asc())
+            .limit(limit)
+        )
+        with self.session_scope() as session:
+            return list(session.execute(statement).scalars().all())
+
     def reset_research_for_retry(
         self,
         research_id: str,

@@ -124,6 +124,11 @@ class TaskStore(Protocol):
     # Least recently updated first, at most `limit`.
     def list_stalled_research_ids(self, stale_before: datetime, limit: int = 50) -> list[str]: ...
 
+    # PROCESSING researches with a decomposition in flight (a decompose_pending key in
+    # graph_state), whatever their age: the rows list_stalled_research_ids leaves to
+    # decomposition recovery. Least recently updated first, at most `limit`.
+    def list_pending_decomposition_ids(self, limit: int = 50) -> list[str]: ...
+
     # Status-guarded reset for a retry, under the row lock: clears the reports and drops
     # `remove_graph_state_keys`, only while the research is in `expected_status`.
     def reset_research_for_retry(
