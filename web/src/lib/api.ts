@@ -197,9 +197,11 @@ const API_STATUS_KEYS: Record<number, string> = {
 };
 
 // Known server details of a mapped status → a more specific `errors.api.*` key. The
-// server sends no error codes, so these match the English ConflictError texts raised in
+// server sends no error codes, so these match the English error texts raised in
 // src/services; any other detail gets the status's generic text, never the raw one.
 const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
+  // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
+  403: [[/^This email is reserved for an administrator\b/, "adminEmailReserved"]],
   409: [
     [/^A research is already in progress\b/, "researchInProgress"],
     [/^Research capacity is currently full\b/, "capacityFull"],

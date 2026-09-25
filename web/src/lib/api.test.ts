@@ -280,4 +280,16 @@ describe("apiErrorMessage", () => {
     // The detail refines only its own status.
     expect(apiErrorMessage(new ApiError(404, "Report is not ready yet"), t)).toBe("[errors.api.notFound]");
   });
+
+  it("explains a refused sign-up with an administrator's email", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+    const detail =
+      "This email is reserved for an administrator: sign in with Google, or ask the operator to provision it with scripts/create_admin.py";
+
+    expect(apiErrorMessage(new ApiError(403, detail), t)).toBe("[errors.api.adminEmailReserved]");
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.adminEmailReserved", value)).toBe(true);
+    expect(apiErrorMessage(new ApiError(403, "Admin privileges required"), t)).toBe("[errors.api.forbidden]");
+  });
 });

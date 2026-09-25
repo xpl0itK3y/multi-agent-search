@@ -1112,6 +1112,7 @@ const ru = {
     api: {
       unauthorized: "Неверный email или пароль, либо сессия истекла — войдите заново",
       forbidden: "Недостаточно прав для этого действия",
+      adminEmailReserved: "Этот email зарезервирован для администратора — войдите через Google или попросите оператора создать аккаунт",
       notFound: "Не найдено",
       conflict: "Действие конфликтует с текущим состоянием — обновите страницу и попробуйте снова",
       researchInProgress: "Уже идёт исследование — дождитесь его завершения, прежде чем запускать новое",
@@ -2240,6 +2241,7 @@ const en: typeof ru = {
     api: {
       unauthorized: "Wrong email or password, or the session has expired — please sign in again",
       forbidden: "You don't have permission to do this",
+      adminEmailReserved: "This email is reserved for an administrator — sign in with Google or ask the operator to provision the account",
       notFound: "Not found",
       conflict: "This conflicts with the current state — refresh and try again",
       researchInProgress: "A research is already running — wait for it to finish before starting another",
@@ -3368,6 +3370,7 @@ const es: typeof ru = {
     api: {
       unauthorized: "Email o contraseña incorrectos, o la sesión ha expirado — inicia sesión de nuevo",
       forbidden: "No tienes permiso para hacer esto",
+      adminEmailReserved: "Este email está reservado para un administrador — inicia sesión con Google o pide al operador que cree la cuenta",
       notFound: "No encontrado",
       conflict: "Esto entra en conflicto con el estado actual — actualiza la página e inténtalo de nuevo",
       researchInProgress: "Ya hay una investigación en curso — espera a que termine antes de iniciar otra",
