@@ -2,6 +2,8 @@
 rate budget), so a cookie session must send the double-submit CSRF header on them, as on
 a mutation. Otherwise a cross-site link or redirect, which carries the SameSite=Lax
 session cookie, starts an export under the admin's name. Bearer requests stay exempt.
+SEC3-2: the same holds with AUTH_DISABLED=true once ADMIN_EMAILS is set, since
+require_admin then still authenticates the admin by bearer token or session cookie.
 
 The app tests also run on the Postgres store over one shared database (postgres-smoke),
 so ids are unique per test and assertions only look at this test's audit rows."""
@@ -19,9 +21,9 @@ EXPORTS = {
 }
 
 
-@pytest.fixture
-def admin(client, monkeypatch):
-    monkeypatch.setattr(settings, "auth_disabled", False)
+@pytest.fixture(params=["auth-on", "auth-disabled"])
+def admin(client, monkeypatch, request):
+    monkeypatch.setattr(settings, "auth_disabled", request.param == "auth-disabled")
     monkeypatch.setattr(settings, "auth_secret_key", "export-csrf-secret-" + "x" * 40)
     user_id = f"export-admin-{uuid.uuid4().hex[:8]}"
     email = f"{user_id}@example.com"
@@ -86,3 +88,29 @@ async def test_other_admin_gets_and_preflights_stay_unchecked(client, admin):
 
     assert listing.status_code == 200
     assert preflight.status_code != 403
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("admin", ["auth-disabled"], indirect=True)
+async def test_auth_disabled_admin_mutation_with_a_cookie_needs_the_header(client, admin):
+    body = {"action": "not-an-action"}
+
+    refused = await client.post("/v1/admin/operations/preview", json=body, headers=_cookie_session(admin, None))
+    checked = await client.post("/v1/admin/operations/preview", json=body, headers=_cookie_session(admin))
+
+    assert refused.status_code == 403
+    assert refused.json() == {"detail": "CSRF token missing or invalid"}
+    assert checked.status_code == 422  # past the CSRF check and require_admin, to the body
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("admin", ["auth-disabled"], indirect=True)
+async def test_auth_disabled_request_without_a_session_cookie_stays_unchecked(client, admin):
+    export = await client.get("/v1/admin/users/export")
+    research = await client.post("/v1/research", json={})
+
+    # Refused by require_admin (no admin token), not by the CSRF check, and the open
+    # routes of this mode need no header without a cookie to ride on.
+    assert export.status_code == 401
+    assert research.status_code == 422
+    assert _export_audits(admin, "export_users") == []

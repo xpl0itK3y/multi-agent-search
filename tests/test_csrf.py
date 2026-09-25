@@ -36,6 +36,27 @@ def test_no_check_when_auth_disabled(monkeypatch):
     assert _is_csrf_violation(_req()) is False
 
 
+def test_auth_disabled_with_admin_emails_checks_a_cookie_session(monkeypatch):
+    """SEC3-2: with ADMIN_EMAILS set, require_admin still authenticates the admin by the
+    session cookie while auth is disabled, so a cross-site request could ride on it."""
+    monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
+    monkeypatch.setattr(settings, "auth_cookie_name", "access_token", raising=False)
+    monkeypatch.setattr(settings, "csrf_cookie_name", "csrf_token", raising=False)
+    session = {"access_token": "cookie.session.jwt", "csrf_token": "tok123"}
+
+    assert _is_csrf_violation(_req(cookies=session)) is True
+    assert _is_csrf_violation(_req(headers={"X-CSRF-Token": "forged"}, cookies=session)) is True
+    assert _is_csrf_violation(_req(method="GET", path="/v1/admin/users/export", cookies=session)) is True
+    assert _is_csrf_violation(_req(headers={"X-CSRF-Token": "tok123"}, cookies=session)) is False
+    assert _is_csrf_violation(_req(headers={"Authorization": "Bearer abc.def.ghi"}, cookies=session)) is False
+    assert _is_csrf_violation(_req(method="GET", path="/v1/admin/users", cookies=session)) is False
+    # No session cookie, or no admin to authenticate: nothing for a forged request to use.
+    assert _is_csrf_violation(_req(cookies={"csrf_token": "tok123"})) is False
+    monkeypatch.setattr(settings, "admin_emails", "", raising=False)
+    assert _is_csrf_violation(_req(cookies=session)) is False
+
+
 def test_safe_methods_pass(auth_on):
     assert _is_csrf_violation(_req(method="GET")) is False
 

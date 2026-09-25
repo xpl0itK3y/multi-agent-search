@@ -37,7 +37,7 @@ from src.auth.login_rate_limit import (
     enforce_login_account_rate_limit,
     enforce_password_check_rate_limit,
 )
-from src.auth.admin_identity import has_admin_rights
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.telemetry_rate_limit import telemetry_user_id
@@ -140,10 +140,16 @@ _CSRF_CHECKED_GET_PATHS = frozenset(
 def _is_csrf_violation(request: Request) -> bool:
     """Double-submit CSRF check for cookie-authenticated mutations and the side-effecting
     GETs in _CSRF_CHECKED_GET_PATHS. Bearer-token requests are exempt (the header can't be
-    forged cross-site); the check is off when auth is disabled.
+    forged cross-site).
     "Bearer-token request" follows the rule authentication uses (request_bearer_token): a
-    header whose token is blank falls back to the cookie there, so it is no exemption."""
-    if settings.auth_disabled:
+    header whose token is blank falls back to the cookie there, so it is no exemption.
+    With auth disabled the session cookie still authenticates one identity once
+    ADMIN_EMAILS is set: the admin that require_admin asks for. So in that mode the check
+    is off only when no such admin can ride on the request (no ADMIN_EMAILS or no session
+    cookie)."""
+    if settings.auth_disabled and (
+        not admin_emails() or not request.cookies.get(settings.auth_cookie_name)
+    ):
         return False
     if request.method in _CSRF_SAFE_METHODS and (
         # A CORS preflight (OPTIONS) carries neither cookies nor the header: never checked.
