@@ -147,7 +147,7 @@ class FinalizeGraphRunner:
                 return {
                     **state,
                     "effective_prompt": graph_state.get("effective_prompt") or prompt,
-                    "canonical_sources": graph_state.get("canonical_sources") or [],
+                    "canonical_sources": graph_state.get("canonical_sources"),
                     "report": saved_report,
                     "resume_from_step": "complete",
                 }
@@ -175,7 +175,7 @@ class FinalizeGraphRunner:
             "detected_conflicts": graph_state.get("detected_conflicts") or [],
             "source_summary": graph_state.get("source_summary") or {},
             "evidence_summary": graph_state.get("evidence_summary") or {},
-            "canonical_sources": graph_state.get("canonical_sources") or [],
+            "canonical_sources": graph_state.get("canonical_sources"),
             "report": graph_state.get("report") or "",
             "resume_from_step": step,
         }
@@ -215,7 +215,9 @@ class FinalizeGraphRunner:
             "detected_conflicts": state.get("detected_conflicts", []),
             "source_summary": state.get("source_summary", {}),
             "evidence_summary": state.get("evidence_summary", {}),
-            "canonical_sources": state.get("canonical_sources", []),
+            # None until analyze has built the [Sn] table, so readers rebuild the pool from
+            # the tasks instead of taking an empty list as the report's (empty) table.
+            "canonical_sources": state.get("canonical_sources"),
             "report": state.get("report", ""),
         }
         meta = GRAPH_STEP_METADATA.get(step, {})
@@ -457,7 +459,7 @@ class FinalizeGraphRunner:
             else:
                 report = analysis_result
                 aggregated_data = state.get("aggregated_data")
-                canonical_sources = state.get("canonical_sources", [])
+                canonical_sources = state.get("canonical_sources")
                 detected_conflicts = state.get("detected_conflicts", [])
             next_state = {
                 **state,

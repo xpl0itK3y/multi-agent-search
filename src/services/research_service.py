@@ -1222,7 +1222,7 @@ class ResearchService(
         """Run a small follow-up web search for a chat question; persists results as a task."""
         task = self.task_store.add_task(
             {
-                "id": f"chat-{uuid.uuid4()}",
+                "id": f"{self._CHAT_TASK_PREFIX}{uuid.uuid4()}",
                 "research_id": research_id,
                 "description": f"Follow-up search: {question[:80]}",
                 "queries": [question],
@@ -1263,21 +1263,13 @@ class ResearchService(
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
-            self.task_store.merge_research_graph_state(
-                research_id,
-                {"canonical_sources": self._canonical_source_table(pool)},
-            )
+        # A copy: the report's pool is read-only here. Mini-search results are numbered after
+        # its ids and live only in this answer's own sources, never in the canonical table.
+        pool = list(self._report_source_pool(research, tasks))
         if self._question_needs_search(question, pool):
             if status_callback:
                 status_callback("searching")
             new_sources = self._mini_search_for_chat(research_id, question, research.depth)
-            tasks = self.task_store.get_tasks_by_research(research_id)
             seen_urls = {source.get("url") for source in pool if source.get("url")}
             source_numbers = [
                 int(source_id[1:])
@@ -1293,10 +1285,6 @@ class ResearchService(
                 pool.append({"source_id": f"S{next_source_number}", **source})
                 seen_urls.add(url)
                 next_source_number += 1
-            self.task_store.merge_research_graph_state(
-                research_id,
-                {"canonical_sources": self._canonical_source_table(pool)},
-            )
         # Retrieve the most relevant sources for this question (not just the first 12).
         pool = self._rank_sources_for_question(question, pool, 12)
         sources = [
@@ -1350,12 +1338,7 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
+        pool = self._report_source_pool(research, tasks)
         return [
             SearchSourcePreview(
                 url=item.get("url", ""),
@@ -1396,12 +1379,7 @@ class ResearchService(
         if not research:
             raise NotFoundError("Research not found")
         tasks = self.task_store.get_tasks_by_research(research_id)
-        pool = self._aggregated_sources(research, tasks)
-        if pool is None:
-            pool = [
-                {"source_id": f"S{index}", **item}
-                for index, item in enumerate(self._build_research_source_pool(tasks), start=1)
-            ]
+        pool = self._report_source_pool(research, tasks)
         evidence_pool = [
             {"source_id": item.get("source_id", ""), "content": item.get("content", "")}
             for item in pool

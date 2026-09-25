@@ -70,10 +70,19 @@ class TrustReportMixin:
             if source.get("source_id") and source.get("url")
         ]
 
+    # Chat follow-up searches are stored as research tasks with this id prefix; they answer a
+    # chat turn and are never sources of the report.
+    _CHAT_TASK_PREFIX = "chat-"
+
+    def _report_tasks(self, tasks: list) -> list:
+        return [task for task in tasks if not str(task.id).startswith(self._CHAT_TASK_PREFIX)]
+
     def _stored_canonical_sources(self, research, tasks: list) -> list[dict] | None:
+        """The persisted [Sn] table with content re-attached, or None while it is not computed.
+
+        Absent or None means "not computed" (legacy runs, and finalization before analyze
+        has built it); only a stored list, even an empty one, is the report's table."""
         state = research.graph_state or {}
-        if "canonical_sources" not in state:
-            return None
         canonical = state.get("canonical_sources")
         if not isinstance(canonical, list):
             return None
@@ -90,7 +99,8 @@ class TrustReportMixin:
         ]
 
     def _aggregated_sources(self, research, tasks: list) -> list | None:
-        """Return the persisted canonical [Sn] pool, falling back for legacy runs."""
+        """Return the persisted canonical [Sn] pool, falling back to the analyzer's
+        reconstruction while it is not computed (legacy runs, finalization before analyze)."""
         stored = self._stored_canonical_sources(research, tasks)
         if stored is not None:
             return stored
@@ -100,11 +110,22 @@ class TrustReportMixin:
             return None
         try:
             effective_prompt = (research.graph_state or {}).get("effective_prompt") or research.prompt
-            aggregated, _ = prepare(effective_prompt, tasks, research.depth)
+            aggregated, _ = prepare(effective_prompt, self._report_tasks(tasks), research.depth)
             return aggregated
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("aggregate_sources_failed research_id=%s error=%s", research.id, exc)
             return None
+
+    def _report_source_pool(self, research, tasks: list) -> list[dict]:
+        """The report's [Sn] source pool for the read endpoints and chat: the canonical table,
+        else the analyzer's reconstruction, else the task pool numbered in task order."""
+        pool = self._aggregated_sources(research, tasks)
+        if pool is not None:
+            return pool
+        return [
+            {"source_id": f"S{index}", **item}
+            for index, item in enumerate(self._build_research_source_pool(self._report_tasks(tasks)), start=1)
+        ]
 
     def _audit_citations(self, report: str, research, tasks: list, aggregated: list | None = None) -> None:
         """Check each [Sn] citation against its source text; store grounding + integrity.

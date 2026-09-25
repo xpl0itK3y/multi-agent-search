@@ -1,4 +1,4 @@
-from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus
+from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus, TaskUpdate
 from src.agents.chat import ChatAgent
 from src.repositories import InMemoryTaskStore
 from src.services import ResearchService
@@ -203,5 +203,107 @@ def test_chat_assigns_new_search_sources_after_existing_canonical_ids(mocker):
     by_url = {source.url: source.source_id for source in message.sources}
     assert by_url["https://existing.example/report"] == "S4"
     assert by_url["https://new.example/report"] == "S5"
+    # The mini-search source belongs to this answer, not to the report's source table.
     stored = store.get_research(research.id).graph_state["canonical_sources"]
-    assert stored[-1]["source_id"] == "S5"
+    assert [source["source_id"] for source in stored] == ["S4"]
+    assert [source.source_id for source in service.get_research_sources(research.id)] == ["S4"]
+
+
+def _research_with_task_pool(store: InMemoryTaskStore, *, depth=SearchDepth.EASY):
+    research = store.add_research(ResearchRequest(prompt="topic", depth=depth), task_ids=["task-1"])
+    store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "collect evidence",
+            "queries": ["topic evidence"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {"url": "https://one.example/a", "title": "One", "content": "first source text"},
+                {"url": "https://two.example/b", "title": "Two", "content": "second source text"},
+            ],
+        }
+    )
+    return research
+
+
+def test_pre_analyze_checkpoint_leaves_the_pool_not_computed(mocker):
+    # collect_context used to checkpoint canonical_sources=[], which every reader took as
+    # the report's (empty) table, so the Sources tab was blank until analyze finished.
+    store = InMemoryTaskStore()
+    research = _research_with_task_pool(store)
+    service = ResearchService(task_store=store, analyzer=CanonicalAnalyzer())
+    runner = service.finalize_graph_runner
+
+    runner._checkpoint(
+        {"research_id": research.id, "prompt": "topic", "tasks": store.get_tasks_by_research(research.id)},
+        "collect_context",
+        "collected",
+    )
+
+    assert store.get_research(research.id).graph_state["canonical_sources"] is None
+    assert [(s.source_id, s.url) for s in service.get_research_sources(research.id)] == [
+        ("S1", "https://one.example/a"),
+        ("S2", "https://two.example/b"),
+    ]
+
+
+def test_run_that_failed_in_analyze_still_lists_the_task_pool():
+    class FailingAnalyzer(CanonicalAnalyzer):
+        def run_analysis(self, prompt, tasks, **kwargs):
+            raise RuntimeError("model outage")
+
+    store = InMemoryTaskStore()
+    research = _research_with_task_pool(store)
+    service = ResearchService(task_store=store, analyzer=FailingAnalyzer())
+
+    try:
+        service.finalize_graph_runner.run(
+            research.id, "topic", store.get_tasks_by_research(research.id), research.depth
+        )
+    except RuntimeError:
+        pass
+
+    state = store.get_research(research.id).graph_state
+    assert state["step"] == "collect_context"
+    assert state.get("canonical_sources") is None
+    assert len(service.get_research_sources(research.id)) == 2
+
+
+def test_an_empty_stored_table_is_still_authoritative():
+    store = InMemoryTaskStore()
+    research = _research_with_task_pool(store)
+    store.merge_research_graph_state(research.id, {"canonical_sources": []})
+    service = ResearchService(task_store=store)
+
+    assert service.get_research_sources(research.id) == []
+
+
+def test_chat_follow_up_tasks_never_enter_the_report_source_fallback(mocker):
+    store = InMemoryTaskStore()
+    research = _research_with_task_pool(store)
+    store.update_research_status(research.id, ResearchStatus.COMPLETED, "Report [S1] [S2].")
+    chat = mocker.Mock()
+    chat.answer.return_value = "Fresh evidence [S3]."
+    service = ResearchService(task_store=store, chat_agent=chat)
+    mocker.patch.object(service, "_question_needs_search", return_value=True)
+
+    def fake_run_task(self, task_id):
+        store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.COMPLETED,
+                result=[{"url": "https://chat.example/new", "title": "New", "content": "fresh evidence"}],
+            ),
+        )
+
+    mocker.patch("src.agents.search.SearchAgent.run_task", fake_run_task)
+
+    message = service.generate_research_answer(research.id, "what is new?")
+
+    assert "https://chat.example/new" in {source.url for source in message.sources}
+    assert "canonical_sources" not in (store.get_research(research.id).graph_state or {})
+    assert [s.url for s in service.get_research_sources(research.id)] == [
+        "https://one.example/a",
+        "https://two.example/b",
+    ]
