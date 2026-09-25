@@ -128,7 +128,9 @@ class TrustReportMixin:
                 for source in aggregated
                 if source.get("source_id")
             }
-            audit = self.citation_auditor.audit(report, sources_by_id)
+            audit = self.citation_auditor.audit(
+                report, sources_by_id, language=self._research_language(research)
+            )
             audit.research_id = research.id
             self.task_store.merge_research_graph_state(research.id, {"citation_audit": audit.model_dump()})
         except Exception as exc:  # pragma: no cover - defensive

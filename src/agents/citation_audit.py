@@ -4,12 +4,16 @@ For every inline ``[Sn]`` citation, check whether the cited source's text actual
 the sentence — by lexical overlap. Reports are frequently written in one language while
 citing sources in another, so matching is LANGUAGE-AWARE:
 
-  * when the source shares the claim's primary language, the full token overlap is scored
-    leniently (the normal same-language case),
+  * when the source is in the report's language (the research's stored language) and
+    shares the claim's script, the full token overlap is scored leniently (the normal
+    same-language case),
   * when it doesn't, only language-agnostic ANCHORS (numbers + Latin names/acronyms like
     "OpenAI", "GPT-5.6", "IPO") can match — these survive across languages, and
   * if a foreign-language source can't be judged from anchors, the claim is "unverified"
     rather than flagged — a foreign-language citation is never falsely called fabricated.
+
+"Foreign" compares each source's detected language with the report language, for every
+language pair (an English source is foreign to a Spanish report as much as to a Russian one).
 
 Integrity is scored over VERIFIABLE claims only (supported / (supported + unsupported)).
 This is a lexical match, not a truth judgement: it catches citations whose source never
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import re
 
+from src.agents.cross_language import detect_language
 from src.domain import CitationAudit, CitationGround
 
 _CITATION = re.compile(r"\[S(\d+)\]")
@@ -34,6 +39,10 @@ _NUM = re.compile(r"\d[\d.,]*")
 _IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MDLINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _URL = re.compile(r"https?://\S+")
+# In Latin-script reports every word is a Latin token, so only name-like ones (inner
+# capitals, digits, or capitalized after the first word) are language-agnostic anchors.
+_LATIN_SCRIPT_LANGUAGES = {"en", "es", "fr", "de", "it", "pt"}
+_LATIN_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.+#-]{2,}")
 
 _NATIVE_T = 0.20    # share of same-language claim terms that must appear in the source
 _ANCHOR_T = 0.50    # share of language-agnostic anchors that must appear (cross-language)
@@ -48,12 +57,19 @@ _STOPWORDS = {
 
 
 class CitationAuditAgent:
-    def audit(self, report: str, sources_by_id: dict[str, dict]) -> CitationAudit:
-        """``sources_by_id``: {"S1": {"content","url","title"}, ...} as the report numbered them."""
+    def audit(
+        self, report: str, sources_by_id: dict[str, dict], language: str | None = None
+    ) -> CitationAudit:
+        """``sources_by_id``: {"S1": {"content","url","title"}, ...} as the report numbered them.
+
+        ``language`` is the report's language (the research's stored language); without it the
+        report text is run through the canonical detector.
+        """
         if not report or not sources_by_id:
             return CitationAudit()
 
-        report_has_cyr = bool(_CYR.search(report.lower()))
+        report_language = language if language and language != "unknown" else detect_language(report)
+        latin_report = report_language in _LATIN_SCRIPT_LANGUAGES
         checks: list[tuple[str, str]] = []          # (claim, status: ok | no | unverified)
         best: dict[str, tuple[float, str, bool]] = {}  # source_id -> (score, quote, single_ok)
         foreign: dict[str, bool] = {}               # source_id -> different language than the report
@@ -73,6 +89,7 @@ class CitationAuditAgent:
             s_lat: set[str] = set()
             s_num: set[str] = set()
             saw_source = False
+            all_foreign = True
             for n in dict.fromkeys(ids):  # dedupe, preserve order
                 source_id = f"S{n}"
                 source = sources_by_id.get(source_id)
@@ -86,7 +103,9 @@ class CitationAuditAgent:
                 s_lat |= t_lat
                 s_num |= t_num
                 if source_id not in foreign:
-                    foreign[source_id] = report_has_cyr and not _CYR.search(content.lower())
+                    source_language = detect_language(content)
+                    foreign[source_id] = source_language not in ("unknown", report_language)
+                all_foreign = all_foreign and foreign[source_id]
                 quote, score = self._best_passage(claim_terms, content)
                 if source_id not in best or score > best[source_id][0]:
                     best[source_id] = (score, quote, score >= _NATIVE_T)
@@ -95,11 +114,12 @@ class CitationAuditAgent:
 
             src_terms = s_cyr | s_cjk | s_lat | s_num
             full_cov = len(claim_terms & src_terms) / len(claim_terms) if claim_terms else 0.0
-            anchors = c_lat | c_num
+            anchors = (self._latin_name_anchors(claim, c_lat) if latin_report else c_lat) | c_num
             anchor_cov = len(anchors & (s_lat | s_num)) / len(anchors) if anchors else 0.0
-            # The source "shares the language" when it has tokens in the claim's primary script.
+            # The source "shares the language" when it is in the report's language and has
+            # tokens in the claim's primary script.
             primary = self._primary(c_cyr, c_cjk, c_lat)
-            shares = (
+            shares = not all_foreign and (
                 (primary == "cyr" and s_cyr)
                 or (primary == "cjk" and s_cjk)
                 or (primary == "lat" and s_lat)
@@ -145,6 +165,21 @@ class CitationAuditAgent:
     def _primary(cyr: set, cjk: set, lat: set) -> str:
         counts = {"cyr": len(cyr), "cjk": len(cjk), "lat": len(lat)}
         return max(counts, key=counts.get)
+
+    @staticmethod
+    def _latin_name_anchors(claim: str, latin_tokens: set[str]) -> set[str]:
+        """Latin tokens of ``claim`` that look like names, acronyms or model ids."""
+        anchors: set[str] = set()
+        for index, match in enumerate(_LATIN_WORD.finditer(claim)):
+            word = match.group(0)
+            name_like = (
+                any(char.isdigit() for char in word)
+                or any(char.isupper() for char in word[1:])
+                or (index > 0 and word[0].isupper())
+            )
+            if name_like and word.lower() in latin_tokens:
+                anchors.add(word.lower())
+        return anchors
 
     @staticmethod
     def _clean(content: str) -> str:
