@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import logging
 import random
@@ -207,6 +208,21 @@ class DeepSeekProvider(LLMProvider):
         )
         return {model_id for model_id in configured if model_id}
 
+    @contextmanager
+    def _llm_slot(self, model: str):
+        """The global LLM concurrency slot for one attempt. The usage the attempt reports
+        (appended to the yielded list) is recorded once the slot is released: the usage sink
+        writes to the database, and a slow pool or a stalled Postgres must not keep a slot
+        from the next call. Reported tokens are billed, so they count even if the call
+        then fails."""
+        reported: list[tuple[int, int, int]] = []
+        try:
+            with get_llm_limiter().slot():
+                yield reported
+        finally:
+            for prompt_tokens, completion_tokens, cache_hit_tokens in reported:
+                self._record_usage(prompt_tokens, completion_tokens, model, cache_hit_tokens=cache_hit_tokens)
+
     def generate(
         self,
         system_prompt: str,
@@ -240,7 +256,7 @@ class DeepSeekProvider(LLMProvider):
             try:
                 # Hold a global concurrency slot for the whole call (incl. streaming) so a
                 # burst of researches can't overrun the provider into 429s.
-                with get_llm_limiter().slot():
+                with self._llm_slot(model) as reported_usage:
                     response = self.client.chat.completions.create(
                         model=model,
                         messages=[
@@ -253,13 +269,7 @@ class DeepSeekProvider(LLMProvider):
 
                     if not use_stream:
                         if response.usage:
-                            pt, ct, cht = self._extract_usage(response.usage)
-                            self._record_usage(
-                                pt,
-                                ct,
-                                model,
-                                cache_hit_tokens=cht,
-                            )
+                            reported_usage.append(self._extract_usage(response.usage))
                         return response.choices[0].message.content
 
                     accumulated = ""
@@ -267,13 +277,7 @@ class DeepSeekProvider(LLMProvider):
                     for chunk in response:
                         # final usage chunk (stream_options include_usage)
                         if chunk.usage:
-                            pt, ct, cht = self._extract_usage(chunk.usage)
-                            self._record_usage(
-                                pt,
-                                ct,
-                                model,
-                                cache_hit_tokens=cht,
-                            )
+                            reported_usage.append(self._extract_usage(chunk.usage))
                         if not chunk.choices:
                             continue
                         delta = chunk.choices[0].delta

@@ -3,13 +3,17 @@ usage sink and attributed to the research/user bound where the call was made. It
 get one row per successful finalization, read from the process-wide provider counter."""
 import threading
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import APIConnectionError
 
 from src.agents.optimizer import PromptOptimizerAgent
 from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskStatus
 from src.bootstrap import _llm_usage_sink
+from src.config import settings
 from src.observability import bind_observability_context, get_observability_context
 from src.providers.deepseek import DeepSeekProvider, calculate_deepseek_cost
 from src.repositories import InMemoryTaskStore
@@ -89,6 +93,70 @@ def test_a_failing_sink_does_not_fail_the_call(caplog):
     with caplog.at_level("WARNING", logger="src.providers.deepseek"):
         assert provider.generate("sys", "user") == "ok"
     assert "llm_usage_record_failed" in caplog.text
+
+
+class _TrackingLimiter:
+    """Stands in for the global LLM limiter and counts the slots currently held."""
+
+    def __init__(self):
+        self.held = 0
+
+    @contextmanager
+    def slot(self):
+        self.held += 1
+        try:
+            yield
+        finally:
+            self.held -= 1
+
+
+class _StubStream:
+    """A streamed completion: content chunks, then the include_usage chunk."""
+
+    def __init__(self, fail_first: bool = False):
+        self.calls = 0
+        self.fail_first = fail_first
+
+    def create(self, model, messages, stream, **kwargs):
+        self.calls += 1
+        if self.fail_first and self.calls == 1:
+            raise APIConnectionError(request=httpx.Request("POST", "https://api.deepseek.com"))
+
+        def chunk(content):
+            return SimpleNamespace(usage=None, choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+
+        usage = SimpleNamespace(prompt_tokens=10, completion_tokens=4, prompt_cache_hit_tokens=0)
+        return iter([chunk("hel"), chunk("lo"), SimpleNamespace(usage=usage, choices=[])])
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_usage_is_recorded_after_the_llm_slot_is_released(monkeypatch, streaming):
+    """The sink writes to the database: a slow pool must not hold a global LLM slot."""
+    limiter = _TrackingLimiter()
+    monkeypatch.setattr("src.providers.deepseek.get_llm_limiter", lambda: limiter)
+    seen = []
+    provider = _provider(lambda **usage: seen.append((limiter.held, usage["research_id"], usage["prompt_tokens"])))
+    if streaming:
+        provider.client = SimpleNamespace(chat=SimpleNamespace(completions=_StubStream()))
+
+    with bind_observability_context(research_id="r-slot"):
+        result = provider.generate("sys", "user", streaming_callback=(lambda _text: None) if streaming else None)
+
+    assert result == ("hello" if streaming else "ok")
+    assert seen == [(0, "r-slot", 10 if streaming else 1234)]  # no slot held, still attributed
+
+
+def test_a_retried_call_records_only_the_attempt_that_reported_usage(monkeypatch):
+    monkeypatch.setattr(settings, "llm_retry_base_delay", 0.0)
+    records = []
+    provider = _provider(lambda **usage: records.append(usage))
+    completions = _StubStream(fail_first=True)
+    provider.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    assert provider.generate("sys", "user", streaming_callback=lambda _text: None) == "hello"
+
+    assert completions.calls == 2
+    assert [(r["prompt_tokens"], r["completion_tokens"]) for r in records] == [(10, 4)]
 
 
 def test_bootstrap_sink_writes_a_row_and_drops_the_local_user():
