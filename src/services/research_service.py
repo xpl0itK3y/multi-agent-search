@@ -341,6 +341,7 @@ class ResearchService(
                 logger.warning("promote_payload_invalid research_id=%s error=%s", item.id, exc)
                 self.task_store.update_research_status(item.id, ResearchStatus.FAILED, "Queued research plan was invalid.")
                 continue
+            self._mark_decompose_requested(item.id)  # it may have queued for longer than recovery waits
             _threading.Thread(
                 target=self.decompose_and_enqueue, args=(item.id, request),
                 daemon=True, name=f"promote-{item.id[:8]}",
@@ -560,16 +561,47 @@ class ResearchService(
     def _clear_decompose_pending(self, research_id: str) -> None:
         """Remove the crash-recovery marker from graph_state after decompose completes."""
         self.task_store.merge_research_graph_state(
-            research_id, remove_keys=["decompose_pending", "decompose_payload"]
+            research_id, remove_keys=["decompose_pending", "decompose_payload", "decompose_requested_at"]
         )
+
+    @staticmethod
+    def _decompose_marker(request: ResearchRequest | None = None) -> dict[str, Any]:
+        """The crash-recovery marker for a decomposition starting now. Recovery ages it on
+        decompose_requested_at: a research that waited in the queue, for clarification
+        answers or for a retry has an old created_at, and aging on that started a second,
+        concurrent decomposition next to the one just launched."""
+        marker: dict[str, Any] = {
+            "decompose_pending": True,
+            "decompose_requested_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if request is not None:
+            marker["decompose_payload"] = request.model_dump(mode="json")
+        return marker
+
+    def _mark_decompose_requested(self, research_id: str, request: ResearchRequest | None = None) -> None:
+        self.task_store.merge_research_graph_state(research_id, self._decompose_marker(request))
+
+    @staticmethod
+    def _decompose_requested_at(research: ResearchRecord) -> datetime | None:
+        stamp = (research.graph_state or {}).get("decompose_requested_at") or research.created_at
+        if isinstance(stamp, str):
+            try:
+                stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if stamp is not None and stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp
 
     def recover_pending_decompositions(self) -> int:
         """Re-schedule decompositions lost during a process crash.
 
         Scans recent PROCESSING researches for those that have ``decompose_pending=True``
-        in graph_state, have no tasks yet, and were created more than
-        ``settings.decompose_recovery_minutes`` minutes ago.  For each such research a
-        fresh daemon thread is launched to replay ``decompose_and_enqueue``.
+        in graph_state, have no tasks yet, and whose decomposition was requested (or, for
+        a research without ``decompose_requested_at``, created) more than
+        ``settings.decompose_recovery_minutes`` minutes ago.  For each such research the
+        request time is re-stamped and a fresh daemon thread replays
+        ``decompose_and_enqueue``, so the next pass does not start a second one.
 
         Returns the number of researches for which recovery was triggered.
         """
@@ -591,13 +623,8 @@ class ResearchService(
                 self._clear_decompose_pending(research.id)
                 continue
             # Too recent — the background task may still be running.
-            created_at = research.created_at
-            if isinstance(created_at, str):
-                try:
-                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                except Exception:
-                    continue
-            if created_at and created_at > stale_threshold:
+            requested_at = self._decompose_requested_at(research)
+            if requested_at is None or requested_at > stale_threshold:
                 continue
             payload = graph_state.get("decompose_payload")
             if not payload:
@@ -611,6 +638,7 @@ class ResearchService(
                 )
                 continue
             logger.info("decompose_recovery_triggered research_id=%s", research.id)
+            self._mark_decompose_requested(research.id)
             _threading.Thread(
                 target=self.decompose_and_enqueue,
                 args=(research.id, req),
@@ -663,8 +691,8 @@ class ResearchService(
 
     # What a failed finalization leaves in graph_state: its graph checkpoint (a retry runs
     # a fresh pass rather than resuming the attempt that failed) and the trust artifacts
-    # the panels would otherwise keep serving. decompose_pending goes too: queue
-    # maintenance would re-run a decomposition the retry has already started.
+    # the panels would otherwise keep serving. The decompose marker goes too; a retry that
+    # decomposes again sets it anew with decompose_requested_at, which recovery ages on.
     _RETRY_RESET_GRAPH_STATE_KEYS = (
         "error",
         "report",
@@ -693,6 +721,7 @@ class ResearchService(
         "stance_balance",
         "cross_language",
         "decompose_pending",
+        "decompose_requested_at",
     )
 
     def retry_research(
@@ -753,7 +782,16 @@ class ResearchService(
         # would make try_begin_finalization refuse and leave no job at all.
         if not self.task_store.try_begin_finalization(research_id):
             return  # cancelled between the admission and here
-        job = self._dispatch_finalize_job(research_id)
+        try:
+            job = self._dispatch_finalize_job(research_id)
+        except Exception as exc:
+            # ANALYZING with no job would be stuck (stale recovery needs a RUNNING job and
+            # retry a FAILED research): hand it back as FAILED so it can be retried at once.
+            # A crash here instead is caught by the stalled-research sweep.
+            self.task_store.transition_research_status(
+                research_id, [ResearchStatus.ANALYZING], ResearchStatus.FAILED, self._failure_message(exc)
+            )
+            raise
         logger.info("research_retry_finalization finalize_job_id=%s", job.id)
 
     def _redispatch_search_tasks(self, tasks: list[SearchTask], depth: SearchDepth) -> None:
@@ -797,6 +835,9 @@ class ResearchService(
                 model=graph_state.get("model"),
                 thread_id=graph_state.get("thread_id"),
             )
+        # The decomposition runs in an API background task: if that process dies first,
+        # queue maintenance replays it from this marker (payload included).
+        self._mark_decompose_requested(research.id, request)
         if background_tasks is not None:
             background_tasks.add_task(self.decompose_and_enqueue, research.id, request)
         else:
@@ -1076,7 +1117,7 @@ class ResearchService(
         self._admit_or_raise(research_id, ResearchStatus.CLARIFYING)
         self.task_store.merge_research_graph_state(
             research_id,
-            {"clarifications": clar, "clarified": True, "decompose_pending": True},
+            {"clarifications": clar, "clarified": True, **self._decompose_marker()},
         )
 
         import threading

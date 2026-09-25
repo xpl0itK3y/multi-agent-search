@@ -7,7 +7,7 @@ search jobs with swapped arguments.
 """
 import threading
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -343,11 +343,16 @@ def test_decompose_retry_replays_the_stored_request_in_the_background():
             self.calls.append((func, args))
 
     background = _Background()
+    store.get_research(research.id).created_at -= timedelta(hours=1)  # an old research
     service.retry_research(research.id, background_tasks=background)
 
     current = store.get_research(research.id)
     assert current.status == ResearchStatus.PROCESSING
-    assert "decompose_pending" not in current.graph_state  # maintenance must not start a second run
+    # The marker ages from the retry, not from created_at: maintenance must not start a
+    # second decomposition next to the background one.
+    assert current.graph_state["decompose_pending"] is True
+    assert current.graph_state["decompose_requested_at"]
+    assert service.recover_pending_decompositions() == 0
     (func, (research_id, request)), = background.calls
     assert func == service.decompose_and_enqueue and research_id == research.id
     assert request.depth == SearchDepth.MEDIUM
@@ -355,6 +360,97 @@ def test_decompose_retry_replays_the_stored_request_in_the_background():
     func(research_id, request)
     assert [task.id for task in store.get_tasks_by_research(research.id)] == ["decomposed-1"]
     assert store.get_latest_search_task_job("decomposed-1").status == SearchJobStatus.PENDING
+    assert not {"decompose_pending", "decompose_requested_at"} & set(store.get_research(research.id).graph_state)
+
+
+def _age_decompose_marker(store, research_id, minutes):
+    graph_state = store.get_research(research_id).graph_state
+    stamp = datetime.fromisoformat(graph_state["decompose_requested_at"]) - timedelta(minutes=minutes)
+    store.merge_research_graph_state(research_id, {"decompose_requested_at": stamp.isoformat()})
+
+
+def test_decompose_retry_lost_with_its_api_process_is_replayed_by_maintenance(monkeypatch):
+    monkeypatch.setattr(settings, "decompose_recovery_minutes", 10)
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = _failed_research(store)
+    replayed = threading.Event()
+    calls = []
+
+    def decompose(research_id, request):
+        calls.append((research_id, request.prompt))
+        replayed.set()
+
+    class _DiesWithTheProcess:
+        def add_task(self, func, *args):
+            pass  # the API process is killed before the background task runs
+
+    service.retry_research(research.id, background_tasks=_DiesWithTheProcess())
+    monkeypatch.setattr(service, "decompose_and_enqueue", decompose)
+    assert service.recover_pending_decompositions() == 0  # it may still be running
+
+    _age_decompose_marker(store, research.id, minutes=11)
+    assert service.recover_pending_decompositions() == 1
+    assert replayed.wait(5)
+    assert calls == [(research.id, "retry this research")]
+    # Re-stamped on replay: the next pass does not start a second one while it runs.
+    assert service.recover_pending_decompositions() == 0
+
+
+def test_a_decomposition_started_on_an_old_research_is_not_doubled_by_recovery(monkeypatch):
+    monkeypatch.setattr(settings, "max_global_active_researches", 1)
+    store = InMemoryTaskStore()
+    service = _service(store)
+    request = ResearchRequest(prompt="queued for a long time", depth=SearchDepth.EASY)
+    research = store.add_research(request, task_ids=[])
+    store.update_research_status(research.id, ResearchStatus.QUEUED)
+    store.merge_research_graph_state(
+        research.id, {"decompose_pending": True, "decompose_payload": request.model_dump(mode="json")}
+    )
+    store.get_research(research.id).created_at -= timedelta(hours=1)
+    started = []
+    monkeypatch.setattr(service, "decompose_and_enqueue", lambda research_id, req: started.append(research_id))
+
+    assert service.promote_queued_researches() == 1
+
+    assert service.recover_pending_decompositions() == 0
+
+
+def test_a_decomposition_after_late_clarification_answers_is_not_doubled_by_recovery(monkeypatch):
+    store = InMemoryTaskStore()
+    service = _service(store)
+    request = ResearchRequest(prompt="answered an hour later", depth=SearchDepth.EASY, plan_first=True)
+    research = store.add_research(request, task_ids=[])
+    store.merge_research_graph_state(
+        research.id,
+        {"decompose_payload": request.model_dump(mode="json"), "clarifications": {"questions": ["Which?"], "answers": []}},
+    )
+    store.update_research_status(research.id, ResearchStatus.CLARIFYING)
+    store.get_research(research.id).created_at -= timedelta(hours=1)
+    monkeypatch.setattr(service, "decompose_and_enqueue", lambda research_id, req: None)
+
+    service.submit_clarifications(research.id, ["This one"])
+
+    assert store.get_research(research.id).graph_state["decompose_pending"] is True
+    assert service.recover_pending_decompositions() == 0
+
+
+def test_retry_that_cannot_dispatch_its_finalize_job_hands_the_research_back_as_failed(monkeypatch):
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = _failed_research(store, _completed_task())
+    _dead_letter_finalize_job(store, research.id)
+
+    def connection_dropped(job_id):
+        raise RuntimeError("DB connection dropped")
+
+    monkeypatch.setattr(store, "requeue_research_finalize_job", connection_dropped)
+    with pytest.raises(RuntimeError):
+        service.retry_research(research.id)
+
+    assert store.get_research(research.id).status == ResearchStatus.FAILED
+    monkeypatch.undo()
+    assert service.retry_research(research.id).status == ResearchStatus.ANALYZING
 
 
 # ── admission and state guards ───────────────────────────────────────────────
