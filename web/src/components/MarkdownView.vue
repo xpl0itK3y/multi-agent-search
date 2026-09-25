@@ -173,7 +173,10 @@ const html = computed(() => {
   // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
   // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
   // Control characters that double as claim sentinels are dropped so report text can't forge one.
+  // Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
+  // numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
   const source = (props.source || "")
+    .replace(/\r\n?/g, "\n")
     .replace(/[\u0001-\u0003]/g, "")
     .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
   const urls = sourceUrlMap(source, props.sources);

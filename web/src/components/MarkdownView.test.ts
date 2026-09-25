@@ -144,6 +144,15 @@ describe("MarkdownView citations", () => {
       "inside a blockquote, escaped pipe",
       "> | Metric | Value | Source |\n> |---|---|---|\n> | Revenue grew | $5B \\| 2024 [S1] | [S1] |\n> | Users | 10M. Up 5% [S2] | [S2] |",
     ],
+    [
+      // markdown-it reads a bare CR as a line break: the table's rows move down a line.
+      "after a bare CR",
+      "Intro line.\rMore context.\n\n| Metric | Value | Source |\n|---|---|---|\n| Revenue grew | $5B in 2024 [S1] | [S1] |\n| Users | 10M. Up 5% [S2] | [S2] |",
+    ],
+    [
+      "CRLF line endings",
+      "| Metric | Value | Source |\r\n|---|---|---|\r\n| Revenue grew | $5B in 2024 [S1] | [S1] |\r\n| Users | 10M. Up 5% [S2] | [S2] |\r\n",
+    ],
   ])("keeps a cited table's cells in verify mode (%s)", (_name, source) => {
     const sources = [
       { source_id: "S1", url: "https://one.example/a" },
