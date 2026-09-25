@@ -310,7 +310,9 @@ class JobQueueMixin:
         return handled
 
     def _finalize_stalled_search(self, research_id: str) -> bool:
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        # Chat follow-up tasks neither gate nor feed the report (see _report_tasks), as in
+        # _maybe_enqueue_finalization: one a dead API process left RUNNING must not fail it.
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         if not tasks or not all(self._search_settled(task) for task in tasks):
             return False
         try:

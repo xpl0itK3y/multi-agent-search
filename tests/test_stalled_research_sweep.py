@@ -159,6 +159,37 @@ def test_sweep_finalizes_a_research_whose_searches_all_settled():
     assert store.get_research(research.id).final_report == "report over t1"
 
 
+def test_sweep_finalizes_past_a_chat_follow_up_task_left_running():
+    """A chat mini-search runs inline in the API process with no search job; one that
+    process died in stays RUNNING. It neither gates nor feeds the report, so the sweep
+    finalizes over the report tasks instead of failing the research."""
+    store, broker, service = _service()
+    chat_id = f"{service._CHAT_TASK_PREFIX}orphaned"
+    research = _research(store, _completed("t1"), {"id": chat_id, "status": TaskStatus.RUNNING})
+    job = store.add_search_task_job("t1", SearchDepth.EASY.value)
+    store.update_search_task_job(job.id, SearchJobStatus.COMPLETED)
+    _idle_for(store, research.id)
+
+    assert service.sweep_stalled_researches() == [research.id]
+
+    assert store.get_research(research.id).status == ResearchStatus.ANALYZING
+    finalize = store.get_latest_research_finalize_job(research.id)
+    assert finalize.status == FinalizeJobStatus.PENDING and broker.finalize == [finalize.id]
+    service.process_finalize_job(finalize.id)
+    assert store.get_research(research.id).final_report == "report over t1"
+
+
+def test_sweep_does_not_finalize_a_research_with_only_chat_tasks():
+    store, broker, service = _service()
+    research = _research(store, _completed(f"{service._CHAT_TASK_PREFIX}only"))
+    _idle_for(store, research.id)
+
+    assert service.sweep_stalled_researches() == [research.id]
+
+    assert store.get_research(research.id).status == ResearchStatus.FAILED
+    assert broker.finalize == [] and store.get_latest_research_finalize_job(research.id) is None
+
+
 def test_sweep_fails_an_analyzing_research_left_without_a_live_finalize_job():
     store, broker, service = _service()
     research = _research(store, _completed("t1"), status=ResearchStatus.ANALYZING)
