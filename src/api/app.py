@@ -194,18 +194,35 @@ def _owner_job_view(job):
 # Cells a spreadsheet would evaluate as a formula (OWASP CSV injection): = + - @, tab, CR.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 _CSV_FORMULA_TRIGGERS = frozenset("=+-@")
+# Excel opens a double-clicked .csv with the OS list separator, which is ';', not ',',
+# in the ru, kk, es and de locales. There a line is one run of text cut at each ';', and
+# the quotes the writer puts around a cell (past the first) fall mid-field, where they
+# quote nothing: the text after a ';' in a cell becomes a cell of its own, and the text
+# after a CR or LF starts a new row. Each such piece is checked like a whole cell, and
+# past any '"' too: the writer doubles each '"' of a quoted cell, and a piece opening
+# with '""=' is not one to trust a spreadsheet to read as text.
+_CSV_PIECE_BREAKS = frozenset(";\r\n")
+_CSV_PIECE_BREAK_RE = re.compile(r"[;\r\n]")
+_CSV_PIECE_PREFIXES = tuple(p for p in _CSV_FORMULA_PREFIXES if p not in _CSV_PIECE_BREAKS)
 # Rows per DB page while streaming an admin CSV export.
 ADMIN_EXPORT_PAGE_SIZE = 500
 
 
-def _starts_like_formula(value: str) -> bool:
-    if value.startswith(_CSV_FORMULA_PREFIXES):
+def _starts_like_formula(value: str, start: int = 0, *, piece: bool = False) -> bool:
+    """Whether value[start:] starts like a formula. For a ``piece`` (the text after a
+    ';', CR or LF) the search for its first visible character ends at the next break,
+    where the next piece begins: that one is checked on its own, which also keeps a
+    cell made of many breaks linear to check."""
+    if value.startswith(_CSV_PIECE_PREFIXES if piece else _CSV_FORMULA_PREFIXES, start):
         return True
     # Spreadsheets trim leading blanks before parsing a cell, and invisible characters
     # (NBSP, zero-width space, BOM) hide a trigger from a plain startswith check; the
     # fullwidth and small forms (＝ ＋ － ＠, ﹦ ...) fold to the ASCII ones under NFKC.
-    for char in value:
-        if char.isspace() or unicodedata.category(char) == "Cf":
+    for index in range(start, len(value)):
+        char = value[index]
+        if piece and char in _CSV_PIECE_BREAKS:
+            return False
+        if char.isspace() or unicodedata.category(char) == "Cf" or (piece and char == '"'):
             continue
         return unicodedata.normalize("NFKC", char) in _CSV_FORMULA_TRIGGERS
     return False
@@ -215,10 +232,22 @@ def csv_safe(value: object) -> object:
     """A text cell that starts like a formula gets a leading single quote, so Excel or
     Sheets show it as text instead of running it (a user-chosen name or prompt such as
     '=HYPERLINK(...)' in an admin export). "Starts" means the first visible character,
-    so leading whitespace or zero-width characters do not hide it. Numbers pass through."""
-    if isinstance(value, str) and _starts_like_formula(value):
-        return "'" + value
-    return value
+    so leading whitespace or zero-width characters do not hide it. The same goes for
+    the text after each ';', CR or LF in the cell (see _CSV_PIECE_BREAKS): its quote
+    goes right after the break. Numbers pass through."""
+    if not isinstance(value, str):
+        return value
+    cuts = [
+        match.end()
+        for match in _CSV_PIECE_BREAK_RE.finditer(value)
+        if _starts_like_formula(value, match.end(), piece=True)
+    ]
+    if cuts:
+        pieces = [value[begin:end] for begin, end in zip([0, *cuts], [*cuts, len(value)])]
+        safe = "'".join(pieces)
+    else:
+        safe = value
+    return "'" + safe if _starts_like_formula(value) else safe
 
 
 def stream_csv(

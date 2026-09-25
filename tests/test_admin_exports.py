@@ -5,6 +5,7 @@ The app tests also run on the Postgres store over one shared database (postgres-
 CI job), so each test checks only the rows it created."""
 import csv
 import io
+import time
 import uuid
 
 import pytest
@@ -26,7 +27,6 @@ def test_csv_safe_quotes_formula_like_text(value):
     "value",
     [
         " =1+1",
-        "\n=1+1",
         "  \t@SUM(A1)",
         "\u00a0=1+1",  # NBSP
         "\u200b=1+1",  # zero-width space
@@ -46,10 +46,46 @@ def test_csv_safe_sees_through_leading_blanks_and_fullwidth_triggers(value):
 
 
 @pytest.mark.parametrize(
-    "value", ["plain", "a=1", "", "   ", "\u200b", " plain =1", "\u00a0text", "\uff41", 42, -1, 0.5, None]
+    ("value", "expected"),
+    [
+        ("x;=1+1", "x;'=1+1"),
+        ("x; =1+1", "x;' =1+1"),
+        ("x;\u200b=1+1", "x;'\u200b=1+1"),
+        ("x;\uff1d1+1", "x;'\uff1d1+1"),
+        ('x;"=1+1', "x;'\"=1+1"),
+        ("x;\tcmd", "x;'\tcmd"),
+        ("a;b;@SUM(A1);c", "a;b;'@SUM(A1);c"),
+        ("=1;+2", "'=1;'+2"),
+        ("line\n=1+1", "line\n'=1+1"),
+        ("line\r\n-2+3", "line\r\n'-2+3"),
+        ("x;\r=1", "x;\r'=1"),
+        ("\n=1+1", "'\n'=1+1"),
+    ],
+)
+def test_csv_safe_checks_each_piece_a_semicolon_or_line_break_starts(value, expected):
+    """SEC3-4: Excel splits a .csv on ';' in ru/kk/es/de locales, where the writer's quotes
+    fall mid-line and protect nothing: the text after a ';' in a cell becomes a cell of its
+    own, and the text after a CR or LF a new row."""
+    assert csv_safe(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plain", "a=1", "", "   ", "\u200b", " plain =1", "\u00a0text", "\uff41", 42, -1, 0.5, None,
+        "a;b", "1;2;3", "x;", "x;;", "a\nb", "list;\r\nnext", "note: a-b; c=d",
+    ],
 )
 def test_csv_safe_leaves_other_cells_alone(value):
     assert csv_safe(value) == value
+
+
+def test_csv_safe_stays_linear_in_the_number_of_breaks():
+    # Each piece's scan stops at the next break, so a prompt of blank lines costs one pass.
+    started = time.perf_counter()
+    assert csv_safe("\n" * 100_000 + "=1") == "'" + "\n" * 100_000 + "'=1"
+    assert csv_safe("; " * 100_000) == "; " * 100_000
+    assert time.perf_counter() - started < 1.0
 
 
 def test_stream_csv_pages_until_a_short_page_and_skips_repeats(monkeypatch):
@@ -85,6 +121,7 @@ async def test_users_export_streams_every_page_and_quotes_a_formula_name(client,
     for user_id in ids:
         store.create_user(user_id, f"{user_id}@example.com", None)
     store.update_user_profile(ids[3], "=1+1", None)
+    store.update_user_profile(ids[4], "Ivan;=HYPERLINK(1)\r\n@SUM(A1)", None)
     pages = []
     real_list = store.get_admin_users_list
 
@@ -105,6 +142,7 @@ async def test_users_export_streams_every_page_and_quotes_a_formula_name(client,
     assert sorted(user_id for user_id in exported if user_id in ids) == sorted(ids)
     assert len(exported) == len(set(exported))
     assert next(row for row in rows if row[0] == ids[3])[2] == "'=1+1"
+    assert next(row for row in rows if row[0] == ids[4])[2] == "Ivan;'=HYPERLINK(1)\r\n'@SUM(A1)"
     # Every page is a 2-row DB read, until the first short one: 5+ users take 3+ pages.
     assert pages == [(page, 2) for page in range(1, len(pages) + 1)] and len(pages) >= 3
     for user_id in ids:
