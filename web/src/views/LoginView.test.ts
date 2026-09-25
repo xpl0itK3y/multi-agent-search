@@ -51,6 +51,14 @@ describe("LoginView", () => {
     expect(wrapper.find("p.text-red-400").exists()).toBe(false);
   });
 
+  it("explains oauth_conflict as an account linked to another Google identity", () => {
+    // A Google sign-in now links to an existing account with this email; the callback
+    // refuses only an account that is linked to a different Google identity.
+    for (const loc of ["ru", "en", "es"] as const) {
+      expect(i18n.global.getLocaleMessage(loc).auth.oauthConflict, loc).toMatch(/Google.*Google/);
+    }
+  });
+
   it("tells a would-be admin how to get a password (no first-password-on-login)", async () => {
     const wrapper = await mountAt("/login?redirect=/admin");
 
