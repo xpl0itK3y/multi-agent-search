@@ -9,7 +9,9 @@ The postgres leg shares the conftest throwaway database (migrated to head),
 so it never depends on a developer's working database.
 """
 import ast
+import hashlib
 import inspect
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -19,6 +21,7 @@ import pytest
 from sqlalchemy import event, select, update
 
 from src.api.schemas import (
+    AuthActionPurpose,
     FinalizeJobStatus,
     ResearchRequest,
     ResearchStatus,
@@ -30,6 +33,7 @@ from src.api.schemas import (
 from src.config import settings
 from src.db.models import (
     AdminAuditLogORM,
+    AuthActionTokenORM,
     LLMUsageLogORM,
     ResearchFinalizeJobORM,
     ResearchORM,
@@ -105,6 +109,7 @@ _SQL_ROWS = {
     "audit": (AdminAuditLogORM, AdminAuditLogORM.id),
     "event": (UserEventORM, UserEventORM.id),
     "user": (UserORM, UserORM.id),
+    "token": (AuthActionTokenORM, AuthActionTokenORM.id),
 }
 
 
@@ -119,6 +124,8 @@ def _backdate(store, kind, row_id, **timestamps):
         store.user_telemetry.setdefault(row_id, {}).update(timestamps)
     elif kind == "cache":
         store.search_cache[row_id] = (timestamps["created_at"], store.search_cache[row_id][1])
+    elif kind == "token":
+        store.auth_action_tokens[row_id].update(timestamps)
     elif kind == "event":
         next(e for e in store.user_events if e["id"] == row_id).update(timestamps)
     else:
@@ -931,6 +938,185 @@ def test_admin_provisioning_stamp_is_written_with_the_password(store):
     linked = store.create_user(f"l-{tag}", f"l-{tag}@example.com", None, google_subject=f"sub-l-{tag}")
     assert store.get_user_by_google_subject(f"sub-l-{tag}").admin_provisioned_at is None
     assert linked.admin_provisioned_at is None
+
+
+def test_only_an_identity_that_arrives_verified_is_created_verified(store):
+    """users.email_verified_at (AUTH-RECOVERY): Google verified the address, the operator
+    vouched for it; a plain sign-up proves nothing. As migration 000033's backfill."""
+    tag = uuid.uuid4().hex[:8]
+    plain = store.create_user(f"v-{tag}", f"v-{tag}@example.com", "hash")
+    google = store.create_user(f"vg-{tag}", f"vg-{tag}@example.com", None, google_subject=f"sub-v-{tag}")
+    provisioned = store.create_user(f"vp-{tag}", f"vp-{tag}@example.com", "hash", admin_provisioned=True)
+
+    assert plain.email_verified_at is None
+    assert google.email_verified_at is not None
+    assert store.get_user_by_id(provisioned.id).email_verified_at == provisioned.email_verified_at is not None
+    assert store.update_user_password(plain.id, "hash-2").email_verified_at is None  # self-service
+    stamped = store.update_user_password(plain.id, "hash-3", admin_provisioned=True)
+    assert stamped.email_verified_at is not None
+    # A later provisioning keeps the first stamp.
+    again = store.update_user_password(plain.id, "hash-4", admin_provisioned=True)
+    assert again.email_verified_at == stamped.email_verified_at
+
+
+def test_linking_google_keeps_or_clears_the_password_in_one_write(store):
+    tag = uuid.uuid4().hex[:8]
+    verified = store.create_user(f"lk-{tag}", f"lk-{tag}@example.com", "hash-v", admin_provisioned=True)
+    unverified = store.create_user(f"lu-{tag}", f"lu-{tag}@example.com", "hash-u")
+
+    kept = store.link_user_google_subject(verified.id, f"sub-lk-{tag}", clear_password=False)
+    assert (kept.google_subject, kept.password_hash, kept.token_version) == (
+        f"sub-lk-{tag}",
+        "hash-v",
+        verified.token_version,
+    )
+    assert kept.email_verified_at == verified.email_verified_at  # the first stamp stays
+
+    cleared = store.link_user_google_subject(unverified.id, f"sub-lu-{tag}", clear_password=True)
+    assert (cleared.password_hash, cleared.token_version) == (None, unverified.token_version + 1)
+    assert cleared.email_verified_at is not None
+    assert store.get_user_by_google_subject(f"sub-lu-{tag}") == cleared
+
+    # Never re-linked, never a subject another account holds, never a missing account.
+    assert store.link_user_google_subject(unverified.id, f"sub-other-{tag}", clear_password=True) is None
+    third = store.create_user(f"lt-{tag}", f"lt-{tag}@example.com", "hash-t")
+    assert store.link_user_google_subject(third.id, f"sub-lk-{tag}", clear_password=False) is None
+    assert store.get_user_by_id(third.id) == third
+    assert store.link_user_google_subject(f"missing-{tag}", f"sub-m-{tag}", clear_password=False) is None
+
+
+# ── one-time links (auth_action_tokens) ───────────────────────────────────────
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _in(minutes: float) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+
+def _link(store, user, purpose, token, *, email=None, expires_at=None, requested_ip=None):
+    return store.create_auth_action_token(
+        user.id, purpose, _hash(token), email or user.email, expires_at or _in(60), requested_ip=requested_ip
+    )
+
+
+def test_a_new_link_invalidates_the_older_unused_links_of_its_purpose(store):
+    user = store.create_user(f"t-{uuid.uuid4().hex[:8]}", "Link.Owner@Example.com", "hash-1")
+    first = _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-1", requested_ip="203.0.113.9" * 10)
+    verification = _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-1")
+    second = _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-2")
+
+    assert first.purpose == AuthActionPurpose.PASSWORD_RESET and first.used_at is None
+    assert first.email == "link.owner@example.com" and first.user_id == user.id
+    assert len(first.requested_ip) == 64  # clipped to the column
+    assert first.id != second.id != verification.id
+    assert store.reset_password_with_token(_hash("reset-1"), "hash-2") is None  # superseded
+    assert store.reset_password_with_token(_hash("reset-2"), "hash-2").password_hash == "hash-2"
+    assert store.verify_email_with_token(_hash("verify-1")) is not None  # another purpose: kept
+
+    assert store.create_auth_action_token(
+        f"missing-{uuid.uuid4().hex[:8]}", AuthActionPurpose.PASSWORD_RESET, _hash("nobody"), "x@example.com", _in(60)
+    ) is None
+
+
+def test_a_reset_link_redeems_once_and_revokes_every_session(store):
+    user = store.create_user(f"r-{uuid.uuid4().hex[:8]}", f"r-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
+    link = _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-once")
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-other")
+    _backdate(store, "token", link.id, used_at=None)  # two live links (as two racing requests could leave)
+
+    assert store.verify_email_with_token(_hash("reset-once")) is None  # the wrong purpose
+    reset = store.reset_password_with_token(_hash("reset-once"), "hash-2")
+
+    assert (reset.password_hash, reset.token_version) == ("hash-2", user.token_version + 1)
+    assert reset.email_verified_at is not None  # the link proved the mailbox
+    assert store.get_user_by_id(user.id) == reset
+    assert store.reset_password_with_token(_hash("reset-once"), "hash-3") is None  # used
+    assert store.reset_password_with_token(_hash("reset-other"), "hash-3") is None  # invalidated with it
+    assert store.reset_password_with_token(_hash("never-issued"), "hash-3") is None
+    assert store.get_user_by_id(user.id).password_hash == "hash-2"
+
+
+def test_an_expired_link_or_one_sent_to_another_address_does_not_redeem(store):
+    user = store.create_user(f"e-{uuid.uuid4().hex[:8]}", f"e-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
+    expired = _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-expired")
+    _backdate(store, "token", expired.id, expires_at=_in(-1))
+    assert store.verify_email_with_token(_hash("verify-expired")) is None
+
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-elsewhere", email="previous@example.com")
+    assert store.reset_password_with_token(_hash("reset-elsewhere"), "hash-2") is None
+    unchanged = store.get_user_by_id(user.id)
+    assert (unchanged.password_hash, unchanged.token_version, unchanged.email_verified_at) == (
+        "hash-1",
+        user.token_version,
+        None,
+    )
+
+
+def test_a_verification_link_marks_the_email_verified_once_and_keeps_the_first_stamp(store):
+    user = store.create_user(f"m-{uuid.uuid4().hex[:8]}", f"m-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
+    _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-a")
+
+    verified = store.verify_email_with_token(_hash("verify-a"))
+
+    assert verified.email_verified_at is not None
+    assert (verified.password_hash, verified.token_version) == ("hash-1", user.token_version)
+    assert store.verify_email_with_token(_hash("verify-a")) is None
+    _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-b")
+    assert store.verify_email_with_token(_hash("verify-b")).email_verified_at == verified.email_verified_at
+
+
+def test_a_link_redeems_once_under_concurrent_redeems(store):
+    user = store.create_user(f"c-{uuid.uuid4().hex[:8]}", f"c-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-race")
+    results: list = []
+    start = threading.Barrier(6)
+
+    def redeem(index: int) -> None:
+        start.wait()
+        results.append(store.reset_password_with_token(_hash("reset-race"), f"hash-race-{index}"))
+
+    threads = [threading.Thread(target=redeem, args=(index,)) for index in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    winners = [result for result in results if result is not None]
+    assert len(results) == 6 and len(winners) == 1
+    assert store.get_user_by_id(user.id).token_version == user.token_version + 1
+
+
+def test_link_cleanup_deletes_expired_and_used_links_across_batches(store):
+    store._RETENTION_BATCH_SIZE = 2  # the SQL store deletes in batches of this size
+    tag = uuid.uuid4().hex[:8]
+    users = [store.create_user(f"k-{index}-{tag}", f"k-{index}-{tag}@example.com", "h") for index in range(5)]
+    live = _link(store, users[0], AuthActionPurpose.PASSWORD_RESET, "live")
+    for index, user in enumerate(users[1:], start=1):
+        expired = _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, f"old-{index}")
+        _backdate(store, "token", expired.id, expires_at=_in(-10))
+    _link(store, users[1], AuthActionPurpose.PASSWORD_RESET, "used")
+    store.reset_password_with_token(_hash("used"), "hash-2")
+
+    assert store.cleanup_auth_action_tokens(_in(-60)) == 0  # nothing ended an hour ago
+    assert store.cleanup_auth_action_tokens(_in(1)) == 5
+    assert store.reset_password_with_token(_hash("live"), "hash-2") is not None
+    assert live.used_at is None
+
+
+def test_deleting_a_user_deletes_their_links(store):
+    tag = uuid.uuid4().hex[:8]
+    user = store.create_user(f"d-{tag}", f"d-{tag}@example.com", "hash-1")
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, f"reset-{tag}")
+
+    assert store.delete_user(user.id) is True
+    again = store.create_user(f"d-{tag}", f"d-{tag}@example.com", "hash-new")
+
+    assert store.reset_password_with_token(_hash(f"reset-{tag}"), "hash-2") is None  # the row is gone
+    assert store.get_user_by_id(again.id).password_hash == "hash-new"
+    assert store.cleanup_auth_action_tokens(_in(24 * 60)) == 0
 
 
 # ── heartbeats, queue metrics, cache ──────────────────────────────────────────
