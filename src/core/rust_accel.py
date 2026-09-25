@@ -382,6 +382,12 @@ def sanitize_citations(report: str, valid_source_ids: set[str]) -> str:
     return sanitized
 
 
+# Reason codes of heuristic conflict candidates. The native module emits the same English
+# strings (native/text_processing/src/lib.rs); the analyzer maps both to the report language.
+CONFLICT_REASON_NEGATION = "one source affirms the claim while the other negates it"
+CONFLICT_REASON_FIGURES = "the sources report different concrete figures"
+
+
 def detect_conflicts(
     aggregated_data: list[dict],
     stopwords: set[str],
@@ -480,9 +486,9 @@ def detect_conflicts(
             if pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)
-            reason = "one source affirms the claim while the other negates it"
+            reason = CONFLICT_REASON_NEGATION
             if left["has_negation"] == right["has_negation"]:
-                reason = "the sources report different concrete figures"
+                reason = CONFLICT_REASON_FIGURES
             conflicts.append(
                 {
                     "topic": ", ".join(shared[:3]) or "source disagreement",

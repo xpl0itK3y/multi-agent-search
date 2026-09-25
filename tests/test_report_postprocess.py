@@ -68,3 +68,76 @@ def test_conflicts_are_inserted_before_extended_conclusion_heading():
     result = agent._inject_conflicts_section(report, conflicts, "en")
 
     assert result.index("## Conflicts And Uncertainties") < result.index("## Conclusion / Bottom Line")
+
+
+_COST_CONFLICT = {
+    "topic": "cost",
+    "reason": "",
+    "source_ids": ["S1", "S2"],
+    "sentences": ["The total cost was 10 in 2024.", "The total cost was 20 in 2024."],
+}
+
+
+def test_conflicts_without_a_conclusion_heading_survive_the_sources_rebuild():
+    # No conclusion-like heading: the section used to be appended after the auto-added
+    # "## Sources" heading, and _rebuild_sources_section then cut it off with the sources.
+    agent = _agent()
+    report = agent._post_process_report("## Summary\nCosts differ [S1].\n\n## Recommendations\nBudget [S2].", "en")
+    sources = [
+        {"source_id": "S1", "url": "https://a.example", "title": "A", "content": "cost 10"},
+        {"source_id": "S2", "url": "https://b.example", "title": "B", "content": "cost 20"},
+    ]
+
+    with_conflicts = agent._inject_conflicts_section(report, [_COST_CONFLICT], "en")
+    rebuilt = agent._rebuild_sources_section(with_conflicts, sources, "en")
+
+    assert "## Conflicts And Uncertainties" in rebuilt
+    assert rebuilt.index("## Recommendations") < rebuilt.index("## Conflicts And Uncertainties")
+    assert rebuilt.index("## Conflicts And Uncertainties") < rebuilt.index("## Sources")
+
+
+def test_conflicts_section_is_written_in_spanish_for_a_spanish_report():
+    agent = _agent()
+    result = agent._inject_conflicts_section("## Resumen\nTexto.", [_COST_CONFLICT], "es")
+
+    assert "## Contradicciones e incertidumbres" in result
+    assert "- Tema: cost. Motivo: discrepancia sustancial." in result
+    assert agent.CONFLICT_HEADING_PATTERN.search(result)  # a second pass does not add it twice
+
+
+class _EmptyReasonAdjudicator(LLMProvider):
+    def __init__(self):
+        self.system_prompts = []
+
+    def generate(self, system_prompt, user_prompt, **kwargs):
+        self.system_prompts.append(system_prompt)
+        return '{"decisions": [{"index": 0, "conflict": true, "reason": ""}]}'
+
+
+def test_adjudicated_conflict_reasons_are_requested_and_filled_in_the_report_language(mocker):
+    from src.core import rust_accel
+
+    llm = _EmptyReasonAdjudicator()
+    agent = AnalyzerAgent(llm)
+    candidate = {**_COST_CONFLICT, "reason": rust_accel.CONFLICT_REASON_FIGURES}
+    mocker.patch.object(agent, "_detect_conflict_candidates", return_value=[candidate])
+
+    conflicts = agent._detect_conflicts([], language="ru")
+
+    assert "Write every reason in Russian" in llm.system_prompts[0]
+    assert "conflict adjudicator" in llm.system_prompts[0]
+    assert conflicts[0]["reason"] == "источники приводят разные конкретные значения"
+    section = agent._inject_conflicts_section("## Итог\nВывод.", conflicts, "ru")
+    assert "Причина: источники приводят разные конкретные значения." in section
+    assert rust_accel.CONFLICT_REASON_FIGURES not in section
+
+
+def test_native_conflict_reasons_match_the_python_reason_codes():
+    # The analyzer localizes heuristic reasons by these codes, whichever backend produced them.
+    from pathlib import Path
+
+    from src.core import rust_accel
+
+    lib = (Path(__file__).resolve().parents[1] / "native/text_processing/src/lib.rs").read_text(encoding="utf-8")
+    assert f'"{rust_accel.CONFLICT_REASON_NEGATION}"' in lib
+    assert f'"{rust_accel.CONFLICT_REASON_FIGURES}"' in lib
