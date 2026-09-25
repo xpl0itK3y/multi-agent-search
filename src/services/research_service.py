@@ -771,7 +771,10 @@ class ResearchService(
         if research.status != ResearchStatus.FAILED:
             raise ConflictError("Only failed research can be retried")
 
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        # Chat follow-up searches are not part of the report: a failed one must not force the
+        # search path (it would be redispatched as a report search), nor a completed one feed
+        # the retried report, and they survive a replan along with the chat they answered.
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         # A plan none of whose tasks was ever dispatched is what a failed decomposition used
         # to persist ('Could not generate a search plan'): searching it would only run the
         # parse fallback or empty tasks, so it is dropped and the request decomposed again.
@@ -1510,7 +1513,9 @@ class ResearchService(
         claim_summary = self.claim_verifier.verify_and_downgrade(report, language, [], [])[1]
         return self.report_critic.build(
             research_id,
-            tasks,
+            # Plan coverage is over the report's plan; a chat follow-up search is not a
+            # sub-question the report was meant to answer.
+            self._report_tasks(tasks),
             evidence_groups,
             report,
             claim_summary=claim_summary,
@@ -1855,7 +1860,8 @@ class ResearchService(
         ]:
             return research
 
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        # Chat follow-up tasks neither gate nor feed the report (see _report_tasks).
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         all_done = all(t.status in [TaskStatus.COMPLETED, TaskStatus.FAILED] for t in tasks)
         any_failed = any(t.status == TaskStatus.FAILED for t in tasks)
 
@@ -2061,7 +2067,8 @@ class ResearchService(
                 # the (cancelled) record so the contract stays ResearchRecord, never None (AUD-033)
                 return research
 
-            tasks = self.task_store.get_tasks_by_research(research_id)
+            # The report is built from its own plan only, never from chat follow-up searches.
+            tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
             analyzer = self.require_agent(self.analyzer, "Analyzer")
 
             # reset token counter before this analysis run
@@ -2618,7 +2625,7 @@ class ResearchService(
             ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED
         ):
             return
-        tasks = self.task_store.get_tasks_by_research(research_id)
+        tasks = self._report_tasks(self.task_store.get_tasks_by_research(research_id))
         if not tasks:
             return
         if all(self._search_settled(task) for task in tasks):

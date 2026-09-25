@@ -535,7 +535,9 @@ class TrustReportMixin:
         tasks = self.task_store.get_tasks_by_research(research_id)
         state = research.graph_state or {}
 
-        plan = [t.description for t in tasks if (t.description or "").strip()]
+        # The plan and its queries are the report's; chat follow-up searches are not.
+        report_tasks = self._report_tasks(tasks)
+        plan = [t.description for t in report_tasks if (t.description or "").strip()]
         queries = [
             AuditQuery(
                 task=t.description or "",
@@ -543,7 +545,7 @@ class TrustReportMixin:
                 status=getattr(t.status, "value", str(t.status)),
                 result_count=len(t.result or []),
             )
-            for t in tasks
+            for t in report_tasks
         ]
 
         sources = self._audit_sources(research, tasks)
