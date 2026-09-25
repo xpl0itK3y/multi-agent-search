@@ -2372,7 +2372,11 @@ class ResearchService(
         # Atomic single-winner transition into ANALYZING. Concurrent callers across replicas
         # (or a re-delivered search job completing the same research) lose the CAS and must NOT
         # enqueue a duplicate finalize job. Also rejects terminal/already-finalizing states.
-        if not self.task_store.try_begin_finalization(research_id):
+        # The store checks again that every search is settled, under the lock an admin
+        # requeue takes: one committed between the settled read above and this CAS left a
+        # PENDING task and job, and finalizing then drained the requeued search. That job's
+        # own settling calls back here once it is done.
+        if not self.task_store.try_begin_finalization(research_id, require_settled_searches=True):
             return research, None
 
         with bind_observability_context(research_id=research_id):

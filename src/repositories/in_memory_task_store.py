@@ -580,21 +580,37 @@ class InMemoryTaskStore:
             self._emit_change(research_id)
             return True
 
-    def try_begin_finalization(self, research_id: str) -> bool:
+    def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this
-        caller won the transition (single-winner finalize enqueue)."""
-        research = self.researches.get(research_id)
-        if research is None or research.status in (
-            ResearchStatus.ANALYZING,
-            ResearchStatus.COMPLETED,
-            ResearchStatus.FAILED,
-            ResearchStatus.CANCELLED,
-        ):
-            return False
-        research.status = ResearchStatus.ANALYZING
-        research.updated_at = datetime.now(timezone.utc)
+        caller won the transition (single-winner finalize enqueue). With
+        require_settled_searches it also refuses while a task of the research that has not
+        COMPLETED has a PENDING or RUNNING search job, checked under the lock
+        requeue_search_task_job_of_active_research takes: a requeue landing after the
+        caller found every search settled then keeps the research searching."""
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status in (
+                ResearchStatus.ANALYZING,
+                ResearchStatus.COMPLETED,
+                ResearchStatus.FAILED,
+                ResearchStatus.CANCELLED,
+            ):
+                return False
+            if require_settled_searches and self._has_unsettled_search(research_id):
+                return False
+            research.status = ResearchStatus.ANALYZING
+            research.updated_at = datetime.now(timezone.utc)
         self._emit_change(research_id)
         return True
+
+    def _has_unsettled_search(self, research_id: str) -> bool:
+        for job in self.search_jobs.values():
+            if job.status not in self._ACTIVE_SEARCH_STATUSES:
+                continue
+            task = self.tasks.get(job.task_id)
+            if task is not None and task.research_id == research_id and task.status != TaskStatus.COMPLETED:
+                return True
+        return False
 
     def add_task(self, task_data: dict) -> SearchTask:
         # No results read back as None, as on the SQL store (where they are rows).

@@ -721,9 +721,13 @@ class SQLAlchemyTaskStore:
             self._emit_change(research_id)
         return claimed
 
-    def try_begin_finalization(self, research_id: str) -> bool:
+    def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this caller
-        won — prevents two replicas from enqueueing duplicate finalize jobs for one research."""
+        won — prevents two replicas from enqueueing duplicate finalize jobs for one research.
+        With require_settled_searches it also refuses while a task of the research that has
+        not COMPLETED has a PENDING or RUNNING search job, checked under the research row
+        lock that requeue_search_task_job_of_active_research takes first: a requeue committed
+        after the caller found every search settled then keeps the research searching."""
         terminal = [
             ResearchStatus.ANALYZING.value,
             ResearchStatus.COMPLETED.value,
@@ -731,12 +735,35 @@ class SQLAlchemyTaskStore:
             ResearchStatus.CANCELLED.value,
         ]
         with self.session_scope() as session:
-            outcome = session.execute(
-                update(ResearchORM)
-                .where(ResearchORM.id == research_id, ResearchORM.status.notin_(terminal))
-                .values(status=ResearchStatus.ANALYZING.value, updated_at=datetime.now(timezone.utc))
-            )
-            claimed = outcome.rowcount == 1
+            if require_settled_searches:
+                # FOR NO KEY UPDATE, the lock the bare UPDATE below takes: it waits for the
+                # requeue's FOR UPDATE but not for the key-share locks of FK inserts.
+                research = session.get(ResearchORM, research_id, with_for_update={"key_share": True})
+                unsettled = (
+                    select(SearchTaskJobORM.id)
+                    .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
+                    .where(
+                        SearchTaskORM.research_id == research_id,
+                        SearchTaskORM.status != TaskStatus.COMPLETED.value,
+                        SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+                    )
+                    .limit(1)
+                )
+                claimed = (
+                    research is not None
+                    and research.status not in terminal
+                    and session.execute(unsettled).first() is None
+                )
+                if claimed:
+                    research.status = ResearchStatus.ANALYZING.value
+                    research.updated_at = datetime.now(timezone.utc)
+            else:
+                outcome = session.execute(
+                    update(ResearchORM)
+                    .where(ResearchORM.id == research_id, ResearchORM.status.notin_(terminal))
+                    .values(status=ResearchStatus.ANALYZING.value, updated_at=datetime.now(timezone.utc))
+                )
+                claimed = outcome.rowcount == 1
         if claimed:
             self._emit_change(research_id)
         return claimed

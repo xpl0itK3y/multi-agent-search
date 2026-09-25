@@ -321,6 +321,48 @@ def test_try_begin_finalization_is_single_flight(store):
     assert store.try_begin_finalization(record.id) is False
 
 
+def _processing_research_with_a_queued_search(store):
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    task = _task(store, record.id)
+    store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    return record, task
+
+
+def test_try_begin_finalization_can_require_every_search_settled(store):
+    # The auto-finalize CAS: an admin requeue that lands after the caller found every search
+    # settled leaves a PENDING task and job, and finalizing then would drain that search.
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    task = _task(store, record.id)
+    store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED, log="Search job failed after all retries"))
+    dead = _dead_letter_search_job(store, task.id)
+    requeued = store.requeue_search_task_job_of_active_research(dead.id, "Search job manually requeued")
+    _processing_research_with_a_queued_search(store)  # another research's search does not count
+
+    assert store.try_begin_finalization(record.id, require_settled_searches=True) is False
+    store.claim_search_task_job_by_id(requeued.id)
+    store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED, log="Error: provider down"))
+    # FAILED while its job still runs: the retry is not decided yet.
+    assert store.try_begin_finalization(record.id, require_settled_searches=True) is False
+    assert store.get_research(record.id).status == ResearchStatus.PROCESSING
+
+    assert store.record_search_task_job_failure(requeued.id, "provider down").status == SearchJobStatus.DEAD_LETTER
+    assert store.try_begin_finalization(record.id, require_settled_searches=True) is True
+    assert store.get_research(record.id).status == ResearchStatus.ANALYZING
+    assert store.try_begin_finalization(record.id, require_settled_searches=True) is False
+    assert store.try_begin_finalization("missing-research", require_settled_searches=True) is False
+
+    # A COMPLETED task is settled whatever its job still does, as the service counts it.
+    completed, completed_task = _processing_research_with_a_queued_search(store)
+    store.update_task(completed_task.id, TaskUpdate(status=TaskStatus.COMPLETED, log="done"))
+    assert store.try_begin_finalization(completed.id, require_settled_searches=True) is True
+    # Without the flag the CAS does not look at the searches (stale finalize recovery, retry).
+    unchecked, _ = _processing_research_with_a_queued_search(store)
+    assert store.try_begin_finalization(unchecked.id) is True
+    assert store.get_research(unchecked.id).status == ResearchStatus.ANALYZING
+
+
 # ── tasks ─────────────────────────────────────────────────────────────────────
 
 

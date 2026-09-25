@@ -5,7 +5,9 @@ requeue_search_task_job checked only that the job was DEAD_LETTER. On a complete
 cancelled, failed or finalizing research it set the task PENDING and requeued a job the
 worker then drained ('Research no longer active — search skipped'), leaving the task
 PENDING on the ended research. On a PROCESSING one neither write touched the research
-row, so a sweep that had just listed it still failed it under the requeued search.
+row, so a sweep that had just listed it still failed it under the requeued search. A
+requeue committed between a finalizer's settled read and its ANALYZING CAS still lost the
+search the same way: the CAS looked at the research status only.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -147,6 +149,61 @@ def test_a_requeue_that_lands_after_the_sweep_listed_the_research_wins():
         service.process_finalize_job(finalize_job_id)
     research = store.get_research(research_id)
     assert research.status == ResearchStatus.COMPLETED and research.final_report == "report over bad,ok"
+
+
+def _requeue_just_before_the_finalize_cas(store, service, job_id):
+    """The admin requeue commits after the finalizer found every search settled (the dead
+    task FAILED with a DEAD_LETTER job) and before its ANALYZING CAS."""
+    cas = store.try_begin_finalization
+    requeued = []
+
+    def requeue_then_cas(research_id, **kwargs):
+        if not requeued:
+            requeued.append(service.requeue_search_task_job(job_id))
+        return cas(research_id, **kwargs)
+
+    store.try_begin_finalization = requeue_then_cas
+    return requeued
+
+
+def _finish_the_requeued_search(store, broker, service, research_id, job_id, report):
+    service.process_search_task_job(job_id)
+    for finalize_job_id in broker.finalize:
+        service.process_finalize_job(finalize_job_id)
+    research = store.get_research(research_id)
+    assert research.status == ResearchStatus.COMPLETED and research.final_report == report
+
+
+def test_a_requeue_that_lands_before_the_auto_finalize_cas_keeps_the_research_searching():
+    store, broker, service = _service()
+    research_id, job_id = _research_with_a_dead_search(store)
+    store.add_task(
+        {"id": "sib", "research_id": research_id, "description": "d", "queries": ["q"], "status": TaskStatus.PENDING}
+    )
+    store.set_research_task_ids(research_id, ["ok", "bad", "sib"])
+    sibling_job = store.add_search_task_job("sib", SearchDepth.EASY.value, max_attempts=1)
+    requeued = _requeue_just_before_the_finalize_cas(store, service, job_id)
+
+    service.process_search_task_job(sibling_job.id)  # the last running search: auto-finalize
+
+    assert [job.status for job in requeued] == [SearchJobStatus.PENDING]
+    assert store.get_research(research_id).status == ResearchStatus.PROCESSING
+    assert broker.finalize == [] and store.get_task("bad").status == TaskStatus.PENDING
+    _finish_the_requeued_search(store, broker, service, research_id, job_id, "report over bad,ok,sib")
+
+
+def test_a_requeue_that_lands_before_the_stalled_sweeps_finalize_cas_keeps_the_research_searching():
+    store, broker, service = _service()
+    research_id, job_id = _research_with_a_dead_search(store)
+    store.get_research(research_id).updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    requeued = _requeue_just_before_the_finalize_cas(store, service, job_id)
+
+    assert service.sweep_stalled_researches() == []
+
+    assert [job.status for job in requeued] == [SearchJobStatus.PENDING]
+    assert store.get_research(research_id).status == ResearchStatus.PROCESSING
+    assert broker.finalize == [] and store.get_task("bad").status == TaskStatus.PENDING
+    _finish_the_requeued_search(store, broker, service, research_id, job_id, "report over bad,ok")
 
 
 @pytest.mark.anyio
