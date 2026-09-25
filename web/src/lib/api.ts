@@ -504,18 +504,3 @@ export const adminApi = {
     return () => es.close();
   },
 };
-
-export const telemetryApi = {
-  recordEvent: (payload: {
-    session_id?: string;
-    event_name: string;
-    event_category?: string;
-    details?: Record<string, any>;
-    device_info?: Record<string, any>;
-  }) =>
-    request<{ ok: boolean; event_id: string }>("/v1/telemetry/event", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-};
-
