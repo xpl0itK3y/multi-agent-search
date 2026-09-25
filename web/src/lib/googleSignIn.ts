@@ -27,21 +27,26 @@ export function googleReauthErrorKey(code: unknown): string | null {
 }
 
 /**
- * `value` when it is a path on this site ("/settings?tab=security"), else null. Rejects
+ * `value` as a path on this site ("/settings?tab=security"), else null. Rejects
  * absolute URLs, the protocol-relative forms browsers read as another host
- * ("//evil.example", "/\evil.example"), and backslashes or control characters anywhere
- * (the URL parser drops tabs and newlines, so "/\t/evil.example" is "//evil.example").
+ * ("//evil.example", "/\evil.example", and "/..//evil.example", whose dot segment
+ * resolves away), and backslashes or control characters anywhere (the URL parser drops
+ * tabs and newlines, so "/\t/evil.example" is "//evil.example"). Returns the resolved
+ * form ("/a/../settings" is "/settings"), which stays the same path when resolved again.
  */
 export function safeReturnPath(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 512) return null;
   if (!value.startsWith("/") || value.startsWith("//")) return null;
   if (/[\\\u0000-\u001f\u007f]/.test(value)) return null;
+  let url: URL;
   try {
-    if (new URL(value, RETURN_BASE).origin !== RETURN_BASE) return null;
+    url = new URL(value, RETURN_BASE);
   } catch {
     return null;
   }
-  return value;
+  if (url.origin !== RETURN_BASE || url.pathname.startsWith("//")) return null;
+  const path = url.pathname + url.search + url.hash;
+  return path.length > 512 ? null : path;
 }
 
 function forgetReturnPath(): void {
@@ -115,7 +120,8 @@ export function googleReturnRedirect(to: Landing, signedIn: boolean, now = Date.
     const code = typeof error === "string" && REAUTH_ERRORS.has(error) ? error : "oauth_failed";
     const back = new URL(path, RETURN_BASE);
     back.searchParams.set(REAUTH_ERROR_PARAM, code);
-    return back.pathname + back.search + back.hash;
+    // Checked again: the rebuilt URL is written out anew and must still be a path here.
+    return safeReturnPath(back.pathname + back.search + back.hash);
   }
   if (to.name === "login" || to.name === "set-password" || to.fullPath === path) return null;
   return path;

@@ -44,6 +44,18 @@ describe("safeReturnPath", () => {
     }
   });
 
+  it("returns the resolved path, which it keeps as is when checked again", async () => {
+    const { safeReturnPath } = await import("./googleSignIn");
+    for (const [value, resolved] of [
+      ["/a/../settings?tab=security", "/settings?tab=security"],
+      ["/./research/abc#sources", "/research/abc#sources"],
+      ["/%2e%2e/settings", "/settings"],
+    ]) {
+      expect(safeReturnPath(value), value).toBe(resolved);
+      expect(safeReturnPath(resolved), resolved).toBe(resolved);
+    }
+  });
+
   it("rejects anything a browser could resolve to another site", async () => {
     const { safeReturnPath } = await import("./googleSignIn");
     for (const value of [
@@ -53,6 +65,12 @@ describe("safeReturnPath", () => {
       "/settings\\..\\x",
       "/\t/evil.example",
       "/\n/evil.example",
+      // Dot segments resolve away, leaving the protocol-relative "//evil.example".
+      "/..//evil.example",
+      "/.//evil.example",
+      "/./..//evil.example",
+      "/a/..//evil.example/x",
+      "/%2e%2e//evil.example",
       "javascript:alert(1)",
       "settings",
       "",
@@ -159,6 +177,20 @@ describe("googleReturnRedirect", () => {
     ["public page", { path: "/settings", at: NOW }, landing("public-report", "/r/t", { public: true }), true],
     ["already there", { path: "/settings?tab=security", at: NOW }, landing("settings", "/settings?tab=security"), true],
     ["tampered path", { path: "//evil.example", at: NOW }, landing("home", "/"), true],
+    ["dot segment to another host", { path: "/..//evil.example", at: NOW }, landing("home", "/"), true],
+    // The failed re-auth branch rebuilds the path as a URL: it must not come out as "//host".
+    [
+      "failed re-auth, dot segment to another host",
+      { path: "/..//evil.example", at: NOW },
+      landing("login", "/login?error=oauth_failed"),
+      true,
+    ],
+    [
+      "failed re-auth, encoded dot segment",
+      { path: "/a/%2e%2e//evil.example/x", at: NOW },
+      landing("login", "/login?error=oauth_conflict"),
+      true,
+    ],
     ["no timestamp", { path: "/settings" }, landing("home", "/"), true],
     ["not JSON", "{oops", landing("home", "/"), true],
     ["JSON null", "null", landing("home", "/"), true],
