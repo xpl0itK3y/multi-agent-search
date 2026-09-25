@@ -89,6 +89,31 @@ class Settings(BaseSettings):
     @property
     def oauth_enabled(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)
+
+    # Account email: password reset links, email verification links and security notices.
+    # "disabled" (default) sends nothing: forgot-password still answers 202, and the
+    # operator hands out reset links with scripts/issue_password_reset.py. "console" writes
+    # each message, link included, to the application log (development only). "smtp"
+    # delivers through SMTP_* (bootstrap refuses it without SMTP_HOST and SMTP_FROM).
+    email_backend: str = "disabled"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_security: str = "starttls"  # "starttls" | "ssl" | "none"
+    smtp_timeout_seconds: float = 10.0
+    # Where the SPA is served; links are {PUBLIC_APP_URL}/reset-password#token=... and
+    # {PUBLIC_APP_URL}/verify-email#token=... (the token rides in the fragment, which never
+    # reaches a server log or a Referer header). No trailing slash.
+    public_app_url: str = "http://localhost:8502"
+    password_reset_ttl_seconds: int = 3600
+    email_verification_ttl_seconds: int = 86400
+
+    @property
+    def email_delivery_enabled(self) -> bool:
+        """Whether account email goes anywhere (EMAIL_BACKEND is not "disabled")."""
+        return (self.email_backend or "").strip().lower() not in ("", "disabled")
     # Comma-separated list of allowed CORS origins for the Vue SPA (dev: Vite 5173 / preview 4173).
     cors_allow_origins: str = "http://localhost:5173,http://localhost:4173"
     # SSRF guard: when False, user webhooks must resolve to public IPs only.

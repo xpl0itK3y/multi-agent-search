@@ -30,6 +30,9 @@ def _isolate_auth_settings(monkeypatch):
     monkeypatch.setattr(settings, "admin_emails", "", raising=False)
     monkeypatch.setattr(settings, "google_client_id", "", raising=False)
     monkeypatch.setattr(settings, "google_client_secret", "", raising=False)
+    # Nor may it send real account email (EMAIL_BACKEND=smtp) or change the links' origin.
+    monkeypatch.setattr(settings, "email_backend", "disabled", raising=False)
+    monkeypatch.setattr(settings, "public_app_url", "http://localhost:8502", raising=False)
     # The auth limiters are process-wide: without a reset, one test's login/register hits
     # (all from the same test client address) push a later test over the limit. The
     # activity gate likewise would skip a later test's first touch for a reused user id.
