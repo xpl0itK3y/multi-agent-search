@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -1171,8 +1172,6 @@ class ResearchService(
 
     def _question_needs_search(self, question: str, pool: list[dict]) -> bool:
         """Heuristic: True if the question's key terms aren't covered by the source pool."""
-        import re
-
         tokens = [
             token
             for token in re.findall(r"[^\W\d_]{4,}", (question or "").lower(), flags=re.UNICODE)
@@ -1187,8 +1186,6 @@ class ResearchService(
         return covered / len(set(tokens)) < 0.34
 
     def _chat_tokens(self, text: str) -> list[str]:
-        import re
-
         return [
             token
             for token in re.findall(r"[^\W\d_]{4,}", (text or "").lower(), flags=re.UNICODE)
@@ -1248,6 +1245,8 @@ class ResearchService(
         refreshed = self.task_store.get_task(task.id)
         return (refreshed.result if refreshed else None) or []
 
+    _CITED_SOURCE_ID = re.compile(r"\[(S\d+)\\?\]")
+
     def generate_research_answer(
         self,
         research_id: str,
@@ -1286,7 +1285,7 @@ class ResearchService(
                 seen_urls.add(url)
                 next_source_number += 1
         # Retrieve the most relevant sources for this question (not just the first 12).
-        pool = self._rank_sources_for_question(question, pool, 12)
+        ranked = self._rank_sources_for_question(question, pool, 12)
         sources = [
             {
                 "source_id": item.get("source_id"),
@@ -1297,7 +1296,7 @@ class ResearchService(
                 "extraction_status": item.get("extraction_status"),
                 "content": (item.get("content") or "")[:800],
             }
-            for item in pool
+            for item in ranked
             if item.get("source_id")
         ]
         history = list((research.graph_state or {}).get("messages") or [])
@@ -1314,6 +1313,15 @@ class ResearchService(
                 model=model,
                 streaming_callback=streaming_callback,
             )
+        # The model also sees the whole report, so it can cite report ids outside the
+        # ranked 12; give every cited id its url/title (no content) so each one links.
+        cited_ids = set(self._CITED_SOURCE_ID.findall(answer or ""))
+        sent_ids = {source["source_id"] for source in sources}
+        cited_only = [
+            {key: item.get(key) for key in ("source_id", "title", "domain", "url", "source_quality", "extraction_status")}
+            for item in pool
+            if item.get("source_id") in cited_ids and item.get("source_id") not in sent_ids
+        ]
         return ChatMessage(
             role="assistant",
             content=answer,
@@ -1327,7 +1335,7 @@ class ResearchService(
                     extraction_status=source.get("extraction_status"),
                     snippet=((source.get("content") or "")[:280] or None),
                 )
-                for source in sources
+                for source in sources + cited_only
                 if source.get("url")
             ],
         )

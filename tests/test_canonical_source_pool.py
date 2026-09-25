@@ -307,3 +307,49 @@ def test_chat_follow_up_tasks_never_enter_the_report_source_fallback(mocker):
         "https://one.example/a",
         "https://two.example/b",
     ]
+
+
+def test_chat_links_every_cited_report_id_even_outside_the_ranked_sources(mocker):
+    store = InMemoryTaskStore()
+    research = store.add_research(ResearchRequest(prompt="topic", depth=SearchDepth.EASY), task_ids=["task-1"])
+    store.update_research_status(research.id, ResearchStatus.COMPLETED, "Report citing [S1] to [S13].")
+    store.add_task(
+        {
+            "id": "task-1",
+            "research_id": research.id,
+            "description": "collect evidence",
+            "queries": ["topic evidence"],
+            "status": TaskStatus.COMPLETED,
+            "result": [
+                {
+                    "url": f"https://source-{index}.example/report",
+                    "title": f"Source {index}",
+                    "content": "specific ranking keyword " * 20 if index == 13 else f"background {index} " * 20,
+                }
+                for index in range(1, 14)
+            ],
+        }
+    )
+    store.merge_research_graph_state(
+        research.id,
+        {
+            "canonical_sources": [
+                {"source_id": f"S{index}", "url": f"https://source-{index}.example/report", "title": f"Source {index}"}
+                for index in range(1, 14)
+            ]
+        },
+    )
+    chat = mocker.Mock()
+    # S12 is not among the 12 ranked sources the model got, but it is in the report it read.
+    chat.answer.return_value = "The keyword matters [S13], as the report noted [S12] and \\[S12\\]."
+    service = ResearchService(task_store=store, chat_agent=chat)
+
+    message = service.generate_research_answer(research.id, "What does the specific ranking keyword show?")
+
+    assert "S12" not in {source["source_id"] for source in chat.answer.call_args.args[2]}
+    by_id = {source.source_id: source for source in message.sources}
+    assert by_id["S12"].url == "https://source-12.example/report"
+    assert by_id["S12"].title == "Source 12"
+    assert by_id["S12"].snippet is None  # the id table carries no content
+    assert [source.source_id for source in message.sources].count("S12") == 1
+    assert by_id["S13"].snippet  # ranked sources keep their snippet
