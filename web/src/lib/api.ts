@@ -158,6 +158,14 @@ async function recoverFromExpiredSession(hadToken: boolean, hadSession: boolean)
   window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
 }
 
+// The server writes account emails (verification, password reset, notices) in the
+// request's Accept-Language. Send the page's language, the one picked in the app (the ui
+// store keeps <html lang> on it), which may differ from the browser's.
+function languageHeaders(): Record<string, string> {
+  const lang = typeof document !== "undefined" ? document.documentElement?.lang : undefined;
+  return lang ? { "Accept-Language": lang } : {};
+}
+
 interface RequestOptions {
   // false: a 401 from this call means "wrong credential" (a mistyped current
   // password), not a stale session — keep the token and let the caller show it.
@@ -172,6 +180,7 @@ async function request<T>(
   const method = init?.method ?? "GET";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...languageHeaders(),
     ...((init?.headers as Record<string, string>) ?? {}),
     ...authHeaders(method),
   };

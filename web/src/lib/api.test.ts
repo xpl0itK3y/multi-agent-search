@@ -291,6 +291,26 @@ describe("account recovery endpoints", () => {
     expect(sent(fetchMock)).toMatchObject({ url: "/v1/auth/email/verify", method: "POST", body: { token: "verify-tok" } });
   });
 
+  it("sends the page's language, in which the server writes account emails", async () => {
+    stubEnv(null, "/forgot-password");
+    // <html lang>, which the ui store keeps on the language picked in the app.
+    const documentElement = { lang: "es" };
+    vi.stubGlobal("document", { cookie: "", documentElement });
+    const fetchMock = answering(202, { status: "accepted" });
+    const { api } = await import("./api");
+
+    for (const lang of ["es", "en", "ru"]) {
+      documentElement.lang = lang;
+      await api.forgotPassword("denis@example.com");
+      expect(sent(fetchMock, fetchMock.mock.calls.length - 1).headers).toMatchObject({ "Accept-Language": lang });
+    }
+
+    // No page language: the browser's own Accept-Language applies.
+    documentElement.lang = "";
+    await api.forgotPassword("denis@example.com");
+    expect(sent(fetchMock, fetchMock.mock.calls.length - 1).headers).not.toHaveProperty("Accept-Language");
+  });
+
   it("asks for a verification email with the session and the csrf token", async () => {
     stubEnv("access", "/settings", "", "csrf_token=tok");
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "sent" }), { status: 202 }));
