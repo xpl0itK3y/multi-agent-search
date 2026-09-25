@@ -60,15 +60,20 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+// Double-submit CSRF token (the readable csrf cookie echoed in a header) for
+// cookie-authenticated requests, e.g. after Google OAuth, where there is no Bearer token.
+function csrfHeaders(): Record<string, string> {
+  const csrf = readCookie("csrf_token");
+  return csrf ? { "X-CSRF-Token": csrf } : {};
+}
+
 export function authHeaders(method = "GET"): Record<string, string> {
   const headers: Record<string, string> = {};
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
-  // Double-submit CSRF token for cookie-authenticated mutations (e.g. after Google OAuth,
-  // where there is no Bearer token). Safe methods don't need it.
+  // Mutations need the CSRF token; safe methods don't (file downloads add it themselves).
   if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
-    const csrf = readCookie("csrf_token");
-    if (csrf) headers["X-CSRF-Token"] = csrf;
+    Object.assign(headers, csrfHeaders());
   }
   return headers;
 }
@@ -171,12 +176,15 @@ function attachmentFilename(disposition: string | null): string | null {
 }
 
 // File downloads (report exports, admin CSVs) go through the same credentials,
-// bearer/CSRF headers and 401 recovery as request(); only the body differs.
+// bearer header and 401 recovery as request(); only the body differs. They always
+// carry the CSRF token too, although they are GETs: the admin CSV exports have side
+// effects (an audit row, the shared admin rate budget), so the server checks the token
+// on them like on a mutation whenever the session is the cookie (a Google sign-in).
 async function fetchFile(path: string): Promise<ApiFile> {
   const hadToken = authToken !== null;
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
-    headers: authHeaders("GET"),
+    headers: { ...authHeaders("GET"), ...csrfHeaders() },
   });
   if (!res.ok) {
     if (res.status === 401) recoverFromExpiredSession(hadToken);

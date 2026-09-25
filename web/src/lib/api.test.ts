@@ -4,7 +4,7 @@ import { i18n, LOCALES } from "@/i18n";
 
 // api.ts touches localStorage / document.cookie at import time and
 // window.location on 401 recovery — stub the globals before each dynamic import.
-function stubEnv(token: string | null, pathname: string, search = "") {
+function stubEnv(token: string | null, pathname: string, search = "", cookie = "") {
   const assign = vi.fn();
   const removeItem = vi.fn();
   vi.stubGlobal("localStorage", {
@@ -12,7 +12,7 @@ function stubEnv(token: string | null, pathname: string, search = "") {
     setItem: vi.fn(),
     removeItem,
   });
-  vi.stubGlobal("document", { cookie: "" });
+  vi.stubGlobal("document", { cookie });
   vi.stubGlobal("window", { location: { pathname, search, assign } });
   return { assign, removeItem };
 }
@@ -188,6 +188,39 @@ describe("file downloads", () => {
     }
     expect(report.filename).toBe("token_usage.csv");
     expect(await csv.blob.text()).toBe("a,b\n");
+  });
+
+  it("downloads echo the csrf cookie so admin CSV exports work with a cookie session", async () => {
+    // A Google sign-in leaves no bearer token: the session is the cookie alone.
+    stubEnv(null, "/admin", "", "theme=dark; csrf_token=c%2Bsrf%3D; x=1");
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("a,b\n", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api, adminApi } = await import("./api");
+    await adminApi.exportUsersCsv();
+    await adminApi.exportPromptsCsv();
+    await adminApi.exportTokensCsv();
+    await api.exportReport("r-1", new URLSearchParams({ format: "md" }));
+    await api.getReport("r-1").catch(() => undefined);
+
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    for (const [url, init] of calls.slice(0, 4)) {
+      expect(init.headers, url).toEqual({ "X-CSRF-Token": "c+srf=" });
+    }
+    // Other GETs stay without it: only the downloads opt in.
+    expect(calls[4][1].headers).not.toHaveProperty("X-CSRF-Token");
+  });
+
+  it("downloads send the bearer and the csrf token when both exist", async () => {
+    stubEnv("access", "/admin", "", "csrf_token=tok");
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { adminApi } = await import("./api");
+    await adminApi.exportUsersCsv();
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toEqual({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
   });
 
   it("a 401 on a download goes through the shared session recovery", async () => {
