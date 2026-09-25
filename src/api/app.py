@@ -126,14 +126,26 @@ ADMIN_STREAM_INTERVAL_SECONDS = 2.0
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+# GETs with side effects, checked like mutations: each admin CSV export writes an audit
+# row and spends the shared admin rate budget, and a SameSite=Lax session cookie rides
+# along on a cross-site top-level GET (a link or a redirect to the export URL).
+_CSRF_CHECKED_GET_PATHS = frozenset(
+    {"/v1/admin/users/export", "/v1/admin/prompts/export", "/v1/admin/tokens/export"}
+)
 
 
 def _is_csrf_violation(request: Request) -> bool:
-    """Double-submit CSRF check for cookie-authenticated mutations. Bearer-token requests are
-    exempt (the header can't be forged cross-site); the check is off when auth is disabled.
+    """Double-submit CSRF check for cookie-authenticated mutations and the side-effecting
+    GETs in _CSRF_CHECKED_GET_PATHS. Bearer-token requests are exempt (the header can't be
+    forged cross-site); the check is off when auth is disabled.
     "Bearer-token request" follows the rule authentication uses (request_bearer_token): a
     header whose token is blank falls back to the cookie there, so it is no exemption."""
-    if settings.auth_disabled or request.method in _CSRF_SAFE_METHODS:
+    if settings.auth_disabled:
+        return False
+    if request.method in _CSRF_SAFE_METHODS and (
+        # A CORS preflight (OPTIONS) carries neither cookies nor the header: never checked.
+        request.method == "OPTIONS" or request.url.path not in _CSRF_CHECKED_GET_PATHS
+    ):
         return False
     if request.url.path in _CSRF_EXEMPT_PATHS:
         return False

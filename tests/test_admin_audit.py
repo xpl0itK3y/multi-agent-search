@@ -138,6 +138,20 @@ def test_every_admin_mutation_is_listed_throttled_and_audited_below():
         assert enforce_admin_rate_limit in routes[key], f"{key} is not behind enforce_admin_rate_limit"
 
 
+def test_every_side_effecting_admin_get_is_csrf_checked():
+    """A GET that audits and spends the admin budget is checked for CSRF like a mutation
+    (SEC2-8): the csrf middleware keys on the path, so a new one must be listed there."""
+    from src.api.app import _CSRF_CHECKED_GET_PATHS
+
+    routes = _admin_routes(create_app())
+    side_effecting_gets = {
+        path for (method, path), calls in routes.items() if method == "GET" and enforce_admin_rate_limit in calls
+    }
+
+    assert side_effecting_gets == {path for _method, path in AUDITED_EXPORTS}
+    assert side_effecting_gets == _CSRF_CHECKED_GET_PATHS
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("route", sorted(AUDITED_ROUTES) + sorted(AUDITED_EXPORTS))
 async def test_admin_route_writes_an_audit_row(client, route):
