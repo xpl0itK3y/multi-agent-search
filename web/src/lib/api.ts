@@ -9,6 +9,7 @@ import type {
   AdminUserDetailResponse,
   AdminUserListResponse,
   AgentMetadataItem,
+  AuthConfig,
   AuthSession,
   AuthUser,
   UserTokenStats,
@@ -232,6 +233,12 @@ const API_STATUS_KEYS: Record<number, string> = {
 // server sends no error codes, so these match the English error texts raised in
 // src/services; any other detail gets the status's generic text, never the raw one.
 const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
+  400: [
+    // A password reset or email verification link that is unknown, expired or already
+    // used (see isResetTokenInvalid / isVerificationTokenInvalid).
+    [/^reset_token_invalid/, "resetTokenInvalid"],
+    [/^verification_token_invalid/, "verificationTokenInvalid"],
+  ],
   403: [
     // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
     [/^This email is reserved for an administrator\b/, "adminEmailReserved"],
@@ -260,6 +267,20 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
 export function isReauthRequired(err: unknown): boolean {
   return err instanceof ApiError && err.status === 403 && err.detail.startsWith("reauth_required");
 }
+
+// The one-time token of an emailed link is unknown, expired or already used: the page
+// says so and offers a new link instead of trying it again.
+export function isResetTokenInvalid(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && err.detail.startsWith("reset_token_invalid");
+}
+
+export function isVerificationTokenInvalid(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && err.detail.startsWith("verification_token_invalid");
+}
+
+// The shortest password the server accepts on sign-up, set-password and password reset
+// (min_length in src/domain/models.py), checked here first for a translated message.
+export const PASSWORD_MIN_LENGTH = 6;
 
 // Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
 // statuses get a translated text (a specific one for known details); anything
@@ -315,7 +336,42 @@ export const api = {
     }
   },
 
-  authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
+  authConfig: () => request<AuthConfig>("/v1/auth/config"),
+
+  // Always a 202 {"status": "accepted"}, whether or not an account has this email: the
+  // server never says. A 429 when this address or this client asked too often.
+  forgotPassword: (email: string) =>
+    request<{ status: string }>("/v1/auth/password/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  // Sets a new password with the one-time token of a reset link. The server then revokes
+  // every session of that account and signs nobody in, so this page drops the session it
+  // held as well (which account the link was for is not known here). A dead link is a
+  // 400 (isResetTokenInvalid).
+  resetPassword: async (token: string, password: string) => {
+    const res = await request<{ status: string }>("/v1/auth/password/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    });
+    setAuthToken(null);
+    sessionActive = false;
+    return res;
+  },
+
+  // Emails the signed-in user a new verification link, unless the address is already
+  // verified (then nothing is sent).
+  requestEmailVerification: () =>
+    request<{ status: "sent" | "already_verified" }>("/v1/auth/email/verification", { method: "POST" }),
+
+  // Confirms an address with the one-time token of a verification link; it needs no
+  // session. A dead link is a 400 (isVerificationTokenInvalid).
+  verifyEmail: (token: string) =>
+    request<{ status: string }>("/v1/auth/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
 
   updateProfile: async (payload: { name?: string; avatar_url?: string }) => {
     return await request<AuthUser>("/v1/auth/profile", {

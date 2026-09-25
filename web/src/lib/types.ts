@@ -6,6 +6,18 @@ export interface AuthUser {
   name?: string | null;
   avatar_url?: string | null;
   is_admin?: boolean;
+  // Whether the account proved it owns `email`: a verification link, a password reset or
+  // a Google sign-in. The server always sends it; optional like is_admin, absent reads as
+  // not verified.
+  email_verified?: boolean;
+}
+
+// GET /v1/auth/config: the sign-in options this server offers. password_reset and
+// email_verification go together: both are on whenever the server can send email.
+export interface AuthConfig {
+  google_oauth: boolean;
+  password_reset: boolean;
+  email_verification: boolean;
 }
 
 export interface AuthSession {
