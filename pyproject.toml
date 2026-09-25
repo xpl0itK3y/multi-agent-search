@@ -12,11 +12,6 @@ extend-exclude = ["venv", "web", "native", "alembic/versions"]
 # formatted once as a dedicated change.
 select = ["E4", "E7", "E9", "F"]
 
-[tool.ruff.lint.per-file-ignores]
-# Deliberate re-export shims: the whole point is forwarding every public name.
-"src/api/schemas.py" = ["F401", "F403"]
-"src/domain/__init__.py" = ["F401", "F403"]
-
 [tool.pytest.ini_options]
 markers = [
     "postgres: requires a running Postgres database configured for the application",
