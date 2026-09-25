@@ -37,20 +37,33 @@ DEFAULT_MAX_KEYS = 10_000
 class SlidingWindowLimiter:
     """Per-key sliding-window counter with a bounded key table.
 
-    A key that reached its limit (locked out) is never evicted while it still has a hit
-    in the window: otherwise a flood of fresh keys, such as typed emails, would push a
-    brute-forced account out of the table and hand it a fresh budget. At the cap the
-    unlocked key idle longest goes; when every tracked key is locked out, a new key is
-    refused like an over-limit one until the oldest lockout leaves the window. Memory
-    stays bounded and a lockout is never forgotten early, at the price of refusing new
-    keys during a flood that locks out the whole table (max_keys keys, each at its
-    limit). A key counts as locked out from the hit that reaches the limit of that call
-    (each limiter passes one fixed limit).
+    At the cap the key idle longest among those below their limit goes first, so a flood
+    of fresh keys pushes out other fresh keys before a key that reached its limit (locked
+    out). When every tracked key is locked out, protect_lockouts decides:
+
+    - True (the brute-force limiters): a new key is refused like an over-limit one until
+      the oldest lockout leaves the window. Otherwise a flood of keys each at its limit,
+      such as typed emails, would push a brute-forced account out of the table and hand
+      it a fresh budget; the price is refusing new keys during such a flood.
+    - False (the default): the oldest lockout is forgotten and the new key admitted, as a
+      plain LRU table would. A limit-1 gate, such as the activity touch gate, locks every
+      key out on its first hit, so a full table is its normal state past max_keys keys per
+      window, and refusing there would starve every newcomer instead of throttling anyone.
+
+    Memory stays bounded either way. A key counts as locked out from the hit that reaches
+    the limit of that call (each limiter passes one fixed limit).
     """
 
-    def __init__(self, window_seconds: float = 60.0, max_keys: int = DEFAULT_MAX_KEYS) -> None:
+    def __init__(
+        self,
+        window_seconds: float = 60.0,
+        max_keys: int = DEFAULT_MAX_KEYS,
+        *,
+        protect_lockouts: bool = False,
+    ) -> None:
         self._window = window_seconds
         self._max_keys = max(1, max_keys)
+        self._protect_lockouts = protect_lockouts
         # Keys below their limit, ordered by latest hit, oldest first (a key moves to the
         # end whenever it records a hit), so expired keys, and the one to evict at the cap,
         # sit in front.
@@ -73,9 +86,12 @@ class SlidingWindowLimiter:
                 if limit <= 0:
                     return False
                 if len(self._hits) + len(self._locked) >= self._max_keys:
-                    if not self._hits:
+                    if self._hits:
+                        self._hits.popitem(last=False)
+                    elif self._protect_lockouts:
                         return False  # every key is locked out: forget none of them
-                    self._hits.popitem(last=False)
+                    else:
+                        self._locked.popitem(last=False)
                 (self._hits if limit > 1 else self._locked)[key] = deque((now,))
                 return True
             while hits and hits[0] < cutoff:
@@ -106,9 +122,9 @@ class SlidingWindowLimiter:
             self._locked.clear()
 
 
-_auth_limiter = SlidingWindowLimiter()
-_account_limiter = SlidingWindowLimiter()
-_password_check_limiter = SlidingWindowLimiter()
+_auth_limiter = SlidingWindowLimiter(protect_lockouts=True)
+_account_limiter = SlidingWindowLimiter(protect_lockouts=True)
+_password_check_limiter = SlidingWindowLimiter(protect_lockouts=True)
 
 
 def reset_auth_rate_limiter() -> None:

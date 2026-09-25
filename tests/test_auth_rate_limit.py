@@ -235,7 +235,7 @@ def test_sliding_window_caps_keys_and_evicts_the_longest_idle_first(clock):
 def test_sliding_window_never_evicts_a_locked_out_key_inside_its_window(clock):
     """SEC3-3: at the cap a flood of fresh keys (typed emails) must not push a brute-forced
     account out of the table, which would hand it a fresh budget."""
-    limiter = SlidingWindowLimiter()
+    limiter = SlidingWindowLimiter(protect_lockouts=True)
     assert [limiter.allow("victim@example.com", 10) for _ in range(11)] == [True] * 10 + [False]
 
     for i in range(2 * DEFAULT_MAX_KEYS):
@@ -249,7 +249,7 @@ def test_sliding_window_never_evicts_a_locked_out_key_inside_its_window(clock):
 
 
 def test_sliding_window_full_of_locked_out_keys_refuses_a_new_one(clock):
-    limiter = SlidingWindowLimiter(window_seconds=60, max_keys=3)
+    limiter = SlidingWindowLimiter(window_seconds=60, max_keys=3, protect_lockouts=True)
     for key in ("a", "b", "c"):
         assert limiter.allow(key, 1)
         clock.now += 1
@@ -261,6 +261,40 @@ def test_sliding_window_full_of_locked_out_keys_refuses_a_new_one(clock):
     clock.now += 58  # "a" is 61 s old: its lockout ended, so its slot is free again
     assert limiter.allow("d", 1)
     assert not limiter.allow("b", 1) and not limiter.allow("c", 1)
+
+
+def test_a_limit_one_gate_admits_a_new_key_when_its_table_is_full(clock):
+    """The activity touch gate passes limit=1, so every key is locked out from its first
+    hit: refusing a new key at the cap skipped the touch for every newcomer past max_keys
+    users a window. Without lockout protection the oldest key goes, as in an LRU table."""
+    gate = SlidingWindowLimiter(window_seconds=60, max_keys=2)
+    assert gate.allow("a", 1)
+    clock.now += 1
+    assert gate.allow("b", 1)
+    clock.now += 1
+
+    assert gate.allow("c", 1)
+
+    assert len(gate) == 2
+    assert not gate.allow("b", 1) and not gate.allow("c", 1)
+    assert gate.allow("a", 1)  # "a" was the one forgotten; admitting it again forgets "b"
+    assert len(gate) == 2
+    assert gate.allow("b", 1)
+
+
+def test_only_the_brute_force_limiters_refuse_new_keys_when_full_of_lockouts():
+    from src.api import app as app_module
+    from src.auth import login_rate_limit
+
+    assert all(
+        limiter._protect_lockouts
+        for limiter in (
+            login_rate_limit._auth_limiter,
+            login_rate_limit._account_limiter,
+            login_rate_limit._password_check_limiter,
+        )
+    )
+    assert not app_module._activity_touch_gate._protect_lockouts
 
 
 def test_sliding_window_with_zero_limit_records_no_key(clock):
