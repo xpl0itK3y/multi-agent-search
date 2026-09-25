@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 from fastapi import HTTPException, Request
 
@@ -26,23 +26,55 @@ from src.api.schemas import AuthUser
 from src.config import settings
 
 
+# Keys one limiter tracks at most. Keys are caller-chosen (an email typed into the login
+# form, a client address), so the table must not grow with every distinct value: keys
+# whose hits all left the window are dropped as they age out, and past this cap the key
+# idle longest goes first. About 1 KB per key, so the cap bounds a limiter near 10 MB.
+DEFAULT_MAX_KEYS = 10_000
+
+
 class SlidingWindowLimiter:
-    def __init__(self, window_seconds: float = 60.0) -> None:
+    def __init__(self, window_seconds: float = 60.0, max_keys: int = DEFAULT_MAX_KEYS) -> None:
         self._window = window_seconds
-        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._max_keys = max(1, max_keys)
+        # Ordered by each key's latest hit, oldest first (a key moves to the end whenever
+        # it records a hit), so expired keys, and the one to evict at the cap, sit in front.
+        self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def allow(self, key: str, limit: int) -> bool:
-        now = time.monotonic()
-        cutoff = now - self._window
         with self._lock:
-            hits = self._hits[key]
+            # Read the clock under the lock, so hits land in time order across threads.
+            now = time.monotonic()
+            cutoff = now - self._window
+            self._drop_expired(cutoff)
+            hits = self._hits.get(key)
+            if hits is None:
+                if limit <= 0:
+                    return False
+                if len(self._hits) >= self._max_keys:
+                    self._hits.popitem(last=False)
+                self._hits[key] = deque((now,))
+                return True
             while hits and hits[0] < cutoff:
                 hits.popleft()
             if len(hits) >= limit:
                 return False
             hits.append(now)
+            self._hits.move_to_end(key)
             return True
+
+    def _drop_expired(self, cutoff: float) -> None:
+        """Forget every key whose latest hit left the window (they are all at the front)."""
+        while self._hits:
+            _key, hits = next(iter(self._hits.items()))
+            if hits and hits[-1] >= cutoff:
+                return
+            self._hits.popitem(last=False)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._hits)
 
     def reset(self) -> None:
         with self._lock:

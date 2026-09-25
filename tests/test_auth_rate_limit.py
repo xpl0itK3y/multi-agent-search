@@ -179,3 +179,78 @@ async def test_current_password_checks_are_throttled_per_user(auth_app, method, 
         )
     assert response.status_code == 429
     assert app.state.research_service.task_store.get_user_by_id(user.id) is not None
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    from src.auth import login_rate_limit
+
+    fake = _Clock()
+    monkeypatch.setattr(login_rate_limit.time, "monotonic", fake)
+    return fake
+
+
+def test_sliding_window_forgets_keys_whose_hits_left_the_window(clock):
+    """Keys are caller-chosen (typed emails, token subjects): an idle one must not stay
+    in memory forever."""
+    limiter = SlidingWindowLimiter(window_seconds=60)
+    for i in range(500):
+        assert limiter.allow(f"attacker-{i}@example.com", 5)
+    clock.now += 30
+    assert limiter.allow("victim@example.com", 2)
+    assert len(limiter) == 501
+
+    clock.now += 31  # the attacker keys are 61 s old, the victim's 31 s
+    assert limiter.allow("newcomer@example.com", 5)
+
+    assert len(limiter) == 2
+    assert limiter.allow("victim@example.com", 2)
+    assert not limiter.allow("victim@example.com", 2)  # its window survived the sweep
+
+
+def test_sliding_window_caps_keys_and_evicts_the_longest_idle_first(clock):
+    limiter = SlidingWindowLimiter(window_seconds=60, max_keys=3)
+    for key in ("a", "b", "c"):
+        assert limiter.allow(key, 1)
+        clock.now += 1
+    assert not limiter.allow("a", 1)  # a refusal records nothing and keeps "a" oldest
+    assert limiter.allow("b", 2)  # "b" hit again: now the most recent
+
+    assert limiter.allow("d", 1)
+
+    assert len(limiter) == 3
+    assert limiter.allow("a", 1)  # "a" was evicted, so its budget is fresh again
+    assert not limiter.allow("b", 2)  # "b" kept both hits
+    assert not limiter.allow("d", 1)
+
+
+def test_sliding_window_with_zero_limit_records_no_key(clock):
+    limiter = SlidingWindowLimiter()
+    assert not limiter.allow("k", 0)
+    assert len(limiter) == 0
+
+
+def test_every_process_limiter_is_bounded():
+    """Each module-level limiter uses the capped class (none built on a bare dict)."""
+    from src.api import app as app_module
+    from src.auth import admin_rate_limit, login_rate_limit, telemetry_rate_limit
+
+    limiters = [
+        app_module._activity_touch_gate,
+        admin_rate_limit._admin_mutation_limiter,
+        llm_rate_limit._llm_route_limiter,
+        login_rate_limit._auth_limiter,
+        login_rate_limit._account_limiter,
+        login_rate_limit._password_check_limiter,
+        telemetry_rate_limit._telemetry_limiter,
+    ]
+    assert all(isinstance(limiter, SlidingWindowLimiter) for limiter in limiters)
+    assert all(0 < limiter._max_keys <= 10_000 for limiter in limiters)
