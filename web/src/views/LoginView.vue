@@ -19,6 +19,9 @@ const password = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
 const googleEnabled = ref(false);
+// Whether a forgotten password can be reset by email here; null until the config is
+// known, so neither the link nor the "ask the administrator" hint shows before.
+const passwordReset = ref<boolean | null>(null);
 
 // A failed Google callback redirects here as /login?error=<code>. Keep the key
 // (not the text) so the message follows a language switch on this page.
@@ -30,7 +33,9 @@ const oauthErrorKey = ref<string | null>(OAUTH_ERRORS[String(route.query.error ?
 
 async function loadAuthConfig(retries = 2) {
   try {
-    googleEnabled.value = Boolean((await api.authConfig())?.google_oauth);
+    const config = await api.authConfig();
+    googleEnabled.value = Boolean(config?.google_oauth);
+    passwordReset.value = Boolean(config?.password_reset);
   } catch {
     if (retries > 0) {
       setTimeout(() => loadAuthConfig(retries - 1), 1000);
@@ -117,6 +122,14 @@ async function submit() {
           :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
           class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
         />
+        <template v-if="mode === 'login' && passwordReset !== null">
+          <div v-if="passwordReset" class="text-right">
+            <router-link to="/forgot-password" class="text-xs text-muted hover:text-ink">
+              {{ $t("auth.forgotPassword") }}
+            </router-link>
+          </div>
+          <p v-else class="text-xs text-muted">{{ $t("auth.forgotPasswordAskAdmin") }}</p>
+        </template>
         <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
         <p v-else-if="oauthErrorKey" class="text-sm text-red-400">{{ $t(oauthErrorKey) }}</p>
         <button
