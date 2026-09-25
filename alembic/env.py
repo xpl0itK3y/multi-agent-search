@@ -35,6 +35,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        hide_parameters=True,  # as the app's engines: no bound values in error text
     )
 
     with connectable.connect() as connection:

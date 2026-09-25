@@ -48,10 +48,42 @@ def access_logger():
         ("/v1/research/abc-123", "/v1/research/abc-123"),
         ("/v1/research/abc/r/keep", "/v1/research/abc/r/keep"),
         ("/v1/public/research/", "/v1/public/research/"),
+        # The client chooses the spelling and uvicorn logs it verbatim, routed or not.
+        (f"//v1/public/research/{TOKEN}", "//v1/public/research/[redacted]"),
+        (f"/v1//public/research/{TOKEN}", "/v1//public/research/[redacted]"),
+        (f"/v1/public/research//{TOKEN}?x=1", "/v1/public/research//[redacted]?x=1"),
+        (f"/V1/Public/RESEARCH/{TOKEN}", "/V1/Public/RESEARCH/[redacted]"),
+        (f"/v1/public/research%2F{TOKEN}", "/v1/public/research%2F[redacted]"),
+        (f"/v1%2fpublic%2Fresearch%2f{TOKEN}", "/v1%2fpublic%2Fresearch%2f[redacted]"),
+        (f"/v1/public/research%252F{TOKEN}", "/v1/public/research%252F[redacted]"),
+        (f"path=/v1/public/research/{TOKEN}", "path=/v1/public/research/[redacted]"),
+        (f"/prefix/v1/public/research/{TOKEN}", "/prefix/v1/public/research/[redacted]"),
+        (f'{{"path": "/v1/public/research/{TOKEN}"}}', '{"path": "/v1/public/research/[redacted]"}'),
+        (f"//r/{TOKEN}", "//r/[redacted]"),
+        (f"/R/{TOKEN}", "/R/[redacted]"),
+        (f"%2Fr%2F{TOKEN}", "%2Fr%2F[redacted]"),
+        (f"path=/r/{TOKEN}&x=1", "path=/r/[redacted]&x=1"),
+        (f"HTTPS://Example.com//r/{TOKEN}", "HTTPS://Example.com//r/[redacted]"),
     ],
 )
 def test_redact_share_tokens(line, expected):
     assert redact_share_tokens(line) == expected
+
+
+def test_database_errors_do_not_carry_bound_parameters():
+    """SQLAlchemy puts bound values in its error text, which reaches logs and job errors:
+    share tokens, password hashes, prompts. The app's engines hide them."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import OperationalError
+
+    from src.db.session import _engine_kwargs
+
+    engine = create_engine("sqlite://", **_engine_kwargs("sqlite://"))
+    with pytest.raises(OperationalError) as exc, engine.connect() as conn:
+        conn.execute(text("SELECT * FROM researches WHERE share_token = :token"), {"token": TOKEN})
+
+    assert TOKEN not in str(exc.value)
+    assert "hidden" in str(exc.value)
 
 
 def test_uvicorn_access_line_is_redacted(access_logger):

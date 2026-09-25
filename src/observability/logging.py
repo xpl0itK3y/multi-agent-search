@@ -7,10 +7,20 @@ from src.config import settings
 from src.observability.context import get_observability_context
 
 # Public share links carry their bearer token in the URL path, and access logs are
-# shipped to Loki. `/r/<token>` is the SPA share route, so it only counts at the start
-# of a path (or right after a URL's host), not as an arbitrary `/r/` segment.
+# shipped to Loki. A client picks the exact spelling of the path it sends, and uvicorn
+# logs it verbatim even when no route matches, so the pattern takes any letter case and
+# any run of separators, including percent-encoded ones: '//v1/public/research/<t>',
+# '/V1//public/research/<t>', '/v1/public/research%2F<t>'. /v1/public/research counts
+# anywhere in the text ('path=/v1/...', behind a proxy prefix); `/r/<token>`, the SPA
+# share route, only at the start of a path (after whitespace, a quote, '=' or a URL's
+# host), not as an arbitrary `/r/` segment.
+_PATH_SEPARATORS = r"(?:/|%(?:25)?2f)+"
 _SHARE_TOKEN_PATH_RE = re.compile(
-    r"(?P<prefix>(?:^|[\s\"']|://[^/\s\"']+)(?:/v1/public/research|/r)/)[^/?#\s\"']+"
+    r"(?P<prefix>"
+    rf"{_PATH_SEPARATORS}v1{_PATH_SEPARATORS}public{_PATH_SEPARATORS}research{_PATH_SEPARATORS}"
+    rf"|(?:^|[\s\"'=(\[,;]|://[^/\s\"']+){_PATH_SEPARATORS}r{_PATH_SEPARATORS}"
+    r")[^/?#&\s\"']+",
+    re.IGNORECASE,
 )
 REDACTED_SHARE_TOKEN = "[redacted]"
 
