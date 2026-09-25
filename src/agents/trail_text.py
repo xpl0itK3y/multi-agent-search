@@ -167,10 +167,11 @@ TRAIL_DETAILS: dict[str, dict[str, str]] = {
         "ru": "Оценка академического и экспертного авторитета источников",
         "es": "Evaluación de la autoridad académica y experta de las fuentes",
     },
+    # {total}: figures checked against their cited source; {supported}: found there.
     "numeric_check": {
-        "en": "Numeric fact cross-check — figures verified: {count}",
-        "ru": "Кросс-проверка численных фактов — верифицировано показателей: {count}",
-        "es": "Verificación cruzada de datos numéricos — cifras verificadas: {count}",
+        "en": "Numeric fact cross-check — figures found in their cited source: {supported} of {total}",
+        "ru": "Кросс-проверка численных фактов — показателей найдено в указанном источнике: {supported} из {total}",
+        "es": "Verificación cruzada de datos numéricos — cifras halladas en su fuente citada: {supported} de {total}",
     },
     "viewpoints": {
         "en": "Weighing the balance of viewpoints and detecting bias",

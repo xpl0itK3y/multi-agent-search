@@ -505,9 +505,12 @@ class TrustReportMixin:
                         "phase": "verify",
                         "action": "validate_data",
                         "detail": trail_detail(
-                            "numeric_check", self._research_language(research), count=check.total
+                            "numeric_check",
+                            self._research_language(research),
+                            supported=check.supported,
+                            total=check.total,
                         ),
-                        "metrics": {"figures_count": check.total},
+                        "metrics": {"figures_count": check.total, "figures_supported": check.supported},
                     },
                 )
         except Exception as exc:  # pragma: no cover - defensive
