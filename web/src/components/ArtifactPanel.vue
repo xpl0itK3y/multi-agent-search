@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { saveFile } from "@/lib/download";
+import { safeHttpUrl } from "@/lib/url";
 import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
@@ -1056,7 +1057,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 <a
                   v-for="(u, j) in f.source_urls"
                   :key="j"
-                  :href="u"
+                  :href="safeHttpUrl(u) ?? undefined"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="text-xs text-accent hover:underline"

@@ -5,6 +5,7 @@ import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { CitationGround, SourceIndependence, SourcePreview } from "@/lib/types";
+import { safeHttpUrl } from "@/lib/url";
 
 const props = defineProps<{
   source: string;
@@ -28,22 +29,11 @@ function escAttr(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// A source URL safe to place inside an href: an http(s) URL that parses, normalized by
-// URL() (which percent-encodes spaces, quotes, angle brackets, backticks and non-ASCII),
-// with the few characters it leaves alone that matter in HTML or script contexts
-// encoded too, and attribute-escaped. Anything else gets no link ("").
+// A source URL safe to place inside a hand-built href: an http(s) URL that parses,
+// percent-encoded (lib/url) and attribute-escaped. Anything else gets no link ("").
 function safeHref(u: string | undefined): string {
-  const raw = (u || "").trim();
-  if (!/^https?:\/\//i.test(raw)) return "";
-  let href: string;
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
-    href = parsed.href;
-  } catch {
-    return "";
-  }
-  return escAttr(href.replace(/['"`<>\\\s]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")));
+  const href = safeHttpUrl(u);
+  return href ? escAttr(href) : "";
 }
 
 // Claim sentinels (verify mode): OPEN idx MID … OPEN idx END wraps one cited sentence.

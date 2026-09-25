@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
+import { safeHttpUrl } from "@/lib/url";
 
 const props = withDefaults(
   defineProps<{
@@ -701,7 +702,7 @@ function formatTime(isoStr?: string): string {
                 <a
                   v-for="(s, j) in entry.sources"
                   :key="j"
-                  :href="s.url || `https://${s.domain}`"
+                  :href="safeHttpUrl(s.url) ?? safeHttpUrl(`https://${s.domain}`) ?? undefined"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"

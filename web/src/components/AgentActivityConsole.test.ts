@@ -61,3 +61,29 @@ describe("AgentActivityConsole initial state", () => {
     expect(consoleBodyVisible("processing")).toBe(false);
   });
 });
+
+describe("AgentActivityConsole source chips", () => {
+  it("link only http(s) URLs, falling back to the source's domain", () => {
+    const wrapper = mount(AgentActivityConsole, {
+      props: {
+        entries: [
+          {
+            step: "search",
+            detail: "Searching",
+            sources: [
+              { domain: "ok.example", url: "https://ok.example/a" },
+              { domain: "evil.example", url: "javascript:alert(document.domain)" },
+            ],
+          },
+        ],
+        status: "processing",
+        live: true,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    const hrefs = wrapper.findAll("a").map((a) => a.attributes("href"));
+    wrapper.unmount();
+    expect(hrefs).toEqual(["https://ok.example/a", "https://evil.example/"]);
+  });
+});
