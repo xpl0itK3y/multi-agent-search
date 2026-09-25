@@ -8,8 +8,11 @@ method that drifts fails on the postgres leg instead of in production.
 The postgres leg shares the conftest throwaway database (migrated to head),
 so it never depends on a developer's working database.
 """
+import ast
+import inspect
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from sqlalchemy import update
@@ -35,6 +38,7 @@ from src.db.models import (
     WorkerHeartbeatORM,
 )
 from src.repositories.in_memory_task_store import InMemoryTaskStore
+from src.repositories.protocols import TaskStore
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
 from tests.postgres_helpers import truncate_runtime_tables
 
@@ -1029,3 +1033,44 @@ def test_telemetry_summary_counts_users_and_leaves_unknowns_out(store):
     assert summary.popular_models == [{"model": "deepseek-chat", "count": 2}, {"model": "deepseek-v4-pro", "count": 1}]
     assert summary.avg_prompt_len == 15.0
 
+
+# ── the suite covers the whole protocol ───────────────────────────────────────
+
+# The modules whose `store` fixture runs every test on both backends.
+CONFORMANCE_MODULES = ("test_task_store_conformance.py", "test_admin_store_conformance.py")
+
+
+def _protocol_methods() -> list[str]:
+    return sorted(name for name, value in vars(TaskStore).items() if callable(value) and not name.startswith("_"))
+
+
+def _methods_called_on_the_store_fixture() -> set[str]:
+    called: set[str] = set()
+    for module in CONFORMANCE_MODULES:
+        tree = ast.parse((Path(__file__).parent / module).read_text(encoding="utf-8"))
+        called.update(
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "store"
+        )
+    return called
+
+
+def test_every_protocol_method_runs_in_the_conformance_suite():
+    """A TaskStore method added without a conformance test is exactly how the two stores
+    drifted before (admin/telemetry methods, retry reset): fail until it has one."""
+    assert [name for name in _protocol_methods() if name not in _methods_called_on_the_store_fixture()] == []
+
+
+@pytest.mark.parametrize("implementation", [InMemoryTaskStore, SQLAlchemyTaskStore])
+def test_both_stores_implement_the_protocol_signatures(implementation):
+    def parameters(function):
+        return [(p.name, p.kind, p.default) for p in inspect.signature(function).parameters.values()]
+
+    mismatched = [
+        name
+        for name in _protocol_methods()
+        if not callable(getattr(implementation, name, None))
+        or parameters(getattr(implementation, name)) != parameters(getattr(TaskStore, name))
+    ]
+    assert mismatched == []
