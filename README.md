@@ -85,9 +85,18 @@ PROMETHEUS_METRICS_ENABLED=true
 
 ## Authentication and Admins
 
-Auth is off by default (`AUTH_DISABLED=true`, single-tenant). For a public
-deployment set `AUTH_DISABLED=false`, a random `AUTH_SECRET_KEY` of at least 32
-characters and, behind HTTPS, `AUTH_COOKIE_SECURE=true` (see `.env.example`).
+Auth is on by default (`AUTH_DISABLED=false`): people sign in and see only
+their own researches. The API refuses to start until `AUTH_SECRET_KEY`, which
+signs the session tokens, is a random value of at least 32 characters; the
+built-in default and anything shorter are rejected. Generate one with
+`openssl rand -hex 32` and put it in `.env`. Behind HTTPS also set
+`AUTH_COOKIE_SECURE=true` (see `.env.example`).
+
+`AUTH_DISABLED=true` is for a trusted local single-user setup only: nobody
+signs in, every request runs as one shared local user, and while `ADMIN_EMAILS`
+is empty that user also passes every admin check. Do not expose such an
+instance beyond your own machine.
+
 Users register with email and password or sign in with Google. Google sign-in
 never merges into an existing password account with the same email: the login
 page shows `?error=oauth_conflict` for that case and `?error=oauth_failed` for
@@ -142,6 +151,12 @@ DEEPSEEK_API_KEY=your_api_key_here
 DEEPSEEK_MODEL=deepseek-v4-pro
 TASK_STORE_BACKEND=postgres
 
+# Auth is on by default and the API will not start without this: paste the
+# output of `openssl rand -hex 32` (at least 32 random characters).
+AUTH_SECRET_KEY=
+# Or, for a trusted local single-user setup only (no login at all):
+# AUTH_DISABLED=true
+
 POSTGRES_USER=app
 POSTGRES_PASSWORD=app
 POSTGRES_DB=multi_agent_search
@@ -151,6 +166,12 @@ POSTGRES_PORT=5433
 FINALIZE_WORKER_INTERVAL=2.0
 QUEUE_MAINTENANCE_INTERVAL_SECONDS=60
 ```
+
+If `AUTH_SECRET_KEY` is left empty, is shorter than 32 characters or is the
+built-in default while auth is on, the API exits at startup with
+`Insecure auth configuration: AUTH_SECRET_KEY must be overridden ...`, so
+under Docker Compose the API never comes up and the web UI answers 502 on
+`/v1`. See "Authentication and Admins" above.
 
 See [.env.example](./.env.example) for a full example.
 
@@ -270,7 +291,7 @@ docker compose down -v
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # then set DEEPSEEK_API_KEY and AUTH_SECRET_KEY
 ```
 
 2. Start Postgres:
