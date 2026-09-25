@@ -113,6 +113,7 @@ def test_sqlalchemy_task_store_admin_methods(postgres_session_factory):
 def test_token_analytics_reuses_its_aggregates_across_page_changes(monkeypatch):
     """The totals and breakdowns scan all of llm_usage_logs; a page change within the
     cache window reads only the research page, and the aggregates refresh after it."""
+    from datetime import datetime, timedelta, timezone
     from types import SimpleNamespace
 
     from src.api.schemas import ResearchRequest, SearchDepth
@@ -123,6 +124,7 @@ def test_token_analytics_reuses_its_aggregates_across_page_changes(monkeypatch):
     service = ResearchService(task_store=store)
     for n in range(3):
         research = store.add_research(ResearchRequest(prompt=f"topic {n}", depth=SearchDepth.EASY), task_ids=[])
+        store.researches[research.id].created_at = datetime(2026, 9, 1, tzinfo=timezone.utc) + timedelta(minutes=n)
         store.record_llm_usage(research.id, None, "deepseek-chat", 10, 0, 10, 0.01)
     full_scans = []
     aggregate = store.get_admin_token_analytics
