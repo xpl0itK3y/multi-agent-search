@@ -45,8 +45,11 @@ class ReplanAgent:
         reason: str,
         task_descriptions: list[str],
         fallback: list[str],
+        llm_failures: list[str] | None = None,
     ) -> list[str]:
-        """Ask the LLM for gap-specific queries; fall back to templates on any failure."""
+        """Ask the LLM for gap-specific queries; fall back to templates on any failure.
+        A fallback caused by the LLM (an error or unusable output) appends `reason` to
+        `llm_failures`; running without an LLM is not a failure."""
         if self.llm is None:
             return fallback
 
@@ -85,6 +88,8 @@ class ReplanAgent:
                     return valid[:3]
         except Exception as exc:
             logger.warning("replan_llm_queries_failed reason=%r error=%s", reason, exc)
+        if llm_failures is not None:
+            llm_failures.append(reason)
         return fallback
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -109,7 +114,11 @@ class ReplanAgent:
         depth: SearchDepth,
         tasks: list[SearchTask],
         source_summary: SourceCriticSummary | None = None,
+        *,
+        llm_failures: list[str] | None = None,
     ) -> list[ReplanRecommendation]:
+        """Follow-up gaps for the task set. Pass `llm_failures` to learn which gaps fell
+        back to template queries because the LLM call failed."""
         recommendations: list[ReplanRecommendation] = []
         selected_sources = sum(task.search_metrics.selected_source_count for task in tasks)
         failed_tasks = [task for task in tasks if task.status.value == "failed" or not (task.result or [])]
@@ -135,7 +144,9 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
@@ -150,7 +161,9 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
@@ -165,7 +178,9 @@ class ReplanAgent:
             recommendations.append(
                 ReplanRecommendation(
                     reason=reason,
-                    suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                    suggested_queries=self._llm_queries(
+                        prompt, reason, task_descriptions, fallback, llm_failures
+                    ),
                 )
             )
 
@@ -185,7 +200,9 @@ class ReplanAgent:
                 recommendations.append(
                     ReplanRecommendation(
                         reason=reason,
-                        suggested_queries=self._llm_queries(prompt, reason, task_descriptions, fallback),
+                        suggested_queries=self._llm_queries(
+                            prompt, reason, task_descriptions, fallback, llm_failures
+                        ),
                     )
                 )
 

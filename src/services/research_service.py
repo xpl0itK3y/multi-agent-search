@@ -909,6 +909,10 @@ class ResearchService(
     # graph_state key for the /summary follow-ups. Not the graph's "replan_recommendations",
     # which the finalize graph writes only when a replan branch is possible (else []).
     _SUMMARY_FOLLOW_UP_KEY = "summary_follow_up"
+    # A result that fell back to template queries because the LLM failed is kept only this
+    # long: long enough that an outage does not cost LLM calls on every GET, short enough
+    # that the templates are not served for good once the LLM is back.
+    _SUMMARY_FOLLOW_UP_DEGRADED_TTL_SECONDS = 300
 
     @staticmethod
     def _tasks_fingerprint(tasks: list[SearchTask]) -> str:
@@ -926,29 +930,52 @@ class ResearchService(
         source_summary: SourceCriticSummary,
     ) -> list[ReplanRecommendation]:
         """Compute the follow-up recommendations once per task set and store them (SUMMARY-LLM):
-        they cost up to three LLM calls, and /summary used to pay that on every GET."""
+        they cost up to three LLM calls, and /summary used to pay that on every GET. A result
+        degraded by LLM failures carries `retry_after` and is recomputed once that passes."""
         fingerprint = self._tasks_fingerprint(tasks)
         stored = (research.graph_state or {}).get(self._SUMMARY_FOLLOW_UP_KEY) or {}
-        if stored.get("fingerprint") == fingerprint:
+        if stored.get("fingerprint") == fingerprint and not self._follow_up_retry_due(stored):
             return [ReplanRecommendation.model_validate(item) for item in stored.get("recommendations") or []]
+        llm_failures: list[str] = []
+        kwargs: dict[str, Any] = {"source_summary": source_summary}
+        if self._accepts_keyword(self.replan_agent.suggest_follow_up, "llm_failures"):
+            kwargs["llm_failures"] = llm_failures
         # Runs in the API process: bind the owner so the calls land in llm_usage_logs.
         with bind_observability_context(research_id=research.id, user_id=research.user_id or "local"):
             recommendations = self.replan_agent.suggest_follow_up(
                 research.prompt,
                 research.depth,
                 tasks,
-                source_summary=source_summary,
+                **kwargs,
             )
-        self.task_store.merge_research_graph_state(
-            research.id,
-            {
-                self._SUMMARY_FOLLOW_UP_KEY: {
-                    "fingerprint": fingerprint,
-                    "recommendations": [item.model_dump() for item in recommendations],
-                }
-            },
-        )
+        entry: dict[str, Any] = {
+            "fingerprint": fingerprint,
+            "recommendations": [item.model_dump() for item in recommendations],
+        }
+        if llm_failures:
+            entry["retry_after"] = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self._SUMMARY_FOLLOW_UP_DEGRADED_TTL_SECONDS)
+            ).isoformat()
+            logger.info(
+                "summary_follow_up_degraded research_id=%s failed_gaps=%s",
+                research.id, len(llm_failures),
+            )
+        self.task_store.merge_research_graph_state(research.id, {self._SUMMARY_FOLLOW_UP_KEY: entry})
         return recommendations
+
+    @staticmethod
+    def _follow_up_retry_due(stored: dict) -> bool:
+        retry_after = stored.get("retry_after")
+        if not retry_after:
+            return False
+        try:
+            due = datetime.fromisoformat(str(retry_after))
+        except ValueError:
+            return True
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= due
 
     def get_research_status_summary(self, research_id: str) -> ResearchStatusSummary:
         """Cheap status snapshot for polling — no source-critic/evidence/claim/replan/LLM."""
