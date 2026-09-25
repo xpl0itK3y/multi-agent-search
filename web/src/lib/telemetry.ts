@@ -12,6 +12,10 @@ import { authHeaders } from "./api";
 // Same API prefix as api.ts / stream.ts (empty => same origin via the dev proxy).
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 const SESSION_KEY = "telemetry_session_id";
+// Who the stored id belongs to, so a different user signing in on this tab never
+// inherits it — even without an explicit sign-in (a Google sign-in after the previous
+// user's session expired comes back as a restored session).
+const OWNER_KEY = "telemetry_session_owner";
 const HEARTBEAT_MS = 30_000;
 
 // The server accepts exactly these names (UserTelemetryEventInput); others get a 422.
@@ -21,24 +25,33 @@ export type TelemetryCategory = "system" | "ui";
 let activeUserId: string | null = null;
 let listenersInstalled = false;
 
-function mintSessionId(): string {
-  const sid = "sess_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
+function readSession(key: string): string | null {
   try {
-    sessionStorage.setItem(SESSION_KEY, sid);
+    return sessionStorage.getItem(key);
+  } catch {
+    return null; // storage blocked
+  }
+}
+
+function writeSession(key: string, value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
   } catch {
     // Storage blocked: the id just won't survive a reload.
   }
+}
+
+// A fresh id for `owner` (null: nobody yet, the next user to sign in adopts it).
+function mintSessionId(owner: string | null): string {
+  const sid = "sess_" + Math.random().toString(36).substring(2, 11) + "_" + Date.now();
+  writeSession(SESSION_KEY, sid);
+  writeSession(OWNER_KEY, owner);
   return sid;
 }
 
 function getSessionId(): string {
-  let sid: string | null = null;
-  try {
-    sid = sessionStorage.getItem(SESSION_KEY);
-  } catch {
-    // fall through to a fresh id
-  }
-  return sid || mintSessionId();
+  return readSession(SESSION_KEY) || mintSessionId(activeUserId);
 }
 
 export function getClientDeviceInfo(): Record<string, any> {
@@ -137,13 +150,18 @@ function installListeners(): void {
 
 /**
  * Begin (or resume) telemetry for a signed-in user and announce the session with its
- * device info. `newSession` mints a fresh session id — on an explicit sign-in, so a
- * tab never reuses the id of whoever was signed in before.
+ * device info. A tab never reuses the id of whoever was signed in before: `newSession`
+ * (an explicit sign-in) mints a fresh one, and so does a stored id owned by another
+ * user. A reload by the same user keeps its id, and an id with no recorded owner
+ * (minted at sign-out, or stored by an older build) is adopted.
  */
 export function startTelemetry(userId: string, { newSession = false }: { newSession?: boolean } = {}): void {
   if (typeof window === "undefined") return;
   if (activeUserId === userId && !newSession) return;
-  if (newSession) mintSessionId();
+  const owner = readSession(OWNER_KEY);
+  const someoneElses = (owner !== null && owner !== userId) || (activeUserId !== null && activeUserId !== userId);
+  if (newSession || someoneElses) mintSessionId(userId);
+  else writeSession(OWNER_KEY, userId);
   activeUserId = userId;
   installListeners();
   trackEvent("session_start", "system", { path: window.location.pathname }, true);
@@ -152,5 +170,5 @@ export function startTelemetry(userId: string, { newSession = false }: { newSess
 /** Stop sending (signed out) and rotate the session id for whoever signs in next. */
 export function stopTelemetry(): void {
   activeUserId = null;
-  mintSessionId();
+  mintSessionId(null);
 }

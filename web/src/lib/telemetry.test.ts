@@ -102,4 +102,33 @@ describe("telemetry client", () => {
     expect(events).toHaveLength(1);
     expect(events[0].body.session_id).toBe("sess_same_tab");
   });
+
+  // A page load (module state gone, sessionStorage kept) that signs someone in without
+  // an explicit sign-in: a Google callback, or a reload.
+  async function reloadAndResume(userId: string): Promise<string> {
+    const previous = loaded;
+    const { startTelemetry } = await loadTelemetry();
+    fetchMock.mockClear();
+    startTelemetry(userId);
+    const sid = sentEvents(fetchMock)[0].body.session_id;
+    previous?.stopTelemetry(); // only now silence the unloaded page's listeners
+    return sid;
+  }
+
+  it("never hands the previous user's id to someone else signing in on the tab", async () => {
+    const { startTelemetry } = await loadTelemetry();
+    startTelemetry("user-a");
+    const idA = sentEvents(fetchMock)[0].body.session_id;
+
+    // A's session expires → /login → B signs in with Google → a restored session.
+    expect(await reloadAndResume("user-b")).not.toBe(idA);
+  });
+
+  it("keeps the id across a reload by the same user", async () => {
+    const { startTelemetry } = await loadTelemetry();
+    startTelemetry("user-a");
+    const idA = sentEvents(fetchMock)[0].body.session_id;
+
+    expect(await reloadAndResume("user-a")).toBe(idA);
+  });
 });
