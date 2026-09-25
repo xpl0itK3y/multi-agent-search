@@ -314,6 +314,41 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage(new ApiError(404, "Report is not ready yet"), t)).toBe("[errors.api.notFound]");
   });
 
+  it("names why an admin requeue of a dead-letter finalize job was refused", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+
+    // job_queue_mixin.requeue_research_finalize_job, raised after the dead-letter check.
+    const cases: [string, string][] = [
+      ["Only the finalize job of a failed research can be requeued", "finalizeResearchNotFailed"],
+      ["A newer finalize job has superseded this one", "finalizeJobSuperseded"],
+      ["Finalize job state changed. Please retry.", "finalizeJobChanged"],
+    ];
+    for (const [detail, key] of cases) {
+      expect(apiErrorMessage(new ApiError(409, detail), t), detail).toBe(`[errors.api.${key}]`);
+      for (const { value } of LOCALES) {
+        expect(i18n.global.te(`errors.api.${key}`, value), `${value}: ${key}`).toBe(true);
+        // A text of its own, not the generic conflict or the dead-letter one.
+        for (const other of ["conflict", "notDeadLetter"]) {
+          expect(i18n.global.t(`errors.api.${key}`, {}, { locale: value }), `${value}: ${key}`).not.toBe(
+            i18n.global.t(`errors.api.${other}`, {}, { locale: value }),
+          );
+        }
+      }
+    }
+    // Similar texts of other refusals keep their own mapping.
+    expect(apiErrorMessage(new ApiError(409, "Research state changed. Please retry."), t)).toBe("[errors.api.conflict]");
+    expect(apiErrorMessage(new ApiError(409, "Only dead-letter finalize jobs can be requeued"), t)).toBe(
+      "[errors.api.notDeadLetter]",
+    );
+    expect(apiErrorMessage(new ApiError(409, "Only failed research can be retried"), t)).toBe("[errors.api.conflict]");
+    // Only on a 409.
+    expect(apiErrorMessage(new ApiError(404, "A newer finalize job has superseded this one"), t)).toBe(
+      "[errors.api.notFound]",
+    );
+  });
+
   it("explains a refused sign-up with an administrator's email", async () => {
     stubEnv(null, "/");
     const { ApiError, apiErrorMessage } = await import("./api");

@@ -220,6 +220,11 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
     [/^(?:Email already registered|An account with this email already exists)\b/, "emailTaken"],
     [/^Report is not ready yet\b/, "reportNotReady"],
     [/^Only dead-letter \w+ jobs can be requeued\b/, "notDeadLetter"],
+    // An admin requeue of a dead-letter finalize job (job_queue_mixin): the research is
+    // no longer FAILED, a newer job replaced this one, or the job changed concurrently.
+    [/^Only the finalize job of a failed research can be requeued\b/, "finalizeResearchNotFailed"],
+    [/^A newer finalize job has superseded this one\b/, "finalizeJobSuperseded"],
+    [/^Finalize job state changed\b/, "finalizeJobChanged"],
   ],
 };
 
