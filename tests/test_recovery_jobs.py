@@ -109,4 +109,5 @@ def test_service_recovers_stale_finalize_jobs_and_preserves_analyzing(monkeypatc
     assert current.status == ResearchStatus.ANALYZING
     assert current.graph_state["resume_after_stale_recovery"] is True
     assert current.graph_trail[-1]["step"] == "stale_recovered"
-    assert "resume_from=verify" in current.graph_trail[-1]["detail"]
+    assert current.graph_trail[-1]["metrics"] == {"resume_from": "verify"}
+    assert "resuming after step verify" in current.graph_trail[-1]["detail"]

@@ -11,6 +11,7 @@ import uuid
 from src.domain.errors import NotFoundError
 
 from src.agents.cross_language import detect_language
+from src.agents.trail_text import trail_detail
 from src.config import settings
 from src.domain import (
     AuditQuery,
@@ -174,7 +175,11 @@ class TrustReportMixin:
                         "agent": "SourceIndependenceAgent",
                         "phase": "critic",
                         "action": "cluster_origins",
-                        "detail": f"Проверка независимости источников: обнаружено {len(independence.clusters)} независимых кластеров",
+                        "detail": trail_detail(
+                            "independence",
+                            self._research_language(research),
+                            count=len(independence.clusters),
+                        ),
                         "metrics": {"clusters": len(independence.clusters)},
                     },
                 )
@@ -218,7 +223,7 @@ class TrustReportMixin:
                         "agent": "SourceReputationAgent",
                         "phase": "critic",
                         "action": "score_reputation",
-                        "detail": "Оценка академического и экспертного авторитета источников",
+                        "detail": trail_detail("reputation", self._research_language(research)),
                     },
                 )
         except Exception as exc:  # pragma: no cover - defensive
@@ -323,7 +328,7 @@ class TrustReportMixin:
                         "agent": "CrossLanguageAgent",
                         "phase": "plan",
                         "action": "multilingual_expansion",
-                        "detail": f"Мультиязычное расширение: поиск на {', '.join(langs)}",
+                        "detail": trail_detail("cross_language", query_lang, languages=", ".join(langs)),
                         "metrics": {"languages": langs, "query_count": len(queries)},
                     },
                 )
@@ -377,7 +382,7 @@ class TrustReportMixin:
                         "agent": "CrossLanguageAgent",
                         "phase": "verify",
                         "action": "language_audit",
-                        "detail": f"Сравнение зарубежных и локальных источников ({foreign_count} иноязычных)",
+                        "detail": trail_detail("cross_language_analysis", query_lang, count=foreign_count),
                         "metrics": {"foreign_sources": foreign_count, "by_language": by_lang},
                     },
                 )
@@ -476,7 +481,9 @@ class TrustReportMixin:
                         "agent": "NumericCheckAgent",
                         "phase": "verify",
                         "action": "validate_data",
-                        "detail": f"Кросс-проверка численных фактов: верифицировано {len(check.figures)} показателей",
+                        "detail": trail_detail(
+                            "numeric_check", self._research_language(research), count=len(check.figures)
+                        ),
                         "metrics": {"figures_count": len(check.figures)},
                     },
                 )

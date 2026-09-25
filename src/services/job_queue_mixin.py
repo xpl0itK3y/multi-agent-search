@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.domain.errors import ConflictError, NotFoundError
 
+from src.agents.trail_text import trail_detail
 from src.config import settings
 from src.domain import (
     FinalizeJobStatus,
@@ -85,7 +86,13 @@ class JobQueueMixin:
                 {"resume_after_stale_recovery": True},
                 {
                     "step": "stale_recovered",
-                    "detail": f"Finalize job {job.id} recovered after timeout; resume_from={resume_step}",
+                    "detail": trail_detail(
+                        "stale_recovered",
+                        self._research_language(research) if research else None,
+                        job_id=job.id,
+                        step=resume_step,
+                    ),
+                    "metrics": {"resume_from": resume_step},
                 },
             )
             # Re-dispatch to Redis (see search-job recovery note above).

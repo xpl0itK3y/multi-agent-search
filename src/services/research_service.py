@@ -23,6 +23,7 @@ from src.agents.numeric_check import NumericCheckAgent
 from src.agents.confidence import ConfidenceAgent
 from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
+from src.agents.trail_text import TRAIL_DETAILS, research_language, trail_detail
 from src.brokers.redis_broker import RedisBroker
 from src.services.auth_mixin import AuthMixin
 from src.services.operational_health_mixin import OperationalHealthMixin
@@ -433,13 +434,16 @@ class ResearchService(
                     logger.info("decompose_skipped_terminal research_id=%s status=%s", research_id, research.status.value)
                     return
                 graph_state = (research.graph_state if research else None) or {}
+                language = self._research_language(research) if research else detect_language(
+                    request.prompt
+                )
                 self._emit_plan_progress(
                     research_id,
                     "plan_start",
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="analyze_prompt",
-                    detail="Анализ темы исследования и постановка исследовательских задач",
+                    detail=trail_detail("plan_start", language),
                 )
                 # Clarify step (plan-first only, once): ask up to 3 questions before planning.
                 if (
@@ -456,7 +460,7 @@ class ResearchService(
                             agent="ClarifierAgent",
                             phase="plan",
                             action="generate_questions",
-                            detail=f"Сформировано {len(questions)} уточняющих вопросов для фокуса исследования",
+                            detail=trail_detail("clarify", language, count=len(questions)),
                             metrics={"question_count": len(questions)},
                         )
                         logger.info(
@@ -465,16 +469,13 @@ class ResearchService(
                         )
                         return
                 effective_prompt = self._augment_prompt_with_clarifications(request.prompt, graph_state)
-                language = self._research_language(research) if research else detect_language(
-                    request.prompt
-                )
                 self._emit_plan_progress(
                     research_id,
                     "decompose",
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="decompose_topics",
-                    detail=f"Декомпозиция темы на направления (глубина: {request.depth.value})",
+                    detail=trail_detail("decompose", language, depth=request.depth.value),
                     metrics={"depth": request.depth.value},
                 )
                 tasks_raw = self._run_decompose(
@@ -496,7 +497,7 @@ class ResearchService(
                         agent="OrchestratorAgent",
                         phase="plan",
                         action="awaiting_approval",
-                        detail=f"Сформирован черновик плана из {len(tasks_raw)} пунктов. Ожидание утверждения.",
+                        detail=trail_detail("plan_review", language, count=len(tasks_raw)),
                         metrics={"task_count": len(tasks_raw)},
                     )
                     logger.info(
@@ -527,7 +528,7 @@ class ResearchService(
                     agent="OrchestratorAgent",
                     phase="plan",
                     action="tasks_enqueued",
-                    detail=f"План утвержден: создано {len(registered_tasks)} поисковых задач, запущен параллельный сбор данных",
+                    detail=trail_detail("plan_ready", language, count=len(registered_tasks)),
                     metrics={"task_count": len(registered_tasks), "enqueued_jobs": enqueued_jobs},
                 )
                 if enqueued_jobs == 0:
@@ -1552,10 +1553,7 @@ class ResearchService(
     @staticmethod
     def _research_language(research: ResearchRecord) -> str:
         """Return the language stored at creation, with a fallback for legacy rows."""
-        language = getattr(research, "language", None)
-        if language and language != "unknown":
-            return language
-        return detect_language(research.prompt)
+        return research_language(research)
 
     def _build_graph_execution_summary(self, tasks: list[SearchTask]) -> dict:
         follow_up_tasks = [task for task in tasks if task.id.startswith("replan-")]
@@ -1723,6 +1721,12 @@ class ResearchService(
                 lines.append(f"  {finding.challenge}")
         return "\n".join(lines)
 
+    _GRAPH_TRAIL_LABELS = {
+        "ru": ("## Трасса выполнения графа", "Шаг", "Детали"),
+        "en": ("## Graph Execution Trail", "Step", "Details"),
+        "es": ("## Traza de ejecución del grafo", "Paso", "Detalles"),
+    }
+
     def _inject_graph_execution_trail(self, report: str, research_id: str) -> str:
         research = self.task_store.get_research(research_id)
         if not research or not research.graph_trail:
@@ -1736,10 +1740,9 @@ class ResearchService(
         ):
             return report
 
-        language = self._research_language(research)
-        heading = "## Трасса выполнения графа" if language == "ru" else "## Graph Execution Trail"
-        step_label = "Шаг" if language == "ru" else "Step"
-        detail_label = "Детали" if language == "ru" else "Details"
+        heading, step_label, detail_label = self._GRAPH_TRAIL_LABELS.get(
+            self._research_language(research), self._GRAPH_TRAIL_LABELS["en"]
+        )
         lines = [heading]
         # Exclude live search-progress steps — the trail in the report is the finalize graph.
         finalize_entries = [e for e in research.graph_trail if e.get("step") != "search"]
@@ -1815,25 +1818,21 @@ class ResearchService(
             "agent": "RedTeamAgent",
             "phase": "verify",
             "action": "stress_test",
-            "detail": "Анализ контраргументов и стресс-тестирование гипотез",
         },
         "audit": {
             "agent": "CitationAuditAgent",
             "phase": "verify",
             "action": "audit_citations",
-            "detail": "Аудит цитат, фактчекинг и проверка источников",
         },
         "viewpoints": {
             "agent": "StanceAgent",
             "phase": "verify",
             "action": "stance_detection",
-            "detail": "Оценка баланса точек зрения и выявление предвзятости",
         },
         "completed": {
             "agent": "System",
             "phase": "complete",
             "action": "finish",
-            "detail": "Исследование завершено, итоговый аналитический отчёт готов",
         },
     }
 
@@ -1848,11 +1847,13 @@ class ResearchService(
         action: str | None = None,
         detail: str | None = None,
         metrics: dict | None = None,
+        language: str | None = None,
     ) -> None:
         """Append a finalize-phase step to the live trail so the progress trace keeps moving
         during synthesis (and surfaces the trust/verification work as it happens). Labelled
-        by the frontend via trace.{step}. Trail failures are best-effort; a lost lease must
-        stop the fenced runner before it can publish a result."""
+        by the frontend via trace.{step}; the detail is written in the research's
+        ``language``. Trail failures are best-effort; a lost lease must stop the fenced
+        runner before it can publish a result."""
         self.ensure_finalize_job_lease(finalize_job_id, lease_epoch)
         store = self.task_store
         if not research_id or not hasattr(store, "append_research_graph_event"):
@@ -1863,7 +1864,7 @@ class ResearchService(
             "agent": agent or meta.get("agent", "FinalizeRunner"),
             "phase": phase or meta.get("phase", "verify"),
             "action": action or meta.get("action", step),
-            "detail": detail or meta.get("detail", ""),
+            "detail": detail or (trail_detail(step, language) if step in TRAIL_DETAILS else ""),
         }
         if metrics:
             event["metrics"] = metrics
@@ -1897,11 +1898,12 @@ class ResearchService(
         checked before every step (CANCEL-TRUST-SUITE), so a research cancelled during the
         last graph step stops spending here too; FinalizeCancelled ends the suite."""
         research_id = research.id
+        language = self._research_language(research)
         self._raise_if_cancelled(research_id)
-        self._emit_finalize_progress(research_id, "redteam", finalize_job_id, lease_epoch)
+        self._emit_finalize_progress(research_id, "redteam", finalize_job_id, lease_epoch, language=language)
         report = self._maybe_red_team(report, research, tasks)
         self._raise_if_cancelled(research_id)
-        self._emit_finalize_progress(research_id, "audit", finalize_job_id, lease_epoch)
+        self._emit_finalize_progress(research_id, "audit", finalize_job_id, lease_epoch, language=language)
         # Share the exact analyzer output across the trust steps. Legacy/custom analyzers
         # fall back to the persisted canonical table or deterministic reconstruction.
         if aggregated is None:
@@ -1918,7 +1920,7 @@ class ResearchService(
             self._raise_if_cancelled(research_id)
             step()
         self._raise_if_cancelled(research_id)
-        self._emit_finalize_progress(research_id, "viewpoints", finalize_job_id, lease_epoch)
+        self._emit_finalize_progress(research_id, "viewpoints", finalize_job_id, lease_epoch, language=language)
         self._maybe_assess_stance(research, tasks, aggregated=aggregated)
         self._raise_if_cancelled(research_id)
         self._analyze_cross_language(research, tasks, aggregated=aggregated)
@@ -2054,7 +2056,9 @@ class ResearchService(
             logger.info("finalize_discarded_cancelled research_id=%s", research_id)
             return finalized_research
 
-        self._emit_finalize_progress(research_id, "completed")
+        self._emit_finalize_progress(
+            research_id, "completed", language=self._research_language(finalized_research)
+        )
         logger.info("research_finalize_completed")
 
         # fire webhook if configured (F-1)

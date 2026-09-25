@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.analyzer import AnalyzerAgent
 from src.agents.cross_language import detect_language
+from src.agents.trail_text import TRAIL_DETAILS, trail_detail
 from src.domain import ReplanRecommendation, ResearchStatus, SearchDepth, SearchTask
 from src.config import settings
 from src.graph.metrics import (
@@ -34,42 +35,38 @@ class FinalizeLeaseLost(RuntimeError):
     """Raised when stale-job recovery fences off a previous finalize runner."""
 
 
+# Stable step/agent/phase/action codes for the trail; the human detail sentence for each
+# step is rendered from src.agents.trail_text in the research's language.
 GRAPH_STEP_METADATA: dict[str, dict[str, Any]] = {
     "collect_context": {
         "agent": "SourceCriticAgent",
         "phase": "critic",
         "action": "evaluate_sources",
-        "detail": "Оценка достоверности источников, структурирование доказательств и выявление белых пятен",
     },
     "replan": {
         "agent": "ReplanAgent",
         "phase": "plan",
         "action": "gap_analysis_loop",
-        "detail": "↩ Обнаружены пробелы в данных: возврат на допоиск источников для полноты картины",
     },
     "analyze": {
         "agent": "AnalyzerAgent",
         "phase": "synthesis",
         "action": "synthesize_report",
-        "detail": "Глубокий синтез аналитического отчёта, сведение фактов и разметка цитат",
     },
     "tie_break": {
         "agent": "ReplanAgent",
         "phase": "critic",
         "action": "conflict_tie_break",
-        "detail": "↩ Обнаружены противоречия между источниками: запуск арбитражного поиска (Tie-Break)",
     },
     "verify": {
         "agent": "ReportCriticAgent",
         "phase": "verify",
         "action": "verify_claims",
-        "detail": "Верификация утверждений отчёта, контроль точности цитирования и рецензирование",
     },
     "verify_retry": {
         "agent": "ReportCriticAgent",
         "phase": "verify",
         "action": "critic_revision_loop",
-        "detail": "↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
     },
 }
 
@@ -240,10 +237,12 @@ class FinalizeGraphRunner:
         action: str | None = None,
         detail: str | None = None,
         metrics: dict | None = None,
+        language: str | None = None,
     ) -> None:
         """Surface this finalize step on the live progress trail (streamed via SSE) so the
         trace keeps moving during synthesis instead of freezing after the search phase.
-        Step names reuse the existing trace.* i18n labels (collect_context/analyze/…)."""
+        Step names reuse the existing trace.* i18n labels (collect_context/analyze/…);
+        the default detail is the step's sentence in the research's ``language``."""
         store = getattr(self.service, "task_store", None)
         if not research_id or store is None or not hasattr(store, "append_research_graph_event"):
             return
@@ -254,7 +253,7 @@ class FinalizeGraphRunner:
                 "agent": agent or meta.get("agent", "FinalizeRunner"),
                 "phase": phase or meta.get("phase", "synthesis"),
                 "action": action or meta.get("action", step),
-                "detail": detail or meta.get("detail", ""),
+                "detail": detail or (trail_detail(step, language) if step in TRAIL_DETAILS else ""),
             }
             if metrics:
                 event["metrics"] = metrics
@@ -262,12 +261,12 @@ class FinalizeGraphRunner:
         except Exception:  # progress events must never break finalize
             pass
 
-    def _run_timed_step(self, step_name: str, action, research_id: str):
+    def _run_timed_step(self, step_name: str, action, research_id: str, language: str | None = None):
         research = self.service.task_store.get_research(research_id)
         if research is not None and research.status == ResearchStatus.CANCELLED:
             logger.info("langgraph_finalize_cancelled_before_step step=%s", step_name)
             raise FinalizeCancelled(research_id)
-        self._emit_trail(research_id, step_name)
+        self._emit_trail(research_id, step_name, language=language)
         started_at = perf_counter()
         try:
             result = action()
@@ -332,11 +331,16 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "collect_context",
-                f"Collected {len(aggregated_sources)} sources, replan_needed={should_replan}",
+                trail_detail(
+                    "collect_context_done",
+                    state.get("language"),
+                    count=len(aggregated_sources),
+                    replan=should_replan,
+                ),
             )
             return next_state
 
-        return self._run_timed_step("collect_context", action, state["research_id"])
+        return self._run_timed_step("collect_context", action, state["research_id"], state.get("language"))
 
     def _apply_replan(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -376,12 +380,17 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "replan",
-                f"Created {len(created_tasks)} follow-up tasks from {len(recommendations)} recommendations",
+                trail_detail(
+                    "replan_done",
+                    state.get("language"),
+                    tasks=len(created_tasks),
+                    recommendations=len(recommendations),
+                ),
             )
             record_graph_replan()
             return next_state
 
-        return self._run_timed_step("replan", action, state["research_id"])
+        return self._run_timed_step("replan", action, state["research_id"], state.get("language"))
 
     def _supported_analysis_kwargs(self, candidate: dict) -> dict:
         """Filter ``candidate`` kwargs down to those ``run_analysis`` accepts.
@@ -461,12 +470,12 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "analyze",
-                f"Analyzer run completed. analyze_attempt={next_state['analyze_attempts']}",
+                trail_detail("analyze_done", state.get("language"), attempt=next_state["analyze_attempts"]),
             )
             record_graph_analyze()
             return next_state
 
-        return self._run_timed_step("analyze", action, state["research_id"])
+        return self._run_timed_step("analyze", action, state["research_id"], state.get("language"))
 
     def _apply_tie_break(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -501,12 +510,17 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "tie_break",
-                f"Created {len(created_tasks)} tie-break tasks from {len(recommendations)} recommendations",
+                trail_detail(
+                    "tie_break_done",
+                    state.get("language"),
+                    tasks=len(created_tasks),
+                    recommendations=len(recommendations),
+                ),
             )
             record_graph_tie_break()
             return next_state
 
-        return self._run_timed_step("tie_break", action, state["research_id"])
+        return self._run_timed_step("tie_break", action, state["research_id"], state.get("language"))
 
     def _verify(self, state: FinalizeGraphState) -> FinalizeGraphState:
         def action() -> FinalizeGraphState:
@@ -548,8 +562,8 @@ class FinalizeGraphRunner:
                     agent="ReportCriticAgent",
                     phase="verify",
                     action="critic_revision_loop",
-                    detail="↩ Рецензент вернул отчёт на доработку в AnalyzerAgent: устранение слабых мест и усиление доказательств",
                     metrics={"attempt": state["analyze_attempts"] + 1},
+                    language=state.get("language"),
                 )
             elif should_tie_break and tie_break_recommendations:
                 effective_prompt = state["effective_prompt"]
@@ -559,7 +573,11 @@ class FinalizeGraphRunner:
                     agent="ReplanAgent",
                     phase="critic",
                     action="conflict_tie_break",
-                    detail=f"↩ Обнаружены противоречия в источниках ({len(state.get('detected_conflicts') or [])}): запуск арбитражного поиска (Tie-Break)",
+                    detail=trail_detail(
+                        "tie_break_conflicts",
+                        state.get("language"),
+                        count=len(state.get("detected_conflicts") or []),
+                    ),
                     metrics={"recommendations": len(tie_break_recommendations)},
                 )
             else:
@@ -574,11 +592,18 @@ class FinalizeGraphRunner:
             self._checkpoint(
                 next_state,
                 "verify",
-                f"weak_support={weak_support} conflicts={len(state.get('detected_conflicts') or [])} retry={should_retry} tie_break={next_state['should_tie_break']}",
+                trail_detail(
+                    "verify_done",
+                    state.get("language"),
+                    weak_support=weak_support,
+                    conflicts=len(state.get("detected_conflicts") or []),
+                    retry=should_retry,
+                    tie_break=next_state["should_tie_break"],
+                ),
             )
             return next_state
 
-        return self._run_timed_step("verify", action, state["research_id"])
+        return self._run_timed_step("verify", action, state["research_id"], state.get("language"))
 
     def _supports_graph_branching(self, analyzer) -> bool:
         return isinstance(analyzer, AnalyzerAgent) or getattr(analyzer, "enable_graph_branching", False) is True
@@ -659,7 +684,7 @@ class FinalizeGraphRunner:
         self._checkpoint(
             state,
             "complete",
-            f"Finalize graph completed with {state.get('analyze_attempts', 0)} analyze passes",
+            trail_detail("complete", state.get("language"), count=state.get("analyze_attempts", 0)),
         )
         record_graph_completed_run()
         return self._result_from_state(state)
