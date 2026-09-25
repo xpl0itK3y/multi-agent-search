@@ -369,7 +369,9 @@ def format_trail_cursor(cursor: TrailCursor) -> str:
 
 def parse_trail_cursor(value: str | None) -> TrailCursor | None:
     timestamp, _, count = (value or "").rpartition("|")
-    if not timestamp or not count.isdigit():
+    # ASCII digits only: isdigit() also accepts superscripts ("\xb2" is a valid latin-1
+    # header byte) that int() rejects, so a malformed Last-Event-ID raised a 500.
+    if not timestamp or not (count.isascii() and count.isdigit()):
         return None
     return timestamp, int(count)
 

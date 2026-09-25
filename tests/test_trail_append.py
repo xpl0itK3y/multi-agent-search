@@ -99,6 +99,12 @@ def test_cursor_round_trips_through_the_sse_id():
         assert parse_trail_cursor(junk) is None
 
 
+def test_cursor_rejects_non_ascii_digits():
+    # str.isdigit() accepts these, but int() rejects the superscripts; all are junk here.
+    for junk in ("2026|\xb2", "2026|\xb9\xb2", "2026|١", "2026|3\xb3"):
+        assert parse_trail_cursor(junk) is None
+
+
 def _research_snapshot(store, research_id, status, trail):
     research = store.get_research(research_id).model_copy(deep=True)
     research.status = status
@@ -152,5 +158,21 @@ async def test_events_stream_resumes_after_last_event_id(client):
     after_first = unsent_trail_entries(trail[:1], None)[-1][1]
 
     events = await _stream(client, record.id, headers={"Last-Event-ID": format_trail_cursor(after_first)})
+
+    assert len([name for _, name in events if name == "trace_step"]) == 2
+
+
+@pytest.mark.anyio
+async def test_events_stream_replays_everything_for_a_non_ascii_last_event_id(client):
+    service = client._transport.app.state.research_service
+    store = service.task_store
+    record = store.add_research(ResearchRequest(prompt="junk resume id", depth=SearchDepth.EASY), task_ids=[])
+    for detail in ("a", "b"):
+        store.append_research_graph_event(record.id, {"step": "search", "detail": detail})
+    store.update_research_status(record.id, ResearchStatus.COMPLETED, "final")
+    timestamp = store.get_research(record.id).graph_trail[0]["timestamp"]
+
+    # Raw header bytes: 0xB2 (superscript two) reaches the app as "\xb2" via latin-1.
+    events = await _stream(client, record.id, headers={"Last-Event-ID": f"{timestamp}|".encode() + b"\xb2"})
 
     assert len([name for _, name in events if name == "trace_step"]) == 2
