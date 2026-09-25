@@ -39,17 +39,14 @@ NAMED_LLM_ROUTES = [
     ("POST", "/v1/research/{research_id}/messages/stream"),
     ("POST", "/v1/research/{research_id}/retry"),
     ("GET", "/v1/research/{research_id}/summary"),
-]
-
-# Start LLM work without the limiter. Each is a one-shot, admission-gated transition of a
-# research whose creation was rate-limited, so the spend stays bounded per research, but
-# they should be metered like the rest. Remove an entry once its route depends on
-# enforce_llm_rate_limit (this test fails until you do).
-KNOWN_UNMETERED_LLM_ROUTES = {
     ("POST", "/v1/research/{research_id}/clarify"),
     ("POST", "/v1/research/{research_id}/plan/approve"),
     ("POST", "/v1/research/{research_id}/finalize"),
-}
+]
+
+# Routes allowed to start LLM work without the limiter. Keep it empty: a route that needs an
+# exception must be listed here explicitly, with the reason next to it.
+KNOWN_UNMETERED_LLM_ROUTES: set[tuple[str, str]] = set()
 
 
 def _depends_on(dependant, call) -> bool:

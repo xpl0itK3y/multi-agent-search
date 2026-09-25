@@ -1372,7 +1372,12 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).get_research_clarifications(research_id)
 
     @app.post("/v1/research/{research_id}/clarify", response_model=ResearchRecord, dependencies=research_guard)
-    def submit_clarifications(research_id: str, payload: ClarifyAnswers, request: Request):
+    def submit_clarifications(
+        research_id: str,
+        payload: ClarifyAnswers,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return _public_record(get_research_service(request).submit_clarifications(research_id, payload.answers))
 
     @app.get("/v1/research/{research_id}/plan", response_model=ResearchPlan, dependencies=research_guard)
@@ -1384,7 +1389,11 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).update_research_plan(research_id, payload)
 
     @app.post("/v1/research/{research_id}/plan/approve", response_model=ResearchRecord, dependencies=research_guard)
-    def approve_research_plan(research_id: str, request: Request):
+    def approve_research_plan(
+        research_id: str,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         return _public_record(get_research_service(request).approve_research_plan(research_id))
 
     @app.get("/v1/research/{research_id}/messages", response_model=List[ChatMessage], dependencies=research_guard)
@@ -1635,7 +1644,11 @@ def register_routes(app: FastAPI) -> None:
         )
 
     @app.post("/v1/research/{research_id}/finalize", response_model=ResearchFinalizeResponse, dependencies=research_guard)
-    def finalize_research(research_id: str, request: Request):
+    def finalize_research(
+        research_id: str,
+        request: Request,
+        _rate_user: AuthUser = Depends(enforce_llm_rate_limit),
+    ):
         research, job = get_research_service(request).enqueue_research_finalization(research_id)
         return ResearchFinalizeResponse(
             research=research,
