@@ -30,13 +30,22 @@ The project now supports:
   `WorkerJobFailureRate`, `FinalizeQueueBacklog`); test the rules with
   `promtool test rules ops/prometheus/alerts.test.yml`.
   `mas_worker_jobs_total` counts job attempts: every failed attempt is a
-  `status="failure"`, including one that is retried, so `WorkerJobFailureRate`
+  `status="failure"`, including one that is retried and a finalize attempt
+  whose lease was lost (stale recovery or a requeue took the job over while it
+  ran, even if the job then completed), so `WorkerJobFailureRate`
   needs more than 20% failed attempts and at least 6 of them in 15 minutes (two
   jobs' worth of `JOB_MAX_ATTEMPTS=3`); a single dead-lettered job is left to
   `DeadLetterQueueGrowth`
 - `loki` + `promtail` collecting every container's stdout. JSON log lines are
   stored whole, so the Research Operations dashboard's Logs panel shows the API
   and worker logs of one research (type its id into the Research ID box)
+
+The API request metrics (`mas_api_requests_total`,
+`mas_api_request_duration_seconds`) keep a bounded label set. `path` is the
+matched route template (`unmatched` when no route matched), never the raw path
+with its share tokens. `method` is one of `GET`, `POST`, `PUT`, `PATCH`,
+`DELETE`, `HEAD`, `OPTIONS`, or `OTHER` for any other method, so a client
+cannot add series by sending made-up methods.
 
 Metrics caveat: the API runs `uvicorn --workers $API_WORKERS` (2 in Compose)
 without `prometheus_client` multiprocess mode, so each API process keeps its own
@@ -56,10 +65,13 @@ series report spend that never happened. Exact totals, API calls included, are
 in the admin panel's Analytics tab, which reads `llm_usage_logs`.
 
 Health endpoints: `GET /health` is the cheap readiness probe (status +
-dependency pings) and needs no login. `GET /health/detail` (the full
-operational payload: queue metrics, graph alerts and trends) and the worker
-heartbeat routes under `/health/workers` (each worker's status and last error)
-are admin-only.
+dependency pings) and needs no login. Everything else under `/health` is
+admin-only: `GET /health/detail` (the full operational payload: queue metrics,
+graph alerts and trends), `GET /health/queues` (queue metrics with the
+maintenance summary, which lists every user's research ids, and the admins'
+resolution notes), the worker heartbeat routes under `/health/workers` (each
+worker's status and last error) and the queue maintenance and recommendation
+routes under `/health/queues/`.
 
 `/metrics` is blocked at the nginx edge and, optionally, protected by a shared
 secret (`METRICS_TOKEN`; sent as `Authorization: Bearer …` or `X-Metrics-Token`).
@@ -168,10 +180,12 @@ LLM spend is recorded per call in `llm_usage_logs` (actual model id, tokens,
 cache hits, cost), including API-side calls such as decompose, optimize and
 chat. `DEEPSEEK_REASONER_MODEL` and `DEEPSEEK_REPAIR_MODEL` are sent to the
 provider as configured; they are operator settings, never user-selectable.
-The price tier comes from an explicit model-id map: `deepseek-reasoner` and
-`deepseek-chat` are billed at the flash tier, because DeepSeek serves them as
-v4-flash in thinking and non-thinking mode. Only unknown ids fall back to a
-name heuristic.
+The price tier comes from an explicit model-id map (the model catalog and its
+aliases, plus `deepseek-reasoner` and `deepseek-chat`, which are billed at the
+flash tier because DeepSeek serves them as v4-flash in thinking and
+non-thinking mode). An id that is not in the map is guessed from its name: one
+containing `pro` is billed as pro, one containing `flash` or `chat` as flash.
+An id whose name matches neither is billed at the tier of `DEEPSEEK_MODEL`.
 
 ## Security
 
@@ -179,8 +193,11 @@ name heuristic.
 
 Signing out (`POST /v1/auth/logout`) revokes every session token of the
 account, not only the one in use, so it signs you out on all devices. It also
-clears the session cookies and always answers 200. Changing the password
-revokes every session too.
+clears the session cookies and always answers 200 with
+`{"status": "ok", "revoked": true}`. `revoked` is `false` when the request had
+no valid session or the revocation failed; this browser is signed out either
+way, but after a failure other devices may still be signed in. Changing the
+password revokes every session too.
 
 Two password changes need a fresh Google sign-in: setting the first password
 of an account created with Google, and resetting the password of a
@@ -210,6 +227,13 @@ signs in with Google and gets a new account.
   and `/v1/admin/tokens/export`) check CSRF like unsafe methods: with a cookie
   session, `X-CSRF-Token` must match the `csrf` cookie, so a cross-site link
   cannot start an export under an admin's name. The admin panel sends it.
+- Rate limits use one-minute sliding windows kept in each API process, so each
+  of the `API_WORKERS` processes (2 in Compose) counts separately. They cover
+  sign-in and sign-up per client address, sign-in per account,
+  current-password checks per user, the LLM routes, telemetry and admin actions.
+  Each limiter keeps at most 10,000 keys (client addresses, emails or user ids)
+  per process. Past that, the key idle longest is dropped first, and its budget
+  starts over.
 - A client's `X-Request-ID` is kept, and echoed back, only if it matches
   `^[A-Za-z0-9._-]{1,64}$`. Any other value is replaced by a generated id.
 - Webhook URLs often carry a credential (Slack, Discord and Teams incoming
@@ -464,6 +488,36 @@ Run the worker once:
 python scripts/run_finalize_worker.py --once
 ```
 
+## Database Migrations
+
+`alembic upgrade head` applies the schema. Under Docker Compose the `migrate`
+service runs it before the API starts; locally you run it yourself (step 3
+above). Notes on recent revisions:
+
+- `20260924_000028` (session and prompt-event indexes) and `20260925_000031`
+  build their indexes with `CREATE INDEX CONCURRENTLY`, which does not block
+  writes. A build that fails (a lock or statement timeout, a killed deploy job,
+  a duplicate row racing in) leaves an INVALID index, which PostgreSQL never
+  uses. The next `alembic upgrade head` drops it and builds it again, so no
+  manual `DROP INDEX` is needed. `000028` also fails, without recording the
+  revision, while an index it built is still not valid (for example, when
+  another session is still building it); run the upgrade again after that
+  build finishes. It drops the old `ix_user_sessions_session_id` only once the
+  new unique index is valid.
+- `20260925_000031` adds `ix_researches_created_id` on
+  `researches (created_at, id)`. The admin Tokens list and export and the
+  prompts export page through researches in that order. On a large table the
+  build takes a while.
+- `20260925_000032` deletes orphaned prompt copies from `user_events`, once.
+  These are `research_prompt` and `chat_prompt` rows whose research no longer
+  exists (left by researches deleted before `000028`'s release, and still
+  readable in the admin Prompt and Event logs), plus prompt rows that name no
+  research. Other events are kept. The deletion cannot be undone: downgrade
+  does nothing, so take a backup first if you may need those rows (see
+  "PostgreSQL Backup and Restore"). It walks the prompt rows in id order,
+  1,000 per transaction, so it never holds one long lock, but its runtime grows
+  with the size of `user_events`.
+
 ## Infra Notes
 
 Implemented in this repository:
@@ -494,8 +548,8 @@ TOKEN=$(curl -s -X POST "http://localhost:8000/v1/auth/login" \
 
 Then add `-H "Authorization: Bearer $TOKEN"` to each call. `/health` needs no
 token (nor does `/metrics`, unless `METRICS_TOKEN` is set); `/health/detail`,
-the worker heartbeats and every route under "Queue Admin" need an admin's
-token.
+`/health/queues`, the worker heartbeats and every route under "Queue Admin"
+need an admin's token.
 
 Health:
 
@@ -530,7 +584,7 @@ curl -X POST "http://localhost:8000/v1/research" \
   -d '{"prompt":"research renewable energy trends 2024","depth":"easy"}'
 ```
 
-Check queue health:
+Check queue health (admin):
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/health/queues

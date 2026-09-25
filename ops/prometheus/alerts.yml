@@ -35,7 +35,9 @@ groups:
 
       # mas_worker_jobs_total counts job attempts: status="failure" is recorded for every
       # failed attempt (task FAILED, exception, retry scheduled or dead-lettered), so one
-      # job that exhausts JOB_MAX_ATTEMPTS (3) adds three failures within seconds. The
+      # job that exhausts JOB_MAX_ATTEMPTS (3) adds three failures within seconds. A
+      # finalize attempt whose lease was lost (stale recovery or a requeue took the job
+      # over mid-attempt) is a failure too, even if the job then completed. The
       # floor of 6 failures in 15m keeps a single bad job on a quiet queue from paging
       # (DeadLetterQueueGrowth reports it); a provider outage failing every job clears it
       # quickly.
