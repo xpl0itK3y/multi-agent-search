@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from src.api.schemas import (
     FinalizeJobStatus,
@@ -29,6 +29,7 @@ from src.api.schemas import (
 from src.config import settings
 from src.db.models import (
     AdminAuditLogORM,
+    LLMUsageLogORM,
     ResearchFinalizeJobORM,
     ResearchORM,
     SearchCacheORM,
@@ -1191,6 +1192,35 @@ def test_deleting_a_user_keeps_their_llm_usage_unattributed(store):
 
     assert store.get_user_token_analytics(user.id)["total_tokens"] == 0  # the FK is SET NULL
     assert store.get_admin_token_analytics().total_tokens == 5
+
+
+def _usage_owners(store) -> list[tuple[str | None, str | None]]:
+    """(research_id, user_id) of every llm_usage_logs row, in a stable order."""
+    if isinstance(store, InMemoryTaskStore):
+        owners = [(u["research_id"], u["user_id"]) for u in store.llm_usage_logs]
+    else:
+        with store.session_scope() as session:
+            owners = [tuple(row) for row in session.execute(select(LLMUsageLogORM.research_id, LLMUsageLogORM.user_id))]
+    return sorted(owners, key=repr)
+
+
+def test_llm_usage_of_an_owner_deleted_mid_call_is_kept_unattributed(store):
+    """A call still running when its research or account is deleted was billed all the
+    same: its row is kept with that owner NULL, as SET NULL leaves an earlier row."""
+    research = _research(store, user_id="usage-owner")
+    store.record_llm_usage(research.id, "usage-owner", "deepseek-chat", 3, 2, 5, 0.01)
+
+    assert store.delete_research(research.id) is True
+    store.record_llm_usage(research.id, "usage-owner", "deepseek-chat", 4, 1, 5, 0.02)  # ended after the delete
+
+    assert _usage_owners(store) == [(None, "usage-owner"), (None, "usage-owner")]
+    assert store.get_user_token_analytics("usage-owner")["total_tokens"] == 10
+
+    assert store.delete_user("usage-owner") is True
+    store.record_llm_usage(None, "usage-owner", "deepseek-chat", 1, 1, 2, 0.01)
+
+    assert _usage_owners(store) == [(None, None)] * 3
+    assert store.get_admin_token_analytics().total_tokens == 12
 
 
 def test_telemetry_summary_counts_users_and_leaves_unknowns_out(store):

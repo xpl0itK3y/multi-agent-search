@@ -3,8 +3,24 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import and_, case, delete, false, func, literal, null, or_, select, text, true, union_all, update
+from sqlalchemy import (
+    and_,
+    case,
+    delete,
+    false,
+    func,
+    insert,
+    literal,
+    null,
+    or_,
+    select,
+    text,
+    true,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from src.domain import (
@@ -82,6 +98,10 @@ def _user_record(user: UserORM) -> UserRecord:
         avatar_url=user.avatar_url,
         admin_provisioned_at=user.admin_provisioned_at,
     )
+
+
+# SQLSTATE foreign_key_violation.
+_FOREIGN_KEY_VIOLATION = "23503"
 
 
 def _contains_pattern(term: str) -> str:
@@ -1711,22 +1731,44 @@ class SQLAlchemyTaskStore:
         estimated_cost_usd: float,
         cache_hit_tokens: int = 0,
     ) -> str:
+        """One usage row. An owner deleted while its call ran (a research deleted mid-run,
+        an account deleted) is stored as NULL, as ON DELETE SET NULL would have left a row
+        written a moment earlier: the call was billed, so its row is kept either way."""
+        usage_id = str(uuid.uuid4())
+        values = {
+            "id": usage_id,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cache_hit_tokens": cache_hit_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "created_at": datetime.now(timezone.utc),
+        }
+        try:
+            self._insert_llm_usage(values, research_id, user_id)
+        except IntegrityError as exc:
+            # A delete that committed between the owner lookup and the FK check: the
+            # retry's lookup no longer finds that owner.
+            if getattr(exc.orig, "sqlstate", None) != _FOREIGN_KEY_VIOLATION:
+                raise
+            self._insert_llm_usage(values, research_id, user_id)
+        return usage_id
+
+    def _insert_llm_usage(self, values: dict, research_id: str | None, user_id: str | None) -> None:
+        def existing(model, owner_id: str | None):
+            if owner_id is None:
+                return None
+            return select(model.id).where(model.id == owner_id).scalar_subquery()
+
         with self.session_scope() as session:
-            usage_id = str(uuid.uuid4())
-            record = LLMUsageLogORM(
-                id=usage_id,
-                research_id=research_id,
-                user_id=user_id,
-                model=model,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                cache_hit_tokens=cache_hit_tokens,
-                estimated_cost_usd=estimated_cost_usd,
-                created_at=datetime.now(timezone.utc),
+            session.execute(
+                insert(LLMUsageLogORM).values(
+                    **values,
+                    research_id=existing(ResearchORM, research_id),
+                    user_id=existing(UserORM, user_id),
+                )
             )
-            session.add(record)
-            return usage_id
 
     def record_admin_audit(
         self,

@@ -2,6 +2,7 @@
 usage sink and attributed to the research/user bound where the call was made. It used to
 get one row per successful finalization, read from the process-wide provider counter."""
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -92,16 +93,18 @@ def test_a_failing_sink_does_not_fail_the_call(caplog):
 
 def test_bootstrap_sink_writes_a_row_and_drops_the_local_user():
     store = InMemoryTaskStore()
+    store.create_user("u1", "u1@example.com", None)
+    research = store.add_research(ResearchRequest(prompt="sink topic", depth=SearchDepth.EASY), task_ids=[])
     sink = _llm_usage_sink(store)
 
-    sink(research_id="r1", user_id="local", model="deepseek-chat", prompt_tokens=10,
+    sink(research_id=research.id, user_id="local", model="deepseek-chat", prompt_tokens=10,
          completion_tokens=5, cache_hit_tokens=3, estimated_cost_usd=0.000012345)
     sink(research_id=None, user_id="u1", model="deepseek-v4-pro", prompt_tokens=1,
          completion_tokens=1, cache_hit_tokens=0, estimated_cost_usd=0.0)
 
     first, second = store.llm_usage_logs
     assert first["user_id"] is None  # LOCAL_USER has no users row (FK on Postgres)
-    assert (first["research_id"], first["model"], first["total_tokens"]) == ("r1", "deepseek-chat", 15)
+    assert (first["research_id"], first["model"], first["total_tokens"]) == (research.id, "deepseek-chat", 15)
     assert first["cache_hit_tokens"] == 3
     assert first["estimated_cost_usd"] == 0.000012345
     assert (second["user_id"], second["research_id"]) == ("u1", None)
@@ -109,6 +112,7 @@ def test_bootstrap_sink_writes_a_row_and_drops_the_local_user():
 
 def test_api_process_optimize_call_is_recorded_for_its_user():
     store = InMemoryTaskStore()
+    store.create_user("user-42", "user-42@example.com", None)
     provider = _provider(_llm_usage_sink(store))
     service = ResearchService(task_store=store, optimizer=PromptOptimizerAgent(provider))
 
@@ -190,3 +194,54 @@ def test_sqlalchemy_sink_rows_satisfy_the_owner_foreign_keys(postgres_session_fa
     assert rows[0].estimated_cost_usd == pytest.approx(0.0000123456)
     assert store.get_user_token_analytics("usage-owner")["total_tokens"] == 15
     store.delete_user("usage-owner")
+
+
+def _wait_for_a_lock_wait(session_factory, timeout: float = 5.0) -> None:
+    from sqlalchemy import text
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with session_factory() as session:
+            if session.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar_one():
+                return
+        time.sleep(0.05)
+    raise AssertionError("the usage insert never waited on the deleted research")
+
+
+@pytest.mark.postgres
+def test_sqlalchemy_usage_row_survives_a_delete_committed_mid_insert(postgres_session_factory):
+    """The race the owner lookup cannot close: the research is deleted after the INSERT
+    read it, and its FK check fails once the delete commits. The row is written again
+    with that owner NULL instead of being dropped (the call was billed)."""
+    from sqlalchemy import delete, select
+
+    from src.db.models import LLMUsageLogORM, ResearchORM
+    from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
+
+    store = SQLAlchemyTaskStore(postgres_session_factory)
+    store.delete_user("race-owner")
+    store.create_user("race-owner", "race-owner@example.com", None)
+    research = store.add_research(
+        ResearchRequest(prompt="race topic", depth=SearchDepth.EASY), task_ids=[], user_id="race-owner"
+    )
+    errors: list[Exception] = []
+
+    def record() -> None:
+        try:
+            store.record_llm_usage(research.id, "race-owner", "deepseek-chat", 3, 2, 5, 0.01)
+        except Exception as exc:  # surfaced by the assertion below
+            errors.append(exc)
+
+    with postgres_session_factory() as deleter:
+        deleter.execute(delete(ResearchORM).where(ResearchORM.id == research.id))  # row locked, not committed
+        writer = threading.Thread(target=record)
+        writer.start()
+        _wait_for_a_lock_wait(postgres_session_factory)  # the FK check waits on the deleted row
+        deleter.commit()
+    writer.join(timeout=10)
+
+    assert errors == []
+    with postgres_session_factory() as session:
+        rows = session.execute(select(LLMUsageLogORM.research_id, LLMUsageLogORM.user_id)).all()
+    assert [tuple(row) for row in rows] == [(None, "race-owner")]
+    store.delete_user("race-owner")

@@ -327,6 +327,10 @@ class InMemoryTaskStore:
         task_ids = [tid for tid, t in self.tasks.items() if t.research_id == research_id]
         for tid in task_ids:
             del self.tasks[tid]
+        # llm_usage_logs.research_id is SET NULL: the spend stays, unattributed.
+        for usage in self.llm_usage_logs:
+            if usage["research_id"] == research_id:
+                usage["research_id"] = None
         # Like SQL: the prompt copies in user_events go with their research.
         self.user_events = [
             e for e in self.user_events
@@ -1239,8 +1243,9 @@ class InMemoryTaskStore:
         usage_id = str(uuid.uuid4())
         self.llm_usage_logs.append({
             "id": usage_id,
-            "research_id": research_id,
-            "user_id": user_id,
+            # Like SQL: an owner deleted while its call ran is stored as None (SET NULL).
+            "research_id": research_id if research_id in self.researches else None,
+            "user_id": user_id if user_id in self.users else None,
             "model": model,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
