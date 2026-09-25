@@ -127,6 +127,7 @@ ADMIN_STREAM_INTERVAL_SECONDS = 2.0
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+_LOGOUT_PATH = "/v1/auth/logout"
 # GETs with side effects, checked like mutations: each admin CSV export writes an audit
 # row and spends the shared admin rate budget, and a SameSite=Lax session cookie rides
 # along on a cross-site top-level GET (a link or a redirect to the export URL).
@@ -151,6 +152,11 @@ def _is_csrf_violation(request: Request) -> bool:
     if request.url.path in _CSRF_EXEMPT_PATHS:
         return False
     if request_bearer_token(request):
+        return False
+    # Logout answers 200 even without a session. With no session cookie there is nothing
+    # a cross-site request could ride on; with one, the check stops a forced sign-out of
+    # every device.
+    if request.url.path == _LOGOUT_PATH and not request.cookies.get(settings.auth_cookie_name):
         return False
     cookie = request.cookies.get(settings.csrf_cookie_name)
     header = request.headers.get("x-csrf-token")
@@ -533,11 +539,23 @@ def register_routes(app: FastAPI) -> None:
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
-    @app.post("/v1/auth/logout")
-    def logout(response: Response):
+    @app.post(_LOGOUT_PATH)
+    def logout(request: Request, response: Response):
+        """Sign out everywhere: revoke every session token of the caller's account (its
+        token_version is bumped, so all devices are signed out) and clear the session
+        cookies. Always 200, also without a valid session; ``revoked`` says whether an
+        account's sessions were revoked."""
+        revoked = False
+        try:
+            user_id = resolve_request_user_id(request)
+            if user_id:
+                revoked = get_research_service(request).revoke_user_sessions(user_id)
+        except Exception:
+            # This browser is still signed out below; the other devices are not.
+            logger.exception("logout_revoke_failed")
         response.delete_cookie(settings.auth_cookie_name, path="/")
         response.delete_cookie(settings.csrf_cookie_name, path="/")
-        return {"status": "ok"}
+        return {"status": "ok", "revoked": revoked}
 
     @app.get("/v1/auth/me", response_model=AuthUser)
     def me(user: AuthUser = Depends(get_current_user)):

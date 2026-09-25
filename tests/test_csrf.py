@@ -130,3 +130,17 @@ async def test_blank_bearer_cannot_skip_csrf_on_a_cookie_session(monkeypatch):
     assert blank.status_code == 403
     assert with_token.status_code == 200
     assert with_token.json()["name"] == "mine"
+
+
+def test_logout_without_a_session_cookie_is_not_checked(auth_on):
+    # SEC2-2: logout always answers 200; with no session cookie nothing can be ridden on.
+    assert _is_csrf_violation(_req(path="/v1/auth/logout")) is False
+    assert _is_csrf_violation(_req(path="/v1/auth/logout", cookies={"csrf_token": "tok123"})) is False
+
+
+def test_logout_with_a_session_cookie_needs_the_token(auth_on, monkeypatch):
+    monkeypatch.setattr(settings, "auth_cookie_name", "access_token", raising=False)
+    session = {"access_token": "cookie.session.jwt", "csrf_token": "tok123"}
+
+    assert _is_csrf_violation(_req(path="/v1/auth/logout", cookies=session)) is True
+    assert _is_csrf_violation(_req(path="/v1/auth/logout", headers={"X-CSRF-Token": "tok123"}, cookies=session)) is False
