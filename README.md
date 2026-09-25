@@ -173,6 +173,103 @@ The price tier comes from an explicit model-id map: `deepseek-reasoner` and
 v4-flash in thinking and non-thinking mode. Only unknown ids fall back to a
 name heuristic.
 
+## Security
+
+### Sessions and passwords
+
+Signing out (`POST /v1/auth/logout`) revokes every session token of the
+account, not only the one in use, so it signs you out on all devices. It also
+clears the session cookies and always answers 200. Changing the password
+revokes every session too.
+
+Two password changes need a fresh Google sign-in: setting the first password
+of an account created with Google, and resetting the password of a
+Google-linked account without the current one. The session must come from the
+Google callback no more than 10 minutes earlier. Otherwise
+`POST /v1/auth/set-password` answers 403 with a detail starting with
+`reauth_required`, and the web UI offers to sign in with Google again and come
+back. The `/set-password` page shown right after a Google sign-up is within
+that window. A stolen session alone therefore cannot add a password login to
+someone's Google account.
+
+Sign-up does not verify email addresses yet. A local (email and password)
+sign-up therefore blocks the address's real owner from signing in with Google
+later: Google sign-in never merges into an unlinked password account with the
+same email, so it ends in a 409 conflict and the login page shows
+`?error=oauth_conflict`. An operator releases the address by deleting the
+squatting account in the admin panel's Users tab (audited; it also deletes that
+account's researches), after confirming who owns the address. The owner then
+signs in with Google and gets a new account.
+
+### API
+
+- `PATCH /v1/tasks/{task_id}` is admin-only. It rewrites a search task's
+  results and log, which feed a finished report's sources, verification and
+  confidence, also on its public share page. The web UI never calls it.
+- Admin CSV exports (`GET /v1/admin/users/export`, `/v1/admin/prompts/export`
+  and `/v1/admin/tokens/export`) check CSRF like unsafe methods: with a cookie
+  session, `X-CSRF-Token` must match the `csrf` cookie, so a cross-site link
+  cannot start an export under an admin's name. The admin panel sends it.
+- A client's `X-Request-ID` is kept, and echoed back, only if it matches
+  `^[A-Za-z0-9._-]{1,64}$`. Any other value is replaced by a generated id.
+- Webhook URLs often carry a credential (Slack, Discord and Teams incoming
+  webhooks, for example), so logs show them as `scheme://host` only.
+- Server-side requests to user-supplied URLs (research webhooks, source page
+  fetches) go through an SSRF guard. It resolves the host and rejects every
+  address that is not globally routable: private, loopback, link-local,
+  reserved, multicast and unspecified ranges, and also the shared address space
+  `100.64.0.0/10` (carrier-grade NAT, also used by Tailscale). Webhooks to
+  internal hosts are refused by design.
+
+### Browser security headers
+
+The web UI's nginx (`web/nginx.conf`) sends these with every page and asset:
+
+- `Content-Security-Policy`:
+  - `default-src 'self'`;
+  - scripts only from the bundle, plus the inline theme script of
+    `web/index.html`, allowed by its hash;
+  - stylesheets from the bundle and Google Fonts. Inline `style` attributes are
+    allowed, because KaTeX math and Vue's pre-rendered markup use them, but
+    inline `<style>` elements are not;
+  - fonts from the bundle, `data:` and Google Fonts;
+  - images from the site, `data:` and any `https:` URL (avatars, source
+    favicons, report images). Plain `http:` images do not load;
+  - `connect-src 'self'`, `object-src 'none'`, `base-uri 'none'`,
+    `form-action 'self'` and `frame-ancestors 'none'`.
+- `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff`.
+- `Referrer-Policy: strict-origin-when-cross-origin`. The public share page
+  (`/r/<token>`) gets `no-referrer`, so its token never appears in a `Referer`
+  header, not even one sent to this site.
+
+Responses from the API (`/v1/`, `/health`) get
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
+`X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`. nginx
+replaces the API's own copies, so each header is sent once. HSTS comes from the
+API when `AUTH_COOKIE_SECURE=true`.
+
+When you change the policy:
+
+- The config is copied into the web image, so rebuild it afterwards
+  (`docker compose up -d --build web`).
+- nginx drops inherited `add_header` directives in any `location` that has an
+  `add_header` of its own. Such a location must repeat the four security
+  headers, as `location = /index.html` does. `web/src/securityHeaders.test.ts`
+  (part of `npm test` in `web/`) fails otherwise.
+- The inline script in `web/index.html` is allowed by its SHA-256 hash, listed
+  once for LF and once for CRLF line endings. After editing the script, put its
+  new hashes into `script-src`. The test fails and shows the expected values.
+- Google sign-in needs no entry: it is a top-level navigation to
+  `/v1/auth/google/login` and on to `accounts.google.com`, which CSP does not
+  restrict.
+- A web build with `VITE_API_BASE` set to another origin (the API is then not
+  proxied under this site's `/v1/`) fetches and streams (SSE) from that origin.
+  Add the origin to `connect-src`, for example
+  `connect-src 'self' https://api.example.com`, and list the web UI's origin in
+  the API's `CORS_ALLOW_ORIGINS`. Any other origin the UI starts loading from
+  needs the matching directive too, for example `http:` in `img-src` if you
+  must show plain-HTTP images.
+
 ## Requirements
 
 - Python 3.11+
