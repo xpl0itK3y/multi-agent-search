@@ -234,18 +234,23 @@ Set these in `.env` (`.env.example` lists them all):
   Loki), so anyone who can read the logs can reset any account's password. The
   API logs a warning at startup while it is on.
 
-Links are built from `PUBLIC_APP_URL`, not from the request, so a forged `Host`
-header cannot point a reset link at another site. Set it whenever users reach
-the web UI anywhere but `http://localhost:8502`: another `WEB_PORT`, a domain,
-HTTPS.
+Messages are plain text, in the language the request's `Accept-Language`
+prefers among English, Russian and Spanish (English otherwise). Links are
+built from `PUBLIC_APP_URL`, not from the request, so a forged `Host` header
+cannot point a reset link at another site. Set it whenever users reach the web
+UI anywhere but `http://localhost:8502`: another `WEB_PORT`, a domain, HTTPS.
+With any backend but `disabled`, the API refuses to start unless it is an
+`http://` or `https://` URL.
 
 ### Password reset
 
 1. `POST /v1/auth/password/forgot` with `{"email": "..."}` always answers 202
    `{"status": "accepted"}`: for a known and an unknown address alike, and also
-   while email is disabled. The answer never tells anyone whether an account
-   exists. If one has that address, it is sent a link to
-   `{PUBLIC_APP_URL}/reset-password#token=<token>`.
+   while email is disabled. The lookup and the mail happen after the response,
+   so neither the answer nor its timing tells anyone whether an account exists.
+   If one has that address, it is sent a link to
+   `{PUBLIC_APP_URL}/reset-password#token=<token>`. A new link makes the
+   account's earlier unused ones stop working.
 2. That page sends the token and a new password to
    `POST /v1/auth/password/reset` and gets 200 `{"status": "ok"}`. The password
    has the same minimum length as everywhere else (6 characters; a shorter one
@@ -271,13 +276,18 @@ and `Referer` headers. nginx also serves `/reset-password` and `/verify-email`
 with `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (see
 [Browser security headers](#browser-security-headers)).
 
-Password reset requests are throttled per client address and per email
-address (compared case-insensitively). The per-email limit counts whether or
-not an account has the address, so hitting it gives nothing away either, and it
-keeps anyone from flooding a mailbox with reset mail. Redeeming a reset or
-verification link is throttled per client address. Past a limit the API answers
-429 `Too many attempts, please slow down`. Like sign-in, the endpoints that
-work without a session need no CSRF token.
+Throttles, per hour and per API process like the other rate limits (see
+[API](#api)), and on even with `AUTH_DISABLED=true`:
+
+- reset requests: 20 per client address and 5 per email address (compared
+  case-insensitively). The per-email limit counts whether or not an account has
+  the address, so hitting it gives nothing away either, and it keeps anyone from
+  flooding a mailbox with reset mail;
+- redeeming a reset or a verification link: 30 per client address for each;
+- new verification links: 5 per signed-in user.
+
+Past a limit the API answers 429 `Too many attempts, please slow down`. Like
+sign-in, the endpoints that work without a session need no CSRF token.
 
 ### Email verification
 
@@ -290,7 +300,8 @@ send the mail never fails the sign-up. `email_verified` in the user returned by
 
 - `POST /v1/auth/email/verification` (signed in, with the usual CSRF token)
   sends a new link and answers 202 `{"status": "sent"}`, or 200
-  `{"status": "already_verified"}`. It is throttled per user.
+  `{"status": "already_verified"}`. It is throttled per user, and the new link
+  makes the earlier ones stop working.
 - `POST /v1/auth/email/verify` with `{"token": "..."}` answers 200
   `{"status": "verified"}`. A link that is invalid, expired or already used
   gets 400 with a detail starting with `verification_token_invalid`. It needs no
@@ -318,6 +329,11 @@ Google sign-in (see [Sessions and passwords](#sessions-and-passwords)). If you
 signed up with a password and want to keep it, verify your address before you
 first sign in with Google.
 
+Upgrading to this release (migration `20260925_000033`) counts accounts that
+are linked to Google or were provisioned with `scripts/create_admin.py` as
+verified, and the script marks every account it provisions from then on
+verified too. Every other existing password account starts unverified.
+
 This rule prevents account pre-hijacking. Sign-up alone proves nothing about
 an address, so an attacker can register yours with a password of their own
 before you ever use the service, and keep a session open. If Google sign-in
@@ -344,7 +360,7 @@ back at that sign-in, because the account is then linked to Google.
 ### Without email: operator-issued reset links
 
 With `EMAIL_BACKEND=disabled` nobody receives reset links. The operator can
-issue one instead:
+issue one instead, and also for a user whose mail does not arrive:
 
 ```bash
 docker compose exec api python scripts/issue_password_reset.py user@example.com
@@ -352,11 +368,12 @@ docker compose exec api python scripts/issue_password_reset.py user@example.com
 
 The script prints a one-time link to `/reset-password` with the usual lifetime
 and effects: using it sets the password, marks the address verified and signs
-the account out everywhere. Whoever opens the link controls the account, so
-confirm who owns the address first and hand the link over directly, out of
-band. The script refuses the in-memory store, exits with status 1 and creates
-nothing when no account has the email, and logs nothing secret: the link goes
-to its standard output only. Locally, run
+the account out everywhere, and issuing it makes the account's earlier reset
+links stop working. Whoever opens the link controls the account, so confirm who
+owns the address first and hand the link over directly, out of band. The
+script refuses the in-memory store, exits with status 1 and creates nothing
+when no account has the email, and logs nothing secret: the link alone goes to
+standard output, a note about it to standard error. Locally, run
 `python scripts/issue_password_reset.py <email>` against the Postgres
 configured in `.env`.
 
