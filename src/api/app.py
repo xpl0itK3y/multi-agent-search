@@ -34,8 +34,13 @@ from src.api.dependencies import (
 from src.auth.login_rate_limit import (
     SlidingWindowLimiter,
     enforce_auth_rate_limit,
+    enforce_email_verify_rate_limit,
+    enforce_forgot_password_email_rate_limit,
+    enforce_forgot_password_ip_rate_limit,
     enforce_login_account_rate_limit,
     enforce_password_check_rate_limit,
+    enforce_password_reset_rate_limit,
+    enforce_verification_email_rate_limit,
 )
 from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
@@ -66,8 +71,11 @@ from src.api.schemas import (
     DeleteAccountRequest,
     DecomposeRequest,
     DecomposeResponse,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
+    VerifyEmailRequest,
     JobCleanupResponse,
     JobRecoveryResponse,
     OperationalHealth,
@@ -116,6 +124,7 @@ from src.api.schemas import (
     WorkerHeartbeat,
 )
 from src.bootstrap import lifespan
+from src.notifications import AccountEmail, preferred_language
 from src.services import ResearchService
 from src.config import settings
 from src.observability import bind_observability_context, metric_route_template, observe_api_request, render_metrics
@@ -127,7 +136,17 @@ logger = logging.getLogger(__name__)
 ADMIN_STREAM_INTERVAL_SECONDS = 2.0
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CSRF_EXEMPT_PATHS = frozenset({"/v1/auth/login", "/v1/auth/register"})
+# Anonymous auth forms: none acts on the session a cross-site request could ride on. The
+# recovery routes act only on what the body proves (an address to mail, a link token).
+_CSRF_EXEMPT_PATHS = frozenset(
+    {
+        "/v1/auth/login",
+        "/v1/auth/register",
+        "/v1/auth/password/forgot",
+        "/v1/auth/password/reset",
+        "/v1/auth/email/verify",
+    }
+)
 _LOGOUT_PATH = "/v1/auth/logout"
 # GETs with side effects, checked like mutations: each admin CSV export writes an audit
 # row and spends the shared admin rate budget, and a SameSite=Lax session cookie rides
@@ -326,6 +345,12 @@ def extract_client_ip(request: Request) -> str | None:
     let any caller forge the IP recorded in the admin audit log."""
     client = request.client
     return client.host if client and client.host else None
+
+
+def request_language(request: Request) -> str:
+    """The language of an account email sent for this request: the supported language its
+    Accept-Language ranks highest (ru, en, es), else English."""
+    return preferred_language(request.headers.get("accept-language"))
 
 
 # In-process "touched recently" gate for request activity: one allowance per user per
@@ -564,8 +589,14 @@ def register_routes(app: FastAPI) -> None:
         return get_research_service(request).get_health_status()
 
     @app.post("/v1/auth/register", response_model=AuthSession, dependencies=auth_rate_limit)
-    def register(payload: RegisterRequest, response: Response, request: Request):
-        user = get_research_service(request).register_user(payload.email, payload.password)
+    def register(
+        payload: RegisterRequest, response: Response, request: Request, background_tasks: BackgroundTasks
+    ):
+        service = get_research_service(request)
+        user = service.register_user(payload.email, payload.password)
+        # A verification link, after the response: a mail failure never fails a sign-up.
+        if service.email_delivery_enabled():
+            background_tasks.add_task(service.send_email_verification, user.id, language=request_language(request))
         token = _issue_session(response, user)
         return AuthSession(access_token=token, user=user)
 
@@ -619,8 +650,13 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/auth/config")
     def auth_config():
-        """Which auth options the SPA should offer (e.g. show the Google button)."""
-        return {"google_oauth": settings.oauth_enabled}
+        """Which auth options the SPA should offer (e.g. show the Google button, the
+        forgot-password link, the verify-your-email prompt)."""
+        return {
+            "google_oauth": settings.oauth_enabled,
+            "password_reset": settings.email_delivery_enabled,
+            "email_verification": settings.email_delivery_enabled,
+        }
 
     @app.get("/v1/auth/google/login")
     def google_login():
@@ -647,7 +683,7 @@ def register_routes(app: FastAPI) -> None:
         return redirect
 
     @app.get("/v1/auth/google/callback")
-    def google_callback(request: Request, code: str = "", state: str = ""):
+    def google_callback(request: Request, background_tasks: BackgroundTasks, code: str = "", state: str = ""):
         if not settings.oauth_enabled:
             raise HTTPException(status_code=404, detail="Google OAuth is not configured")
         cookie_state = request.cookies.get("oauth_state")
@@ -669,21 +705,28 @@ def register_routes(app: FastAPI) -> None:
         if not email or verified not in (True, "true"):
             logger.warning("google_oauth_email_unverified")
             return _oauth_failure("oauth_failed")
+        service = get_research_service(request)
         try:
-            user, created = get_research_service(request).get_or_create_oauth_user(
+            sign_in = service.sign_in_with_google(
                 email,
                 google_subject=userinfo.get("sub") or "",
                 name=userinfo.get("name"),
                 avatar_url=userinfo.get("picture"),
             )
         except ConflictError:
-            # The email already belongs to a local account that is not linked to this Google
-            # identity; it is never merged silently (SEC-ACCOUNT).
-            logger.warning("google_oauth_conflict_unlinked_local_account")
+            # The email belongs to an account linked to a different Google identity; it is
+            # never re-linked (SEC-ACCOUNT). An unlinked local account is linked instead.
+            logger.warning("google_oauth_conflict_other_google_identity")
             return _oauth_failure("oauth_conflict")
         except Exception:
             logger.exception("google_oauth_account_resolution_failed")
             return _oauth_failure("oauth_failed")
+        user, created = sign_in.user, sign_in.created
+        if sign_in.linked_notice is not None:
+            # Google was linked to an existing local account: tell its address.
+            background_tasks.add_task(
+                service.send_account_notice, user.id, sign_in.linked_notice, language=request_language(request)
+            )
         # New users are offered a password to set; returning users go straight in.
         target = settings.oauth_new_user_redirect if created else settings.oauth_post_login_redirect
         redirect = RedirectResponse(target, status_code=302)
@@ -698,19 +741,89 @@ def register_routes(app: FastAPI) -> None:
         payload: SetPasswordRequest,
         response: Response,
         request: Request,
+        background_tasks: BackgroundTasks,
         user: AuthUser = Depends(enforce_password_check_rate_limit),
     ):
         """Set or change the password. A first password, or a reset without the current
         one on a Google-linked account, needs a session from a Google sign-in of the last
-        10 minutes (403 reauth_required otherwise). The new session is a plain one."""
-        updated_user = get_research_service(request).set_user_password(
+        10 minutes (403 reauth_required otherwise). The new session is a plain one. The
+        account's address is told (a stolen session must not change it unnoticed)."""
+        service = get_research_service(request)
+        updated_user = service.set_user_password(
             user.id,
             payload.password,
             current_password=payload.current_password,
             fresh_google_auth=request_has_fresh_google_auth(request),
         )
+        background_tasks.add_task(
+            service.send_account_notice,
+            updated_user.id,
+            AccountEmail.PASSWORD_CHANGED,
+            language=request_language(request),
+        )
         token = _issue_session(response, updated_user)
         return AuthSession(access_token=token, user=updated_user)
+
+    # ── account recovery and email verification (AUTH-RECOVERY) ───────────────
+    # One-time links: {PUBLIC_APP_URL}/reset-password#token=... and /verify-email#token=...
+    # (src/services/account_recovery_mixin.py). Forgot-password, reset and verify are
+    # anonymous and CSRF-exempt like login; their throttles are hourly and always on.
+
+    @app.post(
+        "/v1/auth/password/forgot",
+        status_code=202,
+        dependencies=[Depends(enforce_forgot_password_ip_rate_limit)],
+    )
+    def forgot_password(payload: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks):
+        """Email a password reset link to the account with this address. Always 202 with
+        the same body, for a known or unknown address and with email disabled alike: the
+        lookup, the token and the mail all happen after the response. Throttled per client
+        and per address (429), whether or not an account has it."""
+        enforce_forgot_password_email_rate_limit(payload.email)
+        background_tasks.add_task(
+            get_research_service(request).request_password_reset,
+            payload.email,
+            language=request_language(request),
+            requested_ip=extract_client_ip(request),
+        )
+        return {"status": "accepted"}
+
+    @app.post("/v1/auth/password/reset", dependencies=[Depends(enforce_password_reset_rate_limit)])
+    def reset_password(payload: ResetPasswordRequest, request: Request, background_tasks: BackgroundTasks):
+        """Set a new password with a reset link's token. Marks the email verified, revokes
+        every session and every other reset link, and signs nobody in. 400
+        reset_token_invalid when the link is unknown, used or expired."""
+        service = get_research_service(request)
+        user = service.reset_password_with_token(payload.token, payload.password)
+        background_tasks.add_task(
+            service.send_account_notice, user.id, AccountEmail.PASSWORD_RESET_DONE, language=request_language(request)
+        )
+        return {"status": "ok"}
+
+    @app.post("/v1/auth/email/verification")
+    def request_email_verification(
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        user: AuthUser = Depends(enforce_verification_email_rate_limit),
+    ):
+        """Email the signed-in account a new verification link (202 sent), or 200
+        already_verified. 404 when email delivery is not configured."""
+        if user.email_verified:
+            return {"status": "already_verified"}
+        service = get_research_service(request)
+        if not service.email_delivery_enabled():
+            raise HTTPException(status_code=404, detail="Email delivery is not configured")
+        background_tasks.add_task(service.send_email_verification, user.id, language=request_language(request))
+        response.status_code = 202
+        return {"status": "sent"}
+
+    @app.post("/v1/auth/email/verify", dependencies=[Depends(enforce_email_verify_rate_limit)])
+    def verify_email(payload: VerifyEmailRequest, request: Request):
+        """Confirm the address with a verification link's token; needs no session. 400
+        verification_token_invalid when the link is unknown, used or expired."""
+        get_research_service(request).verify_email_with_token(payload.token)
+        return {"status": "verified"}
 
     @app.delete("/v1/auth/account")
     def delete_account(

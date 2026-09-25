@@ -70,6 +70,15 @@ def test_login_register_exempt(auth_on):
     assert _is_csrf_violation(_req(path="/v1/auth/register")) is False
 
 
+def test_the_anonymous_recovery_forms_are_exempt_and_the_signed_in_resend_is_not(auth_on):
+    """Forgot-password, reset and verify act only on what their body proves (an address to
+    mail, a link token), never on the session a cross-site request could ride on."""
+    session = {"access_token": "cookie.session.jwt", "csrf_token": "tok123"}
+    for path in ("/v1/auth/password/forgot", "/v1/auth/password/reset", "/v1/auth/email/verify"):
+        assert _is_csrf_violation(_req(path=path, cookies=session)) is False, path
+    assert _is_csrf_violation(_req(path="/v1/auth/email/verification", cookies=session)) is True
+
+
 def test_telemetry_ingest_is_not_exempt(auth_on):
     # Authenticated-only ingestion: a cookie-riding cross-site POST must carry the token.
     assert _is_csrf_violation(_req(path="/v1/telemetry/event", cookies={"csrf_token": "tok123"})) is True

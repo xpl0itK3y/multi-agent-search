@@ -7,7 +7,7 @@ from src.config import settings
 from src.services import ResearchService
 
 # Identity used when auth is disabled (single-tenant / dev mode).
-LOCAL_USER = AuthUser(id="local", email="local@local", is_admin=True)
+LOCAL_USER = AuthUser(id="local", email="local@local", is_admin=True, email_verified=True)
 
 
 def get_research_service(request: Request) -> ResearchService:
