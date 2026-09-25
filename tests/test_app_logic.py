@@ -2868,9 +2868,23 @@ def test_get_or_create_oauth_user_is_idempotent():
     assert service.authenticate_user("person@gmail.com", "newpass1").id == u1.id
 
 
-def test_oauth_does_not_silently_merge_with_local_account():
+def test_oauth_linking_an_unverified_local_account_drops_its_password():
+    """The local sign-up never proved the address, so the Google sign-in (which did) links
+    the account but removes the password it was registered with (AUTH-RECOVERY)."""
     service = ResearchService(task_store=InMemoryTaskStore())
-    service.register_user("person@gmail.com", "localpass1")
+    local = service.register_user("person@gmail.com", "localpass1")
+
+    user, created = service.get_or_create_oauth_user("Person@Gmail.com", "google-456")
+
+    assert (user.id, created, user.email_verified) == (local.id, False, True)
+    with pytest.raises(ServiceError) as exc_info:
+        service.authenticate_user("person@gmail.com", "localpass1")
+    assert exc_info.value.status_code == 401
+
+
+def test_oauth_never_relinks_an_account_of_another_google_identity():
+    service = ResearchService(task_store=InMemoryTaskStore())
+    service.get_or_create_oauth_user("person@gmail.com", "google-123")
 
     with pytest.raises(ServiceError) as exc_info:
         service.get_or_create_oauth_user("Person@Gmail.com", "google-456")

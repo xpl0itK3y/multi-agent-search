@@ -186,17 +186,38 @@ async def test_register_endpoint_refuses_admin_email(client, monkeypatch):
     assert client.cookies.get(settings.auth_cookie_name) is None
 
 
-def test_google_sign_in_for_existing_local_admin_email_account_conflicts(monkeypatch):
-    """A local row for an admin email (e.g. squatted before registration was blocked) is never
-    silently handed to the Google identity."""
-    from src.domain.errors import ConflictError
+def test_google_sign_in_takes_an_unverified_local_admin_email_account_from_its_squatter(monkeypatch):
+    """A local row for an admin email (e.g. squatted before registration was blocked) never
+    verified the address. The owner's Google sign-in links it, and in the same write drops
+    the squatter's password and every session: the squatter keeps nothing, the owner gets
+    the admin rights a Google-linked ADMIN_EMAILS account has (AUTH-RECOVERY)."""
+    from src.domain.errors import UnauthorizedError
 
     store, service = _admin_service(monkeypatch)
     squatter = store.create_user("squatter", "owner-admin@example.com", "pbkdf2_sha256$1$00$00")
+    assert service.get_auth_user(squatter.id).is_admin is False
+
+    user, created = service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-real-admin")
+
+    assert (user.id, created, user.is_admin, user.email_verified) == (squatter.id, False, True, True)
+    stored = store.get_user_by_id(squatter.id)
+    assert stored.google_subject == "sub-real-admin"
+    assert stored.password_hash is None
+    assert stored.token_version == squatter.token_version + 1  # the squatter's sessions die
+    with pytest.raises(UnauthorizedError):
+        service.authenticate_user("owner-admin@example.com", "anything")
+
+
+def test_google_sign_in_for_an_admin_email_of_another_google_identity_conflicts(monkeypatch):
+    """An account already linked to one Google identity is never handed to another."""
+    from src.domain.errors import ConflictError
+
+    store, service = _admin_service(monkeypatch)
+    owner, _created = service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-owner")
 
     with pytest.raises(ConflictError) as exc:
-        service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-real-admin")
+        service.get_or_create_oauth_user("owner-admin@example.com", google_subject="sub-intruder")
 
     assert exc.value.status_code == 409
-    assert store.get_user_by_id(squatter.id).google_subject is None
-    assert store.get_user_by_google_subject("sub-real-admin") is None
+    assert store.get_user_by_id(owner.id).google_subject == "sub-owner"
+    assert store.get_user_by_google_subject("sub-intruder") is None

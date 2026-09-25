@@ -2,7 +2,9 @@
 
 Composed into ResearchService; relies on self.task_store (set in ResearchService.__init__).
 """
+import logging
 import uuid
+from dataclasses import dataclass
 
 from src.domain.errors import (
     BadRequestError,
@@ -15,10 +17,25 @@ from src.domain.errors import (
 
 from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.domain import AuthUser
+from src.notifications import AccountEmail
+
+logger = logging.getLogger(__name__)
 
 # Detail prefix of the 403 that asks for a fresh Google sign-in. The web UI keys on it
 # (isReauthRequired: a 403 whose detail starts with it) to offer signing in again.
 REAUTH_REQUIRED = "reauth_required"
+
+
+@dataclass(frozen=True)
+class GoogleSignIn:
+    """What a Google sign-in resolved to (AuthMixin.sign_in_with_google)."""
+
+    user: AuthUser
+    # A brand-new account: the callback offers to set a password.
+    created: bool
+    # Set when this sign-in linked Google to an existing local account: the notice the
+    # callback emails the address (GOOGLE_LINKED or GOOGLE_LINKED_PASSWORD_REMOVED).
+    linked_notice: AccountEmail | None = None
 
 
 def _reauth_required(action: str) -> str:
@@ -71,11 +88,31 @@ class AuthMixin:
         name: str | None = None,
         avatar_url: str | None = None,
     ) -> tuple[AuthUser, bool]:
-        """Resolve (or create) an account for a verified OAuth identity.
+        """Resolve (or create) an account for a verified OAuth identity: sign_in_with_google
+        without the linking notice. Returns (user, created)."""
+        result = self.sign_in_with_google(email, google_subject, name=name, avatar_url=avatar_url)
+        return result.user, result.created
 
-        Stores/refreshes the provider's name + avatar. Returns (user, created):
-        ``created`` is True for a brand-new account, so the caller can offer to set a
-        password for future email/password login.
+    def sign_in_with_google(
+        self,
+        email: str,
+        google_subject: str,
+        name: str | None = None,
+        avatar_url: str | None = None,
+    ) -> GoogleSignIn:
+        """Resolve, link or create the account of a Google identity whose email Google
+        verified (the OAuth callback refuses any other). Stores/refreshes the provider's
+        name + avatar.
+
+        - The subject is linked already: that account.
+        - A local account has this email and no google_subject: Google is linked to it.
+          Its email verified, the password stays. Not verified (a legacy Google account
+          from before 20260904_000019, or a sign-up by whoever typed the address first):
+          the password it was registered with is removed and every session revoked in the
+          same write, and the email is marked verified. Only the owner of the address can
+          then sign in, which defeats account pre-hijacking and unlocks legacy users.
+        - That account is linked to a different Google identity: ConflictError (409).
+        - Otherwise a new passwordless account (``created``: offer to set a password).
         """
         normalized = (email or "").strip().lower()
         subject = (google_subject or "").strip()
@@ -85,13 +122,11 @@ class AuthMixin:
         linked = self.task_store.get_user_by_google_subject(subject)
         if linked is not None:
             self.task_store.update_user_profile(linked.id, name, avatar_url)  # keep fresh
-            return self._to_auth_user(linked), False
+            return GoogleSignIn(self._to_auth_user(linked), created=False)
 
-        # Never silently attach a verified OAuth identity to an existing local account — admin
-        # emails included: sign-up verifies no email, so that row may belong to whoever
-        # claimed the address first.
-        if self.task_store.get_user_by_email(normalized) is not None:
-            raise ConflictError("An account with this email already exists")
+        existing = self.task_store.get_user_by_email(normalized)
+        if existing is not None:
+            return self._link_google_identity(existing, subject, name, avatar_url)
 
         # New OAuth accounts are explicitly passwordless until the user sets one.
         user = self.task_store.create_user(
@@ -101,7 +136,29 @@ class AuthMixin:
             google_subject=subject,
         )
         self.task_store.update_user_profile(user.id, name, avatar_url)
-        return self._to_auth_user(user), True
+        return GoogleSignIn(self._to_auth_user(user), created=True)
+
+    def _link_google_identity(
+        self, existing, subject: str, name: str | None, avatar_url: str | None
+    ) -> GoogleSignIn:
+        if existing.google_subject:
+            # The address belongs to an account of another Google identity: never re-linked.
+            raise ConflictError("An account with this email already exists")
+        clear_password = existing.email_verified_at is None
+        user = self.task_store.link_user_google_subject(existing.id, subject, clear_password=clear_password)
+        if user is None:
+            # Lost a race: a concurrent callback of this identity linked it first (fine),
+            # or another account took the subject or this account got another one.
+            again = self.task_store.get_user_by_google_subject(subject)
+            if again is None or again.id != existing.id:
+                raise ConflictError("An account with this email already exists")
+            return GoogleSignIn(self._to_auth_user(again), created=False)
+        user = self.task_store.update_user_profile(user.id, name, avatar_url) or user
+        logger.info(
+            "google_identity_linked user_id=%s password_removed=%s", user.id, str(clear_password).lower()
+        )
+        notice = AccountEmail.GOOGLE_LINKED_PASSWORD_REMOVED if clear_password else AccountEmail.GOOGLE_LINKED
+        return GoogleSignIn(self._to_auth_user(user), created=False, linked_notice=notice)
 
     def set_user_password(
         self,
@@ -158,7 +215,8 @@ class AuthMixin:
         Every password write bumps token_version, so replacing one revokes all sessions
         minted before it — including any held by whoever registered the address first.
         The same write stamps admin_provisioned_at: the operator's vouching is what makes a
-        password-only ADMIN_EMAILS account an admin (src/auth/admin_identity.py).
+        password-only ADMIN_EMAILS account an admin (src/auth/admin_identity.py). It also
+        counts as a verified email, as migration 20260925_000033's backfill does.
         """
         from src.auth.security import hash_password
 
@@ -233,5 +291,6 @@ class AuthMixin:
             name=user.name,
             avatar_url=user.avatar_url,
             is_admin=has_admin_rights(user.email, user.google_subject, user.admin_provisioned_at),
+            email_verified=user.email_verified_at is not None,
             token_version=user.token_version,
         )
