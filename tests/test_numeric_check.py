@@ -108,3 +108,25 @@ def test_source_unavailable_not_penalized():
 def test_empty_inputs_safe():
     assert _agent().check("", {}).total == 0
     assert _agent().check("No numbers worth checking here at all [S1].", {"S1": {"content": "x"}}).total == 0
+
+
+def test_numeric_check_step_reaches_the_progress_trail():
+    # The trail event used to read a missing NumericCheck.figures field, so it raised
+    # after the result was stored and the step never appeared on the trail.
+    from src.api.schemas import ResearchRequest, SearchDepth
+    from src.repositories import InMemoryTaskStore
+    from src.services import ResearchService
+
+    store = InMemoryTaskStore()
+    research = store.add_research(
+        ResearchRequest(prompt="solar capacity", depth=SearchDepth.EASY), task_ids=[], language="en"
+    )
+    service = ResearchService(task_store=store)
+    report = "Solar capacity grew 40% according to the report [S1]."
+    aggregated = [{"source_id": "S1", "content": "Officials said solar capacity grew about 40 percent."}]
+
+    service._check_numbers(report, research, [], aggregated=aggregated)
+
+    event = store.get_research(research.id).graph_trail[-1]
+    assert event["step"] == "numeric_check"
+    assert event["metrics"] == {"figures_count": 1}
