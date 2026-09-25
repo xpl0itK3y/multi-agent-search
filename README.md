@@ -116,9 +116,15 @@ is empty that user also passes every admin check. Do not expose such an
 instance beyond your own machine.
 
 Users register with email and password or sign in with Google. Google sign-in
-never merges into an existing password account with the same email: the login
-page shows `?error=oauth_conflict` for that case and `?error=oauth_failed` for
-any other callback failure.
+with the address of an existing password account links Google to that account
+(the callback accepts only addresses Google reports as verified). If the account
+had verified its email, its password keeps working. If not, the password is
+cleared and every session of the account is revoked, so a password set by
+someone who never proved they own the address stops working (see
+[Account recovery](#account-recovery)). An account already linked to a
+different Google identity is never taken over: the login page shows
+`?error=oauth_conflict` for that case and `?error=oauth_failed` for any other
+callback failure.
 
 An account has admin rights only when both hold:
 
@@ -127,11 +133,13 @@ An account has admin rights only when both hold:
   email) or the operator provisioned it with `scripts/create_admin.py` (which
   sets `users.admin_provisioned_at`).
 
-Sign-up verifies no email, so the list alone would make whoever registered an
-address first its admin. For the same reason `ADMIN_EMAILS` addresses cannot
-self-register, and the login form never sets their first password. An admin
-either signs in with Google and then sets a password in Settings, or is
-provisioned by the operator:
+Sign-up does not wait for the email to be verified, so the list alone would
+make whoever registered an address first its admin. For the same reason
+`ADMIN_EMAILS` addresses cannot self-register, and the login form never sets
+their first password. Verifying the address through the emailed link does not
+grant admin rights either: only the two routes above do. An admin either signs
+in with Google and then sets a password in Settings, or is provisioned by the
+operator:
 
 ```bash
 # Prompts for the password twice; the email must be listed in ADMIN_EMAILS.
@@ -160,8 +168,10 @@ account that squatted an admin address. Password-only admins therefore lose
 their admin rights after `alembic upgrade head` until you run
 `scripts/create_admin.py` once for each of them (it sets a new password and
 signs them out everywhere). Admins linked to Google (`users.google_subject`
-set) keep their rights; any other admin account, including a Google account
-created before Google ids were stored, needs the script too.
+set) keep their rights. An admin account created with Google before Google ids
+were stored gets them back the next time its owner signs in with Google, which
+links the account (see [Legacy Google accounts](#legacy-google-accounts)); any
+other admin account needs the script too.
 
 Usage telemetry (`POST /v1/telemetry/event`, which feeds the admin analytics)
 is accepted only from signed-in users with a valid CSRF token; the web UI sends
@@ -174,7 +184,9 @@ Every admin mutation (queue maintenance, requeue/recover/cleanup, user
 deletion) and every CSV export writes an admin audit row and shares the
 `ADMIN_RATE_LIMIT_PER_MINUTE` budget (default 10). Accounts with admin rights
 cannot be deleted from the admin panel; an unverified account squatting an
-`ADMIN_EMAILS` address can, and deleting it is the remedy.
+`ADMIN_EMAILS` address can. Deleting it is one remedy. The other is the owner
+signing in with Google, which links that account and clears the squatter's
+password and sessions (see [Account recovery](#account-recovery)).
 
 LLM spend is recorded per call in `llm_usage_logs` (actual model id, tokens,
 cache hits, cost), including API-side calls such as decompose, optimize and
@@ -187,6 +199,167 @@ non-thinking mode). An id that is not in the map is guessed from its name: one
 containing `pro` is billed as pro, one containing `flash` or `chat` as flash.
 An id whose name matches neither is billed at the tier of `DEEPSEEK_MODEL`.
 
+## Account recovery
+
+A forgotten password is reset through a one-time link sent by email, sign-up
+asks people to confirm their address the same way, and Google sign-in links to
+an existing account under rules that lock a squatter out rather than the
+owner. Everything that sends mail needs an email backend.
+
+### Email settings
+
+Set these in `.env` (`.env.example` lists them all):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `EMAIL_BACKEND` | `disabled` | `disabled`, `console` or `smtp` (below) |
+| `SMTP_HOST`, `SMTP_PORT` | none, `587` | The mail server; `SMTP_HOST` is required for `smtp` |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` (TLS from the first byte, usually port 465) or `none` (clear text, for a local relay only) |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | Credentials, if the server needs them |
+| `SMTP_FROM` | none | Sender address; required for `smtp` |
+| `SMTP_TIMEOUT_SECONDS` | `10` | Seconds to wait for the mail server before giving up |
+| `PUBLIC_APP_URL` | `http://localhost:8502` | The web UI's address as users open it, without a trailing slash. Every link in an email starts with it |
+| `PASSWORD_RESET_TTL_SECONDS` | `3600` | How long a password reset link works |
+| `EMAIL_VERIFICATION_TTL_SECONDS` | `86400` | How long a verification link works |
+
+- `disabled` sends nothing, so password reset and email verification are off:
+  `GET /v1/auth/config` reports `"password_reset": false` and
+  `"email_verification": false` next to `google_oauth`. Both are `true` with
+  any other backend. An operator can still issue reset links
+  ([below](#without-email-operator-issued-reset-links)).
+- `smtp` sends through `SMTP_HOST`. The API refuses to start with `smtp`
+  unless `SMTP_HOST` and `SMTP_FROM` are set.
+- `console` is for development only. It writes every message, links included,
+  to the application log at WARNING level (in Compose that log also goes to
+  Loki), so anyone who can read the logs can reset any account's password. The
+  API logs a warning at startup while it is on.
+
+Links are built from `PUBLIC_APP_URL`, not from the request, so a forged `Host`
+header cannot point a reset link at another site. Set it whenever users reach
+the web UI anywhere but `http://localhost:8502`: another `WEB_PORT`, a domain,
+HTTPS.
+
+### Password reset
+
+1. `POST /v1/auth/password/forgot` with `{"email": "..."}` always answers 202
+   `{"status": "accepted"}`: for a known and an unknown address alike, and also
+   while email is disabled. The answer never tells anyone whether an account
+   exists. If one has that address, it is sent a link to
+   `{PUBLIC_APP_URL}/reset-password#token=<token>`.
+2. That page sends the token and a new password to
+   `POST /v1/auth/password/reset` and gets 200 `{"status": "ok"}`. The password
+   has the same minimum length as everywhere else (6 characters; a shorter one
+   gets 422). A link that is invalid, expired or already used gets 400 with a
+   detail starting with `reset_token_invalid`.
+
+A successful reset:
+
+- sets the new password and marks the email as verified: opening the link
+  proved control of the mailbox;
+- revokes every session of the account, on every device, so whoever knew or
+  guessed the old password is signed out;
+- invalidates the account's other reset links that are still outstanding;
+- emails a "your password was reset" notice, so the owner learns about a reset
+  they did not ask for;
+- does not sign you in. Sign in with the new password.
+
+The token is random, works once and expires after `PASSWORD_RESET_TTL_SECONDS`
+(1 hour by default). The database stores only a hash of it, so a database dump
+or backup holds no working link. It travels in the URL fragment (after `#`),
+which browsers never send to a server, so it stays out of access logs, proxies
+and `Referer` headers. nginx also serves `/reset-password` and `/verify-email`
+with `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (see
+[Browser security headers](#browser-security-headers)).
+
+Password reset requests are throttled per client address and per email
+address (compared case-insensitively). The per-email limit counts whether or
+not an account has the address, so hitting it gives nothing away either, and it
+keeps anyone from flooding a mailbox with reset mail. Redeeming a reset or
+verification link is throttled per client address. Past a limit the API answers
+429 `Too many attempts, please slow down`. Like sign-in, the endpoints that
+work without a session need no CSRF token.
+
+### Email verification
+
+With email enabled, sign-up sends a link to
+`{PUBLIC_APP_URL}/verify-email#token=<token>`. It works once, expires after
+`EMAIL_VERIFICATION_TTL_SECONDS` (24 hours by default) and is stored hashed
+like a reset token. The new account can be used right away, and a failure to
+send the mail never fails the sign-up. `email_verified` in the user returned by
+`GET /v1/auth/me`, sign-in and sign-up shows the state.
+
+- `POST /v1/auth/email/verification` (signed in, with the usual CSRF token)
+  sends a new link and answers 202 `{"status": "sent"}`, or 200
+  `{"status": "already_verified"}`. It is throttled per user.
+- `POST /v1/auth/email/verify` with `{"token": "..."}` answers 200
+  `{"status": "verified"}`. A link that is invalid, expired or already used
+  gets 400 with a detail starting with `verification_token_invalid`. It needs no
+  session, so the link also works in another browser.
+
+A verified address keeps its password when Google sign-in is linked (next
+section). It does not grant admin rights (see
+[Authentication and Admins](#authentication-and-admins)).
+
+### Google sign-in and existing accounts
+
+Google sign-in accepts only addresses that Google reports as verified. When no
+account is linked to that Google identity yet but an account with the same
+email exists:
+
+| Existing account | Result of the Google sign-in |
+|---|---|
+| Not linked to Google, email verified | Google is linked. The password keeps working. |
+| Not linked to Google, email not verified: a squatter's sign-up, a Google account from before migration `000019`, any password account whose owner never verified the address | Google is linked, the password is cleared, every session of the account is revoked and the email is marked verified. |
+| Linked to a different Google identity | Nothing changes: the sign-in is refused and the login page shows `?error=oauth_conflict`. |
+
+Linking emails the account a "Google sign-in was linked" notice. After a cleared
+password, the owner can set a new one in Settings within 10 minutes of the
+Google sign-in (see [Sessions and passwords](#sessions-and-passwords)). If you
+signed up with a password and want to keep it, verify your address before you
+first sign in with Google.
+
+This rule prevents account pre-hijacking. Sign-up alone proves nothing about
+an address, so an attacker can register yours with a password of their own
+before you ever use the service, and keep a session open. If Google sign-in
+simply merged into that account, the attacker's password and session would
+keep working in the account you then fill with your research. Clearing an
+unverified password and revoking every session removes both: from the moment
+Google vouches for you, only you can get in. A verified password was set by
+someone who could read the mailbox, the same person Google vouches for, so it
+stays. An account linked to another Google identity is never merged, because a
+second identity already claims it. Researches the squatter created before stay
+in the account; delete any you do not recognize.
+
+### Legacy Google accounts
+
+Accounts created with Google before migration `20260904_000019` have no stored
+Google id (`users.google_subject` is NULL) and a random password nobody knows.
+Strict matching turned their Google sign-in away with `oauth_conflict`, and no
+password let their owners in. They count as unverified, so the owner simply
+signs in with Google again: the account is linked, the unknown random password
+is cleared, and the owner is back with all of their researches. With email
+enabled, a password reset works too. An admin among them gets admin rights
+back at that sign-in, because the account is then linked to Google.
+
+### Without email: operator-issued reset links
+
+With `EMAIL_BACKEND=disabled` nobody receives reset links. The operator can
+issue one instead:
+
+```bash
+docker compose exec api python scripts/issue_password_reset.py user@example.com
+```
+
+The script prints a one-time link to `/reset-password` with the usual lifetime
+and effects: using it sets the password, marks the address verified and signs
+the account out everywhere. Whoever opens the link controls the account, so
+confirm who owns the address first and hand the link over directly, out of
+band. The script refuses the in-memory store, exits with status 1 and creates
+nothing when no account has the email, and logs nothing secret: the link goes
+to its standard output only. Locally, run
+`python scripts/issue_password_reset.py <email>` against the Postgres
+configured in `.env`.
+
 ## Security
 
 ### Sessions and passwords
@@ -197,7 +370,8 @@ clears the session cookies and always answers 200 with
 `{"status": "ok", "revoked": true}`. `revoked` is `false` when the request had
 no valid session or the revocation failed; this browser is signed out either
 way, but after a failure other devices may still be signed in. Changing the
-password revokes every session too.
+password revokes every session too, and so do a password reset by email and a
+Google sign-in that clears an unverified password.
 
 Two password changes need a fresh Google sign-in: setting the first password
 of an account created with Google, and resetting the password of a
@@ -209,14 +383,13 @@ back. The `/set-password` page shown right after a Google sign-up is within
 that window. A stolen session alone therefore cannot add a password login to
 someone's Google account.
 
-Sign-up does not verify email addresses yet. A local (email and password)
-sign-up therefore blocks the address's real owner from signing in with Google
-later: Google sign-in never merges into an unlinked password account with the
-same email, so it ends in a 409 conflict and the login page shows
-`?error=oauth_conflict`. An operator releases the address by deleting the
-squatting account in the admin panel's Users tab (audited; it also deletes that
-account's researches), after confirming who owns the address. The owner then
-signs in with Google and gets a new account.
+Somebody else's local (email and password) sign-up of your address no longer
+locks you out. Signing in with Google links the account to your Google identity
+and removes the squatter's password and sessions; a password reset by email
+replaces their password and ends their sessions (see
+[Account recovery](#account-recovery)). If neither is possible, an operator can
+still delete the squatting account in the admin panel's Users tab (audited; it
+also deletes that account's researches) after confirming who owns the address.
 
 ### API
 
@@ -231,9 +404,10 @@ signs in with Google and gets a new account.
   of the `API_WORKERS` processes (2 in Compose) counts separately. They cover
   sign-in and sign-up per client address, sign-in per account,
   current-password checks per user, the LLM routes, telemetry and admin actions.
-  Each limiter keeps at most 10,000 keys (client addresses, emails or user ids)
-  per process. Past that, the key idle longest is dropped first, and its budget
-  starts over.
+  The account recovery endpoints have throttles of their own (see
+  [Account recovery](#account-recovery)). Each limiter keeps at most 10,000
+  keys (client addresses, emails or user ids) per process. Past that, the key
+  idle longest is dropped first, and its budget starts over.
 - A client's `X-Request-ID` is kept, and echoed back, only if it matches
   `^[A-Za-z0-9._-]{1,64}$`. Any other value is replaced by a generated id.
 - Webhook URLs often carry a credential (Slack, Discord and Teams incoming
@@ -264,7 +438,15 @@ The web UI's nginx (`web/nginx.conf`) sends these with every page and asset:
 - `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff`.
 - `Referrer-Policy: strict-origin-when-cross-origin`. The public share page
   (`/r/<token>`) gets `no-referrer`, so its token never appears in a `Referer`
-  header, not even one sent to this site.
+  header, not even one sent to this site. The account recovery pages
+  (`/reset-password`, `/verify-email`) get it too. Their token is in the URL
+  fragment, which browsers never send anywhere, and the policy backs that up.
+
+The HTML of every route (`index.html`) also gets `Cache-Control: no-cache`:
+browsers revalidate it on every load, so a copy from before a deploy never asks
+for bundles that are gone. `/reset-password` and `/verify-email` get `no-store`
+instead, so no cache keeps a page that handles a one-time credential. Hashed
+assets keep nginx's default caching.
 
 Responses from the API (`/v1/`, `/health`) get
 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
