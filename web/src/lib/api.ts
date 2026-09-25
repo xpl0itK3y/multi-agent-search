@@ -123,12 +123,34 @@ function isPublicPath(pathname: string): boolean {
   return pathname === "/login" || pathname.startsWith("/r/");
 }
 
-// A stored bearer token the server just rejected is stale — drop it and bounce
-// to /login (with a `redirect` back param) so the user can re-authenticate.
-function recoverFromExpiredSession(hadToken: boolean): void {
-  if (!hadToken) return;
+// Whether this page signed a user in: set once /v1/auth/me, a login or a registration
+// succeeds, cleared by logout. A Google sign-in's session is the httpOnly cookie alone
+// (no bearer token), so a 401 cannot be told from a stale session by the token only.
+let sessionActive = false;
+
+// Whether the server still accepts this page's session: a 401 from /v1/auth/me. Any
+// other answer, or no answer (offline), is no verdict on the session.
+async function sessionRejected(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/v1/auth/me`, { credentials: "include", headers: authHeaders("GET") });
+    return res.status === 401;
+  } catch {
+    return false;
+  }
+}
+
+// A session the server just rejected is stale (expired, or revoked: a logout signs out
+// every device): drop the stored bearer and bounce to /login (with a `redirect` back
+// param) so the user can re-authenticate. Nothing to recover before a sign-in (the
+// page-load /v1/auth/me probe) or on public pages. A cookie-only session is confirmed
+// dead with /v1/auth/me first: JS cannot drop that cookie, so a 401 that is not about
+// the session would otherwise bounce the user to /login and straight back, forever.
+async function recoverFromExpiredSession(hadToken: boolean, hadSession: boolean): Promise<void> {
+  if (!hadToken && !hadSession) return;
   const { pathname, search } = window.location;
   if (isPublicPath(pathname)) return;
+  if (!hadToken && !(await sessionRejected())) return;
+  sessionActive = false;
   setAuthToken(null);
   window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
 }
@@ -151,13 +173,14 @@ async function request<T>(
     ...authHeaders(method),
   };
   const hadToken = authToken !== null;
+  const hadSession = sessionActive;
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     ...init,
     headers,
   });
   if (!res.ok) {
-    if (res.status === 401 && sessionRecovery) recoverFromExpiredSession(hadToken);
+    if (res.status === 401 && sessionRecovery) await recoverFromExpiredSession(hadToken, hadSession);
     throw await apiErrorFromResponse(res);
   }
   if (res.status === 204) return undefined as T;
@@ -182,12 +205,13 @@ function attachmentFilename(disposition: string | null): string | null {
 // on them like on a mutation whenever the session is the cookie (a Google sign-in).
 async function fetchFile(path: string): Promise<ApiFile> {
   const hadToken = authToken !== null;
+  const hadSession = sessionActive;
   const res = await fetch(`${BASE}${path}`, {
     credentials: "include",
     headers: { ...authHeaders("GET"), ...csrfHeaders() },
   });
   if (!res.ok) {
-    if (res.status === 401) recoverFromExpiredSession(hadToken);
+    if (res.status === 401) await recoverFromExpiredSession(hadToken, hadSession);
     throw await apiErrorFromResponse(res);
   }
   return { blob: await res.blob(), filename: attachmentFilename(res.headers.get("Content-Disposition")) };
@@ -255,7 +279,11 @@ export function apiErrorMessage(err: unknown, t: (key: string) => string): strin
 }
 
 export const api = {
-  me: () => request<AuthUser>("/v1/auth/me"),
+  me: async () => {
+    const user = await request<AuthUser>("/v1/auth/me");
+    sessionActive = true;
+    return user;
+  },
 
   register: async (email: string, password: string) => {
     const res = await request<AuthSession>("/v1/auth/register", {
@@ -263,6 +291,7 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     setAuthToken(res.access_token);
+    sessionActive = true;
     return res;
   },
 
@@ -272,14 +301,17 @@ export const api = {
       body: JSON.stringify({ email, password }),
     });
     setAuthToken(res.access_token);
+    sessionActive = true;
     return res;
   },
 
+  // A 401 here only says the session had already ended: the caller signs out anyway.
   logout: async () => {
     try {
-      return await request<{ status: string }>("/v1/auth/logout", { method: "POST" });
+      return await request<{ status: string }>("/v1/auth/logout", { method: "POST" }, { sessionRecovery: false });
     } finally {
       setAuthToken(null);
+      sessionActive = false;
     }
   },
 

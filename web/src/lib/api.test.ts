@@ -17,6 +17,19 @@ function stubEnv(token: string | null, pathname: string, search = "", cookie = "
   return { assign, removeItem };
 }
 
+// A fetch whose n-th call gets the n-th status (200 with a user body; NaN: no answer).
+function fetchAnswering(...statuses: number[]) {
+  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+    const status = statuses.shift() ?? 500;
+    if (Number.isNaN(status)) throw new TypeError("fetch failed");
+    return new Response(status === 200 ? JSON.stringify({ id: "u1", email: "denis@example.com" }) : "", { status });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const calledPaths = (fetchMock: ReturnType<typeof fetchAnswering>) => fetchMock.mock.calls.map(([url]) => url);
+
 describe("api request error handling", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -76,15 +89,70 @@ describe("api request error handling", () => {
     expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fresearch%2Fabc%3Ftab%3Dsources");
   });
 
-  it("on 401 without a stored token: no redirect (unauthenticated page)", async () => {
+  it("on 401 before anyone signed in (no token, no session): no redirect", async () => {
     const { assign, removeItem } = stubEnv(null, "/research/abc");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+    const fetchMock = fetchAnswering(401, 401);
 
     const { api } = await import("./api");
+    // The page-load session probe of a signed-out visitor, then any other call.
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
     await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
 
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/research/abc/report"]);
     expect(assign).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
+  });
+
+  // A Google sign-in's session is the cookie alone, and a logout elsewhere revokes it.
+  it("on 401 of a signed-in cookie-only session: confirms with /me, then redirects to /login", async () => {
+    const { assign } = stubEnv(null, "/research/abc", "?tab=sources");
+    const fetchMock = fetchAnswering(200, 401, 401);
+
+    const { api } = await import("./api");
+    await api.me();
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/research/abc/report", "/v1/auth/me"]);
+    expect(assign).toHaveBeenCalledOnce();
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fresearch%2Fabc%3Ftab%3Dsources");
+  });
+
+  it("on 401 of a cookie-only session that /me still accepts: stays (no /login loop)", async () => {
+    // e.g. an admin check refused while the session itself is fine.
+    const { assign } = stubEnv(null, "/admin");
+    for (const answer of [200, NaN]) {
+      const fetchMock = fetchAnswering(200, 401, answer); // NaN: the probe has no answer
+      const { api } = await import("./api");
+      await api.me();
+      await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+      expect(calledPaths(fetchMock)).toHaveLength(3);
+      vi.resetModules();
+    }
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("recovers a cookie-only session from a file download's 401 too", async () => {
+    const { assign } = stubEnv(null, "/admin");
+    fetchAnswering(200, 401, 401);
+
+    const { api, adminApi } = await import("./api");
+    await api.me();
+    await expect(adminApi.exportUsersCsv()).rejects.toMatchObject({ status: 401 });
+
+    expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fadmin");
+  });
+
+  it("after logout a 401 is no longer a lost session, and logout's own 401 never redirects", async () => {
+    const { assign } = stubEnv("stale-token", "/settings");
+    const fetchMock = fetchAnswering(200, 401, 401);
+
+    const { api } = await import("./api");
+    await api.me();
+    await expect(api.logout()).rejects.toMatchObject({ status: 401 });
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/auth/logout", "/v1/research/abc/report"]);
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("on 401 on public routes (/r/…, /login): no redirect loop", async () => {
@@ -97,6 +165,22 @@ describe("api request error handling", () => {
       expect(assign).not.toHaveBeenCalled();
 
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("on 401 on public routes with a cookie-only session: no probe, no redirect", async () => {
+    for (const pathname of ["/r/share-token", "/login"]) {
+      const { assign } = stubEnv(null, pathname);
+      const fetchMock = fetchAnswering(200, 401);
+
+      const { api } = await import("./api");
+      await api.me();
+      await expect(api.getPublicReport("t")).rejects.toMatchObject({ status: 401 });
+      expect(calledPaths(fetchMock)).toHaveLength(2);
+      expect(assign).not.toHaveBeenCalled();
+
+      vi.unstubAllGlobals();
+      vi.resetModules();
     }
   });
 });

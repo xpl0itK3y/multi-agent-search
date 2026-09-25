@@ -96,7 +96,8 @@ function startQueuePoll() {
       queuePos.value = s.queue_position ?? null;
       if (s.status !== "queued") stopQueuePoll();
     } catch (e) {
-      if (isGone(e)) markGone(); // otherwise transient — keep polling
+      if (isGone(e)) markGone();
+      else if (isSignedOut(e)) markSignedOut(e); // otherwise transient — keep polling
     }
   }, 4000);
 }
@@ -190,8 +191,26 @@ function markGone() {
   }
 }
 
+// 401: the session is gone (expired, or revoked: a logout signs out every device).
+// Reconnecting cannot bring it back; api's session recovery sends the tab to /login.
+function isSignedOut(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
+// Stop streaming, reconnecting and polling until the user signs in again. The research
+// itself goes on, so the thread keeps waiting and a manual resume stays offered.
+function markSignedOut(e: unknown) {
+  clearReconnect();
+  close?.();
+  close = undefined;
+  stopQueuePoll();
+  errorMsg.value = apiErrorMessage(e, t);
+  streamLost.value = true;
+}
+
 // Fetch the current status/report (also used to catch up after a dropped stream). Returns
-// true if the research is already in a terminal state (no live stream needed) — or gone.
+// true if no live stream is needed: the research is in a terminal state, is gone, or the
+// session is.
 async function syncStatus(): Promise<boolean> {
   try {
     const s = await api.getStatus(props.id);
@@ -229,6 +248,10 @@ async function syncStatus(): Promise<boolean> {
   } catch (e) {
     if (isGone(e)) {
       markGone();
+      return true;
+    }
+    if (isSignedOut(e)) {
+      markSignedOut(e);
       return true;
     }
     /* SSE still drives status/report */

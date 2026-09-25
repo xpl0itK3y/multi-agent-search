@@ -172,4 +172,49 @@ describe("ResearchTurn live stream", () => {
       expect(mocks.openResearchStream).toHaveBeenCalledTimes(3);
     });
   });
+
+  // A revoked cookie session (a logout elsewhere signs out every device) answers 401 to
+  // /status, and the EventSource just closes: reconnecting can never succeed.
+  describe("a session that is gone", () => {
+    const signedOut = () => new ApiError(401, "Not authenticated");
+
+    it("stops reconnecting once /status says 401, keeps the research and offers a resume", async () => {
+      const wrapper = await mountRunning();
+      mocks.api.getStatus.mockRejectedValue(signedOut());
+
+      handlers(0).onError?.("connection lost"); // /events answered 401: EventSource closed
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(1);
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + the one catch-up
+      expect(wrapper.emitted("done")).toBeUndefined();
+      expect(wrapper.text()).toContain(i18n.global.t("research.resume"));
+
+      // Signed in again (e.g. in another tab): the manual resume picks the stream up.
+      mocks.api.getStatus.mockResolvedValue({ status: "processing", prompt: "Topic", llm_token_usage: null });
+      await wrapper.findAll("button").find((b) => b.text() === i18n.global.t("research.resume"))!.trigger("click");
+      await flushPromises();
+      expect(mocks.openResearchStream).toHaveBeenCalledTimes(2);
+    });
+
+    it("never opens a stream when the session is gone on mount", async () => {
+      mocks.api.getStatus.mockRejectedValue(signedOut());
+      const wrapper = await mountRunning();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(mocks.openResearchStream).not.toHaveBeenCalled();
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(1);
+      expect(wrapper.emitted("done")).toBeUndefined();
+    });
+
+    it("stops polling a queued research", async () => {
+      mocks.api.getStatus.mockResolvedValueOnce({ status: "queued", prompt: "Topic", llm_token_usage: null });
+      await mountRunning();
+      mocks.api.getStatus.mockRejectedValue(signedOut());
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + one poll
+    });
+  });
 });
