@@ -20,7 +20,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: { ...actual.api, ...mocks } };
 });
-vi.mock("@/lib/googleSignIn", () => ({ startGoogleSignIn }));
+vi.mock("@/lib/googleSignIn", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/googleSignIn")>()),
+  startGoogleSignIn,
+}));
 
 import { ApiError } from "@/lib/api";
 import SettingsView from "./SettingsView.vue";
@@ -193,6 +196,33 @@ describe("SettingsView", () => {
     await flushPromises();
     expect(wrapper.text()).toContain(t("errors.api.server"));
     expect(wrapper.text()).not.toContain(t("settings.security.deleteReauthRequired"));
+  });
+
+  it.each([
+    ["oauth_failed", "auth.reauthFailed"],
+    ["oauth_conflict", "auth.reauthConflict"],
+  ])("says why the Google sign-in it asked for did not finish (%s)", async (code, key) => {
+    mocks.setPassword.mockResolvedValue({ access_token: "t", token_type: "bearer", user: {} });
+    const wrapper = await mountSettings(`/settings?tab=security&reauth_error=${code}`);
+
+    expect(wrapper.text()).toContain(t(key));
+    expect(wrapper.text()).not.toContain(code);
+    await buttonByText(wrapper, "auth.reauthGoogle").trigger("click");
+    expect(startGoogleSignIn).toHaveBeenCalledWith("/settings?tab=security");
+
+    // A new attempt replaces the notice with its own outcome.
+    const inputs = wrapper.findAll('input[type="password"]');
+    await inputs[1].setValue("new-password");
+    await inputs[2].setValue("new-password");
+    await buttonByText(wrapper, "settings.security.updatePassword").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).not.toContain(t(key));
+  });
+
+  it("shows no re-auth notice for an unknown reason", async () => {
+    const wrapper = await mountSettings("/settings?tab=security&reauth_error=constructor");
+
+    expect(wrapper.text()).not.toContain(t("auth.reauthGoogle"));
   });
 
   it("opens the tab named by ?tab= and ignores unknown ones", async () => {

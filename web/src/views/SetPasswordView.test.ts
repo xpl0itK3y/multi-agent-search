@@ -15,14 +15,17 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: { ...actual.api, setPassword } };
 });
-vi.mock("@/lib/googleSignIn", () => ({ startGoogleSignIn }));
+vi.mock("@/lib/googleSignIn", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/googleSignIn")>()),
+  startGoogleSignIn,
+}));
 
 import { ApiError } from "@/lib/api";
 import SetPasswordView from "./SetPasswordView.vue";
 
 const t = (key: string) => i18n.global.t(key);
 
-async function mountView() {
+async function mountView(url = "/set-password") {
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().user = { id: "u1", email: "denis@example.com" } as never;
@@ -33,7 +36,7 @@ async function mountView() {
       { path: "/set-password", component: SetPasswordView },
     ],
   });
-  await router.push("/set-password");
+  await router.push(url);
   const wrapper = mount(SetPasswordView, { global: { plugins: [pinia, router, i18n] } });
   await flushPromises();
   return { wrapper, router };
@@ -80,5 +83,21 @@ describe("SetPasswordView", () => {
     expect(startGoogleSignIn).toHaveBeenCalledWith("/set-password");
     // The notice's button must not submit the form again.
     expect(setPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why the Google sign-in it asked for did not finish, and offers it again", async () => {
+    setPassword.mockRejectedValue(new ApiError(500, "boom"));
+    const { wrapper } = await mountView("/set-password?reauth_error=oauth_conflict");
+
+    expect(wrapper.text()).toContain(t("auth.reauthConflict"));
+    expect(wrapper.text()).not.toContain("oauth_conflict");
+    await wrapper.findAll("button").find((b) => b.text() === t("auth.reauthGoogle"))!.trigger("click");
+    expect(startGoogleSignIn).toHaveBeenCalledWith("/set-password");
+    expect(setPassword).not.toHaveBeenCalled();
+
+    // A new attempt replaces the notice with its own outcome.
+    await submit(wrapper);
+    expect(wrapper.text()).not.toContain(t("auth.reauthConflict"));
+    expect(wrapper.text()).toContain(t("errors.api.server"));
   });
 });

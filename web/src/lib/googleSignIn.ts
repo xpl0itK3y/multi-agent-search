@@ -12,6 +12,20 @@ const RETURN_KEY = "auth.google_return_to";
 const RETURN_TTL_MS = 10 * 60 * 1000;
 const RETURN_BASE = "http://return.invalid";
 
+/** The query parameter that brings a failed re-auth's reason back to the page that asked. */
+export const REAUTH_ERROR_PARAM = "reauth_error";
+// The callback's failure codes (/login?error=<code>), as seen by a signed-in user who went
+// through Google again only to confirm an action: the i18n key of the explanation.
+const REAUTH_ERRORS = new Map([
+  ["oauth_conflict", "auth.reauthConflict"],
+  ["oauth_failed", "auth.reauthFailed"],
+]);
+
+/** The i18n key for `?reauth_error=<code>`, or null for no or an unknown code. */
+export function googleReauthErrorKey(code: unknown): string | null {
+  return (typeof code === "string" && REAUTH_ERRORS.get(code)) || null;
+}
+
 /**
  * `value` when it is a path on this site ("/settings?tab=security"), else null. Rejects
  * absolute URLs, the protocol-relative forms browsers read as another host
@@ -64,13 +78,15 @@ export function startGoogleSignIn(returnTo?: string): void {
   window.location.assign(api.googleLoginUrl());
 }
 
-type Landing = Pick<RouteLocationNormalized, "name" | "fullPath" | "meta">;
+type Landing = Pick<RouteLocationNormalized, "name" | "fullPath" | "meta" | "query">;
 
 /**
  * Where the first navigation after a page load should go instead of `to`, if a Google
  * sign-in started by startGoogleSignIn() asked to come back somewhere. Reads the
- * stored path once and drops it. A failed sign-in (/login?error=...), a brand-new
- * account's /set-password landing and the public pages keep their own page.
+ * stored path once and drops it. A failed sign-in (/login?error=<code>) of a user who is
+ * still signed in goes back there too, with ?reauth_error=<code> so that page can say
+ * why. A brand-new account's /set-password landing and the public pages keep their own
+ * page.
  */
 export function googleReturnRedirect(to: Landing, signedIn: boolean, now = Date.now()): string | null {
   let raw: string | null;
@@ -92,6 +108,15 @@ export function googleReturnRedirect(to: Landing, signedIn: boolean, now = Date.
   if (!(age >= 0 && age <= RETURN_TTL_MS)) return null;
   const path = safeReturnPath(stored.path);
   if (!path || !signedIn || to.meta.public) return null;
+  // A cancelled or refused Google step lands on /login?error=<code>, but the old session
+  // cookie still signs the user in, so the router would send them on to Home with no word.
+  const error = to.query.error;
+  if (to.name === "login" && error) {
+    const code = typeof error === "string" && REAUTH_ERRORS.has(error) ? error : "oauth_failed";
+    const back = new URL(path, RETURN_BASE);
+    back.searchParams.set(REAUTH_ERROR_PARAM, code);
+    return back.pathname + back.search + back.hash;
+  }
   if (to.name === "login" || to.name === "set-password" || to.fullPath === path) return null;
   return path;
 }

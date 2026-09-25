@@ -552,6 +552,8 @@ const ru = {
     oauthConflict: "Аккаунт с этим email уже зарегистрирован с паролем — войдите по email и паролю.",
     oauthFailed: "Не удалось войти через Google. Попробуйте ещё раз.",
     reauthGoogle: "Войти через Google ещё раз",
+    reauthFailed: "Повторный вход через Google не завершён, поэтому ничего не изменилось. Попробуйте ещё раз.",
+    reauthConflict: "Выбранный аккаунт Google относится к другому аккаунту на сайте, поэтому ничего не изменилось. Войдите через Google-аккаунт, привязанный к этому.",
   },
   admin: {
     title: "Панель управления",
@@ -1689,6 +1691,8 @@ const en: typeof ru = {
     oauthConflict: "An account with this email already exists with a password — sign in with email and password.",
     oauthFailed: "Google sign-in failed. Please try again.",
     reauthGoogle: "Sign in with Google again",
+    reauthFailed: "The Google sign-in did not finish, so nothing was changed. Please try again.",
+    reauthConflict: "The Google account you chose belongs to a different account here, so nothing was changed. Sign in with the Google account linked to this one.",
   },
   admin: {
     title: "Admin Panel",
@@ -2826,6 +2830,8 @@ const es: typeof ru = {
     oauthConflict: "Ya existe una cuenta con este email y contraseña — inicia sesión con email y contraseña.",
     oauthFailed: "No se pudo iniciar sesión con Google. Inténtalo de nuevo.",
     reauthGoogle: "Volver a iniciar sesión con Google",
+    reauthFailed: "El inicio de sesión con Google no se completó, así que no se cambió nada. Inténtalo de nuevo.",
+    reauthConflict: "La cuenta de Google que elegiste pertenece a otra cuenta de este sitio, así que no se cambió nada. Inicia sesión con la cuenta de Google vinculada a esta.",
   },
   admin: {
     title: "Panel de control",

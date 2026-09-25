@@ -50,6 +50,25 @@ describe("router: back from a Google sign-in", () => {
     expect(router.currentRoute.value.fullPath).toBe("/research/r-1");
   });
 
+  it("brings a signed-in user back from a failed re-auth, with the reason, not to Home", async () => {
+    sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/settings?tab=security", at: Date.now() }));
+    const router = await loadApp(true);
+
+    await router.push("/login?error=oauth_conflict");
+
+    expect(router.currentRoute.value.fullPath).toBe("/settings?tab=security&reauth_error=oauth_conflict");
+    expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+  });
+
+  it("keeps a signed-out user on the failed sign-in's login page", async () => {
+    sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/settings?tab=security", at: Date.now() }));
+    const router = await loadApp(false);
+
+    await router.push("/login?error=oauth_failed");
+
+    expect(router.currentRoute.value.fullPath).toBe("/login?error=oauth_failed");
+  });
+
   it("a signed-out landing still goes to /login, and the entry is dropped", async () => {
     sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/settings", at: Date.now() }));
     const router = await loadApp(false);

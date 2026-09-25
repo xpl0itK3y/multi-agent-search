@@ -26,7 +26,8 @@ function stubBrowser(token: string | null = "password-session-token") {
 }
 
 function landing(name: string, fullPath: string, meta: Record<string, unknown> = {}) {
-  return { name, fullPath, meta };
+  const query = Object.fromEntries(new URL(fullPath, "http://landing.invalid").searchParams);
+  return { name, fullPath, meta, query };
 }
 
 describe("safeReturnPath", () => {
@@ -152,7 +153,8 @@ describe("googleReturnRedirect", () => {
     ["expired", { path: "/settings", at: NOW - 11 * MINUTE }, landing("home", "/"), true],
     ["from the future", { path: "/settings", at: NOW + MINUTE }, landing("home", "/"), true],
     ["not signed in", { path: "/settings", at: NOW }, landing("home", "/"), false],
-    ["failed sign-in", { path: "/settings", at: NOW }, landing("login", "/login?error=oauth_failed"), true],
+    ["failed sign-in, signed out", { path: "/settings", at: NOW }, landing("login", "/login?error=oauth_failed"), false],
+    ["plain login page", { path: "/settings", at: NOW }, landing("login", "/login"), true],
     ["new account onboarding", { path: "/settings", at: NOW }, landing("set-password", "/set-password"), true],
     ["public page", { path: "/settings", at: NOW }, landing("public-report", "/r/t", { public: true }), true],
     ["already there", { path: "/settings?tab=security", at: NOW }, landing("settings", "/settings?tab=security"), true],
@@ -174,5 +176,38 @@ describe("googleReturnRedirect", () => {
     });
     const { googleReturnRedirect } = await import("./googleSignIn");
     expect(googleReturnRedirect(landing("home", "/"), true, NOW)).toBeNull();
+  });
+
+  // A cancelled or refused re-auth lands on /login?error=<code> while the old session is
+  // still valid: back to the asking page, which is told why (not silently to Home).
+  it.each([
+    ["/settings?tab=security", "/login?error=oauth_failed", "/settings?tab=security&reauth_error=oauth_failed"],
+    ["/settings?tab=security", "/login?error=oauth_conflict", "/settings?tab=security&reauth_error=oauth_conflict"],
+    ["/set-password", "/login?error=oauth_failed", "/set-password?reauth_error=oauth_failed"],
+    ["/research/abc#sources", "/login?error=oauth_conflict", "/research/abc?reauth_error=oauth_conflict#sources"],
+    // An unknown code still reads as a failed sign-in, never as text of its own.
+    ["/set-password", "/login?error=%3Cb%3Eboom", "/set-password?reauth_error=oauth_failed"],
+  ])("sends a failed re-auth from %s back there with its reason (%s)", async (path, to, expected) => {
+    const { googleReturnRedirect, session } = await withStored({ path, at: NOW - MINUTE });
+
+    expect(googleReturnRedirect(landing("login", to), true, NOW)).toBe(expected);
+    expect(session.has(RETURN_KEY)).toBe(false);
+  });
+});
+
+describe("googleReauthErrorKey", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    stubBrowser();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("names the explanation of a known code only", async () => {
+    const { googleReauthErrorKey } = await import("./googleSignIn");
+    expect(googleReauthErrorKey("oauth_failed")).toBe("auth.reauthFailed");
+    expect(googleReauthErrorKey("oauth_conflict")).toBe("auth.reauthConflict");
+    for (const code of [undefined, null, "", "boom", "constructor", "__proto__", ["oauth_failed"]]) {
+      expect(googleReauthErrorKey(code), String(code)).toBeNull();
+    }
   });
 });

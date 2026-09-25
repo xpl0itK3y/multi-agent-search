@@ -10,6 +10,7 @@ import { saveFile } from "@/lib/download";
 import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
 import type { Depth, UserTokenStats } from "@/lib/types";
 import GoogleReauthNotice from "@/components/GoogleReauthNotice.vue";
+import { googleReauthErrorKey, REAUTH_ERROR_PARAM } from "@/lib/googleSignIn";
 
 const route = useRoute();
 const router = useRouter();
@@ -183,10 +184,14 @@ const passwordError = ref<string | null>(null);
 // account, or a reset without the current password on a Google-linked one).
 const passwordNeedsReauth = ref(false);
 const REAUTH_RETURN_TO = "/settings?tab=security";
+// Back from that Google sign-in without it (cancelled, or another Google account): the
+// router returns here with ?reauth_error=<code> (lib/googleSignIn.ts) and we say why.
+const reauthErrorKey = ref(googleReauthErrorKey(route.query[REAUTH_ERROR_PARAM]));
 
 async function changePassword() {
   passwordError.value = null;
   passwordNeedsReauth.value = false;
+  reauthErrorKey.value = null;
   passwordSuccess.value = false;
 
   if (newPassword.value.length < 8) {
@@ -261,6 +266,7 @@ async function confirmDeleteAccount() {
   deleteBusy.value = true;
   deleteError.value = null;
   deleteNeedsReauth.value = false;
+  reauthErrorKey.value = null;
   const current = deletePassword.value || undefined;
   try {
     await api.deleteAccount(current);
@@ -830,6 +836,13 @@ onUnmounted(() => {
 
           <!-- ── TAB 5: SECURITY & DATA ───────────────────────────────────── -->
           <section v-if="activeTab === 'security'" class="space-y-6">
+            <GoogleReauthNotice
+              v-if="reauthErrorKey"
+              :return-to="REAUTH_RETURN_TO"
+              :message="t(reauthErrorKey)"
+              class="text-xs"
+            />
+
             <!-- Password Change -->
             <div class="rounded-xl border border-bd bg-surface/50 p-6 space-y-4">
               <div>
