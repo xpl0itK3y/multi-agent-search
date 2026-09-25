@@ -129,7 +129,7 @@ describe("ResetPasswordView", () => {
     const wrapper = await mountView("#token=reset-tok");
 
     await submit(wrapper, "new-password");
-    expect(wrapper.text()).toContain(t("errors.api.rateLimited"));
+    expect(wrapper.find('[role="alert"]').text()).toBe(t("errors.api.rateLimited"));
     expect(wrapper.find("form").exists()).toBe(true);
 
     // The same token is tried again: it is still good.

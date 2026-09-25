@@ -83,6 +83,7 @@ async function submit() {
           type="password"
           autocomplete="new-password"
           :placeholder="$t('resetPassword.password')"
+          :aria-label="$t('resetPassword.password')"
           class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
         />
         <input
@@ -90,9 +91,10 @@ async function submit() {
           type="password"
           autocomplete="new-password"
           :placeholder="$t('resetPassword.confirm')"
+          :aria-label="$t('resetPassword.confirm')"
           class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
         />
-        <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
+        <p v-if="error" role="alert" class="text-sm text-red-400">{{ error }}</p>
         <button
           type="submit"
           :disabled="busy"

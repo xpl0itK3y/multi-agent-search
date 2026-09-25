@@ -80,7 +80,7 @@ describe("ForgotPasswordView", () => {
     const wrapper = await mountView();
     await requestLink(wrapper, "denis@example.com");
 
-    expect(wrapper.text()).toContain(t("errors.api.rateLimited"));
+    expect(wrapper.find('[role="alert"]').text()).toBe(t("errors.api.rateLimited"));
     expect(wrapper.text()).not.toContain(t("forgotPassword.sent"));
     expect(wrapper.text()).not.toContain("slow down");
     expect(wrapper.find("form").exists()).toBe(true);
