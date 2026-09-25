@@ -222,6 +222,11 @@ class TaskStore(Protocol):
     # the finalize variant also bumps lease_epoch to fence a runner on the old lease.
     def requeue_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
 
+    # The admin requeue: one transaction that requeues a DEAD_LETTER/FAILED job (lease
+    # bumped) and moves its research FAILED -> ANALYZING. None unless the research is FAILED
+    # and this is its latest finalize job (a superseded job must never rewind the research).
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None: ...
+
     # RUNNING jobs not renewed since `stale_before`: requeued (PENDING, lease bumped), or
     # closed (COMPLETED with STALE_FINALIZE_CLOSED_ERROR) when their research is already
     # COMPLETED/FAILED/CANCELLED. Returns both kinds; the status tells them apart.

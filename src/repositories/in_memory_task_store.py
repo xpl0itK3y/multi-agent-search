@@ -813,6 +813,30 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        with self._state_lock:
+            job = self.finalize_jobs.get(job_id)
+            if job is None or job.status not in self._REQUEUEABLE_FINALIZE_STATUSES:
+                return None
+            research = self.researches.get(job.research_id)
+            if research is None or research.status != ResearchStatus.FAILED:
+                return None
+            latest = self._latest_job(
+                [item for item in self.finalize_jobs.values() if item.research_id == job.research_id]
+            )
+            if latest is None or latest.id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
+            job.status = FinalizeJobStatus.PENDING
+            job.attempt_count = 0
+            job.error = None
+            job.lease_epoch += 1
+            job.updated_at = now
+            research.status = ResearchStatus.ANALYZING
+            research.updated_at = now
+        self._emit_change(job.research_id)
+        return job
+
     def recover_stale_research_finalize_jobs(
         self,
         stale_before: datetime,

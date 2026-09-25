@@ -755,18 +755,7 @@ class ResearchService(
         # would make try_begin_finalization refuse and leave no job at all.
         if not self.task_store.try_begin_finalization(research_id):
             return  # cancelled between the admission and here
-        latest = self.task_store.get_latest_research_finalize_job(research_id)
-        job = None
-        if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
-            job = latest  # still queued or held by a runner; do not add a second job
-        elif latest is not None:
-            # A dead-lettered/failed job is reused (store-guarded, lease bumped); a
-            # completed one is not requeueable and gets a fresh job below.
-            job = self.task_store.requeue_research_finalize_job(latest.id)
-        if job is None:
-            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
-        if self.broker and job.status == FinalizeJobStatus.PENDING:
-            self.broker.push_finalize_job(job.id)
+        job = self._dispatch_finalize_job(research_id)
         logger.info("research_retry_finalization finalize_job_id=%s", job.id)
 
     def _redispatch_search_task(self, task: SearchTask, depth: SearchDepth) -> None:
@@ -2115,11 +2104,27 @@ class ResearchService(
             return research, None
 
         with bind_observability_context(research_id=research_id):
-            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
-            if self.broker:
-                self.broker.push_finalize_job(job.id)
+            job = self._dispatch_finalize_job(research_id)
             logger.info("research_finalize_enqueued finalize_job_id=%s", job.id)
             return self.task_store.get_research(research_id), job
+
+    def _dispatch_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
+        """The finalize job for a research that just won the ANALYZING CAS: its latest job
+        while that is still queued or held by a runner (never a second one), the latest one
+        requeued when it stopped (DEAD_LETTER/FAILED: store-guarded, lease bumped), else a
+        fresh job. Reusing the stopped job keeps it from lingering in the dead-letter list
+        after a retry, where requeueing it would rewind the research."""
+        latest = self.task_store.get_latest_research_finalize_job(research_id)
+        job = None
+        if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
+            job = latest
+        elif latest is not None:
+            job = self.task_store.requeue_research_finalize_job(latest.id)  # None when COMPLETED
+        if job is None:
+            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+        if self.broker and job.status == FinalizeJobStatus.PENDING:
+            self.broker.push_finalize_job(job.id)
+        return job
 
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.task_store.get_research_finalize_job(job_id)

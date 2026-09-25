@@ -509,6 +509,56 @@ def test_finalize_job_stale_recovery_bumps_lease_epoch(store):
     assert bumped.lease_epoch == 1
 
 
+def _dead_letter_finalize_job(store, research_id):
+    job = store.add_research_finalize_job(research_id, max_attempts=1)
+    claimed = store.claim_research_finalize_job_by_id(job.id)
+    store.record_research_finalize_job_failure(job.id, "boom", lease_epoch=claimed.lease_epoch)
+    return store.get_research_finalize_job(job.id)
+
+
+def test_requeue_failed_finalization_moves_job_and_research_together(store):
+    record = _research(store)
+    dead = _dead_letter_finalize_job(store, record.id)
+    old_epoch = dead.lease_epoch  # the in-memory store hands out the live object
+    store.update_research_status(record.id, ResearchStatus.FAILED, "analysis failed")
+
+    requeued = store.requeue_failed_research_finalize_job(dead.id)
+
+    assert requeued.id == dead.id and requeued.status == FinalizeJobStatus.PENDING
+    assert requeued.attempt_count == 0 and requeued.error is None
+    assert requeued.lease_epoch == old_epoch + 1
+    assert store.get_research(record.id).status == ResearchStatus.ANALYZING
+    # Now PENDING: a second (concurrent) requeue is refused.
+    assert store.requeue_failed_research_finalize_job(dead.id) is None
+    assert store.requeue_failed_research_finalize_job("missing-job") is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ResearchStatus.PROCESSING, ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.CANCELLED],
+)
+def test_requeue_failed_finalization_refuses_a_research_that_is_not_failed(store, status):
+    record = _research(store)
+    dead = _dead_letter_finalize_job(store, record.id)
+    store.update_research_status(record.id, status, "state after a retry")
+
+    assert store.requeue_failed_research_finalize_job(dead.id) is None
+    assert store.get_research_finalize_job(dead.id).status == FinalizeJobStatus.DEAD_LETTER
+    assert store.get_research(record.id).status == status
+
+
+def test_requeue_failed_finalization_refuses_a_superseded_job(store):
+    record = _research(store)
+    superseded = _dead_letter_finalize_job(store, record.id)
+    _backdate(store, "finalize_job", superseded.id, created_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    newer = _dead_letter_finalize_job(store, record.id)
+    store.update_research_status(record.id, ResearchStatus.FAILED, "analysis failed")
+
+    assert store.requeue_failed_research_finalize_job(superseded.id) is None
+    assert store.get_research(record.id).status == ResearchStatus.FAILED
+    assert store.requeue_failed_research_finalize_job(newer.id).status == FinalizeJobStatus.PENDING
+
+
 @pytest.mark.parametrize(
     "ended", [ResearchStatus.CANCELLED, ResearchStatus.COMPLETED, ResearchStatus.FAILED]
 )

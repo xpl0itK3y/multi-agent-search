@@ -60,12 +60,22 @@ class JobQueueMixin:
             raise NotFoundError("Finalize job not found")
         if job.status != FinalizeJobStatus.DEAD_LETTER:
             raise ConflictError("Only dead-letter finalize jobs can be requeued")
+        # A dead-letter job outlives the research's next attempt (a retry that went back to
+        # the searches), so requeueing it could rewind a research that has since completed,
+        # been cancelled or is searching again. Only the latest job of a FAILED one qualifies.
+        research = self.task_store.get_research(job.research_id)
+        if research is None or research.status != ResearchStatus.FAILED:
+            raise ConflictError("Only the finalize job of a failed research can be requeued")
+        latest = self.task_store.get_latest_research_finalize_job(job.research_id)
+        if latest is None or latest.id != job.id:
+            raise ConflictError("A newer finalize job has superseded this one")
 
         self.require_agent(self.analyzer, "Analyzer")
-        self.task_store.update_research_status(job.research_id, ResearchStatus.ANALYZING)
-        requeued = self.task_store.requeue_research_finalize_job(job_id)
-        if requeued is None:  # deleted, or requeued by a concurrent caller
-            raise ConflictError("Only dead-letter finalize jobs can be requeued")
+        # One guarded transaction: requeueing first would let a polling worker claim the job
+        # while the research is still FAILED; setting ANALYZING first could strand it there.
+        requeued = self.task_store.requeue_failed_research_finalize_job(job_id)
+        if requeued is None:  # deleted, requeued or superseded by a concurrent caller
+            raise ConflictError("Finalize job state changed. Please retry.")
         if self.broker:
             self.broker.push_finalize_job(requeued.id)
         logger.info("finalize_job_requeued job_id=%s research_id=%s", job.id, job.research_id)

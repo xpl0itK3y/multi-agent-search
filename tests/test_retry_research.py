@@ -7,6 +7,7 @@ search jobs with swapped arguments.
 """
 import threading
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -17,6 +18,7 @@ from src.api.schemas import (
     SearchDepth,
     SearchJobStatus,
     TaskStatus,
+    TaskUpdate,
 )
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.config import settings
@@ -221,6 +223,99 @@ def test_search_retry_leaves_a_job_that_is_still_running_alone():
 
     assert store.get_search_task_job(running.id).status == SearchJobStatus.RUNNING
     assert broker.search == []
+
+
+# ── the dead-letter job a search-path retry leaves behind ────────────────────
+
+
+def _complete_searches(service):
+    """Stand-in for SearchAgent: the redispatched search finds one source."""
+
+    def run_search_task(task_id, depth):
+        service.task_store.update_task(
+            task_id,
+            TaskUpdate(
+                status=TaskStatus.COMPLETED,
+                result=[{"url": f"https://example.com/{task_id}", "title": "B", "content": "Body " * 40}],
+            ),
+        )
+
+    service.run_search_task = run_search_task
+
+
+def test_admin_requeue_of_the_pre_retry_dead_letter_job_cannot_rewind_the_research():
+    store, broker = InMemoryTaskStore(), _FakeBroker()
+    service = _service(store, broker)
+    _complete_searches(service)
+    research = _failed_research(store, _completed_task("t1"), {"id": "t2", "status": TaskStatus.FAILED})
+    dead_search = _dead_letter_search_job(store, "t2")
+    stale = _dead_letter_finalize_job(store, research.id)
+
+    service.retry_research(research.id)  # search path: t2 is FAILED
+
+    with pytest.raises(ConflictError):
+        service.requeue_research_finalize_job(stale.id)
+    assert store.get_research(research.id).status == ResearchStatus.PROCESSING
+    assert store.get_research_finalize_job(stale.id).status == FinalizeJobStatus.DEAD_LETTER
+
+    service.process_search_task_job(dead_search.id)
+
+    # Finalization reuses the stopped job instead of leaving it in the dead-letter list.
+    assert store.get_latest_research_finalize_job(research.id).id == stale.id
+    assert store.get_dead_letter_research_finalize_jobs() == []
+    assert broker.finalize == [stale.id]
+    service.process_finalize_job(stale.id)
+    final = store.get_research(research.id)
+    assert final.status == ResearchStatus.COMPLETED and final.final_report == "retried report"
+    with pytest.raises(ConflictError):
+        service.requeue_research_finalize_job(stale.id)
+    assert store.get_research(research.id).status == ResearchStatus.COMPLETED
+
+
+def test_admin_requeue_refuses_the_dead_letter_job_of_a_cancelled_research():
+    store, broker = InMemoryTaskStore(), _FakeBroker()
+    service = _service(store, broker)
+    research = _failed_research(store, _completed_task())
+    dead = _dead_letter_finalize_job(store, research.id)
+    store.update_research_status(research.id, ResearchStatus.CANCELLED, "Cancelled by user.")
+
+    with pytest.raises(ConflictError):
+        service.requeue_research_finalize_job(dead.id)
+
+    assert store.get_research(research.id).status == ResearchStatus.CANCELLED
+    assert store.get_research_finalize_job(dead.id).status == FinalizeJobStatus.DEAD_LETTER
+    assert broker.finalize == []
+
+
+def test_admin_requeue_takes_only_the_latest_dead_letter_job():
+    store, broker = InMemoryTaskStore(), _FakeBroker()
+    service = _service(store, broker)
+    research = _failed_research(store, _completed_task())
+    superseded = _dead_letter_finalize_job(store, research.id)
+    superseded.created_at -= timedelta(minutes=5)
+    latest = _dead_letter_finalize_job(store, research.id)
+
+    with pytest.raises(ConflictError):
+        service.requeue_research_finalize_job(superseded.id)
+    assert store.get_research(research.id).status == ResearchStatus.FAILED
+
+    requeued = service.requeue_research_finalize_job(latest.id)
+    assert requeued.id == latest.id and requeued.status == FinalizeJobStatus.PENDING
+    assert store.get_research(research.id).status == ResearchStatus.ANALYZING
+    assert broker.finalize == [latest.id]
+
+
+def test_admin_requeue_losing_a_race_leaves_the_research_failed(monkeypatch):
+    store = InMemoryTaskStore()
+    service = _service(store)
+    research = _failed_research(store, _completed_task())
+    dead = _dead_letter_finalize_job(store, research.id)
+    monkeypatch.setattr(store, "requeue_failed_research_finalize_job", lambda job_id: None)
+
+    with pytest.raises(ConflictError):
+        service.requeue_research_finalize_job(dead.id)
+
+    assert store.get_research(research.id).status == ResearchStatus.FAILED
 
 
 # ── decomposition retry ──────────────────────────────────────────────────────

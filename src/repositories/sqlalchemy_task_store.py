@@ -1069,6 +1069,48 @@ class SQLAlchemyTaskStore:
                 return None
             return research_finalize_job_orm_to_schema(job)
 
+    def requeue_failed_research_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
+        """Requeue a stopped job and move its research FAILED -> ANALYZING in one transaction.
+        None unless the job is DEAD_LETTER/FAILED, is the research's latest finalize job and
+        the research is FAILED: requeueing a job a retry superseded, or one of a research
+        that completed, was cancelled or is running a retry, would rewind that research."""
+        with self.session_scope() as session:
+            # Job row first, then the research: the lock order complete_research_finalize_job uses.
+            job = session.execute(
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.id == job_id)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.status not in self._REQUEUEABLE_JOB_STATUSES:
+                return None
+            research = session.get(ResearchORM, job.research_id, with_for_update=True)
+            if research is None or research.status != ResearchStatus.FAILED.value:
+                return None
+            latest_id = session.execute(
+                select(ResearchFinalizeJobORM.id)
+                .where(ResearchFinalizeJobORM.research_id == job.research_id)
+                .order_by(
+                    ResearchFinalizeJobORM.created_at.desc(),
+                    ResearchFinalizeJobORM.updated_at.desc(),
+                    ResearchFinalizeJobORM.id.desc(),
+                )
+                .limit(1)
+            ).scalar_one()
+            if latest_id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
+            job.status = FinalizeJobStatus.PENDING.value
+            job.attempt_count = 0
+            job.error = None
+            job.lease_epoch += 1
+            job.updated_at = now
+            research.status = ResearchStatus.ANALYZING.value
+            research.updated_at = now
+            session.flush()
+            result = research_finalize_job_orm_to_schema(job)
+        self._emit_change(result.research_id)
+        return result
+
     def recover_stale_research_finalize_jobs(
         self,
         stale_before: datetime,

@@ -114,8 +114,11 @@ def test_research_service_postgres_admin_job_operations(postgres_session_factory
     finalize_job = store.add_research_finalize_job(research.id, max_attempts=1)
     store.claim_next_research_finalize_job()
     store.record_research_finalize_job_failure(finalize_job.id, "boom")
+    # What the dead-letter path does; only a FAILED research's job can be requeued.
+    store.update_research_status(research.id, ResearchStatus.FAILED, "analysis failed")
     requeued_finalize = service.requeue_research_finalize_job(finalize_job.id)
     assert requeued_finalize.status == FinalizeJobStatus.PENDING
+    assert store.get_research(research.id).status == ResearchStatus.ANALYZING
 
     running_search = store.add_search_task_job(task_id, SearchDepth.EASY.value)
     store.update_search_task_job(running_search.id, SearchJobStatus.RUNNING)
