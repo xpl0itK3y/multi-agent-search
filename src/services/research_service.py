@@ -517,7 +517,7 @@ class ResearchService(
                 registered_tasks = []
                 for task_dict in tasks_raw:
                     task_dict["research_id"] = research_id
-                    task = self.task_store.add_task(task_dict)
+                    task = self.task_store.add_task(self._planned_task(task_dict))
                     registered_tasks.append(task)
                     task_ids.append(task.id)
                 self.task_store.set_research_task_ids(research_id, task_ids)
@@ -562,6 +562,24 @@ class ResearchService(
         orchestrator's parse fallback is a FAILED task, some plans come back without queries)."""
         status = TaskStatus(task_raw.get("status") or TaskStatus.PENDING)
         return status == TaskStatus.PENDING and bool(task_raw.get("queries"))
+
+    NO_QUERIES_TASK_LOG = "No search queries were planned for this task: nothing to search."
+
+    @classmethod
+    def _planned_task(cls, task_raw: dict) -> dict:
+        """A plan item as it is stored. A PENDING one without queries gets no search job and
+        _search_settled counts no PENDING task, so stored as it came it kept its research from
+        finalizing until the stalled sweep failed it, although every search that could run had
+        finished. It is stored settled instead: COMPLETED with no results, which is what a
+        search job over no queries would have left (a retry then leaves it alone too)."""
+        status = TaskStatus(task_raw.get("status") or TaskStatus.PENDING)
+        if status != TaskStatus.PENDING or task_raw.get("queries"):
+            return task_raw
+        return {
+            **task_raw,
+            "status": TaskStatus.COMPLETED,
+            "logs": [*(task_raw.get("logs") or []), cls.NO_QUERIES_TASK_LOG],
+        }
 
     def _fail_unsearchable_plan(self, research_id: str, task_count: int) -> None:
         """The decomposition produced nothing to search (non-JSON model output, tasks without
@@ -1248,22 +1266,27 @@ class ResearchService(
         plan = (research.graph_state or {}).get("plan") or []
         if not plan:
             raise ConflictError("No plan to approve")
+        planned = [
+            {
+                "id": item.get("id") or str(uuid.uuid4()),
+                "research_id": research_id,
+                "description": item.get("description", ""),
+                "queries": [query for query in (item.get("queries") or []) if query],
+                "status": TaskStatus.PENDING,
+            }
+            for item in plan
+        ]
+        # Not one search job: the research would only wait for the stalled sweep to fail it.
+        # Refused before the admission, so it stays in review with no slot taken.
+        if not any(self._is_searchable(task_raw) for task_raw in planned):
+            raise ConflictError("The plan has no search queries to run")
 
         self._admit_or_raise(research_id, ResearchStatus.PLAN_REVIEW)
 
         registered_tasks = []
         task_ids = []
-        for item in plan:
-            queries = [query for query in (item.get("queries") or []) if query]
-            task = self.task_store.add_task(
-                {
-                    "id": item.get("id") or str(uuid.uuid4()),
-                    "research_id": research_id,
-                    "description": item.get("description", ""),
-                    "queries": queries,
-                    "status": TaskStatus.PENDING,
-                }
-            )
+        for task_raw in planned:
+            task = self.task_store.add_task(self._planned_task(task_raw))
             registered_tasks.append(task)
             task_ids.append(task.id)
         self.task_store.set_research_task_ids(research_id, task_ids)
