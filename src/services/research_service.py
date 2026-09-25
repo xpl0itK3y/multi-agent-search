@@ -1876,18 +1876,40 @@ class ResearchService(
         user cannot make the server reach internal/loopback/metadata endpoints — and a host that
         DNS-rebinds between validation and connect still can't be reached (SEC-007).
         """
+        target = self._webhook_log_target(url)
         if not settings.webhook_allow_private_targets:
             from src.net_safety import safe_post_json
 
             if safe_post_json(url, payload, timeout=10.0):
-                logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+                logger.info("webhook_fired target=%s research_id=%s", target, research_id)
             return
         try:
             import httpx
             httpx.post(url, json=payload, timeout=10.0)
-            logger.info("webhook_fired url=%s research_id=%s", url, research_id)
+            logger.info("webhook_fired target=%s research_id=%s", target, research_id)
         except Exception as exc:
-            logger.warning("webhook_failed url=%s error=%s", url, exc)
+            # The exception text is not logged: httpx repeats the request URL in it.
+            logger.warning(
+                "webhook_failed target=%s research_id=%s error=%s", target, research_id, type(exc).__name__
+            )
+
+    @staticmethod
+    def _webhook_log_target(url: str) -> str:
+        """scheme://host[:port] of a webhook URL for the logs. Incoming-webhook URLs carry
+        their credential in the path, query or userinfo, so none of those is ever logged."""
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(url or "")
+            host = parts.hostname or ""
+            port = parts.port
+        except ValueError:
+            return "invalid-url"
+        if not host:
+            return "invalid-url"
+        if ":" in host:
+            host = f"[{host}]"  # IPv6 literal
+        return f"{parts.scheme}://{host}" + (f":{port}" if port else "")
 
     def ensure_finalize_job_lease(
         self,
