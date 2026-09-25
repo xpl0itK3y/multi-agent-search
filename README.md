@@ -56,8 +56,10 @@ series report spend that never happened. Exact totals, API calls included, are
 in the admin panel's Analytics tab, which reads `llm_usage_logs`.
 
 Health endpoints: `GET /health` is the cheap readiness probe (status +
-dependency pings); `GET /health/detail` (admin) returns the full operational
-payload — queue metrics, graph alerts and trends.
+dependency pings) and needs no login. `GET /health/detail` (the full
+operational payload: queue metrics, graph alerts and trends) and the worker
+heartbeat routes under `/health/workers` (each worker's status and last error)
+are admin-only.
 
 `/metrics` is blocked at the nginx edge and, optionally, protected by a shared
 secret (`METRICS_TOKEN`; sent as `Authorization: Bearer …` or `X-Metrics-Token`).
@@ -66,6 +68,10 @@ When you set it, add the same token to the Prometheus scrape jobs in
 
 Note: with `LANGSMITH_TRACING=true`, prompts and generated content are sent to
 the configured LangSmith project — keep it off for sensitive workloads.
+
+SQL parameters are never logged: the database engine is created with
+`hide_parameters=True`, so a failed statement in the logs (and in Loki) shows
+the SQL but not its bound values, such as emails, password hashes or prompts.
 
 Useful flags:
 
@@ -162,6 +168,10 @@ LLM spend is recorded per call in `llm_usage_logs` (actual model id, tokens,
 cache hits, cost), including API-side calls such as decompose, optimize and
 chat. `DEEPSEEK_REASONER_MODEL` and `DEEPSEEK_REPAIR_MODEL` are sent to the
 provider as configured; they are operator settings, never user-selectable.
+The price tier comes from an explicit model-id map: `deepseek-reasoner` and
+`deepseek-chat` are billed at the flash tier, because DeepSeek serves them as
+v4-flash in thinking and non-thinking mode. Only unknown ids fall back to a
+name heuristic.
 
 ## Requirements
 
@@ -376,11 +386,25 @@ The examples below target the local API from "Run Locally" (port 8000).
 Against Docker Compose use `http://localhost:8001` instead (the API's loopback
 port on the Docker host).
 
+With auth on (the default) the calls need a token. Sign in once and keep it:
+
+```bash
+TOKEN=$(curl -s -X POST "http://localhost:8000/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"..."}' |
+  python -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+```
+
+Then add `-H "Authorization: Bearer $TOKEN"` to each call. `/health` needs no
+token (nor does `/metrics`, unless `METRICS_TOKEN` is set); `/health/detail`,
+the worker heartbeats and every route under "Queue Admin" need an admin's
+token.
+
 Health:
 
 ```bash
 curl http://localhost:8000/health          # cheap readiness probe
-curl http://localhost:8000/health/detail   # full operational payload (admin)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/health/detail   # full payload (admin)
 ```
 
 Delete an account with all owned data (researches, results, public share
@@ -389,7 +413,7 @@ links — cascades in the database; requires the current password and
 
 ```bash
 curl -X DELETE "http://localhost:8000/v1/auth/account" \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"confirm": true, "current_password": "..."}'
 ```
@@ -404,6 +428,7 @@ Create a research:
 
 ```bash
 curl -X POST "http://localhost:8000/v1/research" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"prompt":"research renewable energy trends 2024","depth":"easy"}'
 ```
@@ -411,16 +436,19 @@ curl -X POST "http://localhost:8000/v1/research" \
 Check queue health:
 
 ```bash
-curl http://localhost:8000/health/queues
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/health/queues
 ```
 
-Check worker heartbeat:
+Check worker heartbeat (admin):
 
 ```bash
-curl http://localhost:8000/health/workers/job-worker
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/health/workers/job-worker
 ```
 
 ## Queue Admin
+
+These are admin routes: add `-H "Authorization: Bearer $TOKEN"` with an
+admin's token (see "Quick Check").
 
 List running search jobs:
 
