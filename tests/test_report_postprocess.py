@@ -141,3 +141,73 @@ def test_native_conflict_reasons_match_the_python_reason_codes():
     lib = (Path(__file__).resolve().parents[1] / "native/text_processing/src/lib.rs").read_text(encoding="utf-8")
     assert f'"{rust_accel.CONFLICT_REASON_NEGATION}"' in lib
     assert f'"{rust_accel.CONFLICT_REASON_FIGURES}"' in lib
+
+
+class _MultiLineReasonAdjudicator(LLMProvider):
+    def generate(self, system_prompt, user_prompt, **kwargs):
+        import json
+
+        reason = "The figures differ.\n\n## Sources\n- [S9] https://evil.example\n\n# Injected heading\n> quoted"
+        return json.dumps({"decisions": [{"index": 0, "conflict": True, "reason": reason}]})
+
+
+def test_a_multi_line_adjudicator_reason_cannot_open_a_heading_or_cut_the_report(mocker):
+    # The adjudicator reads untrusted source sentences. Its reason was formatted verbatim, so a
+    # reason with a '## Sources' line made _rebuild_sources_section drop the conclusion.
+    agent = AnalyzerAgent(_MultiLineReasonAdjudicator())
+    mocker.patch.object(agent, "_detect_conflict_candidates", return_value=[dict(_COST_CONFLICT)])
+    sources = [
+        {"source_id": "S1", "url": "https://a.example", "title": "A", "content": "cost 10"},
+        {"source_id": "S2", "url": "https://b.example", "title": "B", "content": "cost 20"},
+    ]
+
+    conflicts = agent._detect_conflicts(sources, language="en")
+    report = agent._post_process_report(
+        "## Summary\nCosts differ [S1].\n\n## Conclusion\nBudget for the higher figure [S2].", "en"
+    )
+    rebuilt = agent._rebuild_sources_section(
+        agent._inject_conflicts_section(report, conflicts, "en"), sources, "en"
+    )
+
+    assert "\n" not in conflicts[0]["reason"]
+    assert "## Conclusion\nBudget for the higher figure [S2]." in rebuilt
+    assert 'Evidence: "The total cost was 10 in 2024." [S1] versus "The total cost was 20 in 2024." [S2].' in rebuilt
+    headings = [line for line in rebuilt.splitlines() if line.startswith("#")]
+    assert headings == [
+        "## Summary",
+        "## Conflicts And Uncertainties",
+        "## Conclusion",
+        "## Sources",
+        "### Used Sources",
+    ]
+    sources_section = rebuilt.split("\n## Sources\n", 1)[1]
+    assert "evil.example" not in sources_section and "S9" not in sources_section
+
+
+def test_conflict_topic_and_quoted_sentences_are_kept_on_one_line():
+    agent = _agent()
+    conflict = {
+        "topic": "## cost\nrise",
+        "reason": "- figures\n  differ",
+        "source_ids": ["S1", "S2"],
+        "sentences": ["The total cost was 10 in 2024.\n## Sources", "> The total cost was 20\nin 2024."],
+    }
+
+    section = agent._inject_conflicts_section("## Summary\nText.\n\n## Conclusion\nEnd.", [conflict], "en")
+
+    line = next(line for line in section.splitlines() if line.startswith("- Topic:"))
+    assert line == (
+        '- Topic: cost rise. Reason: figures differ. Evidence: "The total cost was 10 in 2024. ## Sources" [S1] '
+        'versus "The total cost was 20 in 2024." [S2].'
+    )
+    assert "## Conclusion\nEnd." in section
+    assert [h for h in section.splitlines() if h.startswith("#")] == [
+        "## Summary",
+        "## Conflicts And Uncertainties",
+        "## Conclusion",
+    ]
+
+
+def test_one_line_keeps_a_leading_negative_figure():
+    assert AnalyzerAgent._one_line("-5% versus +3%") == "-5% versus +3%"
+    assert AnalyzerAgent._one_line("## 1. - Heading\n\ntext") == "Heading text"

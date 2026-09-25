@@ -1243,7 +1243,7 @@ class AnalyzerAgent(BaseAgent):
             decision = by_index.get(index)
             if not decision or decision.get("conflict") is not True:
                 continue
-            reason = str(decision.get("reason") or "").strip()
+            reason = self._one_line(decision.get("reason"))
             confirmed.append(
                 {
                     **candidate,
@@ -1251,6 +1251,22 @@ class AnalyzerAgent(BaseAgent):
                 }
             )
         return confirmed
+
+    # Heading and quote markers, and list markers followed by a space (so '-5%' stays).
+    _LEADING_BLOCK_MARKERS = re.compile(r"^(?:[#>]+|[*+•\-](?=\s)|\d+[.)](?=\s))\s*")
+
+    @classmethod
+    def _one_line(cls, text) -> str:
+        """Model or source text formatted into one report line: whitespace and newlines
+        collapsed and leading heading/quote/list markers dropped. A multi-line value could
+        otherwise open a heading (a '## Sources' line makes _rebuild_sources_section cut the
+        report from there) or split the line it is quoted in."""
+        line = " ".join(str(text or "").split())
+        previous = None
+        while line and line != previous:
+            previous = line
+            line = cls._LEADING_BLOCK_MARKERS.sub("", line).lstrip()
+        return line
 
     def _is_substantive_conflict_sentence(self, sentence: str) -> bool:
         """Return True only for real claim sentences, not titles or questions."""
@@ -1310,11 +1326,11 @@ class AnalyzerAgent(BaseAgent):
             left_sentence, right_sentence = conflict["sentences"]
             lines.append(
                 template.format(
-                    topic=conflict["topic"],
-                    reason=conflict.get("reason") or default_reason,
-                    left=left_sentence,
+                    topic=self._one_line(conflict["topic"]),
+                    reason=self._one_line(conflict.get("reason")) or default_reason,
+                    left=self._one_line(left_sentence),
                     left_id=left_source,
-                    right=right_sentence,
+                    right=self._one_line(right_sentence),
                     right_id=right_source,
                 )
             )
