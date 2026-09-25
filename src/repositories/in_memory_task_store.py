@@ -38,6 +38,7 @@ from src.domain import (
     SearchTask,
     TELEMETRY_IP_MAX_LENGTH,
     TELEMETRY_USER_AGENT_MAX_LENGTH,
+    TaskStatus,
     TaskUpdate,
     USER_ACTIVITY_TOUCH_INTERVAL_SECONDS,
     UserRecord,
@@ -1071,6 +1072,34 @@ class InMemoryTaskStore:
         job.attempt_count = 0
         job.error = None
         job.updated_at = datetime.now(timezone.utc)
+        return job
+
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None:
+        with self._state_lock:
+            job = self.search_jobs.get(job_id)
+            if job is None or job.status not in self._REQUEUEABLE_SEARCH_STATUSES:
+                return None
+            task = self.tasks.get(job.task_id)
+            if task is None:
+                return None
+            research = None
+            if task.research_id is not None:
+                research = self.researches.get(task.research_id)
+                if research is None or research.status != ResearchStatus.PROCESSING:
+                    return None
+            latest = self._latest_job([item for item in self.search_jobs.values() if item.task_id == task.id])
+            if latest is None or latest.id != job.id:
+                return None
+            now = datetime.now(timezone.utc)
+            task.status = TaskStatus.PENDING
+            task.logs.append(task_log)
+            task.updated_at = now
+            job.status = SearchJobStatus.PENDING
+            job.attempt_count = 0
+            job.error = None
+            job.updated_at = now
+            if research is not None:
+                research.updated_at = now
         return job
 
     def recover_stale_search_task_jobs(

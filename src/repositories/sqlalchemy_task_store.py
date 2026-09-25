@@ -57,6 +57,7 @@ from src.domain import (
     ResearchRequest,
     ResearchStatus,
     SearchTask,
+    TaskStatus,
     TaskUpdate,
     UserRecord,
     clip_text,
@@ -1492,6 +1493,53 @@ class SQLAlchemyTaskStore:
             job = session.execute(statement).scalar_one_or_none()
             if job is None:
                 return None
+            return search_task_job_orm_to_schema(job)
+
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None:
+        with self.session_scope() as session:
+            owner = session.execute(
+                select(SearchTaskORM.research_id)
+                .join(SearchTaskJobORM, SearchTaskJobORM.task_id == SearchTaskORM.id)
+                .where(SearchTaskJobORM.id == job_id)
+            ).one_or_none()
+            if owner is None:
+                return None
+            # The research row first, as delete_research_tasks (whose task delete cascades
+            # to the job rows) and the status CAS take it.
+            research = None
+            if owner.research_id is not None:
+                research = session.get(ResearchORM, owner.research_id, with_for_update=True)
+                if research is None or research.status != ResearchStatus.PROCESSING.value:
+                    return None
+            job = session.execute(
+                select(SearchTaskJobORM).where(SearchTaskJobORM.id == job_id).with_for_update()
+            ).scalar_one_or_none()
+            if job is None or job.status not in self._REQUEUEABLE_JOB_STATUSES:
+                return None
+            latest_id = session.execute(
+                select(SearchTaskJobORM.id)
+                .where(SearchTaskJobORM.task_id == job.task_id)
+                .order_by(
+                    SearchTaskJobORM.created_at.desc(),
+                    SearchTaskJobORM.updated_at.desc(),
+                    SearchTaskJobORM.id.desc(),
+                )
+                .limit(1)
+            ).scalar_one()
+            if latest_id != job.id:
+                return None
+            task = session.get(SearchTaskORM, job.task_id, with_for_update=True)
+            now = datetime.now(timezone.utc)
+            task.status = TaskStatus.PENDING.value
+            task.logs = [*task.logs, task_log]
+            task.updated_at = now
+            job.status = SearchJobStatus.PENDING.value
+            job.attempt_count = 0
+            job.error = None
+            job.updated_at = now
+            if research is not None:
+                research.updated_at = now
+            session.flush()
             return search_task_job_orm_to_schema(job)
 
     def recover_stale_search_task_jobs(

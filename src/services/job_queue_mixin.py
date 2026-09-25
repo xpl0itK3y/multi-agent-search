@@ -159,14 +159,28 @@ class JobQueueMixin:
         task = self.task_store.get_task(job.task_id)
         if task is None:
             raise NotFoundError("Task not found")
+        # A dead-letter job outlives its research's attempt. Requeued on a research that
+        # completed, was cancelled, failed or is finalizing, the worker only drained it and
+        # left the task PENDING on the ended research; a failed one is retried instead.
+        if task.research_id is not None:
+            research = self.task_store.get_research(task.research_id)
+            if research is None or research.status != ResearchStatus.PROCESSING:
+                raise ConflictError(
+                    "Only a search job of a research that is still searching can be requeued; "
+                    "retry a failed research instead"
+                )
+        latest = self.task_store.get_latest_search_task_job(task.id)
+        if latest is None or latest.id != job.id:
+            raise ConflictError("A newer search job has superseded this one")
 
-        self.task_store.update_task(
-            task.id,
-            TaskUpdate(status=TaskStatus.PENDING, log="Search job manually requeued"),
+        # One guarded transaction: the task reset, the job requeue and a touch of the
+        # research row, so a stalled sweep that listed the research loses its CAS instead
+        # of failing it under the requeued search.
+        requeued = self.task_store.requeue_search_task_job_of_active_research(
+            job_id, "Search job manually requeued"
         )
-        requeued = self.task_store.requeue_search_task_job(job_id)
-        if requeued is None:  # deleted, or requeued by a concurrent caller
-            raise ConflictError("Only dead-letter search jobs can be requeued")
+        if requeued is None:  # deleted, requeued or superseded meanwhile, or the research moved on
+            raise ConflictError("Search job state changed. Please retry.")
         if self.broker:
             self.broker.push_search_job(requeued.id)
         logger.info("search_job_requeued job_id=%s task_id=%s", job.id, task.id)

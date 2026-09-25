@@ -441,6 +441,73 @@ def test_search_job_listings_by_status(store):
     assert [job.id for job in store.get_dead_letter_search_task_jobs()] == [dead.id]
 
 
+def _dead_letter_search_job(store, task_id):
+    job = store.add_search_task_job(task_id, SearchDepth.EASY.value, max_attempts=1)
+    store.claim_search_task_job_by_id(job.id)
+    return store.record_search_task_job_failure(job.id, "boom")
+
+
+def test_admin_search_requeue_resets_task_and_job_and_touches_the_research(store):
+    record = _research(store)
+    task = _task(store, record.id)
+    store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED, log="Search job failed after all retries"))
+    dead = _dead_letter_search_job(store, task.id)
+    listed_before = datetime.now(timezone.utc) - timedelta(minutes=30)  # a stalled sweep's cutoff
+    _backdate(store, "research", record.id, updated_at=listed_before - timedelta(minutes=30))
+
+    requeued = store.requeue_search_task_job_of_active_research(dead.id, "Search job manually requeued")
+
+    assert requeued.id == dead.id and requeued.status == SearchJobStatus.PENDING
+    assert requeued.attempt_count == 0 and requeued.error is None
+    assert store.get_search_task_job(dead.id).status == SearchJobStatus.PENDING
+    reset = store.get_task(task.id)
+    assert reset.status == TaskStatus.PENDING
+    assert reset.logs == ["Search job failed after all retries", "Search job manually requeued"]
+    # The sweep that listed the research before the requeue loses its CAS.
+    assert store.transition_research_status(
+        record.id, [ResearchStatus.PROCESSING], ResearchStatus.FAILED, "stalled", updated_before=listed_before
+    ) is None
+    assert store.get_research(record.id).status == ResearchStatus.PROCESSING
+    # Now PENDING: a second (concurrent) requeue is refused.
+    assert store.requeue_search_task_job_of_active_research(dead.id, "again") is None
+    assert store.requeue_search_task_job_of_active_research("missing-job", "again") is None
+    assert store.get_task(task.id).logs[-1] == "Search job manually requeued"
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ResearchStatus.ANALYZING, ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED],
+)
+def test_admin_search_requeue_refuses_a_research_that_is_not_searching(store, status):
+    record = _research(store)
+    task = _task(store, record.id)
+    store.update_task(task.id, TaskUpdate(status=TaskStatus.FAILED))
+    dead = _dead_letter_search_job(store, task.id)
+    store.update_research_status(record.id, status, "state after the job died")
+
+    assert store.requeue_search_task_job_of_active_research(dead.id, "requeued") is None
+    assert store.get_search_task_job(dead.id).status == SearchJobStatus.DEAD_LETTER
+    assert store.get_task(task.id).status == TaskStatus.FAILED and store.get_task(task.id).logs == []
+    assert store.get_research(record.id).status == status
+
+
+def test_admin_search_requeue_refuses_a_superseded_job_and_takes_a_task_without_research(store):
+    record = _research(store)
+    task = _task(store, record.id)
+    superseded = _dead_letter_search_job(store, task.id)
+    _backdate(store, "search_job", superseded.id, created_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+    newer = _dead_letter_search_job(store, task.id)
+
+    assert store.requeue_search_task_job_of_active_research(superseded.id, "requeued") is None
+    assert store.get_search_task_job(superseded.id).status == SearchJobStatus.DEAD_LETTER
+    assert store.requeue_search_task_job_of_active_research(newer.id, "requeued").status == SearchJobStatus.PENDING
+
+    orphan = _task(store)  # no research: nothing to rewind
+    orphan_job = _dead_letter_search_job(store, orphan.id)
+    assert store.requeue_search_task_job_of_active_research(orphan_job.id, "requeued").status == SearchJobStatus.PENDING
+    assert store.get_task(orphan.id).status == TaskStatus.PENDING and store.get_task(orphan.id).logs == ["requeued"]
+
+
 # ── finalize jobs ─────────────────────────────────────────────────────────────
 
 

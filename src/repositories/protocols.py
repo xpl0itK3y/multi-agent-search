@@ -314,6 +314,14 @@ class TaskStore(Protocol):
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
 
+    # The admin requeue: one transaction that requeues a DEAD_LETTER/FAILED job (attempts
+    # reset), sets its task PENDING with `task_log` appended and touches its research's
+    # updated_at, so a stalled sweep that listed the research loses its CAS. None unless
+    # this is the task's latest search job and its research is PROCESSING: on an ended or
+    # finalizing research the job is only drained and the task left PENDING. A task with
+    # no research has no state to rewind and is requeued as it stands.
+    def requeue_search_task_job_of_active_research(self, job_id: str, task_log: str) -> SearchTaskJob | None: ...
+
     def recover_stale_search_task_jobs(
         self,
         stale_before: datetime,
