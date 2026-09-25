@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The routes' views are irrelevant here; stub them so a navigation resolves quickly.
 const stubView = vi.hoisted(() => () => ({ default: { render: () => null } }));
 vi.mock("@/views/LoginView.vue", stubView);
+vi.mock("@/views/ForgotPasswordView.vue", stubView);
 vi.mock("@/views/SetPasswordView.vue", stubView);
 vi.mock("@/views/HomeView.vue", stubView);
 vi.mock("@/views/ResearchView.vue", stubView);
@@ -77,5 +78,38 @@ describe("router: back from a Google sign-in", () => {
 
     expect(router.currentRoute.value.name).toBe("login");
     expect(sessionStorage.getItem(RETURN_KEY)).toBeNull();
+  });
+});
+
+describe("router: signed-out account pages", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it.each(["/forgot-password"])("opens %s without a session, outside the app shell", async (path) => {
+    const router = await loadApp(false);
+
+    await router.push(path);
+
+    expect(router.currentRoute.value.fullPath).toBe(path);
+    expect(router.currentRoute.value.meta).toMatchObject({ public: true, bare: true });
+  });
+
+  it.each(["/forgot-password"])("keeps a signed-in user on %s", async (path) => {
+    const router = await loadApp(true);
+
+    await router.push(path);
+
+    expect(router.currentRoute.value.fullPath).toBe(path);
+  });
+
+  it("draws the sign-in page outside the app shell too, and nothing else", async () => {
+    const router = await loadApp(true);
+
+    expect(router.resolve("/login").meta.bare).toBe(true);
+    for (const path of ["/", "/settings", "/r/share-token", "/set-password"]) {
+      expect(router.resolve(path).meta.bare, path).toBeUndefined();
+    }
   });
 });

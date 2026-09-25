@@ -118,10 +118,12 @@ export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   return new ApiError(res.status, await errorDetail(res));
 }
 
-// Routes that legitimately make unauthenticated calls — the public share page,
-// and /login itself (redirecting there from a failed sign-in would loop).
+// Routes that legitimately make unauthenticated calls — the public share page, /login
+// itself (redirecting there from a failed sign-in would loop) and the signed-out account
+// pages. Compared the way vue-router matches them: any case, trailing slashes aside.
+const PUBLIC_PAGES = new Set(["/login", "/forgot-password"]);
 function isPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/r/");
+  return PUBLIC_PAGES.has(pathname.toLowerCase().replace(/\/+$/, "")) || pathname.startsWith("/r/");
 }
 
 // Whether this page signed a user in: set once /v1/auth/me, a login or a registration

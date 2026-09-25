@@ -156,8 +156,11 @@ describe("api request error handling", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
-  it("on 401 on public routes (/r/…, /login): no redirect loop", async () => {
-    for (const pathname of ["/r/share-token", "/login"]) {
+  // The account pages a signed-out visitor opens, in the spellings vue-router matches.
+  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/"];
+
+  it("on 401 on public routes (/r/…, /login, account pages): no redirect loop", async () => {
+    for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
       const { assign } = stubEnv("stale-token", pathname);
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
 
@@ -170,7 +173,7 @@ describe("api request error handling", () => {
   });
 
   it("on 401 on public routes with a cookie-only session: no probe, no redirect", async () => {
-    for (const pathname of ["/r/share-token", "/login"]) {
+    for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
       const { assign } = stubEnv(null, pathname);
       const fetchMock = fetchAnswering(200, 401);
 

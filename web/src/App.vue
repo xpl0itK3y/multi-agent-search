@@ -23,8 +23,8 @@ watch(() => route.fullPath, () => ui.closeMobile());
   <!-- Site-styled confirm modal (replaces window.confirm), available app-wide -->
   <ConfirmDialog />
 
-  <!-- Login screen: no app shell -->
-  <div v-if="route.name === 'login'" class="h-screen w-screen overflow-hidden bg-bg text-ink">
+  <!-- Sign-in screens (login, password reset, email verification): no app shell -->
+  <div v-if="route.meta.bare" class="h-screen w-screen overflow-hidden bg-bg text-ink">
     <router-view />
   </div>
 

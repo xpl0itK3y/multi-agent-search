@@ -5,7 +5,14 @@ import { googleReturnRedirect } from "@/lib/googleSignIn";
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
+    // meta.bare: a sign-in screen, drawn without the app shell (App.vue).
+    { path: "/login", name: "login", component: () => import("@/views/LoginView.vue"), meta: { bare: true } },
+    {
+      path: "/forgot-password",
+      name: "forgot-password",
+      component: () => import("@/views/ForgotPasswordView.vue"),
+      meta: { public: true, bare: true },
+    },
     { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
     {
