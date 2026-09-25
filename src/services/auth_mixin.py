@@ -13,6 +13,7 @@ from src.domain.errors import (
     UnprocessableError,
 )
 
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.domain import AuthUser
 
 
@@ -25,7 +26,7 @@ class AuthMixin:
             raise UnprocessableError("Invalid email address")
         # Admin rights follow the email and sign-up verifies nothing, so a local account for
         # an ADMIN_EMAILS address would make whoever registers it first an admin.
-        if normalized in self._admin_emails():
+        if normalized in admin_emails():
             raise ForbiddenError(
                 "This email is reserved for an administrator: sign in with Google, or ask the "
                 "operator to provision it with scripts/create_admin.py"
@@ -121,19 +122,25 @@ class AuthMixin:
 
         Every password write bumps token_version, so replacing one revokes all sessions
         minted before it — including any held by whoever registered the address first.
+        The same write stamps admin_provisioned_at: the operator's vouching is what makes a
+        password-only ADMIN_EMAILS account an admin (src/auth/admin_identity.py).
         """
         from src.auth.security import hash_password
 
         normalized = (email or "").strip().lower()
-        if normalized not in self._admin_emails():
+        if normalized not in admin_emails():
             raise ForbiddenError(f"{normalized or 'email'} is not listed in ADMIN_EMAILS")
         if len(password or "") < 6:
             raise UnprocessableError("Password must be at least 6 characters")
         existing = self.task_store.get_user_by_email(normalized)
         if existing is None:
-            user = self.task_store.create_user(str(uuid.uuid4()), normalized, hash_password(password))
+            user = self.task_store.create_user(
+                str(uuid.uuid4()), normalized, hash_password(password), admin_provisioned=True
+            )
             return self._to_auth_user(user), True
-        updated = self.task_store.update_user_password(existing.id, hash_password(password))
+        updated = self.task_store.update_user_password(
+            existing.id, hash_password(password), admin_provisioned=True
+        )
         if updated is None:
             raise NotFoundError("User not found")
         return self._to_auth_user(updated), False
@@ -177,21 +184,13 @@ class AuthMixin:
         return self._to_auth_user(user)
 
     @staticmethod
-    def _admin_emails() -> set[str]:
-        from src.config import settings
-
-        if isinstance(settings.admin_emails, str):
-            return {e.strip().lower() for e in settings.admin_emails.split(",") if e.strip()}
-        return {str(e).strip().lower() for e in (settings.admin_emails or []) if str(e).strip()}
-
-    @classmethod
-    def _to_auth_user(cls, user) -> AuthUser:
-        is_admin = bool(user.email and user.email.lower() in cls._admin_emails())
+    def _to_auth_user(user) -> AuthUser:
+        # The one place an AuthUser's admin flag is computed: the guards only read it.
         return AuthUser(
             id=user.id,
             email=user.email,
             name=user.name,
             avatar_url=user.avatar_url,
-            is_admin=is_admin,
+            is_admin=has_admin_rights(user.email, user.google_subject, user.admin_provisioned_at),
             token_version=user.token_version,
         )

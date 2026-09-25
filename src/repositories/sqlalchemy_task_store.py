@@ -58,6 +58,7 @@ from src.db.models import (
     UserSessionORM,
     WorkerHeartbeatORM,
 )
+from src.auth.admin_identity import admin_emails, has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
 from src.repositories.mappers import (
     research_finalize_job_orm_to_schema,
@@ -67,15 +68,19 @@ from src.repositories.mappers import (
     search_task_orm_to_schema,
     worker_heartbeat_orm_to_schema,
 )
-def _parse_admin_emails() -> set[str]:
-    from src.config import settings
-    raw = getattr(settings, "admin_emails", "")
-    if not raw:
-        return set()
-    if isinstance(raw, str):
-        return {e.strip().lower() for e in raw.split(",") if e.strip()}
-    return {str(e).strip().lower() for e in raw if str(e).strip()}
 
+
+def _user_record(user: UserORM) -> UserRecord:
+    return UserRecord(
+        id=user.id,
+        email=user.email,
+        password_hash=user.password_hash,
+        google_subject=user.google_subject,
+        token_version=user.token_version,
+        name=user.name,
+        avatar_url=user.avatar_url,
+        admin_provisioned_at=user.admin_provisioned_at,
+    )
 
 
 def _contains_pattern(term: str) -> str:
@@ -264,25 +269,20 @@ class SQLAlchemyTaskStore:
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord:
         user = UserORM(
             id=user_id,
             email=email.strip().lower(),
             password_hash=password_hash,
             google_subject=google_subject,
+            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
         )
         with self.session_scope() as session:
             session.add(user)
             session.flush()
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -291,30 +291,14 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_id(self, user_id: str) -> UserRecord | None:
         with self.session_scope() as session:
             user = session.get(UserORM, user_id)
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None:
         with self.session_scope() as session:
@@ -322,15 +306,7 @@ class SQLAlchemyTaskStore:
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def delete_user(self, user_id: str) -> bool:
         """Delete a user; researches (and via FK cascades: tasks, results, jobs,
@@ -342,29 +318,23 @@ class SQLAlchemyTaskStore:
             session.delete(user)
             return True
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None:
+        values = {"password_hash": password_hash, "token_version": UserORM.token_version + 1}
+        if admin_provisioned:
+            values["admin_provisioned_at"] = datetime.now(timezone.utc)
         with self.session_scope() as session:
             statement = (
                 update(UserORM)
                 .where(UserORM.id == user_id)
-                .values(
-                    password_hash=password_hash,
-                    token_version=UserORM.token_version + 1,
-                )
+                .values(**values)
                 .returning(UserORM)
             )
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
-            return UserRecord(
-                id=user.id,
-                email=user.email,
-                password_hash=user.password_hash,
-                google_subject=user.google_subject,
-                token_version=user.token_version,
-                name=user.name,
-                avatar_url=user.avatar_url,
-            )
+            return _user_record(user)
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None:
         with self.session_scope() as session:
@@ -375,15 +345,7 @@ class SQLAlchemyTaskStore:
                 if avatar_url is not None:
                     user.avatar_url = avatar_url
                 session.flush()
-                return UserRecord(
-                    id=user.id,
-                    email=user.email,
-                    password_hash=user.password_hash,
-                    google_subject=user.google_subject,
-                    token_version=user.token_version,
-                    name=user.name,
-                    avatar_url=user.avatar_url,
-                )
+                return _user_record(user)
             return None
 
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
@@ -2123,6 +2085,8 @@ class SQLAlchemyTaskStore:
                 UserORM.email,
                 UserORM.name,
                 UserORM.avatar_url,
+                UserORM.google_subject,
+                UserORM.admin_provisioned_at,
                 UserORM.created_at,
                 UserORM.last_seen_at,
                 UserORM.last_ip,
@@ -2143,13 +2107,13 @@ class SQLAlchemyTaskStore:
         return statement, research_stats, usage_stats
 
     @staticmethod
-    def _admin_user_item(row, admin_emails: set[str], online_threshold: datetime) -> AdminUserListItem:
+    def _admin_user_item(row, online_threshold: datetime) -> AdminUserListItem:
         return AdminUserListItem(
             id=row.id,
             email=row.email,
             name=row.name,
             avatar_url=row.avatar_url,
-            is_admin=bool(row.email and row.email.lower() in admin_emails),
+            is_admin=has_admin_rights(row.email, row.google_subject, row.admin_provisioned_at),
             created_at=row.created_at.isoformat(),
             last_seen_at=row.last_seen_at.isoformat() if row.last_seen_at else None,
             is_online=bool(row.last_seen_at and row.last_seen_at >= online_threshold),
@@ -2173,7 +2137,7 @@ class SQLAlchemyTaskStore:
     ) -> AdminUserListResponse:
         now = datetime.now(timezone.utc)
         online_threshold = now - timedelta(minutes=2)
-        admin_emails = _parse_admin_emails()
+        listed = admin_emails()
 
         filters = []
         term = (search or "").strip()
@@ -2186,10 +2150,16 @@ class SQLAlchemyTaskStore:
                     UserORM.last_ip.ilike(pattern, escape="\\"),
                 )
             )
+        # has_admin_rights in SQL: listed email AND a verified identity. Both IS NOT NULL
+        # tests are two-valued, so the negation needs no NULL handling.
+        admin_rights = and_(
+            func.lower(UserORM.email).in_(listed),
+            or_(UserORM.google_subject.is_not(None), UserORM.admin_provisioned_at.is_not(None)),
+        )
         if role == "admin":
-            filters.append(func.lower(UserORM.email).in_(admin_emails) if admin_emails else false())
-        elif role == "user" and admin_emails:
-            filters.append(~func.lower(UserORM.email).in_(admin_emails))
+            filters.append(admin_rights if listed else false())
+        elif role == "user" and listed:
+            filters.append(~admin_rights)
         if online_only:
             filters.append(UserORM.last_seen_at >= online_threshold)
 
@@ -2216,7 +2186,7 @@ class SQLAlchemyTaskStore:
                 .limit(page_size)
             ).all()
             return AdminUserListResponse(
-                users=[self._admin_user_item(row, admin_emails, online_threshold) for row in rows],
+                users=[self._admin_user_item(row, online_threshold) for row in rows],
                 total_users=total_users,
                 online_users=online_users,
                 page=page,
@@ -2225,14 +2195,13 @@ class SQLAlchemyTaskStore:
 
     def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
         online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
-        admin_emails = _parse_admin_emails()
         statement, _research_stats, _usage_stats = self._admin_users_select()
 
         with self.session_scope() as session:
             row = session.execute(statement.where(UserORM.id == user_id)).one_or_none()
             if row is None:
                 return None
-            user_item = self._admin_user_item(row, admin_emails, online_threshold)
+            user_item = self._admin_user_item(row, online_threshold)
 
             sessions = session.execute(
                 select(UserSessionORM)

@@ -51,7 +51,7 @@ def test_require_admin_allows_admin_when_auth_disabled_but_admin_emails_set(monk
     monkeypatch.setattr(settings, "auth_disabled", True, raising=False)
     monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
     monkeypatch.setattr(settings, "admin_emails", "admin@example.com", raising=False)
-    user = AuthUser(id="a1", email="admin@example.com")
+    user = AuthUser(id="a1", email="admin@example.com", is_admin=True)
     token = create_token("a1", email="admin@example.com")
     assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
 
@@ -104,7 +104,7 @@ def test_require_admin_allows_admin(monkeypatch):
     monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
     monkeypatch.setattr(settings, "auth_secret_key", "x" * 48, raising=False)
     monkeypatch.setattr(settings, "admin_emails", "admin@example.com, ops@example.com", raising=False)
-    user = AuthUser(id="a1", email="admin@example.com")
+    user = AuthUser(id="a1", email="admin@example.com", is_admin=True)
     token = create_token("a1", email="admin@example.com")
     assert require_admin(_request({"Authorization": f"Bearer {token}"}, user)) is user
 

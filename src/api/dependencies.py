@@ -1,6 +1,7 @@
 from fastapi import HTTPException, Request
 
 from src.api.schemas import AuthUser
+from src.auth.admin_identity import admin_emails
 from src.auth.security import decode_token
 from src.config import settings
 from src.services import ResearchService
@@ -21,20 +22,6 @@ def _extract_token(request: Request) -> str | None:
         if scheme.lower() == "bearer" and value.strip():
             return value.strip()
     return request.cookies.get(settings.auth_cookie_name)
-
-
-def _get_admin_emails() -> set[str]:
-    raw = getattr(settings, "admin_emails", "")
-    if not raw:
-        return set()
-    if isinstance(raw, str):
-        return {e.strip().lower() for e in raw.split(",") if e.strip()}
-    return {str(e).strip().lower() for e in raw if str(e).strip()}
-
-
-def is_admin_email(email: str | None) -> bool:
-    """Whether the address is one of ADMIN_EMAILS (case-insensitive)."""
-    return bool(email) and email.lower() in _get_admin_emails()
 
 
 def _user_from_token(request: Request, token: str | None) -> AuthUser | None:
@@ -78,9 +65,8 @@ def get_current_user(request: Request) -> AuthUser:
     user = _user_from_token(request, _extract_token(request))
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    allowed = _get_admin_emails()
-    if user.email.lower() in allowed:
-        user.is_admin = True
+    # user.is_admin comes from the service (admin_identity.has_admin_rights): ADMIN_EMAILS
+    # plus a verified identity, never the email alone.
     return user
 
 
@@ -93,18 +79,19 @@ def scope_user_id(request: Request) -> str | None:
 
 def require_admin(request: Request) -> AuthUser:
     """Admin guard for job/queue maintenance and admin routes.
-    
+
     If auth is disabled:
       - If ADMIN_EMAILS is configured, the request must supply an authorized admin identity.
       - If ADMIN_EMAILS is empty, allow local/dev user.
     If auth is enabled:
-      - Requires authenticated user whose email is in ADMIN_EMAILS.
+      - Requires an authenticated admin.
+    Either way an admin is an ADMIN_EMAILS account with a verified identity (Google-linked
+    or provisioned by scripts/create_admin.py): see src/auth/admin_identity.py.
     """
-    allowed = _get_admin_emails()
-    if settings.auth_disabled and not allowed:
+    if settings.auth_disabled and not admin_emails():
         return LOCAL_USER
 
-    if settings.auth_disabled and allowed:
+    if settings.auth_disabled:
         token = _extract_token(request)
         if not token:
             raise HTTPException(status_code=401, detail="Admin authentication required")
@@ -113,15 +100,10 @@ def require_admin(request: Request) -> AuthUser:
         user = _user_from_token(request, token)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid admin token")
-        if user.email.lower() not in allowed:
-            raise HTTPException(status_code=403, detail="Admin privileges required")
-        user.is_admin = True
-        return user
-
-    user = get_current_user(request)
-    if not user or user.email.lower() not in allowed:
+    else:
+        user = get_current_user(request)
+    if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin privileges required")
-    user.is_admin = True
     return user
 
 

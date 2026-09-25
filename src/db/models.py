@@ -36,6 +36,11 @@ class UserORM(Base):
     last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_device: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Set by scripts/create_admin.py; with google_subject, what verifies an ADMIN_EMAILS
+    # address (src/auth/admin_identity.py).
+    admin_provisioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ResearchORM(Base):

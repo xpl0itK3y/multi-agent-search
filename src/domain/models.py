@@ -581,6 +581,8 @@ class UserRecord(BaseModel):
     token_version: int = 0
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+    # Set by scripts/create_admin.py: the operator vouched for this ADMIN_EMAILS account.
+    admin_provisioned_at: Optional[datetime] = None
 
 
 class ResearchRecord(BaseModel):

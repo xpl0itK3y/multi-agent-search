@@ -32,7 +32,7 @@ def stream_admin(client, monkeypatch):
     monkeypatch.setattr(settings, "admin_emails", ADMIN_EMAIL)
     monkeypatch.setattr("src.api.app.ADMIN_STREAM_INTERVAL_SECONDS", 0.01)
     service = client._transport.app.state.research_service
-    service.task_store.create_user("stream-admin", ADMIN_EMAIL, None)
+    service.task_store.create_user("stream-admin", ADMIN_EMAIL, None, google_subject="g-stream-admin")
     yield service, {"Authorization": f"Bearer {create_token('stream-admin', email=ADMIN_EMAIL)}"}
     service.task_store.delete_user("stream-admin")
 

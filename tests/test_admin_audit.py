@@ -204,8 +204,9 @@ async def test_an_admin_cannot_delete_another_admin(client, monkeypatch):
     boss, deputy, member = _uid("boss"), _uid("deputy"), _uid("member")
     monkeypatch.setattr(settings, "admin_emails", f"{boss}@example.com, {deputy.upper()}@EXAMPLE.com")
     store = client._transport.app.state.research_service.task_store
-    for user_id in (boss, deputy, member):
-        store.create_user(user_id, f"{user_id}@example.com", None)
+    for user_id in (boss, deputy):  # Google-linked: a verified ADMIN_EMAILS identity
+        store.create_user(user_id, f"{user_id}@example.com", None, google_subject=f"g-{user_id}")
+    store.create_user(member, f"{member}@example.com", None)
     headers = {"Authorization": f"Bearer {create_token(boss, email=f'{boss}@example.com')}"}
 
     refused = await client.delete(f"/v1/admin/users/{deputy}", headers=headers)

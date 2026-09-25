@@ -21,7 +21,6 @@ from src.domain.errors import ConflictError, ServiceError
 from src.api.dependencies import (
     get_current_user,
     get_research_service,
-    is_admin_email,
     request_token_subject,
     require_admin,
     resolve_request_user_id,
@@ -34,6 +33,7 @@ from src.auth.login_rate_limit import (
     enforce_login_account_rate_limit,
     enforce_password_check_rate_limit,
 )
+from src.auth.admin_identity import has_admin_rights
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
 from src.auth.admin_rate_limit import enforce_admin_rate_limit
 from src.auth.telemetry_rate_limit import telemetry_user_id
@@ -1109,7 +1109,9 @@ def register_routes(app: FastAPI) -> None:
         target = service.task_store.get_user_by_id(user_id)
         if target is None:
             raise HTTPException(status_code=404, detail="User not found")
-        if is_admin_email(target.email):
+        # Only a real admin is protected: an unverified account squatting an ADMIN_EMAILS
+        # address holds no admin rights, and deleting it is the remedy.
+        if has_admin_rights(target.email, target.google_subject, target.admin_provisioned_at):
             raise HTTPException(status_code=403, detail="Admin accounts cannot be deleted from the admin panel")
         # Audit before deleting: afterwards the account's email is gone, and a failed
         # audit write must not leave a deletion nobody recorded.

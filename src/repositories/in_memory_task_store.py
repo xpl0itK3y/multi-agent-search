@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import threading
 import uuid
 
+from src.auth.admin_identity import has_admin_rights
 from src.core.graph_history import compact_graph_step_events, compact_graph_trail
 from src.domain import (
     AdminAuditLogItem,
@@ -41,18 +42,6 @@ from src.domain import (
     UserRecord,
     clip_text,
 )
-
-
-def _admin_emails() -> set[str]:
-    """ADMIN_EMAILS, lower-cased: the same parsing as the SQL store's."""
-    from src.config import settings
-
-    raw = getattr(settings, "admin_emails", "")
-    if not raw:
-        return set()
-    if isinstance(raw, str):
-        return {e.strip().lower() for e in raw.split(",") if e.strip()}
-    return {str(e).strip().lower() for e in raw if str(e).strip()}
 
 
 class InMemoryTaskStore:
@@ -252,12 +241,15 @@ class InMemoryTaskStore:
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord:
         user = UserRecord(
             id=user_id,
             email=email,
             password_hash=password_hash,
             google_subject=google_subject,
+            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
         )
         self.users[user_id] = user
         self._user_created_at[user_id] = datetime.now(timezone.utc)
@@ -296,16 +288,16 @@ class InMemoryTaskStore:
                 usage["user_id"] = None
         return True
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None:
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None:
         user = self.users.get(user_id)
         if user is None:
             return None
-        updated = user.model_copy(
-            update={
-                "password_hash": password_hash,
-                "token_version": user.token_version + 1,
-            }
-        )
+        patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
+        if admin_provisioned:
+            patch["admin_provisioned_at"] = datetime.now(timezone.utc)
+        updated = user.model_copy(update=patch)
         self.users[user_id] = updated
         return updated
 
@@ -1513,7 +1505,7 @@ class InMemoryTaskStore:
         if device:
             entry["last_device"] = device
 
-    def _admin_user_row(self, user_id: str, admin_emails: set[str], online_threshold: datetime) -> tuple[dict, AdminUserListItem]:
+    def _admin_user_row(self, user_id: str, online_threshold: datetime) -> tuple[dict, AdminUserListItem]:
         """The SQL store's per-user row: its sort keys plus the list item."""
         u = self.users[user_id]
         telem = self.user_telemetry.get(user_id, {})
@@ -1530,7 +1522,7 @@ class InMemoryTaskStore:
             email=u.email,
             name=u.name,
             avatar_url=u.avatar_url,
-            is_admin=bool(u.email and u.email.lower() in admin_emails),
+            is_admin=has_admin_rights(u.email, u.google_subject, u.admin_provisioned_at),
             created_at=created_at.isoformat(),
             last_seen_at=last_seen.isoformat() if last_seen else None,
             is_online=bool(last_seen and last_seen >= online_threshold),
@@ -1567,12 +1559,11 @@ class InMemoryTaskStore:
         sort_by: str = "last_seen",
     ) -> AdminUserListResponse:
         online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
-        admin_emails = _admin_emails()
         term = (search or "").strip().lower()
 
         rows: list[tuple[dict, AdminUserListItem]] = []
         for uid in self.users:
-            keys, item = self._admin_user_row(uid, admin_emails, online_threshold)
+            keys, item = self._admin_user_row(uid, online_threshold)
             if term and not (
                 term in item.email.lower()
                 or term in (item.name or "").lower()
@@ -1621,7 +1612,7 @@ class InMemoryTaskStore:
         if user_id not in self.users:
             return None
         online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
-        _keys, user_item = self._admin_user_row(user_id, _admin_emails(), online_threshold)
+        _keys, user_item = self._admin_user_row(user_id, online_threshold)
 
         sessions = [
             {

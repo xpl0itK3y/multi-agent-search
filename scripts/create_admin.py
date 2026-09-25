@@ -1,14 +1,19 @@
 """Operator CLI: create an ADMIN_EMAILS account or set its password.
 
-Admin rights follow ADMIN_EMAILS, so the API refuses to register those addresses and
-never sets a first password from the login form. This is the out-of-band path:
+Admin rights need an ADMIN_EMAILS address AND a verified identity: a linked Google account,
+or provisioning by this script (users.admin_provisioned_at, see src/auth/admin_identity.py).
+The API refuses to register ADMIN_EMAILS addresses and never sets a first password from the
+login form. This is the out-of-band path:
 
     python scripts/create_admin.py ops@example.com                  # prompts twice
     printf '%s\\n' "$PW" | python scripts/create_admin.py ops@example.com --password-stdin
 
 The password is never accepted on the command line (it would end up in shell history
 and `ps` output). Replacing an existing password bumps token_version, which revokes
-every session minted before it.
+every session minted before it. That is also how a self-registered account whose
+address was added to ADMIN_EMAILS later becomes an admin: whoever registered it loses
+access, and only the operator's new password works. Password-only admins from before
+users.admin_provisioned_at existed run this once after upgrading.
 """
 import argparse
 import getpass

@@ -555,6 +555,29 @@ def test_oauth_lookup_by_google_subject(store):
     assert store.get_user_by_google_subject("unknown-subject") is None
 
 
+def test_admin_provisioning_stamp_is_written_with_the_password(store):
+    """scripts/create_admin.py's stamp (admin_identity): set only when asked, in the same
+    write that replaces the password and bumps token_version, and read back everywhere."""
+    tag = uuid.uuid4().hex[:8]
+    plain = store.create_user(f"p-{tag}", f"p-{tag}@example.com", "hash")
+    assert plain.admin_provisioned_at is None
+    assert store.update_user_password(plain.id, "hash-2").admin_provisioned_at is None
+
+    stamped = store.update_user_password(plain.id, "hash-3", admin_provisioned=True)
+    assert stamped.admin_provisioned_at is not None
+    assert stamped.token_version == plain.token_version + 2
+    assert store.get_user_by_email(plain.email).admin_provisioned_at == stamped.admin_provisioned_at
+    # A later self-service password change keeps the operator's stamp.
+    assert store.update_user_password(plain.id, "hash-4").admin_provisioned_at == stamped.admin_provisioned_at
+
+    created = store.create_user(f"c-{tag}", f"c-{tag}@example.com", "hash", admin_provisioned=True)
+    assert created.admin_provisioned_at is not None
+    assert store.get_user_by_id(created.id).admin_provisioned_at == created.admin_provisioned_at
+    linked = store.create_user(f"l-{tag}", f"l-{tag}@example.com", None, google_subject=f"sub-l-{tag}")
+    assert store.get_user_by_google_subject(f"sub-l-{tag}").admin_provisioned_at is None
+    assert linked.admin_provisioned_at is None
+
+
 # ── heartbeats, queue metrics, cache ──────────────────────────────────────────
 
 

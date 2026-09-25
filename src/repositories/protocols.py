@@ -66,6 +66,8 @@ class TaskStore(Protocol):
         email: str,
         password_hash: str | None,
         google_subject: str | None = None,
+        *,
+        admin_provisioned: bool = False,
     ) -> UserRecord: ...
 
     def get_user_by_email(self, email: str) -> UserRecord | None: ...
@@ -77,7 +79,11 @@ class TaskStore(Protocol):
     # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
     def delete_user(self, user_id: str) -> bool: ...
 
-    def update_user_password(self, user_id: str, password_hash: str) -> UserRecord | None: ...
+    # Bumps token_version (revokes earlier sessions). admin_provisioned also stamps
+    # admin_provisioned_at in the same write: scripts/create_admin.py (admin_identity).
+    def update_user_password(
+        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+    ) -> UserRecord | None: ...
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None: ...
 

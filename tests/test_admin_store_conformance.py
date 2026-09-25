@@ -34,9 +34,9 @@ def store(request):
     return SQLAlchemyTaskStore(session_factory)
 
 
-def _user(store, user_id, name=None):
+def _user(store, user_id, name=None, **identity):
     store.delete_user(user_id)
-    user = store.create_user(user_id, f"{user_id}@example.com", None)
+    user = store.create_user(user_id, f"{user_id}@example.com", None, **identity)
     if name:
         store.update_user_profile(user_id, name, None)
     return user
@@ -160,16 +160,22 @@ def test_users_list_aggregates_and_latest_session(store):
 
 def test_users_list_filters_search_role_and_takes_wildcards_literally(store, monkeypatch):
     _user(store, "ab_x")
-    _user(store, "abzx", name="Zed")
-    monkeypatch.setattr(settings, "admin_emails", "ABZX@example.com")
+    _user(store, "abzx", name="Zed", google_subject="g-abzx")
+    _user(store, "abzp", admin_provisioned=True)  # scripts/create_admin.py
+    # Listed too, but self-registered: no verified identity, so no admin rights.
+    _user(store, "abzq")
+    monkeypatch.setattr(settings, "admin_emails", "ABZX@example.com, abzp@example.com, abzq@example.com")
 
     assert [u.id for u in store.get_admin_users_list(search="b_x").users] == ["ab_x"]
     assert [u.id for u in store.get_admin_users_list(search=" zed ").users] == ["abzx"]
     assert store.get_admin_users_list(search="%").users == []
     admins = store.get_admin_users_list(role="admin")
-    assert [(u.id, u.is_admin) for u in admins.users] == [("abzx", True)]
-    assert admins.total_users == 1
-    assert [u.id for u in store.get_admin_users_list(role="user").users] == ["ab_x"]
+    assert sorted((u.id, u.is_admin) for u in admins.users) == [("abzp", True), ("abzx", True)]
+    assert admins.total_users == 2
+    users = store.get_admin_users_list(role="user")
+    assert sorted((u.id, u.is_admin) for u in users.users) == [("ab_x", False), ("abzq", False)]
+    assert store.get_admin_user_detail("abzq").user.is_admin is False
+    assert store.get_admin_user_detail("abzp").user.is_admin is True
 
 
 def test_users_list_runs_a_fixed_number_of_statements(store):
