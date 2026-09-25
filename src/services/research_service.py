@@ -1355,6 +1355,96 @@ class ResearchService(
         refreshed = self.task_store.get_task(task.id)
         return (refreshed.result if refreshed else None) or []
 
+    # Chat follow-up searches keep their sources in a chat-only [Sn] table next to the
+    # report's, never in canonical_sources: graph_state["chat_sources"] holds one batch per
+    # search, {"floor": <highest report source number then>, "sources": [<metadata>]},
+    # appended under the row lock. Ids are derived from the batch order, so every turn and
+    # reader numbers them alike and an id cited in the history keeps pointing at its URL.
+    # The list is never truncated (ids depend on it); a full table stops new searches.
+    _CHAT_SOURCE_LIMIT = 200
+    _CHAT_SOURCE_FIELDS = ("url", "title", "domain", "source_quality", "extraction_status")
+
+    @staticmethod
+    def _chat_batches(research: ResearchRecord) -> list[dict]:
+        batches = (research.graph_state or {}).get("chat_sources")
+        return [batch for batch in batches if isinstance(batch, dict)] if isinstance(batches, list) else []
+
+    @staticmethod
+    def _source_number(source_id: Any) -> int | None:
+        text = str(source_id or "")
+        return int(text[1:]) if text.startswith("S") and text[1:].isdigit() else None
+
+    def _chat_source_table(
+        self, batches: Any, report_pool: list[dict], content_by_url: dict[str, Any]
+    ) -> list[dict]:
+        """The chat-only [Sn] table: each URL once, numbered in batch order after its batch's
+        floor and after every earlier chat id, with content re-attached by URL. An id the
+        report has come to use as well (a retried report grew) is left to the report."""
+        report_ids = {source.get("source_id") for source in report_pool}
+        table: list[dict] = []
+        seen_urls: set[str] = set()
+        number = 0
+        for batch in batches if isinstance(batches, list) else []:
+            if not isinstance(batch, dict):
+                continue
+            floor = batch.get("floor")
+            number = max(number, floor if isinstance(floor, int) else 0)
+            for source in batch.get("sources") or []:
+                url = source.get("url") if isinstance(source, dict) else None
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                number += 1
+                source_id = f"S{number}"
+                if source_id in report_ids:
+                    continue
+                entry = {key: source.get(key) for key in self._CHAT_SOURCE_FIELDS if source.get(key) is not None}
+                entry["source_id"] = source_id
+                if content_by_url.get(url):
+                    entry["content"] = content_by_url[url]
+                table.append(entry)
+        return table
+
+    @staticmethod
+    def _chat_pool(report_pool: list[dict], chat_table: list[dict]) -> list[dict]:
+        """The report's sources, then the chat sources whose URL the report does not have."""
+        report_urls = {source.get("url") for source in report_pool if source.get("url")}
+        return [*report_pool, *(source for source in chat_table if source.get("url") not in report_urls)]
+
+    def _record_chat_sources(
+        self,
+        research_id: str,
+        report_pool: list[dict],
+        batches: list[dict],
+        new_sources: list[dict],
+    ) -> list[dict] | None:
+        """Append this search's new sources to the chat table as one batch. Returns every
+        batch as stored under the row lock (so concurrent turns agree on the ids), or None
+        when the search found nothing new or the research is gone."""
+        known = {source.get("url") for source in report_pool if source.get("url")}
+        known |= {
+            source.get("url")
+            for batch in batches
+            for source in batch.get("sources") or []
+            if isinstance(source, dict)
+        }
+        fresh: list[dict] = []
+        for source in new_sources:
+            url = source.get("url")
+            if not url or url in known:
+                continue
+            known.add(url)
+            fresh.append({key: source.get(key) for key in self._CHAT_SOURCE_FIELDS if source.get(key) is not None})
+        if not fresh:
+            return None
+        floor = max(
+            (number for source in report_pool if (number := self._source_number(source.get("source_id"))) is not None),
+            default=0,
+        )
+        return self.task_store.append_research_graph_state_item(
+            research_id, "chat_sources", {"floor": floor, "sources": fresh}
+        )
+
     _CITED_SOURCE_ID = re.compile(r"\[(S\d+)\\?\]")
 
     def generate_research_answer(
@@ -1372,28 +1462,30 @@ class ResearchService(
         chat = self.require_agent(self.chat_agent, "Chat")
 
         tasks = self.task_store.get_tasks_by_research(research_id)
-        # A copy: the report's pool is read-only here. Mini-search results are numbered after
-        # its ids and live only in this answer's own sources, never in the canonical table.
-        pool = list(self._report_source_pool(research, tasks))
-        if self._question_needs_search(question, pool):
+        # The report's pool is read-only here. Earlier chat searches' sources come after it,
+        # from the chat-only table: their ids stay what earlier answers (still in the history
+        # the model reads) cited, and they never enter the canonical table.
+        report_pool = self._report_source_pool(research, tasks)
+        content_by_url = {
+            source["url"]: source.get("content")
+            for source in self._build_research_source_pool(tasks)
+            if source.get("url")
+        }
+        batches = self._chat_batches(research)
+        chat_table = self._chat_source_table(batches, report_pool, content_by_url)
+        pool = self._chat_pool(report_pool, chat_table)
+        table_full = sum(len(batch.get("sources") or []) for batch in batches) >= self._CHAT_SOURCE_LIMIT
+        if not table_full and self._question_needs_search(question, pool):
             if status_callback:
                 status_callback("searching")
             new_sources = self._mini_search_for_chat(research_id, question, research.depth)
-            seen_urls = {source.get("url") for source in pool if source.get("url")}
-            source_numbers = [
-                int(source_id[1:])
-                for source in pool
-                if (source_id := str(source.get("source_id") or "")).startswith("S")
-                and source_id[1:].isdigit()
-            ]
-            next_source_number = max(source_numbers, default=0) + 1
-            for source in new_sources:
-                url = source.get("url")
-                if not url or url in seen_urls:
-                    continue
-                pool.append({"source_id": f"S{next_source_number}", **source})
-                seen_urls.add(url)
-                next_source_number += 1
+            content_by_url.update(
+                {source["url"]: source.get("content") for source in new_sources if source.get("url")}
+            )
+            stored = self._record_chat_sources(research_id, report_pool, batches, new_sources)
+            if stored is not None:
+                chat_table = self._chat_source_table(stored, report_pool, content_by_url)
+                pool = self._chat_pool(report_pool, chat_table)
         # Retrieve the most relevant sources for this question (not just the first 12).
         ranked = self._rank_sources_for_question(question, pool, 12)
         sources = [
@@ -1423,15 +1515,22 @@ class ResearchService(
                 model=model,
                 streaming_callback=streaming_callback,
             )
-        # The model also sees the whole report, so it can cite report ids outside the
-        # ranked 12; give every cited id its url/title (no content) so each one links.
+        # The model also sees the whole report and the history, so it can cite report or
+        # earlier chat ids outside the ranked 12; give every cited id its url/title (no
+        # content) so each one links.
         cited_ids = set(self._CITED_SOURCE_ID.findall(answer or ""))
-        sent_ids = {source["source_id"] for source in sources}
-        cited_only = [
-            {key: item.get(key) for key in ("source_id", "title", "domain", "url", "source_quality", "extraction_status")}
-            for item in pool
-            if item.get("source_id") in cited_ids and item.get("source_id") not in sent_ids
-        ]
+        listed_ids = {source["source_id"] for source in sources}
+        cited_only = []
+        for item in [*report_pool, *chat_table]:
+            source_id = item.get("source_id")
+            if source_id in cited_ids and source_id not in listed_ids:
+                listed_ids.add(source_id)
+                cited_only.append(
+                    {
+                        key: item.get(key)
+                        for key in ("source_id", "title", "domain", "url", "source_quality", "extraction_status")
+                    }
+                )
         return ChatMessage(
             role="assistant",
             content=answer,
