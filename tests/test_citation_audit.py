@@ -201,3 +201,68 @@ def test_russian_report_citing_a_short_english_snippet_is_still_exempt():
     audit = CitationAuditAgent().audit(report, sources, language="ru")
     assert audit.unverified == 1 and audit.unsupported_claims == []
     assert audit.grounding[0].supported is True
+
+
+# ── German nouns and the foreign grounding flag (C7-4) ─────────────────────────
+
+_SIEMENS_EN = (
+    "Siemens said that its revenue in China for 2024 reached 78 billion euros, and the growth "
+    "came from strong demand for automation."
+)
+
+
+def test_german_report_citing_the_english_source_that_states_the_claim_is_supported():
+    # German capitalises every noun: Umsatz, Milliarden and Nachfrage were taken for names,
+    # never occur in the English source, and pushed the claim to 'no'.
+    report = "Siemens erzielte 2024 in China einen Umsatz von 78 Milliarden Euro dank hoher Nachfrage [S1]."
+    audit = CitationAuditAgent().audit(report, {"S1": {"content": _SIEMENS_EN}}, language="de")
+    assert audit.total == 1 and audit.supported == 1
+    assert audit.unsupported_claims == []
+    assert audit.grounding[0].supported is True
+
+
+def test_english_report_still_uses_capitalised_words_as_name_anchors():
+    anchors = CitationAuditAgent._latin_name_anchors(
+        "Revenue of Siemens in China reached 78 billion", {"revenue", "siemens", "china", "reached", "billion"}
+    )
+    assert anchors == {"siemens", "china"}
+    german = CitationAuditAgent._latin_name_anchors(
+        "Laut Bericht von OpenAI stieg der Umsatz mit GPT-5 stark",
+        {"laut", "bericht", "von", "openai", "stieg", "der", "umsatz", "mit", "gpt-5", "stark"},
+        capitalised_nouns=True,
+    )
+    assert german == {"openai", "gpt-5"}  # inner capitals and digits still count
+
+
+def test_foreign_source_disproved_on_its_anchors_is_not_shown_as_grounded():
+    # The claim was listed as unsupported while its citation hover said 'grounded'.
+    report = "La empresa Nvidia vendió millones de chips GPU H100 durante 2023 en Europa [S1]."
+    sources = {
+        "S1": {
+            "content": (
+                "The weather in London was rainy for the whole week, and the forecast for this "
+                "weekend is similar with more wind from the north."
+            )
+        }
+    }
+    audit = CitationAuditAgent().audit(report, sources, language="es")
+    assert audit.total == 1 and audit.supported == 0 and audit.unsupported_claims
+    assert audit.grounding[0].supported is False
+
+
+def test_foreign_source_cited_by_one_disproved_and_one_unjudgeable_claim_stays_grounded():
+    report = (
+        "La empresa Nvidia vendió millones de chips GPU H100 durante 2023 en Europa [S1].\n"
+        "Los sistemas atraviesan una etapa de transición y escalamiento en toda la industria [S1]."
+    )
+    sources = {
+        "S1": {
+            "content": (
+                "The weather in London was rainy for the whole week, and the forecast for this "
+                "weekend is similar with more wind from the north."
+            )
+        }
+    }
+    audit = CitationAuditAgent().audit(report, sources, language="es")
+    assert audit.unverified == 1 and len(audit.unsupported_claims) == 1
+    assert audit.grounding[0].supported is True  # not every citing claim was disproved
