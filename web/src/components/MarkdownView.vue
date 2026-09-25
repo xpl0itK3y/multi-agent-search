@@ -155,6 +155,20 @@ function splitSentences(text: string): string[] {
   return parts.length ? parts : [text];
 }
 
+// Source lines that markdown-it renders as table rows (header and body), taken from a
+// parse of the same source so the verify pass agrees with the renderer: rows without
+// outer pipes and tables inside a blockquote or list count too.
+function tableRowLines(source: string): Set<number> {
+  const rows = new Set<number>();
+  for (const token of md.parse(source, {})) {
+    if (token.type === "tr_open" && token.map) rows.add(token.map[0]);
+  }
+  return rows;
+}
+
+// A cell separator as markdown-it's table rule sees it: any "|" not right after a "\".
+const CELL_PIPE = /(?<!\\)\|/;
+
 const html = computed(() => {
   // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
   // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
@@ -172,10 +186,24 @@ const html = computed(() => {
   const claims: Claim[] = [];
   if (props.verify) {
     const grade = buildGrader();
+    const decorate = (text: string) =>
+      splitSentences(text)
+        .map((part) => {
+          if (!/\[S\d+\]/.test(part)) return part;
+          const wm = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
+          const lead = wm?.[1] ?? "";
+          const core = wm?.[2] ?? part;
+          const trail = wm?.[3] ?? "";
+          if (!core) return part;
+          const idx = claims.push(grade(core)) - 1;
+          return `${lead}${OPEN}${idx}${MID}${core}${OPEN}${idx}${END}${trail}`;
+        })
+        .join("");
+    const tableRows = tableRowLines(source);
     let inSources = false;
     prepared = source
       .split("\n")
-      .map((line) => {
+      .map((line, lineNo) => {
         if (/^\s*#{1,6}\s+(sources|источники|fuentes)/i.test(line)) inSources = true;
         // Skip: the Sources section, headings, source-definition lines ("- **[S1]** …"),
         // and any line without inline citations.
@@ -189,18 +217,12 @@ const html = computed(() => {
         const pm = line.match(/^(\s*(?:[-*+]\s+|\d+[.)]\s+|>\s+)?)([\s\S]*)$/);
         const prefix = pm?.[1] ?? "";
         const body = pm?.[2] ?? line;
-        const decorated = splitSentences(body)
-          .map((part) => {
-            if (!/\[S\d+\]/.test(part)) return part;
-            const wm = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
-            const lead = wm?.[1] ?? "";
-            const core = wm?.[2] ?? part;
-            const trail = wm?.[3] ?? "";
-            if (!core) return part;
-            const idx = claims.push(grade(core)) - 1;
-            return `${lead}${OPEN}${idx}${MID}${core}${OPEN}${idx}${END}${trail}`;
-          })
-          .join("");
+        // A table row is decorated cell by cell, with every pipe left outside the
+        // sentinels: a sentinel before a row's leading "|" reads as an extra first cell
+        // (and the last cell is dropped), and a span across cells cannot nest.
+        const decorated = tableRows.has(lineNo)
+          ? body.split(CELL_PIPE).map(decorate).join("|")
+          : decorate(body);
         return prefix + decorated;
       })
       .join("\n");

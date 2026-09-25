@@ -120,6 +120,53 @@ describe("MarkdownView citations", () => {
     expect(wrapper.findAll(".md-claim").length).toBeGreaterThan(0);
   });
 
+  // Rows of cell texts (th/td), with the verify-mode support badges left out.
+  function tableCells(wrapper: ReturnType<typeof render>): string[][] {
+    return wrapper.findAll("tr").map((tr) =>
+      tr.findAll("th, td").map((cell) => {
+        const copy = cell.element.cloneNode(true) as Element;
+        copy.querySelectorAll(".md-claim-badge").forEach((b) => b.remove());
+        return (copy.textContent || "").trim();
+      }),
+    );
+  }
+
+  it.each<[string, string]>([
+    [
+      "outer pipes",
+      "| Metric | Value | Source |\n|---|---|---|\n| Revenue grew | $5B in 2024 [S1] | [S1] |\n| Users | 10M. Up 5% [S2] | [S2] |",
+    ],
+    [
+      "no outer pipes",
+      "Metric | Value | Source\n--- | --- | ---\nRevenue grew | $5B in 2024 [S1] | [S1]\nUsers | 10M. Up 5% [S2] | [S2]",
+    ],
+    [
+      "inside a blockquote, escaped pipe",
+      "> | Metric | Value | Source |\n> |---|---|---|\n> | Revenue grew | $5B \\| 2024 [S1] | [S1] |\n> | Users | 10M. Up 5% [S2] | [S2] |",
+    ],
+  ])("keeps a cited table's cells in verify mode (%s)", (_name, source) => {
+    const sources = [
+      { source_id: "S1", url: "https://one.example/a" },
+      { source_id: "S2", url: "https://two.example/b" },
+    ];
+    const plain = tableCells(render(source, sources));
+    const verified = render(source, sources, { verify: true });
+
+    expect(plain).toHaveLength(3);
+    expect(plain[1]).toHaveLength(3);
+    expect(tableCells(verified)).toEqual(plain);
+    // Each cited cell is its own claim: the band span sits inside the cell and holds the
+    // cell's citation and its badge (a span crossing cells would be split by the parser).
+    const claims = verified.findAll(".md-claim");
+    expect(claims).toHaveLength(4);
+    for (const claim of claims) {
+      expect(claim.element.closest("td")).not.toBeNull();
+      expect(claim.findAll(".md-citation")).toHaveLength(1);
+      expect(claim.findAll(".md-claim-badge")).toHaveLength(1);
+    }
+    expect(verified.findAll("a.md-citation")).toHaveLength(4);
+  });
+
   it("drops the link for a URL that does not parse as http(s)", () => {
     const wrapper = render("Claim [S1]. Other [S2].", [
       { source_id: "S1", url: "https://" },
