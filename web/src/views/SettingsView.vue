@@ -215,6 +215,15 @@ async function changePassword() {
   }
 }
 
+// Sessions: a logout revokes every token of the account (the server bumps its token
+// version), so it signs out all devices, and the button says so.
+const logoutBusy = ref(false);
+async function logoutEverywhere() {
+  logoutBusy.value = true;
+  await auth.logout(); // never throws; local state is cleared either way
+  router.push("/login");
+}
+
 // Data Export
 const exportBusy = ref(false);
 const exportError = ref<string | null>(null);
@@ -864,6 +873,21 @@ onUnmounted(() => {
                   {{ passwordBusy ? t("settings.security.updating") : t("settings.security.updatePassword") }}
                 </button>
               </div>
+            </div>
+
+            <!-- Sessions -->
+            <div class="rounded-xl border border-bd bg-surface/50 p-6 space-y-3">
+              <div>
+                <h2 class="text-base font-semibold text-ink">{{ t("settings.security.sessionsTitle") }}</h2>
+                <p class="text-xs text-muted mt-1">{{ t("auth.logoutEverywhereHint") }}</p>
+              </div>
+              <button
+                :disabled="logoutBusy"
+                class="px-4 py-2 rounded-lg border border-bd text-xs font-medium text-ink hover:bg-surface transition disabled:opacity-50"
+                @click="logoutEverywhere"
+              >
+                {{ t("auth.logoutEverywhere") }}
+              </button>
             </div>
 
             <!-- Export History -->

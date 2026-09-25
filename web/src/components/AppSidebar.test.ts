@@ -42,3 +42,18 @@ describe("AppSidebar avatar", () => {
     });
   }
 });
+
+describe("AppSidebar logout", () => {
+  beforeEach(async () => {
+    await router.push("/");
+  });
+
+  it("names the logout button for what it does: every device is signed out", () => {
+    i18n.global.locale.value = "en";
+    const wrapper = mountWithAvatar(null, false);
+
+    const button = wrapper.find(`button[aria-label="${i18n.global.t("auth.logoutEverywhere")}"]`);
+    expect(button.exists()).toBe(true);
+    expect(button.attributes("title")).toBe("Log out on all devices");
+  });
+});

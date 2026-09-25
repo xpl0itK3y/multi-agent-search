@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getTokenStats: vi.fn(),
   setPassword: vi.fn(),
   deleteAccount: vi.fn(),
+  logout: vi.fn(),
 }));
 const startGoogleSignIn = vi.hoisted(() => vi.fn());
 
@@ -30,7 +31,13 @@ async function mountSettings(url = "/settings") {
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().user = { id: "u1", email: "denis@example.com", name: "Denis" } as never;
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/settings", component: SettingsView }] });
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/settings", component: SettingsView },
+      { path: "/login", component: { render: () => null } },
+    ],
+  });
   await router.push(url);
   const wrapper = mount(SettingsView, { global: { plugins: [pinia, router, i18n] } });
   await flushPromises();
@@ -114,6 +121,19 @@ describe("SettingsView", () => {
     const unknown = await mountSettings("/settings?tab=nope");
     expect(unknown.text()).toContain(t("settings.profile.title"));
     expect(unknown.text()).not.toContain(t("settings.security.passwordTitle"));
+  });
+
+  it("says that logging out signs out every device, and logs out", async () => {
+    mocks.logout.mockResolvedValue({ status: "ok" });
+    const wrapper = await mountSettings("/settings?tab=security");
+
+    expect(wrapper.text()).toContain(t("auth.logoutEverywhereHint"));
+    await wrapper.findAll("button").find((b) => b.text() === t("auth.logoutEverywhere"))!.trigger("click");
+    await flushPromises();
+
+    expect(mocks.logout).toHaveBeenCalledOnce();
+    expect(useAuthStore().user).toBeNull();
+    expect(wrapper.vm.$router.currentRoute.value.fullPath).toBe("/login");
   });
 
   it("renders every tab without Russian text or raw keys in the English UI", async () => {
