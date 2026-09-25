@@ -36,8 +36,28 @@ def drop_throwaway_database(base_url: str, name: str) -> None:
         pass  # best-effort cleanup
 
 
-def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
-    """Create a throwaway database migrated to head; skips the test if no Postgres.
+def migrate_throwaway_database(name: str, revision: str = "head", *, downgrade: bool = False) -> None:
+    """Run alembic upgrade (or downgrade) to ``revision`` on a throwaway database.
+
+    Migrates in-process: alembic's env is pointed at the throwaway DB via the live
+    settings object, then whatever the developer had configured is restored."""
+    from alembic import command
+    from alembic.config import Config
+
+    original_db = settings.postgres_db
+    original_url = settings.database_url
+    settings.database_url = ""
+    settings.postgres_db = name
+    try:
+        migrate = command.downgrade if downgrade else command.upgrade
+        migrate(Config("alembic.ini"), revision)
+    finally:
+        settings.postgres_db = original_db
+        settings.database_url = original_url
+
+
+def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE, revision: str = "head"):
+    """Create a throwaway database migrated to ``revision``; skips the test if no Postgres.
 
     Returns (engine, session_factory). Call drop_throwaway_database() when done."""
     import pytest
@@ -57,20 +77,7 @@ def create_migrated_throwaway_database(name: str = POSTGRES_TEST_DATABASE):
     except SQLAlchemyError as exc:
         pytest.skip(f"Postgres integration test skipped (server unreachable): {exc}")
 
-    # Migrate in-process; point alembic's env at the throwaway DB via the live
-    # settings object, then restore whatever the developer had configured.
-    original_db = settings.postgres_db
-    original_url = settings.database_url
-    settings.database_url = ""
-    settings.postgres_db = name
-    try:
-        from alembic import command
-        from alembic.config import Config
-
-        command.upgrade(Config("alembic.ini"), "head")
-    finally:
-        settings.postgres_db = original_db
-        settings.database_url = original_url
+    migrate_throwaway_database(name, revision)
 
     engine = create_engine(f"{base_url}/{name}", pool_pre_ping=True)
     return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
