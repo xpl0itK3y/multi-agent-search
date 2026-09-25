@@ -8,6 +8,7 @@ import logging
 import secrets
 import uuid
 import time
+import unicodedata
 from typing import Callable, Iterator, List
 
 from starlette.concurrency import run_in_threadpool
@@ -162,15 +163,30 @@ def _owner_job_view(job):
 
 # Cells a spreadsheet would evaluate as a formula (OWASP CSV injection): = + - @, tab, CR.
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_CSV_FORMULA_TRIGGERS = frozenset("=+-@")
 # Rows per DB page while streaming an admin CSV export.
 ADMIN_EXPORT_PAGE_SIZE = 500
+
+
+def _starts_like_formula(value: str) -> bool:
+    if value.startswith(_CSV_FORMULA_PREFIXES):
+        return True
+    # Spreadsheets trim leading blanks before parsing a cell, and invisible characters
+    # (NBSP, zero-width space, BOM) hide a trigger from a plain startswith check; the
+    # fullwidth and small forms (＝ ＋ － ＠, ﹦ ...) fold to the ASCII ones under NFKC.
+    for char in value:
+        if char.isspace() or unicodedata.category(char) == "Cf":
+            continue
+        return unicodedata.normalize("NFKC", char) in _CSV_FORMULA_TRIGGERS
+    return False
 
 
 def csv_safe(value: object) -> object:
     """A text cell that starts like a formula gets a leading single quote, so Excel or
     Sheets show it as text instead of running it (a user-chosen name or prompt such as
-    '=HYPERLINK(...)' in an admin export). Numbers pass through."""
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+    '=HYPERLINK(...)' in an admin export). "Starts" means the first visible character,
+    so leading whitespace or zero-width characters do not hide it. Numbers pass through."""
+    if isinstance(value, str) and _starts_like_formula(value):
         return "'" + value
     return value
 

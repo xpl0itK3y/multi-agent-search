@@ -22,7 +22,32 @@ def test_csv_safe_quotes_formula_like_text(value):
     assert csv_safe(value) == "'" + value
 
 
-@pytest.mark.parametrize("value", ["plain", "a=1", "", 42, -1, 0.5, None])
+@pytest.mark.parametrize(
+    "value",
+    [
+        " =1+1",
+        "\n=1+1",
+        "  \t@SUM(A1)",
+        "\u00a0=1+1",  # NBSP
+        "\u200b=1+1",  # zero-width space
+        "\ufeff+1",  # BOM
+        "\u2060\u00a0 -2",  # word joiner, NBSP, space
+        "\u3000=1",  # ideographic space
+        "\uff1d1+1",  # fullwidth =
+        "\uff0b1",  # fullwidth +
+        "\uff0d1",  # fullwidth -
+        "\uff20SUM(A1)",  # fullwidth @
+        "\ufe66HYPERLINK()",  # small form =
+        " \uff1dcmd",
+    ],
+)
+def test_csv_safe_sees_through_leading_blanks_and_fullwidth_triggers(value):
+    assert csv_safe(value) == "'" + value
+
+
+@pytest.mark.parametrize(
+    "value", ["plain", "a=1", "", "   ", "\u200b", " plain =1", "\u00a0text", "\uff41", 42, -1, 0.5, None]
+)
 def test_csv_safe_leaves_other_cells_alone(value):
     assert csv_safe(value) == value
 
