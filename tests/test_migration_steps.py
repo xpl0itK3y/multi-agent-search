@@ -163,3 +163,57 @@ def test_000032_deletes_prompt_copies_of_researches_deleted_earlier(database_at)
 
     with engine.connect() as conn:
         assert set(conn.execute(text("SELECT id FROM user_events")).scalars()) == kept
+
+
+def test_000033_backfills_verified_emails_and_round_trips(database_at):
+    """Google-linked and operator-provisioned accounts count as verified; any other local
+    account stays unverified (it may be someone's squatted address)."""
+    engine = database_at("20260925_000032")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash, google_subject, token_version, created_at, "
+                "admin_provisioned_at) VALUES "
+                "('u-google', 'g@example.com', NULL, 'sub-g', 0, now(), NULL), "
+                "('u-admin', 'a@example.com', 'hash', NULL, 0, now(), now()), "
+                "('u-local', 'l@example.com', 'hash', NULL, 0, now(), NULL)"
+            )
+        )
+
+    migrate_throwaway_database(_DATABASE, "20260925_000033")
+
+    with engine.connect() as conn:
+        verified = dict(conn.execute(text("SELECT id, email_verified_at IS NOT NULL FROM users")).all())
+        purposes = conn.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_auth_action_tokens_purpose'")
+        ).scalar_one()
+    assert verified == {"u-google": True, "u-admin": True, "u-local": False}
+    assert "password_reset" in purposes and "email_verification" in purposes
+    for name in ("ix_auth_action_tokens_token_hash", "ix_auth_action_tokens_user_purpose", "ix_auth_action_tokens_expires_at"):
+        assert _index_is_valid(engine, name) is True, name
+    with engine.begin() as conn:
+        insert = (
+            "INSERT INTO auth_action_tokens (id, user_id, purpose, token_hash, email, created_at, expires_at) "
+            "VALUES (:id, 'u-local', :purpose, :hash, 'l@example.com', now(), now() + interval '1 hour')"
+        )
+        conn.execute(text(insert), {"id": "t-1", "purpose": "password_reset", "hash": "a" * 64})
+    with engine.connect() as conn, pytest.raises(DBAPIError):  # the purpose CHECK
+        conn.execute(text(insert), {"id": "t-2", "purpose": "magic_link", "hash": "b" * 64})
+    with engine.connect() as conn, pytest.raises(DBAPIError):  # one row per token hash
+        conn.execute(text(insert), {"id": "t-3", "purpose": "email_verification", "hash": "a" * 64})
+    with engine.begin() as conn:  # the tokens go with their account
+        conn.execute(text("DELETE FROM users WHERE id = 'u-local'"))
+        assert conn.execute(text("SELECT count(*) FROM auth_action_tokens")).scalar_one() == 0
+
+    migrate_throwaway_database(_DATABASE, "20260925_000032", downgrade=True)
+
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT to_regclass('auth_action_tokens')")).scalar_one() is None
+        columns = conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'")
+        ).scalars().all()
+    assert "email_verified_at" not in columns
+
+    migrate_throwaway_database(_DATABASE, "20260925_000033")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL")).scalar_one() == 2

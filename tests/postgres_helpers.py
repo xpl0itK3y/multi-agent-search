@@ -101,6 +101,7 @@ def truncate_runtime_tables(session_factory) -> None:
         session.execute(
             text(
                 "TRUNCATE TABLE search_task_jobs, research_finalize_jobs, search_results, search_tasks, researches, "
+                "auth_action_tokens, "
                 "user_events, user_sessions, admin_audit_logs, llm_usage_logs, users, worker_heartbeats, "
                 "search_cache RESTART IDENTITY CASCADE"
             )

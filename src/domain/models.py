@@ -593,12 +593,31 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=200)
 
 
+class ForgotPasswordRequest(BaseModel):
+    """POST /v1/auth/password/forgot: always answered 202, whether the account exists."""
+    email: str = Field(..., min_length=3, max_length=200)
+
+
+class ResetPasswordRequest(BaseModel):
+    """POST /v1/auth/password/reset: the token from the link's fragment and a new password
+    (the same minimum as set-password)."""
+    token: str = Field(..., max_length=256)
+    password: str = Field(..., min_length=6, max_length=200)
+
+
+class VerifyEmailRequest(BaseModel):
+    """POST /v1/auth/email/verify: the token from the verification link's fragment."""
+    token: str = Field(..., max_length=256)
+
+
 class AuthUser(BaseModel):
     id: str
     email: str
     name: Optional[str] = None
     avatar_url: Optional[str] = None
     is_admin: bool = False
+    # The address is proven (users.email_verified_at is set).
+    email_verified: bool = False
     token_version: int = Field(default=0, exclude=True)
 
 
@@ -628,6 +647,28 @@ class UserRecord(BaseModel):
     avatar_url: Optional[str] = None
     # Set by scripts/create_admin.py: the operator vouched for this ADMIN_EMAILS account.
     admin_provisioned_at: Optional[datetime] = None
+    # When the address was proven (a verification or reset link, Google, the operator).
+    email_verified_at: Optional[datetime] = None
+
+
+class AuthActionPurpose(str, Enum):
+    """What a one-time link sent to an account's address does (auth_action_tokens)."""
+    PASSWORD_RESET = "password_reset"
+    EMAIL_VERIFICATION = "email_verification"
+
+
+class AuthActionTokenRecord(BaseModel):
+    """A stored one-time link token. The token itself is never stored or returned: only
+    its sha256 hex, which is not part of this record either."""
+    id: str
+    user_id: str
+    purpose: AuthActionPurpose
+    # The address the link was sent to; the token is valid only while it is the account's.
+    email: str
+    created_at: datetime
+    expires_at: datetime
+    used_at: Optional[datetime] = None
+    requested_ip: Optional[str] = None
 
 
 class ResearchRecord(BaseModel):
