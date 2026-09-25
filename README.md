@@ -102,11 +102,18 @@ never merges into an existing password account with the same email: the login
 page shows `?error=oauth_conflict` for that case and `?error=oauth_failed` for
 any other callback failure.
 
-Admin rights follow `ADMIN_EMAILS` (comma-separated). Those addresses cannot
-self-register, and the login form never sets their first password; otherwise
-whoever typed the address first would own the admin account. An admin either
-signs in with Google and then sets a password in Settings, or is provisioned
-by the operator with `scripts/create_admin.py`:
+An account has admin rights only when both hold:
+
+- its email is listed in `ADMIN_EMAILS` (comma-separated), and
+- the address is verified: the account is linked to Google (Google verified the
+  email) or the operator provisioned it with `scripts/create_admin.py` (which
+  sets `users.admin_provisioned_at`).
+
+Sign-up verifies no email, so the list alone would make whoever registered an
+address first its admin. For the same reason `ADMIN_EMAILS` addresses cannot
+self-register, and the login form never sets their first password. An admin
+either signs in with Google and then sets a password in Settings, or is
+provisioned by the operator:
 
 ```bash
 # Prompts for the password twice; the email must be listed in ADMIN_EMAILS.
@@ -115,11 +122,28 @@ docker compose exec api python scripts/create_admin.py ops@example.com
 printf '%s\n' "$ADMIN_PASSWORD" | docker compose exec -T api python scripts/create_admin.py ops@example.com --password-stdin
 ```
 
-Running it for an existing account replaces the password and revokes that
-account's sessions. The password is never taken as a command-line argument, so
-it stays out of shell history and `ps`. Locally, run
-`python scripts/create_admin.py <email>` against the Postgres configured in
+Running it for an existing account replaces the password, revokes that
+account's sessions and marks it as operator-provisioned. That is the only way a
+self-registered password account becomes an admin when its address is added to
+`ADMIN_EMAILS` later: until you run the script for it, it stays a normal user,
+and running it locks out whoever registered it. The password is never taken as
+a command-line argument, so it stays out of shell history and `ps`. Locally,
+run `python scripts/create_admin.py <email>` against the Postgres configured in
 `.env`.
+
+Whenever `ADMIN_EMAILS` is set, `AUTH_SECRET_KEY` must be strong (at least 32
+random characters, not the built-in default) even with `AUTH_DISABLED=true`:
+admin routes then still require an admin's token, which is signed with that
+key, and the API refuses to start with a weak one.
+
+Upgrading from a release without `users.admin_provisioned_at`: the migration
+adds the column without a backfill, because a backfill would also bless any
+account that squatted an admin address. Password-only admins therefore lose
+their admin rights after `alembic upgrade head` until you run
+`scripts/create_admin.py` once for each of them (it sets a new password and
+signs them out everywhere). Admins linked to Google (`users.google_subject`
+set) keep their rights; any other admin account, including a Google account
+created before Google ids were stored, needs the script too.
 
 Usage telemetry (`POST /v1/telemetry/event`, which feeds the admin analytics)
 is accepted only from signed-in users with a valid CSRF token; the web UI sends
@@ -130,8 +154,9 @@ adding event rows.
 
 Every admin mutation (queue maintenance, requeue/recover/cleanup, user
 deletion) and every CSV export writes an admin audit row and shares the
-`ADMIN_RATE_LIMIT_PER_MINUTE` budget (default 10). Accounts listed in
-`ADMIN_EMAILS` cannot be deleted from the admin panel.
+`ADMIN_RATE_LIMIT_PER_MINUTE` budget (default 10). Accounts with admin rights
+cannot be deleted from the admin panel; an unverified account squatting an
+`ADMIN_EMAILS` address can, and deleting it is the remedy.
 
 LLM spend is recorded per call in `llm_usage_logs` (actual model id, tokens,
 cache hits, cost), including API-side calls such as decompose, optimize and
