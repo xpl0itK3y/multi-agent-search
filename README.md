@@ -281,8 +281,8 @@ the page opens. nginx also serves `/reset-password` and `/verify-email`
 with `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (see
 [Browser security headers](#browser-security-headers)).
 
-Throttles, per hour and per API process like the other rate limits (see
-[API](#api)), and on even with `AUTH_DISABLED=true`:
+Throttles count per hour, in each API process separately like the other rate
+limits (see [API](#api)), and stay on even with `AUTH_DISABLED=true`:
 
 - reset requests: 20 per client address and 5 per email address (compared
   case-insensitively). The per-email limit counts whether or not an account has
