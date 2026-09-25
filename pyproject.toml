@@ -25,3 +25,6 @@ omit = ["src/cli.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# The backend-unit CI job (memory store, `-m "not postgres"`) measured 79.5% when the
+# floor was set; fail_under = that, rounded down, minus 1. Raise it as coverage grows.
+fail_under = 78
