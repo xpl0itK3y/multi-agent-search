@@ -632,7 +632,9 @@ def register_routes(app: FastAPI) -> None:
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
 
-    @app.get("/health/queues", response_model=QueueMetrics, dependencies=auth_required)
+    # Operator detail (every user's research ids in the maintenance summary, admins'
+    # resolution notes, worker errors): admin only, like /health/detail.
+    @app.get("/health/queues", response_model=QueueMetrics, dependencies=admin_guard)
     def queue_health(request: Request):
         return get_research_service(request).get_queue_metrics()
 
@@ -690,7 +692,8 @@ def register_routes(app: FastAPI) -> None:
         )
         return entry
 
-    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=auth_required)
+    # last_error is the worker's raw exception text (DB host, IP, user): admin only.
+    @app.get("/health/workers/{worker_name}", response_model=WorkerHeartbeat, dependencies=admin_guard)
     def worker_health(worker_name: str, request: Request):
         heartbeat = get_research_service(request).get_worker_heartbeat(worker_name)
         if not heartbeat:
