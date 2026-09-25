@@ -2,8 +2,11 @@
 report_export.py — PDF and DOCX export for research reports.
 
 Usage:
-    pdf_bytes  = generate_pdf(report_markdown, prompt, depth, created_at)
-    docx_bytes = generate_docx(report_markdown, prompt, depth, created_at)
+    pdf_bytes  = generate_pdf(report_markdown, prompt, depth, created_at, language="ru")
+    docx_bytes = generate_docx(report_markdown, prompt, depth, created_at, language="ru")
+
+``language`` is the research's stored language (``research.language``); labels exist for
+ru/en/es and every other language gets the English ones.
 """
 from __future__ import annotations
 
@@ -40,22 +43,16 @@ _LABELS: dict[str, dict[str, str]] = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Language detection
+# Language: the research's stored language, never re-detected from the text
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _detect_lang(text: str) -> str:
-    """Detect prompt language: 'ru', 'es', or 'en'."""
-    if not text:
-        return "en"
-    # Russian: significant Cyrillic ratio
-    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
-    if cyrillic / len(text) > 0.15:
-        return "ru"
-    # Spanish: ñ / ¿ / ¡ are uniquely Spanish markers
-    spanish = sum(1 for c in text if c in "ñÑ¿¡")
-    if spanish >= 2 or (len(text) > 20 and spanish / len(text) > 0.003):
-        return "es"
-    return "en"
+def _labels(language: str | None) -> dict[str, str]:
+    return _LABELS.get(language or "", _LABELS["en"])
+
+
+def _html_lang(language: str | None) -> str:
+    """A safe value for <html lang>: the ISO 639 code as stored, English otherwise."""
+    return language if language and re.fullmatch(r"[a-z]{2,3}", language) else "en"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -206,6 +203,7 @@ def generate_pdf(
     prompt: str,
     depth: str = "",
     created_at: Optional[str] = None,
+    language: str = "en",
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
@@ -224,8 +222,7 @@ def generate_pdf(
     )
 
     report = _clean_report_for_export(report)
-    lang  = _detect_lang(prompt)
-    lbl   = _LABELS[lang]
+    lbl   = _labels(language)
     fonts = _register_pdf_fonts()
     F     = fonts["r"]
     FB    = fonts["b"]
@@ -455,6 +452,7 @@ def generate_docx(
     prompt: str,
     depth: str = "",
     created_at: Optional[str] = None,
+    language: str = "en",
 ) -> bytes:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -463,8 +461,7 @@ def generate_docx(
     from docx.shared import Cm, Pt, RGBColor
 
     report = _clean_report_for_export(report)
-    lang = _detect_lang(prompt)
-    lbl  = _LABELS[lang]
+    lbl  = _labels(language)
 
     def hex_rgb(hex_str: str) -> RGBColor:
         h = hex_str.lstrip("#")
@@ -998,11 +995,13 @@ def generate_html(
     theme: Optional[str] = None,
     accent: Optional[str] = None,
     base: Optional[str] = None,
+    language: str = "en",
 ) -> bytes:
     """Render the report as a self-contained, shareable HTML page (report + trust scorecard).
 
     ``theme`` picks a look (auto/light/dark/editorial/slate/custom); ``custom`` uses ``accent``
-    (hex) over a light or dark ``base``.
+    (hex) over a light or dark ``base``. ``language`` (the research's stored language) sets
+    the page's ``lang`` attribute; ``labels`` carry the translated UI strings.
     """
     labels = labels or {}
     when = created_at or ""
@@ -1042,7 +1041,7 @@ def generate_html(
     footer = labels.get("footer", "Generated with verifiable research — every claim traceable to its source.")
 
     page = (
-        "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
+        f"<!DOCTYPE html><html lang=\"{_html_lang(language)}\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>{_html_mod.escape(prompt[:120])}</title>"
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
