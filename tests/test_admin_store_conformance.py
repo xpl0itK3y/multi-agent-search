@@ -187,6 +187,62 @@ def test_users_list_runs_a_fixed_number_of_statements(store):
         assert "LATERAL" in statements[-1] and "LIMIT" in statements[-1]
 
 
+@contextmanager
+def _statements_with_parameters(store):
+    """(SQL, bound parameters) of each statement the block runs; None on the memory leg."""
+    if isinstance(store, InMemoryTaskStore):
+        yield None
+        return
+    captured: list[tuple[str, object]] = []
+    bind = store.session_factory.kw["bind"]
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        captured.append((statement, parameters))
+
+    event.listen(bind, "before_cursor_execute", record)
+    try:
+        yield captured
+    finally:
+        event.remove(bind, "before_cursor_execute", record)
+
+
+def _most_scans_of(store, statement, parameters, relation: str) -> int:
+    """How many times EXPLAIN ANALYZE says the statement scanned ``relation`` at most in
+    one plan node: a scan inside a LATERAL runs once per row it is joined to."""
+    with store.session_factory.kw["bind"].connect() as conn:
+        plan = conn.exec_driver_sql("EXPLAIN (ANALYZE, FORMAT JSON) " + statement, parameters).scalar_one()
+    loops = []
+
+    def walk(node):
+        if node.get("Relation Name") == relation:
+            loops.append(node["Actual Loops"])
+        for child in node.get("Plans", []):
+            walk(child)
+
+    walk(plan[0]["Plan"])
+    return max(loops)
+
+
+@pytest.mark.parametrize("sort_by", ["last_seen", "registered", "tokens", "cost", "researches"])
+def test_users_list_aggregates_only_the_page_it_returns(store, sort_by):
+    """The laterals used to run for every account before the LIMIT, even for a sort on
+    users columns alone: a full llm_usage_logs pass on each Users tab refresh."""
+    for n in range(5):
+        _user(store, f"page-{n}")
+        research = _research(store, f"page-{n}", f"topic {n}", T0 + timedelta(minutes=n))
+        _usage(store, research.id, f"page-{n}", 10 * (n + 1), 0.01 * (n + 1))
+        _session(store, f"page-{n}", f"page-sess-{n}", T0 + timedelta(hours=n))
+
+    with _statements_with_parameters(store) as statements:
+        listing = store.get_admin_users_list(page=1, page_size=2, sort_by=sort_by)
+
+    assert len(listing.users) == 2 and listing.total_users == 5
+    if statements is not None:
+        page_query, parameters = statements[-1]
+        for relation in ("llm_usage_logs", "researches", "user_sessions"):
+            assert _most_scans_of(store, page_query, parameters, relation) <= 2, relation
+
+
 # ── user detail ───────────────────────────────────────────────────────────────
 
 

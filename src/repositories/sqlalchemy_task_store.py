@@ -2252,14 +2252,28 @@ class SQLAlchemyTaskStore:
                 .values(**values)
             )
 
+    # The users columns the admin views show (never password_hash).
+    _ADMIN_USER_COLUMNS = (
+        UserORM.id,
+        UserORM.email,
+        UserORM.name,
+        UserORM.avatar_url,
+        UserORM.google_subject,
+        UserORM.admin_provisioned_at,
+        UserORM.created_at,
+        UserORM.last_seen_at,
+        UserORM.last_ip,
+        UserORM.last_device,
+    )
+
     @staticmethod
-    def _admin_users_select():
-        """Users with their research count, usage totals and latest session, in one
-        statement: each aggregate is a LATERAL subquery, so sorting by one of them orders
-        the whole filtered set in SQL before LIMIT/OFFSET (not just the current page)."""
+    def _admin_users_select(users):
+        """``users`` (a subquery of _ADMIN_USER_COLUMNS rows: a page, or one account) with
+        its research count, usage totals and latest session. Each is a LATERAL subquery
+        correlated to those rows, so it runs for them only, never for every account."""
         research_stats = (
             select(func.count().label("researches_count"))
-            .where(ResearchORM.user_id == UserORM.id)
+            .where(ResearchORM.user_id == users.c.id)
             .lateral("research_stats")
         )
         usage_stats = (
@@ -2267,7 +2281,7 @@ class SQLAlchemyTaskStore:
                 func.coalesce(func.sum(LLMUsageLogORM.total_tokens), 0).label("total_tokens"),
                 func.coalesce(func.sum(LLMUsageLogORM.estimated_cost_usd), 0.0).label("total_cost"),
             )
-            .where(LLMUsageLogORM.user_id == UserORM.id)
+            .where(LLMUsageLogORM.user_id == users.c.id)
             .lateral("usage_stats")
         )
         last_session = (
@@ -2277,23 +2291,14 @@ class SQLAlchemyTaskStore:
                 UserSessionORM.browser,
                 UserSessionORM.os,
             )
-            .where(UserSessionORM.user_id == UserORM.id)
+            .where(UserSessionORM.user_id == users.c.id)
             .order_by(UserSessionORM.last_active_at.desc(), UserSessionORM.id.desc())
             .limit(1)
             .lateral("last_session")
         )
-        statement = (
+        return (
             select(
-                UserORM.id,
-                UserORM.email,
-                UserORM.name,
-                UserORM.avatar_url,
-                UserORM.google_subject,
-                UserORM.admin_provisioned_at,
-                UserORM.created_at,
-                UserORM.last_seen_at,
-                UserORM.last_ip,
-                UserORM.last_device,
+                *users.c,
                 research_stats.c.researches_count,
                 usage_stats.c.total_tokens,
                 usage_stats.c.total_cost,
@@ -2302,12 +2307,11 @@ class SQLAlchemyTaskStore:
                 last_session.c.browser.label("session_browser"),
                 last_session.c.os.label("session_os"),
             )
-            .select_from(UserORM)
+            .select_from(users)
             .join(research_stats, true())
             .join(usage_stats, true())
             .outerjoin(last_session, true())
         )
-        return statement, research_stats, usage_stats
 
     @staticmethod
     def _admin_user_item(row, online_threshold: datetime) -> AdminUserListItem:
@@ -2366,14 +2370,54 @@ class SQLAlchemyTaskStore:
         if online_only:
             filters.append(UserORM.last_seen_at >= online_threshold)
 
-        statement, research_stats, usage_stats = self._admin_users_select()
-        newest_first = (UserORM.created_at.desc(), UserORM.id.desc())
-        order_by = {
-            "tokens": (usage_stats.c.total_tokens.desc(), *newest_first),
-            "cost": (usage_stats.c.total_cost.desc(), *newest_first),
-            "researches": (research_stats.c.researches_count.desc(), *newest_first),
-            "registered": newest_first,
-        }.get(sort_by, (UserORM.last_seen_at.desc().nulls_last(), *newest_first))
+        # The page is picked first, then only its rows get the laterals. A sort by a metric
+        # needs that metric for every filtered account: one GROUP BY pass over the table
+        # (a hash aggregate), not a lateral per account.
+        page_select = select(*self._ADMIN_USER_COLUMNS).where(*filters)
+        metric = None
+        if sort_by in ("tokens", "cost"):
+            usage_totals = (
+                select(
+                    LLMUsageLogORM.user_id,
+                    func.sum(LLMUsageLogORM.total_tokens).label("total_tokens"),
+                    func.sum(LLMUsageLogORM.estimated_cost_usd).label("total_cost"),
+                )
+                .where(LLMUsageLogORM.user_id.is_not(None))
+                .group_by(LLMUsageLogORM.user_id)
+                .subquery("usage_totals")
+            )
+            total = usage_totals.c.total_tokens if sort_by == "tokens" else usage_totals.c.total_cost
+            metric = func.coalesce(total, 0)
+            page_select = page_select.outerjoin(usage_totals, usage_totals.c.user_id == UserORM.id)
+        elif sort_by == "researches":
+            research_totals = (
+                select(ResearchORM.user_id, func.count().label("researches_count"))
+                .where(ResearchORM.user_id.is_not(None))
+                .group_by(ResearchORM.user_id)
+                .subquery("research_totals")
+            )
+            metric = func.coalesce(research_totals.c.researches_count, 0)
+            page_select = page_select.outerjoin(research_totals, research_totals.c.user_id == UserORM.id)
+        if metric is not None:
+            page_select = page_select.add_columns(metric.label("sort_metric"))
+
+        def order(columns, sort_metric=None):
+            newest_first = (columns.created_at.desc(), columns.id.desc())
+            if sort_metric is not None:
+                return (sort_metric.desc(), *newest_first)
+            if sort_by == "registered":
+                return newest_first
+            return (columns.last_seen_at.desc().nulls_last(), *newest_first)
+
+        page_rows = (
+            page_select.order_by(*order(UserORM, metric))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .subquery("page")
+        )
+        statement = self._admin_users_select(page_rows).order_by(  # the join does not keep the page order
+            *order(page_rows.c, page_rows.c.sort_metric if metric is not None else None)
+        )
 
         with self.session_scope() as session:
             total_users = session.execute(
@@ -2382,12 +2426,7 @@ class SQLAlchemyTaskStore:
             online_users = session.execute(
                 select(func.count()).select_from(UserORM).where(UserORM.last_seen_at >= online_threshold)
             ).scalar_one()
-            rows = session.execute(
-                statement.where(*filters)
-                .order_by(*order_by)
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            ).all()
+            rows = session.execute(statement).all()
             return AdminUserListResponse(
                 users=[self._admin_user_item(row, online_threshold) for row in rows],
                 total_users=total_users,
@@ -2398,10 +2437,9 @@ class SQLAlchemyTaskStore:
 
     def get_admin_user_detail(self, user_id: str) -> AdminUserDetailResponse | None:
         online_threshold = datetime.now(timezone.utc) - timedelta(minutes=2)
-        statement, _research_stats, _usage_stats = self._admin_users_select()
-
+        account = select(*self._ADMIN_USER_COLUMNS).where(UserORM.id == user_id).subquery("account")
         with self.session_scope() as session:
-            row = session.execute(statement.where(UserORM.id == user_id)).one_or_none()
+            row = session.execute(self._admin_users_select(account)).one_or_none()
             if row is None:
                 return None
             user_item = self._admin_user_item(row, online_threshold)
