@@ -244,6 +244,10 @@ With any backend but `disabled`, the API refuses to start unless it is an
 
 ### Password reset
 
+In the web UI, the sign-in form links to "Forgot password?" (`/forgot-password`)
+while `password_reset` is on; otherwise it tells people to ask the
+administrator. Behind it:
+
 1. `POST /v1/auth/password/forgot` with `{"email": "..."}` always answers 202
    `{"status": "accepted"}`: for a known and an unknown address alike, and also
    while email is disabled. The lookup and the mail happen after the response,
@@ -272,7 +276,8 @@ The token is random, works once and expires after `PASSWORD_RESET_TTL_SECONDS`
 (1 hour by default). The database stores only a hash of it, so a database dump
 or backup holds no working link. It travels in the URL fragment (after `#`),
 which browsers never send to a server, so it stays out of access logs, proxies
-and `Referer` headers. nginx also serves `/reset-password` and `/verify-email`
+and `Referer` headers. The web UI takes it out of the address bar as soon as
+the page opens. nginx also serves `/reset-password` and `/verify-email`
 with `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (see
 [Browser security headers](#browser-security-headers)).
 
