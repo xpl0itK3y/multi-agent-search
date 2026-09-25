@@ -60,7 +60,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Jobs processed by worker",
-      "description": "Jobs per second per worker replica (mas_worker_jobs_total).",
+      "description": "Job attempts per second per worker replica (mas_worker_jobs_total), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "fieldConfig": {
@@ -87,7 +87,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Jobs processed by type",
-      "description": "Jobs per second split by job type (search, finalize, maintenance).",
+      "description": "Job attempts per second split by job type (search, finalize, maintenance), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
       "fieldConfig": {
@@ -113,8 +113,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Failed jobs",
-      "description": "Jobs per second ending in status=failure.",
+      "title": "Failed job attempts",
+      "description": "Failed job attempts per second (status=failure). Every failed attempt counts, including one that is then retried, so a job that exhausts JOB_MAX_ATTEMPTS (3) adds three failures; dead-lettered jobs are on Platform Overview.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 9 },
       "fieldConfig": {
@@ -148,7 +148,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Job success ratio",
-      "description": "Share of processed jobs with status=success over the last 5 minutes.",
+      "description": "Share of job attempts with status=success over the last 5 minutes; a retried job counts once per attempt.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 9 },
       "fieldConfig": {
@@ -185,7 +185,7 @@
       "id": 6,
       "type": "stat",
       "title": "Total jobs processed",
-      "description": "Cumulative processed jobs since process start (all workers).",
+      "description": "Cumulative job attempts since process start (all workers), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
       "fieldConfig": {

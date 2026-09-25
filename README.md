@@ -28,7 +28,12 @@ The project now supports:
   dashboards (Platform Overview, Research Operations) and alert rules
   (`WorkerDown`, `APIDown`, `DeadLetterQueueGrowth`, `APIHighErrorRate`,
   `WorkerJobFailureRate`, `FinalizeQueueBacklog`); test the rules with
-  `promtool test rules ops/prometheus/alerts.test.yml`
+  `promtool test rules ops/prometheus/alerts.test.yml`.
+  `mas_worker_jobs_total` counts job attempts: every failed attempt is a
+  `status="failure"`, including one that is retried, so `WorkerJobFailureRate`
+  needs more than 20% failed attempts and at least 6 of them in 15 minutes (two
+  jobs' worth of `JOB_MAX_ATTEMPTS=3`); a single dead-lettered job is left to
+  `DeadLetterQueueGrowth`
 - `loki` + `promtail` collecting every container's stdout. JSON log lines are
   stored whole, so the Research Operations dashboard's Logs panel shows the API
   and worker logs of one research (type its id into the Research ID box)

@@ -33,17 +33,23 @@ groups:
           summary: "Dead-letter {{ $labels.job_type }} queue is growing"
           description: "Dead-letter {{ $labels.job_type }} jobs had a net increase over the last 30 minutes and the condition has held for 5 minutes."
 
+      # mas_worker_jobs_total counts job attempts: status="failure" is recorded for every
+      # failed attempt (task FAILED, exception, retry scheduled or dead-lettered), so one
+      # job that exhausts JOB_MAX_ATTEMPTS (3) adds three failures within seconds. The
+      # floor of 6 failures in 15m keeps a single bad job on a quiet queue from paging
+      # (DeadLetterQueueGrowth reports it); a provider outage failing every job clears it
+      # quickly.
       - alert: WorkerJobFailureRate
         expr: >
-          sum by (job_type) (rate(mas_worker_jobs_total{status="failure"}[15m]))
-            / clamp_min(sum by (job_type) (rate(mas_worker_jobs_total[15m])), 1e-9) > 0.2
-          and sum by (job_type) (increase(mas_worker_jobs_total{status="failure"}[15m])) >= 3
+          sum by (job_type) (rate(mas_worker_jobs_total{job="multi-agent-search-workers", status="failure"}[15m]))
+            / clamp_min(sum by (job_type) (rate(mas_worker_jobs_total{job="multi-agent-search-workers"}[15m])), 1e-9) > 0.2
+          and sum by (job_type) (increase(mas_worker_jobs_total{job="multi-agent-search-workers", status="failure"}[15m])) >= 6
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.job_type }} jobs are failing"
-          description: "More than 20% of {{ $labels.job_type }} worker jobs failed over the last 15 minutes (currently {{ $value | humanizePercentage }})."
+          description: "More than 20% of {{ $labels.job_type }} job attempts failed over the last 15 minutes (currently {{ $value | humanizePercentage }}); retried attempts count too."
 
       - alert: FinalizeQueueBacklog
         expr: >
