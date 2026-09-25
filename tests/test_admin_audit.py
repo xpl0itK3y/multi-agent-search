@@ -85,6 +85,12 @@ def _dead_finalize_job(service):
     return job.id
 
 
+def _patched_task(service):
+    task_id = _uid("audit-patch")
+    service.task_store.add_task({"id": task_id, "description": "d", "queries": ["q"], "status": TaskStatus.RUNNING})
+    return f"/v1/tasks/{task_id}", {"status": "failed", "log": "admin marked it failed"}
+
+
 def _doomed_user(service):
     user_id = _uid("audit-doomed")
     service.task_store.create_user(user_id, f"{user_id}@example.com", None)
@@ -118,6 +124,7 @@ AUDITED_ROUTES = {
     ("POST", "/v1/research/finalize-jobs/cleanup"): (
         lambda service: ("/v1/research/finalize-jobs/cleanup", None), "cleanup_finalize_jobs"),
     ("DELETE", "/v1/admin/users/{user_id}"): (lambda service: (_doomed_user(service), None), "delete_user"),
+    ("PATCH", "/v1/tasks/{task_id}"): (_patched_task, "update_task"),
     ("POST", "/v1/admin/operations/execute"): (
         lambda service: ("/v1/admin/operations/execute", {"action": "cleanup_old_jobs", "params": {}}),
         "cleanup_old_jobs"),

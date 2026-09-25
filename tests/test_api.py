@@ -1481,7 +1481,9 @@ async def test_research_access_scoped_to_owner(client, mocker):
         json={"status": "failed"},
         headers={"X-CSRF-Token": csrf},
     )
-    assert task_update.status_code == 404
+    # Task rewrites are admin maintenance (SEC2-4): refused for any non-admin user.
+    assert task_update.status_code == 403
+    assert app_service.task_store.get_task(task.id).status != TaskStatus.FAILED
 
     # Global operational listings are admin-only, not cross-user feeds.
     assert (await client.get("/v1/tasks")).status_code == 403

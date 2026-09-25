@@ -823,14 +823,27 @@ def register_routes(app: FastAPI) -> None:
     def get_task_summary(task_id: str, request: Request, owner: str | None = Depends(scope_user_id)):
         return get_research_service(request).get_task_summary(task_id, user_id=owner)
 
-    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask, dependencies=auth_required)
+    @app.patch("/v1/tasks/{task_id}", response_model=SearchTask)
     def update_task(
         task_id: str,
         update: TaskUpdate,
         request: Request,
-        owner: str | None = Depends(scope_user_id),
+        admin_user: AuthUser = Depends(enforce_admin_rate_limit),
     ):
-        task = get_research_service(request).update_task(task_id, update, user_id=owner)
+        """Admin maintenance: rewrite a task's status, results, log or metrics (any
+        owner's). Not for owners: the results are a finished report's evidence, which its
+        sources, verification and confidence (also on the public share page) read live."""
+        service = get_research_service(request)
+        if service.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        details: dict = {"fields": sorted(update.model_fields_set)}
+        if update.status is not None:
+            details["status"] = update.status.value
+        if update.result is not None:
+            details["result_count"] = len(update.result)
+        # Written first, like delete_user: the rewrite must not happen unaudited.
+        record_admin_action(request, admin_user, "update_task", target_type="task", target_id=task_id, details=details)
+        task = service.update_task(task_id, update)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         return task

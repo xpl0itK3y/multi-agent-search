@@ -485,11 +485,56 @@ class GraphExecutionSummary(BaseModel):
     follow_up_queries: List[str] = Field(default_factory=list)
 
 
+# Bounds of one TaskUpdate (SEC2-4): the admin PATCH /v1/tasks route takes it from the
+# request body, and the search workers build it for every write. Workers stay far below
+# them: a task keeps at most source_limit (24 at the deepest depth) results, each with its
+# content clipped to 10,000 characters, and writes counts of that order.
+TASK_UPDATE_MAX_RESULTS = 100
+TASK_UPDATE_MAX_RESULT_ITEM_BYTES = 128 * 1024  # one result, as UTF-8 JSON
+TASK_UPDATE_MAX_RESULTS_BYTES = 4 * 1024 * 1024  # all results together
+TASK_UPDATE_MAX_LOG_CHARS = 4000
+TASK_UPDATE_MAX_METRIC = 1_000_000
+
+
 class TaskUpdate(BaseModel):
     status: Optional[TaskStatus] = None
-    result: Optional[List[Dict[str, Any]]] = None
+    result: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=TASK_UPDATE_MAX_RESULTS)
+    # Longer lines are clipped, not refused: a worker's "Error: <exception text>" line must
+    # never turn the write that marks a task FAILED into a validation error.
     log: Optional[str] = None
     search_metrics: Optional[SearchTaskMetrics] = None
+
+    @field_validator("log", mode="before")
+    @classmethod
+    def _clip_log(cls, value: Any) -> Any:
+        if isinstance(value, str) and len(value) > TASK_UPDATE_MAX_LOG_CHARS:
+            return value[: TASK_UPDATE_MAX_LOG_CHARS - 1] + "…"
+        return value
+
+    @field_validator("result")
+    @classmethod
+    def _bounded_result(cls, value: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+        total = 0
+        for item in value or []:
+            try:
+                size = len(json.dumps(item, ensure_ascii=False, default=str).encode("utf-8"))
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise ValueError("each result must be JSON-serializable") from exc
+            if size > TASK_UPDATE_MAX_RESULT_ITEM_BYTES:
+                raise ValueError(f"a result may be at most {TASK_UPDATE_MAX_RESULT_ITEM_BYTES} bytes of JSON")
+            total += size
+        if total > TASK_UPDATE_MAX_RESULTS_BYTES:
+            raise ValueError(f"results may be at most {TASK_UPDATE_MAX_RESULTS_BYTES} bytes of JSON in total")
+        return value
+
+    @field_validator("search_metrics")
+    @classmethod
+    def _bounded_metrics(cls, value: Optional[SearchTaskMetrics]) -> Optional[SearchTaskMetrics]:
+        # Checked here, not on SearchTaskMetrics, which also parses stored tasks.
+        for name, number in (value.model_dump() if value is not None else {}).items():
+            if not 0 <= number <= TASK_UPDATE_MAX_METRIC:  # also refuses NaN
+                raise ValueError(f"search_metrics.{name} must be between 0 and {TASK_UPDATE_MAX_METRIC}")
+        return value
 
 class DecomposeResponse(BaseModel):
     tasks: List[SearchTask]
