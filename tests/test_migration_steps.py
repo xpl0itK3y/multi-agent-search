@@ -128,3 +128,38 @@ def test_000028_rebuilds_invalid_indexes_left_by_a_failed_build(database_at):
 
     assert _index_is_valid(engine, "ix_user_sessions_session_id") is True
     assert _index_is_valid(engine, "uq_user_sessions_session_user") is None
+
+
+def test_000032_deletes_prompt_copies_of_researches_deleted_earlier(database_at):
+    engine = database_at("20260925_000031")
+    with engine.begin() as conn:
+        _add_user(conn, "u-prompts")
+        conn.execute(
+            text(
+                "INSERT INTO researches (id, prompt, language, user_id, depth, status, graph_state, graph_trail, "
+                "task_ids, created_at, updated_at) VALUES ('r-alive', 'kept topic', 'en', 'u-prompts', 'easy', "
+                "'completed', '{}', '[]', '[]', now(), now())"
+            )
+        )
+        kept = {
+            _add_event(conn, "research_prompt", '{"research_id": "r-alive", "prompt": "kept topic"}', "u-prompts"),
+            _add_event(conn, "chat_prompt", '{"research_id": "r-alive", "prompt": "kept follow-up"}', "u-prompts"),
+            # Not a prompt copy: left alone even though its research is gone.
+            _add_event(conn, "tab_focus", '{"research_id": "r-gone"}', "u-prompts"),
+        }
+        _add_event(conn, "research_prompt", '{"research_id": "r-gone", "prompt": "SECRET topic"}', "u-prompts")
+        _add_event(conn, "chat_prompt", '{"prompt": "names no research"}')
+        # Enough orphans for several batches.
+        conn.execute(
+            text(
+                "INSERT INTO user_events (id, event_name, event_category, details, created_at) "
+                "SELECT 'orphan-' || lpad(g::text, 5, '0'), 'chat_prompt', 'prompt', "
+                "jsonb_build_object('research_id', 'gone-' || g, 'prompt', 'SECRET follow-up'), now() "
+                "FROM generate_series(1, 2500) g"
+            )
+        )
+
+    migrate_throwaway_database(_DATABASE, "20260925_000032")
+
+    with engine.connect() as conn:
+        assert set(conn.execute(text("SELECT id FROM user_events")).scalars()) == kept
