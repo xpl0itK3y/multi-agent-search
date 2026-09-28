@@ -9,6 +9,7 @@ name: Postgres Smoke
 
 jobs:
   smoke:
+    name: Postgres smoke
     runs-on: ubuntu-latest
 
     services:
