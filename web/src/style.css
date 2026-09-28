@@ -215,7 +215,10 @@ body {
   border-radius: 9999px;
 }
 
-/* ---- Motion: entrances + Vue transition classes ---- */
+/* ---- Motion: entrances + Vue transition classes ----
+   Button-driven motion is a CSS transition that never bounces: a retoggled transition
+   restarts from the current on-screen value, which keeps it interruptible (§3).
+   Springs, decay and rubber-banding exist only after a drag (lib/gesture.ts). */
 @keyframes fade-slide-in {
   from {
     opacity: 0;
@@ -238,26 +241,22 @@ body {
   animation: fade-in 0.35s ease both;
 }
 .animate-rise {
-  animation: fade-slide-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fade-slide-in 0.32s var(--ease-emph) both;
 }
 
-/* <transition-group name="trace"> — new steps slide in, removals fade, rest glide */
-.trace-enter-active {
-  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+/* The one looping "live" signal (besides spinners, progress bars and skeletons): a
+   slow opacity breath, no scaling. */
+@keyframes live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
-.trace-leave-active {
-  transition: opacity 0.2s ease;
-  position: absolute;
-}
-.trace-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-.trace-leave-to {
-  opacity: 0;
-}
-.trace-move {
-  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+.live-dot {
+  animation: live-breathe 1.6s ease-in-out infinite;
 }
 
 /* <transition name="fade"> generic crossfade */
@@ -270,11 +269,77 @@ body {
   opacity: 0;
 }
 
-/* slide-up entrance (route views) */
-@keyframes rise-in {
+/* <transition name="fade-quick">: small status chips and pills. */
+.fade-quick-enter-active,
+.fade-quick-leave-active {
+  transition: opacity 160ms ease;
+}
+.fade-quick-enter-from,
+.fade-quick-leave-to {
+  opacity: 0;
+}
+
+/* <transition name="swap">: keyed children sharing one grid cell cross-fade, so the
+   slot is never blank between two values. */
+.swap-enter-active,
+.swap-leave-active {
+  transition: opacity 160ms ease;
+}
+.swap-enter-from,
+.swap-leave-to {
+  opacity: 0;
+}
+
+/* <transition name="pop">: menus and popovers grow from their trigger (callers add
+   origin-top-left / origin-top-right). The leave is quick and lets clicks through. */
+.pop-enter-active {
+  transition: opacity 140ms ease-out, transform 180ms var(--ease-emph);
+}
+.pop-leave-active {
+  transition: opacity 90ms ease-in, transform 90ms ease-in;
+  pointer-events: none;
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+}
+
+/* <transition name="modal">: the scrim fades, the inner .modal-panel rises slightly.
+   Leaving is faster and never blocks the page underneath. */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 240ms var(--ease-emph);
+}
+.modal-leave-active {
+  transition-duration: 160ms;
+  transition-timing-function: ease-in;
+  pointer-events: none;
+}
+.modal-enter-active .modal-panel,
+.modal-leave-active .modal-panel {
+  transition: transform 240ms var(--ease-emph), opacity 240ms var(--ease-emph);
+}
+.modal-leave-active .modal-panel {
+  transition-duration: 160ms;
+  transition-timing-function: ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .modal-panel,
+.modal-leave-to .modal-panel {
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+}
+
+/* Route views: a short rise on enter only. There is no leave animation, so the next
+   view (and its requests) starts on the next frame instead of after a fade-out. */
+@keyframes view-in {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -282,13 +347,20 @@ body {
   }
 }
 .view-enter-active {
-  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: view-in 200ms var(--ease-emph) both;
 }
-.view-leave-active {
-  transition: opacity 0.15s ease;
+
+/* Theme switch: one cross-fade of the whole page (a view transition) instead of every
+   element easing its colours on its own schedule. */
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
 }
-.view-leave-to {
-  opacity: 0;
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ---- Brand ---- */
@@ -386,36 +458,45 @@ select {
     outline-offset: 2px;
   }
 }
-.lift {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-.lift:hover {
-  transform: translateY(-2px);
-}
-/* gentle attention pulse for the live status dot */
-@keyframes soft-pulse {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.82);
-  }
-}
 
+/* ---- Reduced motion (§14): gentler equivalents, not a blanket `animation: none` ----
+   Slides, rises, scales and bounces become short cross-fades or static states; opacity
+   and colour changes that aid comprehension (fades, pulses, spinners) stay. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-in,
-  .animate-rise,
-  .trace-enter-active,
-  .trace-leave-active,
-  .trace-move,
-  .fade-enter-active,
-  .fade-leave-active,
-  .view-enter-active,
-  .veris-logo,
-  .lift {
+  html {
+    scroll-behavior: auto !important;
+  }
+  .animate-ping,
+  .animate-bounce,
+  .animate-progress-indeterminate,
+  .animate-n8n-wire {
     animation: none !important;
+  }
+  .animate-rise,
+  .view-enter-active {
+    animation: fade-in 150ms ease-out both !important;
+  }
+  .feed-item-enter-from,
+  .plan-item-enter-from,
+  .plan-item-leave-to,
+  .pop-enter-from,
+  .pop-leave-to,
+  .modal-enter-from .modal-panel,
+  .modal-leave-to .modal-panel {
+    transform: none !important;
+  }
+  .feed-item-move,
+  .plan-item-move {
     transition: none !important;
+  }
+  .veris-logo {
+    transition: none !important;
+  }
+  .veris-logo:hover {
+    transform: none !important;
+  }
+  .press:not(:disabled):active {
+    scale: none;
+    opacity: 0.72;
   }
 }
