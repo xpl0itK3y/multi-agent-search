@@ -293,6 +293,65 @@ describe("ArtifactPanel trust row", () => {
     expect(w.text()).toContain(t("artifact.sourcesEmpty"));
   });
 
+  // At 390px the chips stacked one per line, about 237px above the report title (VIS-9).
+  describe("on a phone", () => {
+    const chipRow = (w: VueWrapper) => {
+      const row = w.findAll("div").find((d) => d.classes().includes("max-sm:overflow-x-auto"));
+      if (!row) throw new Error("no chip row");
+      return row;
+    };
+    const numbers = {
+      research_id: "r-1",
+      total: 41,
+      supported: 39,
+      integrity: 0.95,
+      unsupported: [{ value: "5", sentence: "A figure.", source_id: "S1" }],
+      contradictions: [],
+    };
+
+    it("puts the chips in one sideways row, the ones with an issue first", async () => {
+      mocks.api.getCitations.mockResolvedValue({ ...citations, unsupported_claims: [] }); // clean
+      mocks.api.getSourceIndependence.mockResolvedValue(independence); // warning: an echo cluster
+      mocks.api.getNumericCheck.mockResolvedValue(numbers); // danger: an unsupported figure
+      const w = await mountPanel();
+      const row = chipRow(w);
+
+      expect(row.classes()).toEqual(expect.arrayContaining(["max-sm:overscroll-x-contain", "scrollbar-none", "sm:flex-wrap"]));
+      expect(row.classes()).not.toContain("flex-wrap");
+      const chips = row.findAll("button");
+      // DOM order, so focus order matches what is in view.
+      expect(chips.map((b) => b.text().split(" ")[0])).toEqual([
+        t("numbers.title").split(" ")[0],
+        t("independence.title").split(" ")[0],
+        t("citations.integrity").split(" ")[0],
+      ]);
+      for (const chip of chips) expect(chip.classes()).toEqual(expect.arrayContaining(["max-sm:shrink-0", "max-sm:whitespace-nowrap"]));
+      expect(chips[0].classes()).toContain("border-danger/40");
+      expect(chips[1].classes()).toContain("border-warning/40");
+      expect(chips[2].classes()).toContain("border-bd");
+      // The verification switch is on its own line, outside the scrolling row.
+      expect(row.text()).not.toContain(t("verify.on"));
+      expect(buttonWithText(w, t("verify.on")).exists()).toBe(true);
+    });
+
+    it("fades the row's right edge only while more chips wait", async () => {
+      mocks.api.getSourceIndependence.mockResolvedValue(independence);
+      const w = await mountPanel();
+      const row = chipRow(w);
+      const el = row.element as HTMLElement;
+      let left = 0;
+      Object.defineProperty(el, "clientWidth", { configurable: true, get: () => 300 });
+      Object.defineProperty(el, "scrollWidth", { configurable: true, get: () => 700 });
+      Object.defineProperty(el, "scrollLeft", { configurable: true, get: () => left });
+
+      await row.trigger("scroll");
+      expect(row.classes()).toContain("edge-fade-x");
+      left = 400;
+      await row.trigger("scroll");
+      expect(row.classes()).not.toContain("edge-fade-x");
+    });
+  });
+
   // Colour dots vanished in forced colours, and they did not look like the marks.
   it("shows the verification legend as the marks themselves", async () => {
     const w = await mountPanel();

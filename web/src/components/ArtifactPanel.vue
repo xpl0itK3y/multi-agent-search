@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch, type Ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, reactive, ref, useId, watch, type Ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { confirm } from "@/lib/confirm";
@@ -367,6 +367,58 @@ const stanceOneSided = computed(() => {
   return s.skew >= 0.7 && s.supports + s.opposes > s.neutral;
 });
 
+// ── trust chips ───────────────────────────────────────────────────────────────
+// The chips on show, each with its issue tone. Those with an issue come first, danger
+// before warning: on a phone the row scrolls sideways, and the chips that matter must be
+// the ones in view (§16 hierarchy). The order is in the DOM, so focus order matches.
+type ChipKey = "citations" | "independence" | "confidence" | "numbers" | "stance" | "crossLang";
+const trustChips = computed<{ key: ChipKey; tone: Tone }[]>(() => {
+  const chips: { key: ChipKey; tone: Tone }[] = [];
+  const c = citations.value;
+  if (c && (c.total || c.unverified)) chips.push({ key: "citations", tone: weakCount.value ? "danger" : null });
+  if (independence.value && independence.value.total_sources > 1)
+    chips.push({ key: "independence", tone: echoCount.value ? "warning" : null });
+  if (confidence.value?.components.length) chips.push({ key: "confidence", tone: null });
+  if (numbers.value && numericHasIssues.value)
+    chips.push({ key: "numbers", tone: numericIssueCount.value ? "danger" : null });
+  if (stance.value?.applicable) chips.push({ key: "stance", tone: stanceOneSided.value ? "warning" : null });
+  if (crossLang.value && crossLang.value.languages.length > 1)
+    chips.push({ key: "crossLang", tone: crossLang.value.monolingual ? "warning" : null });
+  const rank = (tone: Tone) => (tone === "danger" ? 0 : tone === "warning" ? 1 : 2);
+  return chips.sort((a, b) => rank(a.tone) - rank(b.tone)); // stable: same tone keeps its order
+});
+function chipClass(tone: Tone): string[] {
+  return [
+    "press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink max-sm:shrink-0 max-sm:whitespace-nowrap",
+    chipBorder(tone),
+  ];
+}
+
+// The phone chip row fades at its right edge while more chips wait, like the tab strip.
+const chipRow = ref<HTMLElement | null>(null);
+const chipsCanScroll = ref(false);
+function updateChipOverflow() {
+  const el = chipRow.value;
+  chipsCanScroll.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+let chipObserver: ResizeObserver | undefined;
+watch(
+  chipRow,
+  (el) => {
+    chipObserver?.disconnect();
+    chipObserver = undefined;
+    if (el && typeof ResizeObserver !== "undefined") {
+      chipObserver = new ResizeObserver(updateChipOverflow);
+      chipObserver.observe(el);
+    }
+    updateChipOverflow();
+  },
+  { flush: "post" },
+);
+// A chip that appears late or a new locale changes the row's content, not its box.
+onUpdated(updateChipOverflow);
+onBeforeUnmount(() => chipObserver?.disconnect());
+
 // ── confidence / honesty meter ────────────────────────────────────────────────
 const gradeClass = computed(() => {
   const g = confidence.value?.grade;
@@ -720,98 +772,105 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
              Each chip opens its tab or its list; only a chip with an issue is tinted. -->
         <Transition name="fade-quick" appear>
           <div v-if="report && isFinal && trustReady" class="mb-5 space-y-2 text-xs">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <button
-                v-if="citations && (citations.total || citations.unverified)"
-                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :class="chipBorder(weakCount ? 'danger' : null)"
-                :aria-expanded="openList === 'citations'"
-                :title="citations.total ? `${citations.supported}/${citations.total} ${$t('citations.matched')}` : undefined"
-                @click="toggleList('citations')"
-              >
-                {{ $t("citations.integrity") }}
-                <b class="font-semibold tabular-nums" :class="chipValue(weakCount ? 'danger' : null)">{{ citations.total ? pct(citations.integrity) + "%" : "—" }}</b>
-                <span v-if="weakCount" class="tabular-nums text-danger"> · ⚠ {{ weakCount }}</span>
-              </button>
-              <button
-                v-if="independence && independence.total_sources > 1"
-                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :class="chipBorder(echoCount ? 'warning' : null)"
-                :title="`${independence.independent_origins}/${independence.total_sources} ${$t('independence.origins')}` + (echoCount ? ` · ${echoCount} ${$t('independence.echoClusters')}` : '')"
-                @click="tab = 'sources'"
-              >
-                {{ $t("independence.title") }}
-                <b class="font-semibold tabular-nums" :class="chipValue(echoCount ? 'warning' : null)">{{ pct(independence.independence_score) }}%</b>
-                <span v-if="echoCount" class="tabular-nums text-warning"> · ⚠ {{ echoCount }}</span>
-              </button>
-              <button
-                v-if="confidence && confidence.components.length"
-                class="press rounded-full border border-bd bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :title="confidence.total_claims ? `${bandPct(confidence.solid)}% ${$t('confidence.band.solid')} · ${bandPct(confidence.contested)}% ${$t('confidence.band.contested')} · ${bandPct(confidence.speculative)}% ${$t('confidence.band.speculative')}` : undefined"
-                @click="tab = 'confidence'"
-              >
-                {{ $t("confidence.meter") }}
-                <b class="font-semibold tabular-nums text-ink">{{ pct(confidence.overall) }}%</b>
-                · {{ $t("confidence.grade." + confidence.grade) }}
-              </button>
-              <button
-                v-if="numbers && numericHasIssues"
-                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :class="chipBorder(numericIssueCount ? 'danger' : null)"
-                :aria-expanded="openList === 'numbers'"
-                @click="toggleList('numbers')"
-              >
-                {{ $t("numbers.title") }}
-                <b class="font-semibold tabular-nums" :class="chipValue(numericIssueCount ? 'danger' : null)">{{ numbers.total ? `${numbers.supported}/${numbers.total}` : "—" }}</b>
-                <span v-if="numericIssueCount" class="tabular-nums text-danger"> · ⚠ {{ numericIssueCount }}</span>
-              </button>
-              <button
-                v-if="stance && stance.applicable"
-                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :class="chipBorder(stanceOneSided ? 'warning' : null)"
-                :title="`${stancePct(stance.neutral)}% ${$t('stance.neutral')}`"
-                @click="tab = 'sources'"
-              >
-                {{ $t("stance.title") }}
-                <b class="font-semibold tabular-nums" :class="chipValue(stanceOneSided ? 'warning' : null)">{{ stancePct(stance.supports) }}%</b> {{ $t("stance.for") }} ·
-                <b class="font-semibold tabular-nums" :class="chipValue(stanceOneSided ? 'warning' : null)">{{ stancePct(stance.opposes) }}%</b> {{ $t("stance.against") }}
-                <span v-if="stanceOneSided" class="text-warning"> · ⚠ {{ $t("stance.oneSided") }}</span>
-              </button>
-              <button
-                v-if="crossLang && crossLang.languages.length > 1"
-                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
-                :class="chipBorder(crossLang.monolingual ? 'warning' : null)"
-                :title="crossLang.languages.slice(0, 5).map((l) => l.lang + '·' + l.count).join(' ')"
-                @click="tab = 'sources'"
-              >
-                {{ $t("crosslang.title") }}
-                <b class="font-semibold tabular-nums" :class="chipValue(crossLang.monolingual ? 'warning' : null)">{{ crossLang.languages.length }}</b>
-                <span v-if="crossLang.monolingual" class="text-warning"> · ⚠ {{ $t("crosslang.bubble") }}</span>
-                <span v-else-if="crossLang.unique_findings.length" class="text-accent"> · +{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
-              </button>
-
-              <!-- The in-text verification switch and its legend wrap together, last in the
-                   row: closest to the text they change. -->
-              <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <!-- On a phone the chips are one row that scrolls sideways, with a fade while
+                 more wait, rather than a stack of lines above the title. From sm up they
+                 wrap. trustChips puts the chips with an issue first. -->
+            <div
+              ref="chipRow"
+              class="flex items-center gap-1.5 scrollbar-none max-sm:-mx-4 max-sm:overflow-x-auto max-sm:overscroll-x-contain max-sm:px-4 max-sm:py-1 sm:flex-wrap"
+              :class="{ 'edge-fade-x': chipsCanScroll }"
+              @scroll.passive="updateChipOverflow"
+            >
+              <template v-for="chip in trustChips" :key="chip.key">
                 <button
-                  class="press flex items-center gap-1.5 rounded-full border px-2.5 py-1"
-                  :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
-                  :aria-pressed="verifyInline"
-                  @click="verifyInline = !verifyInline"
+                  v-if="chip.key === 'citations' && citations"
+                  :class="chipClass(chip.tone)"
+                  :aria-expanded="openList === 'citations'"
+                  :title="citations.total ? `${citations.supported}/${citations.total} ${$t('citations.matched')}` : undefined"
+                  @click="toggleList('citations')"
                 >
-                  <span aria-hidden="true">{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
+                  {{ $t("citations.integrity") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ citations.total ? pct(citations.integrity) + "%" : "—" }}</b>
+                  <span v-if="weakCount" class="tabular-nums text-danger"> · ⚠ {{ weakCount }}</span>
                 </button>
-                <!-- The legend shows the marks themselves: the ✓ of a strong claim's badge
-                     and the dotted lines under weak and contested words (MarkdownView). -->
-                <template v-if="verifyInline">
-                  <span class="text-muted">{{ $t("verify.legend") }}</span>
-                  <span class="text-muted">
-                    <span class="font-semibold text-success" aria-hidden="true">✓</span> {{ $t("verify.strong") }}
-                  </span>
-                  <span class="verify-sample verify-sample-weak text-muted">{{ $t("verify.weak") }}</span>
-                  <span class="verify-sample verify-sample-contested text-muted">{{ $t("verify.contested") }}</span>
-                </template>
-              </div>
+                <button
+                  v-else-if="chip.key === 'independence' && independence"
+                  :class="chipClass(chip.tone)"
+                  :title="`${independence.independent_origins}/${independence.total_sources} ${$t('independence.origins')}` + (echoCount ? ` · ${echoCount} ${$t('independence.echoClusters')}` : '')"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("independence.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ pct(independence.independence_score) }}%</b>
+                  <span v-if="echoCount" class="tabular-nums text-warning"> · ⚠ {{ echoCount }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'confidence' && confidence"
+                  :class="chipClass(chip.tone)"
+                  :title="confidence.total_claims ? `${bandPct(confidence.solid)}% ${$t('confidence.band.solid')} · ${bandPct(confidence.contested)}% ${$t('confidence.band.contested')} · ${bandPct(confidence.speculative)}% ${$t('confidence.band.speculative')}` : undefined"
+                  @click="tab = 'confidence'"
+                >
+                  {{ $t("confidence.meter") }}
+                  <b class="font-semibold tabular-nums text-ink">{{ pct(confidence.overall) }}%</b>
+                  · {{ $t("confidence.grade." + confidence.grade) }}
+                </button>
+                <button
+                  v-else-if="chip.key === 'numbers' && numbers"
+                  :class="chipClass(chip.tone)"
+                  :aria-expanded="openList === 'numbers'"
+                  @click="toggleList('numbers')"
+                >
+                  {{ $t("numbers.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ numbers.total ? `${numbers.supported}/${numbers.total}` : "—" }}</b>
+                  <span v-if="numericIssueCount" class="tabular-nums text-danger"> · ⚠ {{ numericIssueCount }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'stance' && stance"
+                  :class="chipClass(chip.tone)"
+                  :title="`${stancePct(stance.neutral)}% ${$t('stance.neutral')}`"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("stance.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ stancePct(stance.supports) }}%</b> {{ $t("stance.for") }} ·
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ stancePct(stance.opposes) }}%</b> {{ $t("stance.against") }}
+                  <span v-if="stanceOneSided" class="text-warning"> · ⚠ {{ $t("stance.oneSided") }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'crossLang' && crossLang"
+                  :class="chipClass(chip.tone)"
+                  :title="crossLang.languages.slice(0, 5).map((l) => l.lang + '·' + l.count).join(' ')"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("crosslang.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ crossLang.languages.length }}</b>
+                  <span v-if="crossLang.monolingual" class="text-warning"> · ⚠ {{ $t("crosslang.bubble") }}</span>
+                  <span v-else-if="crossLang.unique_findings.length" class="text-accent"> · +{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
+                </button>
+              </template>
+            </div>
+
+            <!-- The in-text verification switch and its legend: a line of their own, the
+                 last before the report, closest to the text they change. -->
+            <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <button
+                class="press flex items-center gap-1.5 rounded-full border px-2.5 py-1"
+                :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
+                :aria-pressed="verifyInline"
+                @click="verifyInline = !verifyInline"
+              >
+                <span aria-hidden="true">{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
+              </button>
+              <!-- The legend shows the marks themselves: the ✓ of a strong claim's badge
+                   and the dotted lines under weak and contested words (MarkdownView). On a
+                   phone its caption is left to screen readers, beside a switch that says
+                   the same, so the line fits. -->
+              <template v-if="verifyInline">
+                <span class="text-muted max-sm:sr-only">{{ $t("verify.legend") }}</span>
+                <span class="text-muted">
+                  <span class="font-semibold text-success" aria-hidden="true">✓</span> {{ $t("verify.strong") }}
+                </span>
+                <span class="verify-sample verify-sample-weak text-muted">{{ $t("verify.weak") }}</span>
+                <span class="verify-sample verify-sample-contested text-muted">{{ $t("verify.contested") }}</span>
+              </template>
             </div>
 
             <!-- Citations chip: match counts and the claims the sources don't back. -->
