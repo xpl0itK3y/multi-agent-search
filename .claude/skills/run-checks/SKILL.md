@@ -9,7 +9,7 @@ CI is two workflows with six required jobs. They are the `main` ruleset's requir
 
 | Job (`name:`) | Workflow | What it runs |
 |---|---|---|
-| Backend unit tests | quality-gates.yml | `ruff check src/ scripts/ eval/ tests/`, `bash -n scripts/*.sh`, then `pytest -q -m "not postgres" --cov=src` (coverage floor `fail_under = 78` in pyproject.toml), with `TASK_STORE_BACKEND=memory ALLOW_MEMORY_TASK_STORE=true AUTH_DISABLED=true` |
+| Backend unit tests | quality-gates.yml | `ruff check src/ scripts/ eval/ tests/`, `bash -n` on each `scripts/*.sh`, then `pytest -q -m "not postgres" --cov=src` (coverage floor `fail_under = 78` in pyproject.toml), with `TASK_STORE_BACKEND=memory ALLOW_MEMORY_TASK_STORE=true AUTH_DISABLED=true` |
 | Frontend typecheck and tests | quality-gates.yml | in `web/`: `npm ci`, `npx vue-tsc --noEmit`, `npm run test` (vitest) |
 | Offline evaluation gate | quality-gates.yml | `python -m eval --fixtures eval/fixtures --gate` |
 | Native Rust tests | quality-gates.yml | `cargo test --manifest-path native/text_processing/Cargo.toml` |
