@@ -500,3 +500,53 @@ select {
     opacity: 0.72;
   }
 }
+
+/* ---- Accessibility media (§14): reduced transparency, more contrast, forced colours ----
+   Kept last. The html.dark variants are repeated because `html.dark .material-float`
+   (0,2,1) would otherwise win over the plain class. */
+@media (prefers-reduced-transparency: reduce) {
+  .material-float,
+  html.dark .material-float,
+  .material-popover,
+  html.dark .material-popover,
+  .material-bar {
+    background: rgb(var(--c-surface));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  html:not(.dark) {
+    --c-bd: 120 125 145;
+    --c-muted: 72 76 96;
+  }
+  html.dark {
+    --c-bd: 110 115 145;
+    --c-muted: 190 193 214;
+  }
+  .material-float,
+  html.dark .material-float,
+  .material-popover,
+  html.dark .material-popover,
+  .material-bar {
+    background: rgb(var(--c-surface));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border: 1px solid rgb(var(--c-ink) / 0.6);
+  }
+  .prose a,
+  .md-citation {
+    text-decoration: underline;
+  }
+}
+@media (forced-colors: active) {
+  .material-float,
+  .material-popover,
+  .material-bar {
+    border: 1px solid CanvasText;
+  }
+}
