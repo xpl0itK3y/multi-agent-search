@@ -642,16 +642,6 @@ This starts:
 
 The Vue web UI will be available at `http://localhost:8502` (`WEB_PORT`); its
 nginx proxies `/v1/` and `/health` to the API.
-The `web` image builds the SPA itself (`web/Dockerfile`), so a frontend change reaches it
-only through a rebuild: `docker compose up -d --build web`. Nothing from the host's
-`web/dist` is mounted into it.
-
-**Upgrading from a compose file that mounted `./web/dist`:** run `docker compose up -d --build web`
-once. A plain `docker compose up -d` recreates the container from the last-built image, which
-may still hold an old UI (one in which the public report page cannot scroll).
-
-To iterate on the UI against a running stack without rebuilding, use the dev server:
-`cd web && VITE_API_PROXY=http://localhost:8001 npm run dev` (http://localhost:5173).
 
 The API will be available directly at `http://localhost:8001` (`API_PORT`,
 loopback only).

@@ -93,10 +93,8 @@ services:
     depends_on:
       api:
         condition: service_started
-    # No volume over /usr/share/nginx/html: the image builds the SPA itself (web/Dockerfile).
-    # A ./web/dist bind mount here shadowed that build with whatever was last built on the
-    # host, so a rebuilt image kept serving an old UI. After a frontend change:
-    # docker compose up -d --build web
+    volumes:
+      - ./web/dist:/usr/share/nginx/html:ro
     ports:
       - "${WEB_PORT:-8502}:80"
     restart: unless-stopped

@@ -14,13 +14,8 @@ const { t, te } = useI18n();
 const report = ref<PublicReport | null>(null);
 const loading = ref(true);
 const notFound = ref(false);
-// The page's own scroller. The frames around it clip at the viewport, so the document
-// cannot scroll: with focus left on <body>, PageDown, Space, the arrows and End went nowhere
-// until the reader clicked into the report. Focused on arrival, the keys scroll it at once.
-const scroller = ref<HTMLElement | null>(null);
 
 onMounted(async () => {
-  scroller.value?.focus({ preventScroll: true });
   try {
     report.value = await api.getPublicReport(props.token);
   } catch {
@@ -73,10 +68,8 @@ const metaParts = computed(() => {
 </script>
 
 <template>
-  <div ref="scroller" tabindex="-1" data-scroll-root class="h-full scroll-pt-14 overflow-y-auto">
-    <!-- The page scrolls itself: the shell and the bare frame both clip at the viewport.
-         tabindex="-1": focusable from script (keyboard scrolling on arrival), not a Tab stop.
-         scroll-pt-14: a link reached with (Shift+)Tab stops below the sticky header, not under it. -->
+  <div class="h-full overflow-y-auto">
+    <!-- The page scrolls itself: the shell and the bare frame both clip at the viewport. -->
     <div class="mx-auto max-w-[44rem] px-4 pb-10 sm:px-5">
       <!-- Floating chrome: the report scrolls beneath a translucent bar, no hard divider. -->
       <header
