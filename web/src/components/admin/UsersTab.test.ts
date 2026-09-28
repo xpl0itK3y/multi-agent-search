@@ -23,6 +23,10 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   adminApi,
 }));
 
+// The app's styled confirmation (ConfirmDialog), answered "yes" unless a test says otherwise.
+const confirmMock = vi.hoisted(() => ({ confirm: vi.fn(), confirmState: { open: false } }));
+vi.mock("@/lib/confirm", () => confirmMock);
+
 import { ApiError } from "@/lib/api";
 import UsersTab from "./UsersTab.vue";
 
@@ -36,7 +40,8 @@ const user = {
 async function mountTab() {
   setActivePinia(createPinia());
   useAuthStore().user = { id: "admin-1", email: "admin@example.com", name: "Admin", is_admin: true } as never;
-  const wrapper = mount(UsersTab, { global: { plugins: [i18n] } });
+  // The user drawer is teleported to <body>; render it in place so the wrapper sees it.
+  const wrapper = mount(UsersTab, { global: { plugins: [i18n], stubs: { teleport: true } } });
   await flushPromises();
   return wrapper;
 }
@@ -50,8 +55,11 @@ function button(wrapper: Awaited<ReturnType<typeof mountTab>>, text: string) {
 describe("admin UsersTab", () => {
   beforeEach(() => {
     i18n.global.locale.value = "en";
+    confirmMock.confirm.mockResolvedValue(true);
+    confirmMock.confirmState.open = false;
     adminApi.getTelemetrySummary.mockResolvedValue({ total_users: 2, total_researches: 1, total_tokens: 10, total_cost_usd: 0.01 });
     adminApi.getUsers.mockResolvedValue({ users: [user], total_users: 1, online_users: 0, page: 1, page_size: 15 });
+    adminApi.getUserDetail.mockResolvedValue({ user, sessions: [], researches: [], recent_events: [] });
     adminApi.getPrompts.mockResolvedValue({
       prompts: [{
         id: "p-1", prompt_type: "research", prompt: "Someone else's topic", research_id: "r-other",
@@ -63,6 +71,7 @@ describe("admin UsersTab", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("does not link to other users' research (owner-scoped routes would 404)", async () => {
@@ -113,7 +122,6 @@ describe("admin UsersTab", () => {
 
   it("shows CSV export and delete failures inline instead of alert()", async () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     adminApi.exportUsersCsv.mockRejectedValue(new ApiError(403, "Admin privileges required"));
     adminApi.deleteUser.mockRejectedValue(new ApiError(429, "slow down"));
     const wrapper = await mountTab();
@@ -128,5 +136,95 @@ describe("admin UsersTab", () => {
     expect(wrapper.text()).toContain(t("errors.api.rateLimited"));
     expect(wrapper.text()).not.toContain("slow down");
     expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it("asks in the styled dialog before deleting, then says it is done", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    adminApi.deleteUser.mockResolvedValue({ status: "deleted", deleted_user_id: "u-2" });
+    const wrapper = await mountTab();
+
+    await wrapper.find(`button[title="${t("admin.users.deleteUser")}"]`).trigger("click");
+    await flushPromises();
+
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    expect(confirmMock.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ danger: true, message: t("admin.users.deleteConfirm", { email: "other@example.com" }) }),
+    );
+    const notice = wrapper.find('[data-test="users-notice"]');
+    expect(notice.attributes("role")).toBe("status");
+    expect(notice.text()).toBe(`${t("admin.users.userDeleted")}: other@example.com`);
+
+    vi.advanceTimersByTime(5000);
+    await flushPromises();
+    expect(wrapper.find('[data-test="users-notice"]').exists()).toBe(false);
+  });
+
+  it("deletes nothing when the confirmation is declined", async () => {
+    confirmMock.confirm.mockResolvedValue(false);
+    const wrapper = await mountTab();
+
+    await wrapper.find(`button[title="${t("admin.users.deleteUser")}"]`).trigger("click");
+    await flushPromises();
+    expect(adminApi.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("keeps Delete out of the drawer header, in the profile's danger zone", async () => {
+    adminApi.deleteUser.mockResolvedValue({ status: "deleted", deleted_user_id: "u-2" });
+    const wrapper = await mountTab();
+
+    await button(wrapper, t("admin.users.inspect")).trigger("click");
+    await flushPromises();
+
+    const drawer = wrapper.find('[data-test="user-drawer"]');
+    expect(drawer.attributes("aria-hidden")).toBeUndefined();
+    const zone = drawer.find('[data-test="danger-zone"]');
+    expect(zone.text()).toContain(t("admin.users.dangerZone"));
+    // The only delete control in the drawer is the one in the danger zone.
+    const deletes = drawer.findAll("button").filter((b) => b.text().includes(t("admin.users.deleteUser")));
+    expect(deletes).toHaveLength(1);
+    expect(zone.element.contains(deletes[0].element)).toBe(true);
+
+    await deletes[0].trigger("click");
+    await flushPromises();
+    expect(adminApi.deleteUser).toHaveBeenCalledWith("u-2");
+    // The deleted user's sheet closes.
+    expect(wrapper.find('[data-test="user-drawer"]').attributes("aria-hidden")).toBe("true");
+  });
+
+  it("holds the auto-refresh while the pointer is over the table or a user is open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const wrapper = await mountTab();
+    const loads = () => adminApi.getUsers.mock.calls.length;
+    const before = loads();
+
+    const table = wrapper.find('[data-test="users-table"]');
+    await table.trigger("pointerenter");
+    vi.advanceTimersByTime(18000);
+    await flushPromises();
+    expect(loads()).toBe(before);
+
+    await table.trigger("pointerleave");
+    vi.advanceTimersByTime(6000);
+    await flushPromises();
+    expect(loads()).toBe(before + 1);
+
+    await button(wrapper, t("admin.users.inspect")).trigger("click");
+    await flushPromises();
+    vi.advanceTimersByTime(12000);
+    await flushPromises();
+    expect(loads()).toBe(before + 1);
+  });
+
+  it("holds the auto-refresh while a confirmation is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const wrapper = await mountTab();
+    const before = adminApi.getUsers.mock.calls.length;
+
+    confirmMock.confirmState.open = true;
+    vi.advanceTimersByTime(12000);
+    await flushPromises();
+    expect(adminApi.getUsers.mock.calls.length).toBe(before);
+    wrapper.unmount();
   });
 });

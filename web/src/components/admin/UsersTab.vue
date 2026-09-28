@@ -3,7 +3,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { adminApi, apiErrorMessage, type ApiFile } from "@/lib/api";
+import { confirm, confirmState } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
+import SlideOver from "@/components/SlideOver.vue";
 import type {
   AdminEventLogItem,
   AdminPromptItem,
@@ -183,29 +185,47 @@ async function loadEvents() {
 
 async function openUserDrawer(userId: string) {
   selectedUserId.value = userId;
+  selectedUserDetail.value = null;
   drawerOpen.value = true;
   drawerLoading.value = true;
   drawerError.value = null;
   drawerTab.value = "profile";
   try {
-    selectedUserDetail.value = await adminApi.getUserDetail(userId);
+    const detail = await adminApi.getUserDetail(userId);
+    // A slower answer for a user opened earlier doesn't replace the current one.
+    if (selectedUserId.value === userId) selectedUserDetail.value = detail;
   } catch (err) {
-    drawerError.value = apiErrorMessage(err, t);
+    if (selectedUserId.value === userId) drawerError.value = apiErrorMessage(err, t);
   } finally {
-    drawerLoading.value = false;
+    if (selectedUserId.value === userId) drawerLoading.value = false;
   }
 }
 
+// The sheet slides out with its content still in place; the next open replaces it.
 function closeUserDrawer() {
   drawerOpen.value = false;
-  selectedUserId.value = null;
-  selectedUserDetail.value = null;
+}
+
+function isSelf(user: AdminUserListItem): boolean {
+  return user.id === auth.user?.id || (!!auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase());
 }
 
 // CSV exports need the bearer token too (window.open would send only the cookie).
-// A failed export or user deletion is shown inline, not in a blocking dialog.
+// A failed export or user deletion is shown inline, not in a blocking dialog; a
+// completed deletion says so (apple-design §16: completion feedback) for a few seconds.
 const exporting = ref(false);
 const actionError = ref<string | null>(null);
+const actionNotice = ref<string | null>(null);
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showNotice(text: string) {
+  actionNotice.value = text;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    actionNotice.value = null;
+    noticeTimer = null;
+  }, 5000);
+}
 
 async function runExport(fetchCsv: () => Promise<ApiFile>, fallbackName: string) {
   if (exporting.value) return;
@@ -260,15 +280,20 @@ async function copyPromptText(item: AdminPromptItem) {
   }
 }
 
+// Deleting a user is irreversible, so it (alone) asks first, in the app's own dialog.
 async function handleDeleteUser(user: AdminUserListItem) {
   actionError.value = null;
-  if (user.id === auth.user?.id || (auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase())) {
+  if (isSelf(user)) {
     actionError.value = t("admin.users.cannotDeleteSelf");
     return;
   }
-  const confirmed = window.confirm(
-    t("admin.users.deleteConfirm", { email: user.email })
-  );
+  const confirmed = await confirm({
+    title: t("admin.users.deleteUser"),
+    message: t("admin.users.deleteConfirm", { email: user.email }),
+    confirmText: t("admin.users.deleteUser"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
   if (!confirmed) return;
 
   try {
@@ -277,6 +302,7 @@ async function handleDeleteUser(user: AdminUserListItem) {
     if (selectedUserId.value === user.id) {
       closeUserDrawer();
     }
+    showNotice(`${t("admin.users.userDeleted")}: ${user.email}`);
     await loadUsers();
     await loadSummary();
   } catch (err) {
@@ -322,6 +348,8 @@ watch(eventCategory, () => {
 });
 
 watch(activeSubView, (val) => {
+  // The table may have gone without a pointerleave.
+  hoverPaused.value = false;
   if (val === "feed") {
     loadEvents();
   } else if (val === "prompts") {
@@ -331,10 +359,16 @@ watch(activeSubView, (val) => {
   }
 });
 
+// Rows sorted by activity re-order on refresh, so nothing refreshes while the pointer is
+// over the table, a user is open or a confirmation is pending: the row under the
+// pointer stays the row that gets clicked (apple-design §2, targets hold still).
+const hoverPaused = ref(false);
+
 function setupAutoRefresh() {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
   if (autoRefresh.value) {
     autoRefreshTimer = setInterval(() => {
+      if (hoverPaused.value || drawerOpen.value || confirmState.open) return;
       if (activeSubView.value === "feed") {
         loadEvents();
       } else if (activeSubView.value === "prompts") {
@@ -364,6 +398,7 @@ onUnmounted(() => {
   }
   if (searchDebounce) clearTimeout(searchDebounce);
   if (promptsSearchDebounce) clearTimeout(promptsSearchDebounce);
+  if (noticeTimer) clearTimeout(noticeTimer);
 });
 
 const totalPages = computed(() => {
@@ -574,6 +609,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
     </div>
 
     <p v-if="actionError" class="text-right text-xs text-red-400">{{ actionError }}</p>
+    <p v-else-if="actionNotice" class="text-right text-xs text-success" role="status" data-test="users-notice">{{ actionNotice }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- VIEW 1: USER DIRECTORY                                                  -->
@@ -627,8 +663,13 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         </label>
       </div>
 
-      <!-- Users Table -->
-      <div class="overflow-hidden rounded-xl border border-bd bg-surface/40">
+      <!-- Users Table (auto-refresh holds while the pointer is over it) -->
+      <div
+        class="overflow-hidden rounded-xl border border-bd bg-surface/40"
+        data-test="users-table"
+        @pointerenter="hoverPaused = true"
+        @pointerleave="hoverPaused = false"
+      >
         <div v-if="usersLoading && users.length === 0" class="flex h-64 items-center justify-center text-xs text-muted">
           {{ t("common.loading") }}
         </div>
@@ -763,7 +804,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                       {{ t("admin.users.inspect") }}
                     </button>
                     <button
-                      v-if="u.id !== auth.user?.id && (!auth.user?.email || u.email.toLowerCase() !== auth.user.email.toLowerCase())"
+                      v-if="!isSelf(u)"
                       type="button"
                       :disabled="deletingUserId === u.id"
                       class="rounded-lg border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
@@ -1209,12 +1250,18 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- SLIDE-OVER DRAWER: USER DETAIL & TELEMETRY INSPECTOR                     -->
     <!-- ──────────────────────────────────────────────────────────────────────── -->
-    <div
-      v-if="drawerOpen"
-      class="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-opacity"
-      @click.self="closeUserDrawer"
+    <!-- A modal sheet from the right (SlideOver: scrim, Esc, a drag-out-safe backdrop,
+         focus handling, drag to dismiss). Teleported, so the fixed layers sit outside
+         this tab's spaced column. -->
+    <Teleport to="body">
+    <SlideOver
+      :open="drawerOpen"
+      side="right"
+      :label="activeUser?.email ?? t('admin.users.drawerTabProfile')"
+      data-test="user-drawer"
+      @close="closeUserDrawer"
     >
-      <div class="h-full w-full max-w-2xl overflow-y-auto border-l border-bd bg-bg p-6 text-ink shadow-2xl">
+      <div v-if="selectedUserId" class="h-full overflow-y-auto p-6">
         <!-- Drawer Header -->
         <div class="flex items-start justify-between border-b border-bd pb-4">
           <div class="flex items-center gap-3">
@@ -1243,30 +1290,18 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <button
-              v-if="activeUser && activeUser.id !== auth.user?.id && (!auth.user?.email || activeUser.email.toLowerCase() !== auth.user.email.toLowerCase())"
-              type="button"
-              :disabled="deletingUserId === activeUser.id"
-              class="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
-              @click="handleDeleteUser(activeUser)"
-            >
-              <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              <span>{{ deletingUserId === activeUser.id ? t("admin.users.deleting") : t("admin.users.deleteUser") }}</span>
-            </button>
-
-            <button
-              type="button"
-              class="rounded-lg border border-bd bg-surface p-1.5 text-muted transition hover:text-ink"
-              @click="closeUserDrawer"
-            >
-              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+          <!-- Close only: the destructive action lives apart, in the profile's danger zone. -->
+          <button
+            type="button"
+            class="press hit shrink-0 rounded-lg border border-bd bg-surface p-1.5 text-muted hover:text-ink"
+            :aria-label="t('common.close')"
+            :title="t('common.close')"
+            @click="closeUserDrawer"
+          >
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
         <p v-if="actionError" class="mt-3 text-xs text-red-400">{{ actionError }}</p>
@@ -1373,6 +1408,26 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </div>
               </div>
             </div>
+
+            <!-- Danger zone: set apart at the end, never next to Close (§16 Grouping). -->
+            <section
+              v-if="activeUser && !isSelf(activeUser)"
+              class="!mt-8 rounded-xl border border-danger/30 bg-danger/5 p-4"
+              data-test="danger-zone"
+            >
+              <h4 class="text-xs font-semibold text-danger">{{ t("admin.users.dangerZone") }}</h4>
+              <button
+                type="button"
+                class="press mt-3 flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                :disabled="deletingUserId === activeUser.id"
+                @click="handleDeleteUser(activeUser)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>{{ deletingUserId === activeUser.id ? t("admin.users.deleting") : t("admin.users.deleteUser") }}</span>
+              </button>
+            </section>
           </div>
 
           <!-- Drawer Content: Sessions Log -->
@@ -1446,6 +1501,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           </div>
         </div>
       </div>
-    </div>
+    </SlideOver>
+    </Teleport>
   </div>
 </template>
