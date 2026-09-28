@@ -216,6 +216,43 @@ describe("admin UsersTab", () => {
     expect(loads()).toBe(before + 1);
   });
 
+  it("searches at once and lets only the newest query's answer fill the list", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const wrapper = await mountTab();
+    const deferred = () => {
+      let resolve!: (v: unknown) => void;
+      const promise = new Promise((r) => (resolve = r));
+      return { promise, resolve };
+    };
+    const older = deferred();
+    const newer = deferred();
+    const listOf = (email: string) => ({
+      users: [{ ...user, id: email, email, name: email }], total_users: 1, online_users: 0, page: 1, page_size: 15,
+    });
+
+    const input = wrapper.find('input[type="text"]');
+    adminApi.getUsers.mockReturnValueOnce(older.promise);
+    await input.setValue("an");
+    // Feedback on the keystroke, before any request goes out.
+    expect(wrapper.find('[data-test="users-searching"]').exists()).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(adminApi.getUsers).toHaveBeenLastCalledWith(1, 15, "an", undefined, false, "activity");
+
+    adminApi.getUsers.mockReturnValueOnce(newer.promise);
+    await input.setValue("anna");
+    vi.advanceTimersByTime(200);
+    expect(adminApi.getUsers).toHaveBeenLastCalledWith(1, 15, "anna", undefined, false, "activity");
+
+    newer.resolve(listOf("anna@example.com"));
+    await flushPromises();
+    older.resolve(listOf("an@example.com"));
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("anna@example.com");
+    expect(wrapper.text()).not.toContain("an@example.com");
+    expect(wrapper.find('[data-test="users-searching"]').exists()).toBe(false);
+  });
+
   it("holds the auto-refresh while a confirmation is pending", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const wrapper = await mountTab();

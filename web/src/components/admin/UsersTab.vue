@@ -38,6 +38,8 @@ const searchQuery = ref("");
 const roleFilter = ref("");
 const onlineOnly = ref(false);
 const sortBy = ref("activity");
+// True from a keystroke in the search field until the answer for it arrives.
+const searchingUsers = ref(false);
 
 // ── Prompts Stream ───────────────────────────────────────────────────────────
 const prompts = ref<AdminPromptItem[]>([]);
@@ -49,6 +51,7 @@ const promptsPageSize = ref(15);
 const promptsSearch = ref("");
 const promptsTypeFilter = ref<"all" | "research" | "chat">("all");
 const copiedPromptId = ref<string | null>(null);
+const searchingPrompts = ref(false);
 
 // ── Live Feed ────────────────────────────────────────────────────────────────
 const events = ref<AdminEventLogItem[]>([]);
@@ -139,7 +142,12 @@ async function loadSummary() {
   }
 }
 
+// Each request is numbered and only the latest one may write the list: a slow answer
+// for «ан» never lands on top of the newer «анна» (apple-design §1: the screen follows
+// the last input, not the slowest response).
+let usersRequest = 0;
 async function loadUsers() {
+  const id = ++usersRequest;
   try {
     if (users.value.length === 0) {
       usersLoading.value = true;
@@ -153,13 +161,18 @@ async function loadUsers() {
       onlineOnly.value,
       sortBy.value
     );
+    if (id !== usersRequest) return;
     users.value = resp.users;
     totalUsers.value = resp.total_users;
     onlineUsers.value = resp.online_users;
   } catch (err) {
+    if (id !== usersRequest) return;
     usersError.value = apiErrorMessage(err, t);
   } finally {
-    usersLoading.value = false;
+    if (id === usersRequest) {
+      usersLoading.value = false;
+      searchingUsers.value = false;
+    }
   }
 }
 
@@ -244,7 +257,9 @@ function exportCsv() {
   return runExport(adminApi.exportUsersCsv, "users_telemetry.csv");
 }
 
+let promptsRequest = 0;
 async function loadPrompts() {
+  const id = ++promptsRequest;
   try {
     promptsLoading.value = true;
     promptsError.value = null;
@@ -255,12 +270,17 @@ async function loadPrompts() {
       undefined,
       promptsTypeFilter.value
     );
+    if (id !== promptsRequest) return;
     prompts.value = res.prompts;
     promptsTotal.value = res.total_count;
   } catch (err) {
+    if (id !== promptsRequest) return;
     promptsError.value = apiErrorMessage(err, t);
   } finally {
-    promptsLoading.value = false;
+    if (id === promptsRequest) {
+      promptsLoading.value = false;
+      searchingPrompts.value = false;
+    }
   }
 }
 
@@ -313,22 +333,28 @@ async function handleDeleteUser(user: AdminUserListItem) {
 }
 
 // ── Watchers & Lifecycle ─────────────────────────────────────────────────────
+// Search reacts on the keystroke (a spinner in the field) and asks the server after a
+// short 200 ms pause; the spinner stops when the answer for the latest query arrives.
+const SEARCH_DEBOUNCE_MS = 200;
+
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
+  searchingUsers.value = true;
   if (searchDebounce) clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
     page.value = 1;
     loadUsers();
-  }, 350);
+  }, SEARCH_DEBOUNCE_MS);
 });
 
 let promptsSearchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(promptsSearch, () => {
+  searchingPrompts.value = true;
   if (promptsSearchDebounce) clearTimeout(promptsSearchDebounce);
   promptsSearchDebounce = setTimeout(() => {
     promptsPage.value = 1;
     loadPrompts();
-  }, 350);
+  }, SEARCH_DEBOUNCE_MS);
 });
 
 watch([roleFilter, onlineOnly, sortBy, page], () => {
@@ -626,8 +652,15 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             v-model="searchQuery"
             type="text"
             :placeholder="t('admin.users.searchPlaceholder')"
-            class="w-full rounded-xl border border-bd bg-surface/60 py-2 pl-9 pr-4 text-xs text-ink placeholder-muted transition focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            :aria-busy="searchingUsers ? 'true' : undefined"
+            class="w-full rounded-xl border border-bd bg-surface/60 py-2 pl-9 pr-9 text-xs text-ink placeholder-muted transition"
           />
+          <span
+            v-if="searchingUsers"
+            class="pointer-events-none absolute right-3 top-1/2 -mt-2 inline-block h-4 w-4 animate-spin text-center text-xs leading-4 text-muted"
+            aria-hidden="true"
+            data-test="users-searching"
+          >↻</span>
         </div>
 
         <!-- Role Filter -->
@@ -867,8 +900,14 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             v-model="promptsSearch"
             type="text"
             :placeholder="t('admin.users.searchPromptsPlaceholder')"
-            class="w-full rounded-xl border border-bd bg-surface/50 py-2 pl-9 pr-4 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            :aria-busy="searchingPrompts ? 'true' : undefined"
+            class="w-full rounded-xl border border-bd bg-surface/50 py-2 pl-9 pr-9 text-xs text-ink placeholder:text-muted"
           />
+          <span
+            v-if="searchingPrompts"
+            class="pointer-events-none absolute right-3 top-1/2 -mt-2 inline-block h-4 w-4 animate-spin text-center text-xs leading-4 text-muted"
+            aria-hidden="true"
+          >↻</span>
         </div>
 
         <!-- Filter by Prompt Type -->
@@ -887,7 +926,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
 
       <!-- Prompts Feed / Cards List -->
-      <div v-if="promptsLoading" class="flex h-64 items-center justify-center text-xs text-muted">
+      <!-- A refresh or a new query keeps the current cards on screen; only a first load shows the placeholder. -->
+      <div v-if="promptsLoading && prompts.length === 0" class="flex h-64 items-center justify-center text-xs text-muted">
         {{ t("common.loading") }}
       </div>
 
