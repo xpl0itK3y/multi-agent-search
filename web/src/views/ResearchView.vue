@@ -49,6 +49,9 @@ const threadScroll = ref<HTMLElement | null>(null);
 const threadStick = useStickToBottom(threadScroll);
 
 const canChat = computed(() => status.value === "completed");
+// The console carries the page's one breathing signal while it is shown and live, so the
+// status dot above it holds still then (a running page keeps to four loops, §13 Utility).
+const consoleLive = computed(() => !done.value && (trace.value.length > 0 || !!reasoning.value));
 const awaitingAnswer = computed(() => {
   const last = messages.value[messages.value.length - 1];
   return chatBusy.value && (!last || last.role !== "assistant" || !last.content);
@@ -287,12 +290,14 @@ onBeforeUnmount(() => close?.());
 
         <div class="mb-5 flex items-center gap-2">
           <span
+            data-status-dot
             class="h-2 w-2 rounded-full"
             :class="{
               'bg-success': status === 'completed',
               'bg-danger': status === 'failed' || status === 'timeout',
               'bg-muted': status === 'cancelled',
-              'bg-accent live-dot': !DONE.has(status),
+              'bg-accent': !DONE.has(status),
+              'live-dot': !DONE.has(status) && !consoleLive,
             }"
           />
           <span class="text-sm text-muted">{{ statusLabel(status) }}</span>

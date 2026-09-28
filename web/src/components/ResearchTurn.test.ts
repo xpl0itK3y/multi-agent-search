@@ -96,6 +96,15 @@ describe("ResearchTurn live stream", () => {
     expect(mocks.openResearchStream).toHaveBeenCalledTimes(3);
   });
 
+  it("leaves the live breath to the console while it runs: the status dot holds still", async () => {
+    const wrapper = await mountRunning();
+
+    const dot = wrapper.get("[data-status-dot]");
+    expect(dot.classes()).toContain("bg-accent");
+    expect(dot.classes()).not.toContain("live-dot");
+    expect(wrapper.findComponent({ name: "AgentActivityConsole" }).props("live")).toBe(true);
+  });
+
   it("clears the trace and reasoning when the run is retried", async () => {
     mocks.api.getStatus.mockResolvedValue({ status: "failed", prompt: "Topic", llm_token_usage: null });
     mocks.api.retryResearch.mockResolvedValue({ id: "r-1", status: "queued" });

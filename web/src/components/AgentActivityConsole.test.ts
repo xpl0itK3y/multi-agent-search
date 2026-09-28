@@ -362,3 +362,31 @@ describe("AgentActivityConsole synthesis progress", () => {
     expect(rule).toContain("repeating-linear-gradient(");
   });
 });
+
+describe("AgentActivityConsole loops", () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("keeps a running synthesis to two loops, its live dot in accent, not the done green", () => {
+    const wrapper = mount(AgentActivityConsole, {
+      props: {
+        entries: [{ step: "analyze", phase: "synthesis", agent: "AnalyzerAgent", detail: "Writing" }],
+        reasoning: "Weighing the sources",
+        status: "analyzing",
+        live: true,
+      },
+      global: { plugins: [i18n] },
+    });
+
+    // The page around it adds at most two more (the sidebar row, the report tab): four in all.
+    const looping = wrapper.findAll(".live-dot, .animate-pulse, .animate-spin, .animate-ping, .animate-progress-indeterminate");
+    expect(looping.map((w) => (w.classes().includes("live-dot") ? "dot" : w.classes().includes("animate-progress-indeterminate") ? "bar" : w.html()))).toEqual(["dot", "bar"]);
+    const dot = wrapper.get("[data-live-dot]");
+    expect(dot.classes()).toContain("bg-accent");
+    expect(dot.classes()).not.toContain("bg-success");
+    // The reasoning caret marks where the text grows and holds still.
+    expect(wrapper.get("[data-caret]").classes()).not.toContain("animate-pulse");
+    wrapper.unmount();
+  });
+});

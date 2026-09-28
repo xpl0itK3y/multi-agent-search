@@ -556,10 +556,12 @@ function formatTime(isoStr?: string): string {
         <div class="flex items-center gap-2.5 min-w-0 flex-[1_1_10rem]">
           <div class="relative flex items-center justify-center h-8 w-8 rounded-lg border text-base shadow-inner shrink-0" :class="currentAgent.colorClass">
             <span>{{ currentAgent.avatar }}</span>
-            <!-- The console's one live signal: a slow breath, not a pulse or a ping. -->
+            <!-- The console's one live signal: a slow breath, not a pulse or a ping. Accent
+                 like every running marker here; green means a finished step (§16 Familiarity). -->
             <span
               v-if="live"
-              class="live-dot absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-success ring-2 ring-surface"
+              data-live-dot
+              class="live-dot absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-surface"
             />
           </div>
 
@@ -735,13 +737,15 @@ function formatTime(isoStr?: string): string {
             </div>
           </div>
 
+          <!-- The caret marks where the text grows and holds still: the streaming text is
+               motion enough, and a blink would be one more loop beside the live dot. -->
           <div
             v-if="reasoningOpen"
             ref="reasoningBox"
             class="p-3 max-h-56 overflow-y-auto font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink/85 selection:bg-accent/30"
             @scroll="onReasoningScroll"
           >
-            {{ reasoning }}<span v-if="live" class="inline-block h-3.5 w-1.5 ml-0.5 bg-accent animate-pulse align-middle" />
+            {{ reasoning }}<span v-if="live" data-caret aria-hidden="true" class="inline-block h-3.5 w-1.5 ml-0.5 bg-accent/70 align-middle" />
           </div>
         </div>
 

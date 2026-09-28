@@ -458,13 +458,17 @@ onBeforeUnmount(() => {
     <!-- result -->
     <template v-else>
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <!-- One breathing signal per turn: while the console below is live it carries it,
+             so this dot holds still (a running thread keeps to four loops, §13 Utility). -->
         <span
+          data-status-dot
           class="h-2 w-2 rounded-full"
           :class="{
             'bg-success': status === 'completed',
             'bg-danger': status === 'failed' || status === 'timeout',
             'bg-muted': status === 'cancelled' || status === 'not_found',
-            'bg-accent live-dot': !DONE.has(status),
+            'bg-accent': !DONE.has(status),
+            'live-dot': !DONE.has(status) && done,
           }"
         />
         <span class="text-sm text-muted">{{ statusLabel(status) }}<template v-if="status === 'queued' && queuePos"> · #{{ queuePos }}</template></span>
