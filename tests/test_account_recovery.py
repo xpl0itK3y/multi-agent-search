@@ -23,7 +23,7 @@ from src.config import settings
 from src.domain import AuthActionPurpose
 from src.notifications import AccountEmail
 from src.repositories import InMemoryTaskStore
-from src.services import ResearchService
+from src.services import ResearchService, account_recovery_mixin
 from src.services.account_recovery_mixin import (
     RESET_TOKEN_INVALID_DETAIL,
     VERIFICATION_TOKEN_INVALID_DETAIL,
@@ -54,7 +54,7 @@ class FailingSender(RecordingSender):
 
 
 @pytest.fixture
-async def recovery(monkeypatch):
+async def recovery_app(monkeypatch):
     monkeypatch.setattr(settings, "auth_disabled", False, raising=False)
     monkeypatch.setattr(settings, "auth_secret_key", "recovery-test-secret-" + "x" * 40, raising=False)
     monkeypatch.setattr(settings, "email_backend", "console", raising=False)
@@ -64,9 +64,20 @@ async def recovery(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.research_service = service
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            yield client, service, sender
+        yield app, service, sender
+
+
+def _client(app, ip: str | None = None) -> httpx.AsyncClient:
+    """A client of the app, from ``ip`` when given (else ASGITransport's 127.0.0.1)."""
+    transport = httpx.ASGITransport(app=app, **({"client": (ip, 5000)} if ip else {}))
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
+@pytest.fixture
+async def recovery(recovery_app):
+    app, service, sender = recovery_app
+    async with _client(app) as client:
+        yield client, service, sender
 
 
 def _email(tag: str = "") -> str:
@@ -884,6 +895,133 @@ async def test_a_google_sign_in_during_an_account_deletion_keeps_the_account(rec
     assert (deleted.status_code, deleted.json()["detail"]) == (401, "Not authenticated")
     stored = service.task_store.get_user_by_email(email)
     assert stored is not None and (stored.google_subject, stored.password_hash) == ("g-owner", None)
+
+
+# ── how much mail one address gets (SEC-REC2-2) ───────────────────────────────
+# Sign-up, set-password and resend are throttled per client or per account only, and a
+# register/delete loop makes a fresh account every time: an address nobody has proven got
+# hundreds of messages an hour. One hourly budget per recipient now covers all of it.
+
+BUDGET = account_recovery_mixin.ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR
+CONFIRM = "Confirm your email address for Veris"
+CHANGED = "Your Veris password was changed"
+
+
+def _mail_to(sender, address: str) -> list[str]:
+    return [message.subject for message in sender.sent if message.to == address]
+
+
+@pytest.mark.anyio
+async def test_a_sign_up_and_delete_loop_from_many_clients_mails_an_address_at_most_its_budget(
+    recovery_app, monkeypatch, caplog
+):
+    app, _service, sender = recovery_app
+    monkeypatch.setattr("src.auth.security._PBKDF2_ITERATIONS", 1_000)  # 60 hashes below
+    target = _email("flooded")
+    accounts = 0
+    with caplog.at_level(logging.INFO):
+        for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"):
+            async with _client(app, ip) as client:
+                for _ in range(10):  # each client's sign-up throttle
+                    session = await _register(client, target, password="pass-123456")
+                    deleted = await client.request(
+                        "DELETE",
+                        "/v1/auth/account",
+                        json={"current_password": "pass-123456", "confirm": True},
+                        headers=_bearer(session),
+                    )
+                    assert deleted.status_code == 200
+                    accounts += 1
+
+    assert accounts == 30 > BUDGET
+    assert _mail_to(sender, target) == [CONFIRM] * BUDGET
+    skipped = [record.getMessage() for record in caplog.records if "account_email_over_budget" in record.getMessage()]
+    assert len(skipped) == 30 - BUDGET
+    assert all(line.startswith("account_email_over_budget kind=email_verification user_id=") for line in skipped)
+    assert all(target not in line for line in skipped)  # kind and account id only
+
+
+@pytest.mark.anyio
+async def test_an_unverified_account_changing_its_password_mails_its_address_at_most_its_budget(recovery, monkeypatch):
+    client, _service, sender = recovery
+    monkeypatch.setattr("src.auth.security._PBKDF2_ITERATIONS", 1_000)
+    email = _email()
+    session = await _register(client, email, password="pass-0")
+    current, codes = "pass-0", []
+    for index in range(1, 11):  # the per-account password-check throttle
+        changed = await client.post(
+            "/v1/auth/set-password",
+            json={"current_password": current, "password": f"pass-{index}-changed"},
+            headers=_bearer(session),
+        )
+        codes.append(changed.status_code)
+        session, current = changed.json()["access_token"], f"pass-{index}-changed"
+        client.cookies.clear()
+    resends = [(await client.post("/v1/auth/email/verification", headers=_bearer(session))).status_code for _ in range(5)]
+
+    assert codes == [200] * 10 and resends == [202] * 5  # the caller is told nothing
+    assert _mail_to(sender, email) == [CONFIRM] + [CHANGED] * (BUDGET - 1)
+
+
+@pytest.mark.anyio
+async def test_mail_past_the_budget_issues_no_link_so_the_one_already_sent_still_works(recovery, monkeypatch):
+    """The budget is checked before a link is issued: a new link retires the account's
+    earlier one, so a flood that got that far would kill the link in the owner's inbox."""
+    client, service, sender = recovery
+    monkeypatch.setattr(account_recovery_mixin, "ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR", 2)
+    email = _email()
+    session = await _register(client, email)
+    await client.post("/v1/auth/password/forgot", json={"email": email})
+    verification, reset = _links(sender, "/verify-email"), _links(sender, "/reset-password")
+    assert (len(verification), len(reset)) == (1, 1)
+
+    resent = await client.post("/v1/auth/email/verification", headers=_bearer(session))
+    forgot = await client.post("/v1/auth/password/forgot", json={"email": email})
+
+    assert (resent.status_code, forgot.status_code) == (202, 202)
+    assert _mail_to(sender, email) == [CONFIRM, "Reset your Veris password"]
+    rows = list(service.task_store.auth_action_tokens.values())
+    assert len(rows) == 2 and all(row["used_at"] is None for row in rows)  # no new link, none retired
+    verified = await client.post("/v1/auth/email/verify", json={"token": verification[0]}, headers=_bearer(session))
+    assert verified.status_code == 200
+    done = await client.post("/v1/auth/password/reset", json={"token": reset[0], "password": "second-pass1"})
+    assert done.status_code == 200
+    # The address is verified now: its "password was reset" notice goes out past the budget.
+    assert _mail_to(sender, email)[-1] == "Your Veris password was reset"
+
+
+@pytest.mark.anyio
+async def test_security_notices_to_a_verified_address_go_out_past_its_budget(recovery, monkeypatch):
+    """A flood must not hide a real password change, or a Google link, from the owner."""
+    client, _service, sender = recovery
+    monkeypatch.setattr(account_recovery_mixin, "ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR", 1)
+    email = _email()
+    session = await _register(client, email)  # its verification mail uses the budget up
+    await client.post("/v1/auth/email/verify", json={"token": _links(sender, "/verify-email")[0]}, headers=_bearer(session))
+    await client.post("/v1/auth/password/forgot", json={"email": email})  # over budget: skipped
+
+    changed = await client.post(
+        "/v1/auth/set-password",
+        json={"current_password": "first-pass1", "password": "second-pass1"},
+        headers=_bearer(session),
+    )
+
+    assert changed.status_code == 200
+    client.cookies.clear()
+    assert _mail_to(sender, email) == [CONFIRM, CHANGED]
+
+    # An unverified sign-up's notices count: the squatter's password change is not mailed.
+    squatted = _email()
+    squatter = await _register(client, squatted, password="squatter-pass1")
+    await client.post(
+        "/v1/auth/set-password",
+        json={"current_password": "squatter-pass1", "password": "squatter-pass2"},
+        headers=_bearer(squatter),
+    )
+    assert _mail_to(sender, squatted) == [CONFIRM]
+    # The owner's Google sign-in verifies the address, so its notice goes out.
+    await _google_callback(client, monkeypatch, squatted, "g-owner")
+    assert _mail_to(sender, squatted) == [CONFIRM, "Google sign-in was linked to your Veris account"]
 
 
 # ── maintenance ───────────────────────────────────────────────────────────────

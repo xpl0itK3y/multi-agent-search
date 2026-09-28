@@ -25,6 +25,10 @@ Email goes out off the request path: the routes hand the methods documented as
 account id and exception class (never a token, a link or the error text) and changes no
 response. POST /v1/auth/password/forgot does all of its work there, so its response is
 the same, and as quick, for a known and an unknown address.
+
+How much. Every recipient has one hourly budget for all of this mail
+(ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR), checked in the background job before a link is
+issued; past it the message is skipped without a word to the caller.
 """
 import hashlib
 import logging
@@ -32,6 +36,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from src.auth.sliding_window import SlidingWindowLimiter
 from src.config import settings
 from src.domain import AuthActionPurpose, AuthUser, UserRecord
 from src.domain.errors import BadRequestError, ForbiddenError, UnprocessableError
@@ -66,6 +71,17 @@ ACCOUNT_NOTICES = frozenset(
         AccountEmail.PASSWORD_CHANGED,
     }
 )
+
+# One hourly budget per recipient address for every account email, whatever asked for it:
+# a sign-up, a resend, a reset request, a notice (SEC-REC2-2). The routes bound their
+# callers per client address or per account only, and a register/delete loop gets a fresh
+# account each time, so an address nobody has proven could otherwise be sent hundreds of
+# messages an hour. The security notices to a verified address take none of it
+# (_within_mail_budget). Per API process like every throttle, and without lockout
+# protection like the recovery ones (login_rate_limit, SEC-REC-4): with 10,000 addresses
+# over budget the oldest is forgotten, rather than every new address refused.
+ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR = 10
+account_email_limiter = SlidingWindowLimiter(3600.0, protect_lockouts=False)
 
 
 def hash_link_token(token: str) -> str:
@@ -153,6 +169,21 @@ class AccountRecoveryMixin:
         return True
 
     @staticmethod
+    def _within_mail_budget(kind: AccountEmail, user: UserRecord) -> bool:
+        """Take one of the account address's hourly sends (account_email_limiter), or
+        False past the budget: the caller then sends nothing and issues no link, since a
+        new link would retire the one already in the inbox. A security notice to a
+        verified address is exempt and takes nothing: a flood must not hide a real
+        password change from the owner. Logged by kind and account id, never the address."""
+        if kind in ACCOUNT_NOTICES and user.email_verified_at is not None:
+            return True
+        recipient = (user.email or "").strip().lower()
+        if account_email_limiter.allow(recipient, ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR):
+            return True
+        logger.info("account_email_over_budget kind=%s user_id=%s", kind.value, user.id)
+        return False
+
+    @staticmethod
     def _background(kind: AccountEmail, user_id: str | None, work: Callable[[], bool]) -> bool:
         """Run a background send: True when a message went out; a failure is logged and
         returns False, never raises."""
@@ -171,15 +202,16 @@ class AccountRecoveryMixin:
         self, email: str, *, language: str = "en", requested_ip: str | None = None
     ) -> bool:
         """Background half of POST /v1/auth/password/forgot: email a reset link to the
-        account with this address. Nothing happens for an unknown address or with email
-        disabled, and nothing tells the two apart from a sent link."""
+        account with this address. Nothing happens for an unknown address, with email
+        disabled or past the address's mail budget, and nothing tells those apart from a
+        sent link."""
 
         def work() -> bool:
             sender = self._mail()
             if not sender.enabled:
                 return False
             user = self.task_store.get_user_by_email((email or "").strip().lower())
-            if user is None:
+            if user is None or not self._within_mail_budget(AccountEmail.PASSWORD_RESET, user):
                 return False
             ttl = settings.password_reset_ttl_seconds
             link = self._issue_link(
@@ -193,7 +225,8 @@ class AccountRecoveryMixin:
 
     def send_email_verification(self, user_id: str, *, language: str = "en") -> bool:
         """Background: email the account a verification link, unless its address is
-        verified already (or email is disabled, or the account is gone)."""
+        verified already (or email is disabled, the account is gone, or the address is past
+        its mail budget: the link already sent then stays the one that works)."""
 
         def work() -> bool:
             sender = self._mail()
@@ -201,6 +234,8 @@ class AccountRecoveryMixin:
                 return False
             user = self.task_store.get_user_by_id(user_id)
             if user is None or user.email_verified_at is not None:
+                return False
+            if not self._within_mail_budget(AccountEmail.EMAIL_VERIFICATION, user):
                 return False
             ttl = settings.email_verification_ttl_seconds
             link = self._issue_link(user, AuthActionPurpose.EMAIL_VERIFICATION, EMAIL_VERIFICATION_PATH, ttl)
@@ -224,7 +259,7 @@ class AccountRecoveryMixin:
             if not sender.enabled:
                 return False
             user = self.task_store.get_user_by_id(user_id)
-            if user is None:
+            if user is None or not self._within_mail_budget(kind, user):
                 return False
             return self._deliver(sender, kind, user, language)
 

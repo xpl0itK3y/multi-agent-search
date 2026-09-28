@@ -9,7 +9,8 @@ from starlette.requests import Request
 from src.api.schemas import AuthUser
 from src.auth import llm_rate_limit
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
-from src.auth.login_rate_limit import DEFAULT_MAX_KEYS, SlidingWindowLimiter, enforce_auth_rate_limit
+from src.auth.login_rate_limit import enforce_auth_rate_limit
+from src.auth.sliding_window import DEFAULT_MAX_KEYS, SlidingWindowLimiter
 from src.config import settings
 
 
@@ -191,10 +192,10 @@ class _Clock:
 
 @pytest.fixture
 def clock(monkeypatch):
-    from src.auth import login_rate_limit
+    from src.auth import sliding_window
 
     fake = _Clock()
-    monkeypatch.setattr(login_rate_limit.time, "monotonic", fake)
+    monkeypatch.setattr(sliding_window.time, "monotonic", fake)
     return fake
 
 

@@ -315,6 +315,20 @@ account's own address. Like sign-in,
 forgot-password and reset work without a session and need no CSRF token.
 Verifying an address needs both (below).
 
+On top of these, one email address receives at most 10 account emails per hour,
+whatever sends them: verification links, reset links and notices, from sign-up,
+resends, forgot-password and password changes alike. Otherwise a loop of
+signing up with an address and deleting the account, or one account changing
+its password over and over, could flood a mailbox whose owner never proved
+anything. The budget is checked just before a message would go out, and past it
+the message is simply not sent. The request still gets its usual answer, and no
+new link is made, so the link already in the inbox keeps working. The log
+records `account_email_over_budget` with the kind of message and the account
+id, never the address. Security notices (password changed, password reset,
+Google sign-in linked) to a verified address are exempt and do not count, so a
+flood cannot hide a real change from the owner. Like the throttles, the budget
+is kept per API process and tracks at most 10,000 addresses.
+
 ### Email verification
 
 With email enabled, sign-up sends a link to
