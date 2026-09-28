@@ -117,7 +117,8 @@ async function submit() {
 
     <template v-else>
       <p class="mb-4 text-center text-sm text-muted">{{ $t("resetPassword.subtitle") }}</p>
-      <form class="space-y-3" @submit.prevent="submit">
+      <!-- novalidate: see SetPasswordView — the translated inline rule, not the browser's bubble. -->
+      <form class="space-y-3" novalidate @submit.prevent="submit">
         <div>
           <input
             v-model="password"

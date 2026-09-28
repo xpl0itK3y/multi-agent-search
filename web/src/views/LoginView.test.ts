@@ -48,6 +48,22 @@ describe("LoginView", () => {
     while (mounted.length) mounted.pop()!.unmount();
   });
 
+  it("keeps the browser's bubbles out: novalidate, and an empty field is focused, not sent", async () => {
+    const wrapper = await mountAt("/login");
+    const form = wrapper.find("form");
+    expect(form.attributes("novalidate")).toBeDefined();
+
+    await form.trigger("submit");
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.find('input[type="email"]').element);
+
+    await wrapper.find('input[type="email"]').setValue("user@example.com");
+    await form.trigger("submit");
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.find('input[type="password"]').element);
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["oauth_conflict", "auth.oauthConflict"],
     ["oauth_failed", "auth.oauthFailed"],

@@ -20,6 +20,7 @@ const email = ref("");
 const password = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
+const emailInput = ref<HTMLInputElement | null>(null);
 const passwordInput = ref<HTMLInputElement | null>(null);
 const pwHelpId = useId();
 // A sign-up refused locally for a too-short password (the rule line turns red).
@@ -70,6 +71,16 @@ function toggleMode() {
 
 async function submit() {
   if (busy.value) return;
+  // The form is novalidate (the browser's bubbles speak its own language), so empty
+  // fields are caught here: focus the first one instead of asking the server.
+  if (!email.value.trim()) {
+    emailInput.value?.focus();
+    return;
+  }
+  if (!password.value) {
+    passwordInput.value?.focus();
+    return;
+  }
   // The server's rule, checked here first: no round trip for a password it would refuse.
   if (mode.value === "register" && password.value.length < PASSWORD_MIN_LENGTH) {
     passwordTried.value = true;
@@ -143,8 +154,11 @@ async function submit() {
         </h1>
       </div>
 
-      <form class="space-y-3" @submit.prevent="submit">
+      <!-- novalidate: minlength stays a hint for password managers, while the translated
+           inline check says what is wrong, not the browser's bubble in its own language. -->
+      <form class="space-y-3" novalidate @submit.prevent="submit">
         <input
+          ref="emailInput"
           v-model="email"
           type="email"
           required
