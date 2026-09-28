@@ -314,6 +314,16 @@ describe("MarkdownView inline verification", () => {
       expect(badge.border).toBe("1px solid transparent");
     });
 
+    it("tells contested from weak by line style in every mode, not only by hue", () => {
+      expect(declsOf(`${S} .md-claim-contested .md-claim-text`)["text-decoration-style"]).toBe("dashed");
+      expect(declsOf(`${S} .md-claim-weak .md-claim-text`)["text-decoration-style"]).toBeUndefined(); // stays dotted
+    });
+
+    it("spaces a report table on its scroll box, since the box stops margins collapsing", () => {
+      expect(declsOf(`${S} .md-table-scroll`)["margin-block"]).toBe("1.75em");
+      expect(declsOf(`${S} .md-table-scroll > table`)["margin-block"]).toBe("0");
+    });
+
     it("tells contested from weak by line style when forced colours drop the colour", () => {
       const forced = declsOf(`${S} .md-claim-contested .md-claim-text`, "(forced-colors: active)");
       expect(forced["text-decoration-style"]).toBe("dashed");

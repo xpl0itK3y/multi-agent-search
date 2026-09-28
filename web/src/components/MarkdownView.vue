@@ -626,6 +626,15 @@ onBeforeUnmount(() => {
 :deep(.md-table-scroll) {
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  /* A scroll box does not let its child's margins collapse through it, so the prose
+     table spacing (2em at the table's 0.875em) moves to the box itself. */
+  margin-block: 1.75em;
+}
+:deep(.md-table-scroll > table) {
+  margin-block: 0;
+}
+:deep(:is(h2, h3, h4, hr) + .md-table-scroll) {
+  margin-top: 0;
 }
 
 /* The shared pop transition always starts 4px higher. A citation popover placed above
@@ -661,6 +670,9 @@ onBeforeUnmount(() => {
 }
 :deep(.md-claim-contested .md-claim-text) {
   text-decoration-color: rgb(var(--c-danger) / 0.9);
+  /* Line style, not only hue, tells contested from weak: warning and danger are close
+     in lightness, and a colour-blind reader would see two identical dotted lines. */
+  text-decoration-style: dashed;
 }
 /* A citation whose source text does not back the claim carries the same quiet dotted
    mark on itself (the global rule draws a wavy one). */

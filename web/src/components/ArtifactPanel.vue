@@ -1342,6 +1342,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 }
 .verify-sample-contested {
   text-decoration-color: rgb(var(--c-danger) / 0.9);
+  text-decoration-style: dashed; /* matches the report: style, not only hue */
 }
 @media (prefers-contrast: more) {
   .verify-sample {
