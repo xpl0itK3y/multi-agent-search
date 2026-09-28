@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
-import { prefersReducedMotion } from "@/lib/motion";
+import { prefersReducedMotion, smoothOrAuto } from "@/lib/motion";
 import { traceKey } from "@/lib/trace";
 import { safeHttpUrl } from "@/lib/url";
 import { useStickToBottom } from "@/lib/useStickToBottom";
@@ -20,7 +20,7 @@ const props = withDefaults(
   }
 );
 
-const { t, te } = useI18n();
+const { t, te, locale } = useI18n();
 
 // Persist open/collapse state across visits (defaults to collapsed if completed).
 // The Settings preference "auto-expand the agent console" always starts it open.
@@ -178,6 +178,62 @@ const phaseIndex = computed(() => {
   const idx = PHASES.findIndex((item) => item.id === p);
   return idx >= 0 ? idx : 0;
 });
+
+// The stepper scrolls sideways where the five phases don't fit (the 420px research column,
+// a phone). A fade marks each side where more phases wait (§12), and the phase in progress
+// (or the one a stopped run ended on) scrolls into view clear of the fade: horizontally
+// only, so the thread around the console never jumps.
+const stepStrip = ref<HTMLElement | null>(null);
+const stripMore = ref({ start: false, end: false });
+const EDGE_FADE_PX = 28; // .edge-fade-x
+function updateStripOverflow() {
+  const el = stepStrip.value;
+  stripMore.value = {
+    start: !!el && el.scrollLeft > 1,
+    end: !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+  };
+}
+const stripFade = computed(() => {
+  const { start, end } = stripMore.value;
+  if (start) return end ? "stepper-fade-both" : "stepper-fade-start";
+  return end ? "edge-fade-x" : "";
+});
+function revealCurrentPhase(animate: boolean) {
+  const strip = stepStrip.value;
+  if (!strip || props.status === "completed") return updateStripOverflow();
+  const item = strip.querySelectorAll<HTMLElement>("[data-phase-state]")[Math.min(phaseIndex.value, PHASES.length - 1)];
+  if (!item) return updateStripOverflow();
+  const s = strip.getBoundingClientRect();
+  const b = item.getBoundingClientRect();
+  if (!s.width) return updateStripOverflow(); // not laid out (hidden): nothing to measure
+  const delta =
+    b.right > s.right - EDGE_FADE_PX ? b.right - s.right + EDGE_FADE_PX
+    : b.left < s.left + EDGE_FADE_PX && strip.scrollLeft > 0 ? b.left - s.left - EDGE_FADE_PX
+    : 0;
+  if (delta) {
+    if (typeof strip.scrollBy === "function") strip.scrollBy({ left: delta, behavior: animate ? smoothOrAuto() : "auto" });
+    else strip.scrollLeft += delta;
+  }
+  updateStripOverflow();
+}
+let stripObserver: ResizeObserver | undefined;
+watch(
+  stepStrip,
+  (el) => {
+    stripObserver?.disconnect();
+    stripObserver = undefined;
+    if (!el) return;
+    if (typeof ResizeObserver !== "undefined") {
+      stripObserver = new ResizeObserver(updateStripOverflow);
+      stripObserver.observe(el);
+    }
+    revealCurrentPhase(false); // on first sight, already in place
+  },
+  { flush: "post" },
+);
+watch(phaseIndex, () => nextTick(() => revealCurrentPhase(true)));
+watch(locale, () => nextTick(updateStripOverflow));
+onBeforeUnmount(() => stripObserver?.disconnect());
 
 type PhaseState = "done" | "active" | "pending" | "error" | "stopped";
 
@@ -492,9 +548,12 @@ function formatTime(isoStr?: string): string {
 
     <template v-else>
       <!-- TOP AGENT HUD HEADER BAR -->
-      <div class="px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
+      <!-- The running agent's name is the main live signal, so it never gives way: where the
+           row is too narrow for it and the controls (the 420px research column, a phone),
+           the controls wrap under it, still at the right edge. -->
+      <div data-console-header class="px-4 py-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 min-w-0">
         <!-- Active Agent Identity -->
-        <div class="flex items-center gap-2.5 min-w-0 flex-1">
+        <div class="flex items-center gap-2.5 min-w-0 flex-[1_1_10rem]">
           <div class="relative flex items-center justify-center h-8 w-8 rounded-lg border text-base shadow-inner shrink-0" :class="currentAgent.colorClass">
             <span>{{ currentAgent.avatar }}</span>
             <!-- The console's one live signal: a slow breath, not a pulse or a ping. -->
@@ -505,11 +564,16 @@ function formatTime(isoStr?: string): string {
           </div>
 
           <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="min-w-0 truncate font-semibold text-sm text-ink leading-tight">
+            <!-- Short of room, the role badge gives way before the name does. -->
+            <div class="flex items-center gap-2 min-w-0 overflow-hidden">
+              <span data-agent-name class="max-w-full shrink-0 truncate font-semibold text-sm text-ink leading-tight">
                 {{ currentAgent.name }}
               </span>
-              <span class="shrink-0 rounded px-1.5 py-px text-3xs font-semibold uppercase tracking-wider border" :class="currentAgent.colorClass">
+              <span
+                class="min-w-0 truncate rounded px-1.5 py-px text-3xs font-semibold uppercase tracking-wider border"
+                :class="currentAgent.colorClass"
+                :title="currentAgent.badge"
+              >
                 {{ currentAgent.badge }}
               </span>
             </div>
@@ -520,19 +584,25 @@ function formatTime(isoStr?: string): string {
         </div>
 
         <!-- Controls & Elapsed Timer -->
-        <div class="flex items-center gap-2 text-xs shrink-0">
+        <div class="ml-auto flex items-center gap-2 text-xs shrink-0">
           <div v-if="formattedElapsed" class="hidden sm:flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
             <span class="text-muted">⏱</span>
             <span class="tabular-nums text-2xs">{{ formattedElapsed }}</span>
           </div>
 
+          <!-- Both labels share one cell, the idle one invisible, so the button keeps the
+               wider one's width in every language: toggling never moves it or rewraps the row. -->
           <button
-            class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap sm:min-w-[7.75rem]"
+            data-console-toggle
+            class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap"
             :title="open ? t('console.collapse') : t('console.expand')"
             :aria-expanded="open"
             @click="toggleOpen"
           >
-            <span class="tabular-nums">{{ open ? t("console.collapse") : t("console.journal", { n: entries.length }) }}</span>
+            <span class="grid tabular-nums">
+              <span class="col-start-1 row-start-1" :class="!open && 'invisible'">{{ t("console.collapse") }}</span>
+              <span class="col-start-1 row-start-1" :class="open && 'invisible'">{{ t("console.journal", { n: entries.length }) }}</span>
+            </span>
             <span
               class="text-3xs transition-transform duration-200 motion-reduce:transition-none"
               :class="open && 'rotate-90'"
@@ -544,49 +614,54 @@ function formatTime(isoStr?: string): string {
 
       <!-- PIPELINE STEPPER BAR (while live, or with the journal open) -->
       <!-- Its bottom line only separates it from an open body; closed, it would double the card's edge. -->
-      <div
-        v-if="open || live"
-        class="px-4 py-2.5 bg-bg/30 flex items-center justify-between gap-1 overflow-x-auto text-xs scrollbar-none"
-        :class="open && 'border-b border-bd/60'"
-      >
+      <!-- The fade masks only the scrolling row, never the band's tint or its bottom line. -->
+      <div v-if="open || live" class="bg-bg/30" :class="open && 'border-b border-bd/60'">
         <div
-          v-for="(phase, idx) in PHASES"
-          :key="phase.id"
-          class="flex items-center gap-1.5 shrink-0 transition-opacity duration-300"
-          :data-phase-state="phaseState(idx)"
-          :class="{
-            'opacity-100': phaseState(idx) !== 'pending',
-            'opacity-40': phaseState(idx) === 'pending',
-          }"
+          ref="stepStrip"
+          data-stepper
+          class="px-4 py-2.5 flex items-center justify-between gap-1 overflow-x-auto text-xs scrollbar-none"
+          :class="stripFade"
+          @scroll.passive="updateStripOverflow"
         >
           <div
-            class="flex items-center justify-center h-5 w-5 rounded-full text-2xs font-semibold border transition-colors duration-300"
+            v-for="(phase, idx) in PHASES"
+            :key="phase.id"
+            class="flex items-center gap-1.5 shrink-0 transition-opacity duration-300"
+            :data-phase-state="phaseState(idx)"
             :class="{
-              'bg-success/15 text-success border-success/40': phaseState(idx) === 'done',
-              'bg-accent text-onAccent border-accent ring-4 ring-accent/20': phaseState(idx) === 'active',
-              'bg-danger/15 text-danger border-danger/40': phaseState(idx) === 'error',
-              'bg-surface text-muted border-bd': phaseState(idx) === 'pending' || phaseState(idx) === 'stopped',
+              'opacity-100': phaseState(idx) !== 'pending',
+              'opacity-40': phaseState(idx) === 'pending',
             }"
           >
-            <span v-if="phaseState(idx) === 'done'">✓</span>
-            <span v-else-if="phaseState(idx) === 'error'">✕</span>
-            <span v-else-if="phaseState(idx) === 'stopped'">–</span>
-            <span v-else class="tabular-nums">{{ idx + 1 }}</span>
+            <div
+              class="flex items-center justify-center h-5 w-5 rounded-full text-2xs font-semibold border transition-colors duration-300"
+              :class="{
+                'bg-success/15 text-success border-success/40': phaseState(idx) === 'done',
+                'bg-accent text-onAccent border-accent ring-4 ring-accent/20': phaseState(idx) === 'active',
+                'bg-danger/15 text-danger border-danger/40': phaseState(idx) === 'error',
+                'bg-surface text-muted border-bd': phaseState(idx) === 'pending' || phaseState(idx) === 'stopped',
+              }"
+            >
+              <span v-if="phaseState(idx) === 'done'">✓</span>
+              <span v-else-if="phaseState(idx) === 'error'">✕</span>
+              <span v-else-if="phaseState(idx) === 'stopped'">–</span>
+              <span v-else class="tabular-nums">{{ idx + 1 }}</span>
+            </div>
+
+            <span
+              class="text-xs whitespace-nowrap font-medium transition-colors"
+              :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'error' ? 'text-danger' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
+            >
+              {{ $t('trace.' + phase.key) }}
+            </span>
+
+            <!-- Connector line -->
+            <div
+              v-if="idx < PHASES.length - 1"
+              class="h-0.5 w-4 sm:w-8 rounded-full mx-1 transition-colors duration-300"
+              :class="idx < phaseIndex ? 'bg-success/60' : idx === phaseIndex && live ? 'bg-accent/60' : 'bg-bd'"
+            />
           </div>
-
-          <span
-            class="text-xs whitespace-nowrap font-medium transition-colors"
-            :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'error' ? 'text-danger' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
-          >
-            {{ $t('trace.' + phase.key) }}
-          </span>
-
-          <!-- Connector line -->
-          <div
-            v-if="idx < PHASES.length - 1"
-            class="h-0.5 w-4 sm:w-8 rounded-full mx-1 transition-colors duration-300"
-            :class="idx < phaseIndex ? 'bg-success/60' : idx === phaseIndex && live ? 'bg-accent/60' : 'bg-bd'"
-          />
         </div>
       </div>
     </template>
@@ -862,6 +937,16 @@ function formatTime(isoStr?: string): string {
 .animate-progress-indeterminate {
   animation: progress-indeterminate 2.2s infinite ease-in-out;
   transform-origin: 0% 50%;
+}
+
+/* The stepper's fades at its start, and at both ends (.edge-fade-x is the end-only one). */
+.stepper-fade-start {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.stepper-fade-both {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 
 /* A live step rises in from below, where the feed grows (§7); nothing animates out. */
