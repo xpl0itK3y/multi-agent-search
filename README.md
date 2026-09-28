@@ -118,9 +118,10 @@ instance beyond your own machine.
 Users register with email and password or sign in with Google. Google sign-in
 with the address of an existing password account links Google to that account
 (the callback accepts only addresses Google reports as verified). If the account
-had verified its email, its password keeps working. If not, the password is
-cleared and every session of the account is revoked, so a password set by
-someone who never proved they own the address stops working (see
+had verified its email (with a reset link, or with a verification link opened
+while signed in to that account), its password keeps working. If not, the
+password is cleared and every session of the account is revoked, so a password
+set by someone who never proved they own the address stops working (see
 [Account recovery](#account-recovery)). An account already linked to a
 different Google identity is never taken over: the login page shows
 `?error=oauth_conflict` for that case and `?error=oauth_failed` for any other
@@ -242,6 +243,14 @@ UI anywhere but `http://localhost:8502`: another `WEB_PORT`, a domain, HTTPS.
 With any backend but `disabled`, the API refuses to start unless it is an
 `http://` or `https://` URL.
 
+Links in account email work like passwords, so the API also logs a startup
+warning (it still starts) when they would cross the network unencrypted:
+`SMTP_SECURITY=none` with an `SMTP_HOST` other than `localhost` or a loopback
+address (the warning also names the SMTP login when `SMTP_USERNAME` is set),
+and an `http://` `PUBLIC_APP_URL` whose host is not `localhost` or a loopback
+address. Behind a domain, serve the UI over HTTPS and set an `https://`
+`PUBLIC_APP_URL`.
+
 ### Password reset
 
 In the web UI, the sign-in form links to "Forgot password?" (`/forgot-password`)
@@ -272,6 +281,11 @@ A successful reset:
   they did not ask for;
 - does not sign you in. Sign in with the new password.
 
+Every other change of the password retires the outstanding reset links as well:
+a new password set in Settings, `scripts/create_admin.py`, and a Google sign-in
+that clears an unverified password. So a link someone copied from the mailbox
+cannot undo the password its owner set afterwards.
+
 The token is random, works once and expires after `PASSWORD_RESET_TTL_SECONDS`
 (1 hour by default). The database stores only a hash of it, so a database dump
 or backup holds no working link. It travels in the URL fragment (after `#`),
@@ -291,8 +305,15 @@ limits (see [API](#api)), and stay on even with `AUTH_DISABLED=true`:
 - redeeming a reset or a verification link: 30 per client address for each;
 - new verification links: 5 per signed-in user.
 
-Past a limit the API answers 429 `Too many attempts, please slow down`. Like
-sign-in, the endpoints that work without a session need no CSRF token.
+Past a limit the API answers 429 `Too many attempts, please slow down`. Each
+throttle tracks at most 10,000 keys (client addresses, email addresses or
+accounts) per API process. When all of them are at their limit, it forgets the
+oldest instead of refusing every newcomer, so a flood of made-up addresses
+cannot turn recovery off for everyone. What these throttles limit is harmless
+to repeat: a link token cannot be guessed, and a reset mail only goes to the
+account's own address. Like sign-in,
+forgot-password and reset work without a session and need no CSRF token.
+Verifying an address needs both (below).
 
 ### Email verification
 
@@ -307,13 +328,31 @@ send the mail never fails the sign-up. `email_verified` in the user returned by
   sends a new link and answers 202 `{"status": "sent"}`, or 200
   `{"status": "already_verified"}`. It is throttled per user, and the new link
   makes the earlier ones stop working.
-- `POST /v1/auth/email/verify` with `{"token": "..."}` answers 200
-  `{"status": "verified"}`. A link that is invalid, expired or already used
-  gets 400 with a detail starting with `verification_token_invalid`. It needs no
-  session, so the link also works in another browser.
+- `POST /v1/auth/email/verify` with `{"token": "..."}` needs a session of the
+  account the link was sent to, with the usual CSRF token for a cookie session.
+  It answers 200 `{"status": "verified"}`. Without a session it answers 401
+  `Not authenticated`. Signed in to another account, it answers 403 with a
+  detail starting with `verification_wrong_account`, and the link stays valid
+  for its own account. A link that is invalid, expired or already used gets 400
+  with a detail starting with `verification_token_invalid`.
 
-A verified address keeps its password when Google sign-in is linked (next
-section). It does not grant admin rights (see
+In the web UI, the `/verify-email` page sends a signed-out visitor to sign in
+first and comes back. It confirms nothing on opening: it names the account and
+waits for its "Confirm email" button.
+
+Why a session: a verified address keeps its password when Google sign-in is
+linked (next section), so verifying must show that whoever holds the password
+also reads the inbox. An anonymous click shows the inbox alone. Someone could
+sign up with your address and a password of their own; the sign-up mails you
+the link, and one click by you (or by a mail scanner that runs the page) would
+have made their account verified. Your later Google sign-in would then have
+kept their password and sessions, with admin rights if the address is in
+`ADMIN_EMAILS`. Opened in their session only, the link needs the inbox and the
+password together. A password reset stays anonymous: it replaces the password
+and signs every device out, so the one who reads the inbox ends up with the
+only working credential.
+
+Verification does not grant admin rights (see
 [Authentication and Admins](#authentication-and-admins)).
 
 ### Google sign-in and existing accounts
@@ -331,8 +370,8 @@ email exists:
 Linking emails the account a "Google sign-in was linked" notice. After a cleared
 password, the owner can set a new one in Settings within 10 minutes of the
 Google sign-in (see [Sessions and passwords](#sessions-and-passwords)). If you
-signed up with a password and want to keep it, verify your address before you
-first sign in with Google.
+signed up with a password and want to keep it, verify your address (signed in
+to that account) before you first sign in with Google.
 
 Upgrading to this release (migration `20260925_000033`) counts accounts that
 are linked to Google or were provisioned with `scripts/create_admin.py` as
@@ -345,11 +384,12 @@ before you ever use the service, and keep a session open. If Google sign-in
 simply merged into that account, the attacker's password and session would
 keep working in the account you then fill with your research. Clearing an
 unverified password and revoking every session removes both: from the moment
-Google vouches for you, only you can get in. A verified password was set by
-someone who could read the mailbox, the same person Google vouches for, so it
-stays. An account linked to another Google identity is never merged, because a
-second identity already claims it. Researches the squatter created before stay
-in the account; delete any you do not recognize.
+Google vouches for you, only you can get in. A verified password belongs to
+someone who could read the mailbox (a reset link, or a verification link
+redeemed in that account's own session), the same person Google vouches for,
+so it stays. An account linked to another Google identity is never merged,
+because a second identity already claims it. Researches the squatter created
+before stay in the account; delete any you do not recognize.
 
 ### Legacy Google accounts
 
