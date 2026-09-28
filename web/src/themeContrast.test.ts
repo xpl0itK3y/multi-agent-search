@@ -71,4 +71,42 @@ describe("theme contrast", () => {
     }
     expect(failures).toEqual([]);
   });
+
+  it("the accent focus ring is at least 3:1 on every surface", () => {
+    const failures: string[] = [];
+    for (const [name, p] of Object.entries(THEMES)) {
+      for (const base of BASES) {
+        const r = ratio(p["c-accent"], p[base]);
+        if (r < 3) failures.push(`${name}: ring on ${base} = ${r.toFixed(2)}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("a focused field host border is at least 3:1 and differs from its hover border", () => {
+    const rule = css.match(/\n\.field-host:has\(\.field-bare:focus\) {([^}]*)}/);
+    const alpha = Number(rule?.[1].match(/border-color: rgb\(var\(--c-accent\) \/ ([\d.]+)\)/)?.[1]);
+    expect(alpha).toBeGreaterThan(0);
+    // A halo marks focus as well as the border, so a hovered row never looks focused.
+    expect(rule?.[1]).toMatch(/box-shadow: 0 0 0 3px rgb\(var\(--c-accent\)/);
+    const failures: string[] = [];
+    for (const [name, p] of Object.entries(THEMES)) {
+      for (const base of ["c-bg", "c-surface"]) {
+        const r = ratio(over(p["c-accent"], p[base], alpha), p[base]);
+        if (r < 3) failures.push(`${name}: focused host on ${base} = ${r.toFixed(2)}`);
+      }
+      // PlanCard rows hover to border-accent/40.
+      const apart = ratio(over(p["c-accent"], p["c-surface"], alpha), over(p["c-accent"], p["c-surface"], 0.4));
+      if (apart < 2) failures.push(`${name}: focus vs hover border = ${apart.toFixed(2)}`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("checkboxes, radios and sliders get the solid accent ring", () => {
+    expect(css).toMatch(
+      /input:is\(\[type="checkbox"\], \[type="radio"\], \[type="range"\]\):focus-visible {\s*outline: 2px solid rgb\(var\(--c-accent\)\);/,
+    );
+    // It has to come after the field rule, which makes the outline transparent.
+    expect(css.indexOf('input:is([type="checkbox"]')).toBeGreaterThan(css.indexOf(":is(input, textarea, select):focus-visible"));
+  });
 });

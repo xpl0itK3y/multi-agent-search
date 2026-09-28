@@ -479,13 +479,26 @@ select {
   border-color: rgb(var(--c-accent));
   box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.22);
 }
-/* A borderless field inside a bordered box: the box (.field-host) shows the focus. */
+/* Checkboxes, radios and sliders have no border to recolour, so they take the button
+   ring: solid accent, ≥3:1 on every surface. */
+input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 2px;
+  box-shadow: none;
+}
+/* A borderless field inside a bordered box: the box (.field-host) shows the focus.
+   Accent/.85 is ≥3:1 on bg and surface in every theme, and with the halo it reads
+   clearly apart from a hover border (accent/40). The halo keeps any elevation. */
 .field-bare:focus-visible {
   box-shadow: none;
   border-color: transparent;
 }
 .field-host:has(.field-bare:focus) {
-  border-color: rgb(var(--c-accent) / 0.45);
+  border-color: rgb(var(--c-accent) / 0.85);
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18), var(--tw-shadow, 0 0 #0000);
+}
+.material-float.field-host:has(.field-bare:focus) {
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18), var(--elev-2);
 }
 @media (forced-colors: active) {
   :focus-visible {
