@@ -121,12 +121,10 @@ class FooAgent:
     - Sources: `AnalyzerAgent.SOURCE_HEADING_PATTERN`, `SOURCE_HEADING_LINE_PATTERN` and `report_critic._SOURCES_HEADING`;
     - Report Notes: `REPORT_NOTES_HEADING_PATTERN`, `FinalizeGraphRunner._report_needs_retry` and `report_utils._NOTES_SECTION`;
     - Conflicts: `CONFLICT_HEADING_PATTERN`.
-- **Prompt injection.** Every prompt that includes scraped or source text must say that the content is untrusted data, not instructions. `tests/test_prompt_injection_defense.py` checks only the analyzer's system, section and synthesis prompts and chat (citation repair reuses the analyzer system prompt). These lack the clause today; add it when you touch them:
-  - the red-team extract and judge prompts (`_EXTRACT_SYSTEM`, `_JUDGE_SYSTEM`);
-  - stance;
-  - cross-language (the plan and surface prompts);
-  - comparison;
-  - the analyzer's editor and translator prompts.
+- **Prompt injection.** Every prompt that includes scraped or source text, or a report (which quotes its sources), must say that the content is untrusted data, not instructions. `tests/test_prompt_injection_defense.py` lists every such prompt: the analyzer's system, section, synthesis, conflict-adjudication, editor and translator prompts, chat, both red-team prompts, stance, comparison and cross-language `surface`. Citation repair reuses the analyzer system prompt.
+  - A new prompt of this kind goes into that list.
+  - Keep it a module or class constant, so the test can read it (the translator and `surface` prompts were moved out of their methods for this).
+  - Prompts that see only the user's own question (cross-language `plan`, clarifier, orchestrator, replan) need no clause.
 - **Depth.**
   - Search: EASY/MEDIUM/HARD = 2/4/6 tasks × 8/16/24 sources (`search_depth_profiles.py`).
   - Analyzer pool: 15/60/120 sources within a 15k/70k/140k-character budget. `test_writer_medium` pins the pool sizes and at least 900 characters per source, not the exact budgets.
@@ -174,8 +172,8 @@ class FooAgent:
 **Changing a prompt:**
 - Where prompts live:
   - class constants: `AnalyzerAgent.SYSTEM_PROMPT` and the section, synthesis, editor and conflict-adjudication prompts; the orchestrator, optimizer and chat system prompts;
-  - module constants in the other agents (`_SYSTEM`, or named ones like red team's `_EXTRACT_SYSTEM` / `_JUDGE_SYSTEM`);
-  - `_build_*_prompt` builders, and prompts built inline (cross-language, the analyzer's translator).
+  - module constants in the other agents (`_SYSTEM`, or named ones like red team's `_EXTRACT_SYSTEM` / `_JUDGE_SYSTEM` and cross-language's `_SURFACE_SYSTEM`), plus `AnalyzerAgent.TRANSLATOR_SYSTEM_PROMPT`;
+  - `_build_*_prompt` builders, and the one still built inline (cross-language `plan`).
 - Tests that pin prompt text:
   - `test_prompt_injection_defense`;
   - `test_app_logic.py`: the exact phrases about inline `[S1]` citations and preferring primary sources;
@@ -203,7 +201,7 @@ class FooAgent:
 - **Fallback.** `src/core/rust_accel.py` imports it once. Every function has a pure-Python fallback, and **the fallback is what production and the Python tests run**: the Dockerfile and CI never build the extension.
 - **Build.** `scripts/build_native_module.sh` (maturin; set `VENV_PYTHON`).
 - **CI.** The CI job only runs `cargo test`. Parity between the Rust and Python paths is barely tested (conflict reason strings in `test_report_postprocess.py`). Watch byte vs character lengths in Rust.
-- **Duplicated tokens.** `rust_accel._search_config` has its own copy of the low-signal tokens in `SearchAgent.LOW_SIGNAL_*`, and the two have **already drifted** (`amazon.`, `aliexpress.`, `/dp/` and others are only in SearchAgent). Change both, and reconcile them when you touch either. The config helpers are `lru_cache`d.
+- **One copy of the scoring lists.** The domain lists and the candidate token lists (`LOW_SIGNAL_*`, `STRONG_RESULT_TOKENS`) live in `src/core/domain_policy.py`. `SearchAgent` and the `rust_accel` search config read both; `AnalyzerAgent` and the analyzer config read the domain lists; and `tests/test_domain_policy_low_value.py` fails on a local copy or on a token that would drop a gold-cited source. Other lists in `rust_accel._search_config` (the docs tokens) are still local. The config helpers are `lru_cache`d, so a running process keeps the old values.
 
 ## Pitfalls
 

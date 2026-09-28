@@ -181,6 +181,25 @@ def test_delete_research_cascades_tasks(store):
     assert store.delete_research(record.id) is False
 
 
+def test_delete_research_cascades_its_jobs(store):
+    record = _research(store)
+    task = _task(store, research_id=record.id)
+    store.set_research_task_ids(record.id, [task.id])
+    search_job = store.add_search_task_job(task.id, "easy")
+    finalize_job = store.add_research_finalize_job(record.id)
+    other = _research(store, prompt="another topic")
+    kept = store.add_research_finalize_job(other.id)
+
+    assert store.delete_research(record.id) is True
+
+    # The SQL cascades (search job via its task, finalize job via its research): nothing
+    # of the deleted research stays listable or claimable.
+    assert store.get_search_task_job(search_job.id) is None
+    assert store.get_research_finalize_job(finalize_job.id) is None
+    assert store.claim_next_search_task_job() is None
+    assert store.get_research_finalize_job(kept.id) is not None
+
+
 def test_list_researches_scopes_to_owner(store):
     mine = _research(store, user_id="owner-1", prompt="my topic")
     _research(store, user_id="owner-2", prompt="their topic")

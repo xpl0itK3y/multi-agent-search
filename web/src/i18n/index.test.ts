@@ -50,16 +50,36 @@ describe("i18n", () => {
     expect([1, 2].map((n) => g.t("plan.items", n))).toEqual(["1 item", "2 items"]);
   });
 
-  it("resolves every ru key to a non-empty string in every locale", () => {
-    const keys = flatKeys(g.getLocaleMessage("ru") as Record<string, unknown>);
-    expect(keys.length).toBeGreaterThan(0);
+  // The raw messages, not t(): t() falls back to en for a missing string, which would hide it.
+  function leaves(obj: Record<string, unknown>, prefix = ""): [string, unknown][] {
+    return Object.entries(obj).flatMap(([k, v]) =>
+      v && typeof v === "object"
+        ? leaves(v as Record<string, unknown>, `${prefix}${k}.`)
+        : [[`${prefix}${k}`, v] as [string, unknown]],
+    );
+  }
+
+  const raw = (locale: string) => new Map(leaves(g.getLocaleMessage(locale) as Record<string, unknown>));
+
+  it("has a non-empty string for every key in every locale", () => {
     for (const { value } of LOCALES) {
-      g.locale.value = value;
-      for (const key of keys) {
-        const text = g.t(key);
-        expect(`${value}:${key}`, `${value} ${text}`).not.toBe("");
-        expect(typeof text).toBe("string");
-      }
+      const entries = [...raw(value)];
+      expect(entries.length).toBeGreaterThan(300);
+      const empty = entries.filter(([, text]) => typeof text !== "string" || !text.trim()).map(([key]) => key);
+      expect({ locale: value, empty }).toEqual({ locale: value, empty: [] });
     }
+  });
+
+  it("gives every ru plural its three forms, and makes it a plural in en and es too", () => {
+    // ruPluralRule picks among exactly three forms (one | few | many); en and es take two or three.
+    const forms = (text: unknown) => String(text).split("|").length;
+    const ru = raw("ru");
+    const plurals = [...ru].filter(([, text]) => forms(text) > 1).map(([key]) => key);
+    expect(plurals.length).toBeGreaterThan(0);
+    const wrong = plurals.flatMap((key) => [
+      ...(forms(ru.get(key)) === 3 ? [] : [`ru:${key}`]),
+      ...(["en", "es"] as const).filter((loc) => forms(raw(loc).get(key)) < 2).map((loc) => `${loc}:${key}`),
+    ]);
+    expect(wrong).toEqual([]);
   });
 });

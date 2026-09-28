@@ -495,6 +495,13 @@ class InMemoryTaskStore:
         task_ids = [tid for tid, t in self.tasks.items() if t.research_id == research_id]
         for tid in task_ids:
             del self.tasks[tid]
+        # Like the SQL cascades: finalize jobs go with their research, search jobs with
+        # their task. Left behind, they stayed listable and a worker could still claim them.
+        for job_id in [job_id for job_id, job in self.finalize_jobs.items() if job.research_id == research_id]:
+            del self.finalize_jobs[job_id]
+        gone = set(task_ids)
+        for job_id in [job_id for job_id, job in self.search_jobs.items() if job.task_id in gone]:
+            del self.search_jobs[job_id]
         # llm_usage_logs.research_id is SET NULL: the spend stays, unattributed.
         for usage in self.llm_usage_logs:
             if usage["research_id"] == research_id:

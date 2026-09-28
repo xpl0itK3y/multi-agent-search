@@ -50,7 +50,10 @@ description: Conventions for changing the Vue 3 + TypeScript + Tailwind SPA in w
   - Plurals use `|`. **ru has three forms** (`"{n} пункт | {n} пункта | {n} пунктов"`), en and es have two. Call `$t("plan.items", count)`.
 - **Usage.** `$t()` in templates, `const { t } = useI18n()` in script, `i18n.global.t` outside components. Guard dynamic keys with `te()`.
 - **Guards:**
-  - `src/i18n/index.test.ts`: key parity across the three locales. Its non-empty check is a no-op, and its plural check covers only `plan.items`. Check for empty strings and the three ru plural forms yourself.
+  - `src/i18n/index.test.ts`:
+    - key parity across the three locales;
+    - a non-empty string for every key in every locale (read from the raw messages, since `t()` would fall back to en);
+    - three forms for every ru plural, and a plural for the same key in en and es.
   - `src/sourceGuards.test.ts` checks that every literal key used in `*.vue`, `stores/*.ts` and `lib/*.ts` exists, and rejects **Cyrillic inside `<template>`**. Every visible string goes through i18n.
   - sourceGuards skips `router/*.ts`. Instead, `router/index.test.ts` checks that every `titleKey` exists in ru.
 - **Server errors.** `apiErrorMessage(e, t)` tries these in order:
