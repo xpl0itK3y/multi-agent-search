@@ -280,8 +280,11 @@ function startPinch() {
   const ids = [...pointers.keys()].slice(-2) as [number, number];
   const a0 = pointers.get(ids[0])!;
   const b0 = pointers.get(ids[1])!;
-  // A second finger turns whatever the first one was doing into a pinch.
+  // A second finger turns whatever the first one was doing into a pinch. Ending a pan
+  // may start its settle; the pinch takes over from where the canvas is on screen.
   if (gesture) endGesture();
+  stopGlides();
+  settleView();
   ids.forEach(capturePointer);
   gesture = { kind: "pinch", ids, view0: { zoom: zoom.value, panX: panX.value, panY: panY.value }, a0, b0 };
   pinching.value = true;
@@ -394,9 +397,10 @@ function onPointerUp(e: PointerEvent) {
   if (e.type === "pointerup") pointers.set(e.pointerId, localPoint(e));
   const g = gesture;
   if (g?.kind === "pinch") {
-    pointers.delete(e.pointerId);
-    // Down to one finger: the pinch ends, and the remaining finger doesn't start a pan.
+    // Down to one finger: the pinch ends (its last frame applied while both fingers
+    // still count), and the remaining finger doesn't start a pan.
     if (g.ids.includes(e.pointerId)) endGesture();
+    pointers.delete(e.pointerId);
     return;
   }
   if (g && g.pointerId === e.pointerId) endGesture(e.type === "pointerup");

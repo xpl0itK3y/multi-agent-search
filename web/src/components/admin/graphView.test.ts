@@ -777,3 +777,57 @@ describe("AgentsGraphTab inspector panel", () => {
     expect(panel().attributes("aria-hidden")).toBe("true");
   });
 });
+
+describe("AgentsGraphTab pinch", () => {
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([agent("clarifier")]);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.restoreAllMocks();
+  });
+
+  const finger = (id: number, type: string, x: number, y = 300) =>
+    viewport().trigger(type, pointer(type, x, y, { pointerType: "touch", pointerId: id, buttons: type === "pointerup" ? 0 : 1 }));
+  const view = () => {
+    const m = /translate\((-?[\d.e-]+)px, (-?[\d.e-]+)px\) scale\(([\d.e-]+)\)/.exec(worldTransform())!;
+    return { panX: Number(m[1]), panY: Number(m[2]), zoom: Number(m[3]) };
+  };
+
+  it("zooms with the finger spread around the fingers' midpoint", async () => {
+    await mountGraph();
+    const v0 = view();
+    const w = toWorld(v0, { x: 300, y: 300 });
+    await finger(1, "pointerdown", 250);
+    await finger(2, "pointerdown", 350);
+    await finger(2, "pointermove", 400);
+    await finger(1, "pointermove", 200);
+    // Lifting one finger ends the pinch (and applies its last frame); no pan follows.
+    await finger(2, "pointerup", 400);
+    const v1 = view();
+    close(v1.zoom, v0.zoom * 2, 6);
+    const under = toWorld(v1, { x: 300, y: 300 });
+    close(under.x, w.x, 3);
+    close(under.y, w.y, 3);
+
+    await finger(1, "pointermove", 50);
+    await finger(1, "pointerup", 50);
+    expect(view()).toEqual(v1);
+  });
+
+  it("takes over a pan without a transition in between", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    await mountGraph();
+    await finger(1, "pointerdown", 100);
+    await finger(1, "pointermove", 3000); // far into the rubber band
+    await finger(2, "pointerdown", 3100);
+    expect(wrapper!.find(".origin-top-left").classes()).not.toContain("duration-200");
+    await finger(2, "pointerup", 3100);
+    await finger(1, "pointerup", 3000);
+  });
+});
