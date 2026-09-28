@@ -632,3 +632,62 @@ describe("AgentsGraphTab soft limits and glide", () => {
     close(panXShown(), maxPanX(0.55), 0);
   });
 });
+
+describe("AgentsGraphTab frame cost and reduced motion", () => {
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([agent("clarifier")]);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(window, "matchMedia");
+  });
+
+  function emulateReducedMotion(reduce: boolean) {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({
+        matches: reduce && query.includes("prefers-reduced-motion"),
+        media: query,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+  }
+
+  async function startWalkthrough() {
+    const play = wrapper!.findAll("button").find((b) => b.attributes("title") === i18n.global.t("admin.agents.startSim"))!;
+    await play.trigger("click");
+  }
+
+  it("draws travelling particles on the walkthrough's active wires", async () => {
+    emulateReducedMotion(false);
+    await mountGraph();
+    await startWalkthrough();
+    expect(wrapper!.findAll("circle").length).toBeGreaterThan(0);
+    expect(wrapper!.find(".animate-n8n-wire").exists()).toBe(true);
+  });
+
+  it("renders no SMIL particles and no wire animation under reduced motion", async () => {
+    emulateReducedMotion(true);
+    await mountGraph();
+    await startWalkthrough();
+    expect(wrapper!.findAll("circle")).toHaveLength(0);
+    expect(wrapper!.find(".animate-n8n-wire").exists()).toBe(false);
+  });
+
+  it("promotes the world to its own layer only while it moves, and blurs no node", async () => {
+    await mountGraph();
+    const world = () => wrapper!.find(".origin-top-left");
+    expect(world().classes()).not.toContain("will-change-transform");
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 100));
+    expect(world().classes()).toContain("will-change-transform");
+    await viewport().trigger("pointerup", pointer("pointerup", 100, 100));
+    expect(world().classes()).not.toContain("will-change-transform");
+    expect(wrapper!.find(".interactive-node .backdrop-blur").exists()).toBe(false);
+  });
+});

@@ -494,6 +494,12 @@ function restartWheelSequence() {
   }, WHEEL_SEQUENCE_MS);
 }
 
+// A compositor layer for the world only while it moves: a permanent one would be
+// rasterised once and scaled, blurring the node text after a zoom (§11).
+const isMoving = computed(
+  () => isPanning.value || pinching.value || draggingNodeId.value !== null || isWheeling.value || isGliding.value,
+);
+
 // Button-driven changes glide for 200 ms on the emphasized curve (no bounce: a button
 // carries no momentum). Wheel, drag and pinch stay 1:1, with no transition at all.
 const VIEW_ANIMATION_MS = 200;
@@ -1903,7 +1909,10 @@ function isNodeDimmed(nodeId: string): boolean {
       <div
         ref="worldRef"
         class="absolute origin-top-left"
-        :class="isAnimatingView ? 'transition-transform duration-200 ease-emphasized' : 'transition-none'"
+        :class="[
+          isAnimatingView ? 'transition-transform duration-200 ease-emphasized' : 'transition-none',
+          { 'will-change-transform': isMoving },
+        ]"
         :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '7400px', height: '850px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
@@ -2018,7 +2027,7 @@ function isNodeDimmed(nodeId: string): boolean {
               :stroke-dasharray="edge.isReturn ? (edge.isActive ? '5,4' : '6,4') : (edge.isActive ? '7,7' : 'none')"
               :class="[
                 draggingNodeId !== null ? 'transition-none' : 'transition-[stroke,stroke-width] duration-150',
-                { 'animate-n8n-wire': edge.isActive }
+                { 'animate-n8n-wire': edge.isActive && !reducedMotion }
               ]"
               :marker-end="!edge.isReturn ? `url(#${
                 edge.isActive
@@ -2033,8 +2042,9 @@ function isNodeDimmed(nodeId: string): boolean {
             />
 
             <!-- Animated Traveling Particle along active simulation wires -->
+            <!-- SMIL: CSS can't stop it, so under reduced motion it isn't rendered at all. -->
             <circle
-              v-if="edge.isActive"
+              v-if="edge.isActive && !reducedMotion"
               r="4.5"
               :fill="edge.isReturn ? '#fda4af' : '#38bdf8'"
               filter="url(#n8n-glow)"
@@ -2128,7 +2138,7 @@ function isNodeDimmed(nodeId: string): boolean {
           <!-- Node Card Container: the wrapper above carries the position and never
                animates; this card shows press (a dip), lift (while dragged) and state. -->
           <div
-            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-md backdrop-blur transition-[border-color,box-shadow,opacity,transform]"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-e2 transition-[border-color,box-shadow,opacity,transform]"
             :class="[isNodeDimmed(node.id) ? 'opacity-30' : 'opacity-100', nodeCardState(node.id)]"
           >
             <!-- Left Input Port (Handle) -->
@@ -2177,7 +2187,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Return Capability Badge (Critics / Loop Nodes) -->
             <div
               v-if="hasReturnCapability(node.id)"
-              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-400 shadow backdrop-blur transition-transform hover:scale-105 cursor-help"
+              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-400 shadow transition-transform hover:scale-105 cursor-help"
               :title="getReturnCapabilityTooltip(node.id)"
             >
               <span class="text-[9px]">↩</span>
@@ -2218,7 +2228,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div
               v-if="node.llmModel && zoom >= 0.45"
-              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm backdrop-blur"
+              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm"
             >
               <span class="text-accent text-[7px]">◆</span>
               <span>{{ node.llmModel }}</span>
@@ -2239,7 +2249,7 @@ function isNodeDimmed(nodeId: string): boolean {
     <!-- Floating Simulation Walkthrough Banner ("How they work") -->
     <div
       v-if="isSimulating || currentStepIndex > 0"
-      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
+      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-e2"
     >
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd/60 pb-3">
         <div class="flex items-center gap-2">
