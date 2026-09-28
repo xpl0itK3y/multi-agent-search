@@ -1,16 +1,97 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
+import { confirm } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
 import { safeHttpUrl } from "@/lib/url";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, ShareInfo, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
 import ReportSkeletonCanvas from "./ReportSkeletonCanvas.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
+
+// Declared before every watcher: the immediate isFinal watcher below reads `t` and the
+// share state, and a `const` read before its line throws (a TDZ ReferenceError).
+const { t, te } = useI18n();
+
+// ── public share link ─────────────────────────────────────────────────────────
+// Private by default: opening the popover only shows the state. A link is created by
+// the explicit Create button, and revoking asks first, because it breaks the link for
+// everyone it was sent to. Share errors stay inside the popover, next to the action.
+const share = ref<ShareInfo | null>(null);
+const shareMenuOpen = ref(false);
+const shareCopied = ref(false);
+const shareBusy = ref(false);
+const shareError = ref<string | null>(null);
+const shareRevoked = ref(false);
+const shareUrl = computed(() => (share.value?.token ? `${window.location.origin}/r/${share.value.token}` : ""));
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(copiedTimer));
+
+async function ensureShare() {
+  if (share.value) return;
+  try {
+    share.value = await api.getShare(props.id);
+  } catch {
+    /* share state is optional — the popover still offers Create */
+  }
+}
+function toggleShareMenu() {
+  shareMenuOpen.value = !shareMenuOpen.value;
+  if (shareMenuOpen.value) {
+    shareError.value = null;
+    shareRevoked.value = false;
+  }
+}
+async function createShare() {
+  if (shareBusy.value) return;
+  shareBusy.value = true;
+  shareError.value = null;
+  shareRevoked.value = false;
+  try {
+    share.value = await api.createShare(props.id);
+  } catch (e) {
+    shareError.value = apiErrorMessage(e, t);
+  } finally {
+    shareBusy.value = false;
+  }
+}
+async function copyShare() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareCopied.value = true;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (shareCopied.value = false), 1500);
+  } catch {
+    /* clipboard blocked — the field is selectable as a fallback */
+  }
+}
+async function revokeShare() {
+  if (shareBusy.value) return;
+  const ok = await confirm({
+    title: t("share.revoke"),
+    message: t("share.revokeConfirm"),
+    confirmText: t("share.revoke"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
+  if (!ok) return;
+  shareBusy.value = true;
+  shareError.value = null;
+  try {
+    share.value = await api.revokeShare(props.id);
+    shareCopied.value = false;
+    shareRevoked.value = true;
+  } catch (e) {
+    shareError.value = apiErrorMessage(e, t);
+  } finally {
+    shareBusy.value = false;
+  }
+}
 
 type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
 const tab = ref<Tab>("report");
@@ -317,49 +398,6 @@ const bandClass: Record<string, string> = {
   speculative: "bg-red-400",
 };
 
-
-// ── public share link ─────────────────────────────────────────────────────────
-const share = ref<import("@/lib/types").ShareInfo | null>(null);
-const shareMenuOpen = ref(false);
-const shareCopied = ref(false);
-const shareUrl = computed(() => (share.value?.token ? `${window.location.origin}/r/${share.value.token}` : ""));
-async function ensureShare() {
-  if (share.value) return;
-  try {
-    share.value = await api.getShare(props.id);
-  } catch {
-    /* share is optional */
-  }
-}
-async function toggleShareMenu() {
-  shareMenuOpen.value = !shareMenuOpen.value;
-  if (shareMenuOpen.value && !share.value?.shared) {
-    try {
-      share.value = await api.createShare(props.id);
-    } catch (e) {
-      error.value = apiErrorMessage(e, t);
-    }
-  }
-}
-async function copyShare() {
-  if (!shareUrl.value) return;
-  try {
-    await navigator.clipboard.writeText(shareUrl.value);
-    shareCopied.value = true;
-    setTimeout(() => (shareCopied.value = false), 1500);
-  } catch {
-    /* clipboard blocked — the field is selectable as a fallback */
-  }
-}
-async function revokeShare() {
-  try {
-    share.value = await api.revokeShare(props.id);
-    shareMenuOpen.value = false;
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  }
-}
-
 const tabKeys = computed<Tab[]>(() => {
   const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
   // The comparison tab only appears when the query actually produced a table.
@@ -388,7 +426,6 @@ const levelClass: Record<string, string> = {
   weak: "text-red-400 border-red-400/40",
 };
 
-const { t, te } = useI18n();
 function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
@@ -462,29 +499,48 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             class="absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-bd bg-surface p-3.5 text-xs shadow-xl backdrop-blur-md"
           >
             <div class="mb-1 font-semibold text-ink text-xs">{{ $t("share.title") }}</div>
-            <p class="mb-2 text-muted leading-relaxed text-[11px]">{{ $t("share.desc") }}</p>
-            <div class="flex items-center gap-1.5">
-              <input
-                :value="shareUrl"
-                readonly
-                class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1.5 text-ink text-xs focus:outline-none focus:border-accent font-mono select-all"
-                @focus="($event.target as HTMLInputElement).select()"
-              />
+            <p class="mb-2 text-muted leading-relaxed text-2xs">{{ $t("share.desc") }}</p>
+            <template v-if="share && share.shared">
+              <div class="flex items-center gap-1.5">
+                <input
+                  :value="shareUrl"
+                  readonly
+                  :aria-label="$t('share.title')"
+                  class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1.5 text-ink text-xs font-mono select-all"
+                  @focus="($event.target as HTMLInputElement).select()"
+                />
+                <button
+                  class="press shrink-0 rounded-md border border-bd px-2.5 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80"
+                  @click="copyShare"
+                >
+                  {{ shareCopied ? "✓" : $t("share.copy") }}
+                </button>
+              </div>
+              <div class="mt-2.5 pt-2 border-t border-bd/40 flex items-center justify-between">
+                <button
+                  class="text-xs text-danger hover:text-danger/80 hover:underline disabled:opacity-50"
+                  :disabled="shareBusy"
+                  @click="revokeShare"
+                >
+                  {{ $t("share.revoke") }}
+                </button>
+                <span v-if="shareCopied" role="status" class="text-2xs text-success font-medium">
+                  {{ $t("share.copied") }}
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <p v-if="shareRevoked" role="status" class="mb-2 text-2xs text-muted">{{ $t("share.revoked") }}</p>
               <button
-                class="shrink-0 rounded-md border border-bd px-2.5 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
-                @click="copyShare"
+                class="press rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-onAccent disabled:opacity-60"
+                :disabled="shareBusy"
+                :aria-busy="shareBusy"
+                @click="createShare"
               >
-                {{ shareCopied ? "✓" : $t("share.copy") }}
+                {{ shareBusy ? "…" : $t("share.create") }}
               </button>
-            </div>
-            <div class="mt-2.5 pt-2 border-t border-bd/40 flex items-center justify-between">
-              <button class="text-xs text-red-400 hover:text-red-300 hover:underline transition" @click="revokeShare">
-                {{ $t("share.revoke") }}
-              </button>
-              <span v-if="shareCopied" class="text-[10px] text-emerald-400 font-medium">
-                {{ $t("share.copied") }}
-              </span>
-            </div>
+            </template>
+            <p v-if="shareError" role="alert" class="mt-2 text-2xs text-danger">{{ shareError }}</p>
           </div>
         </div>
       </div>
