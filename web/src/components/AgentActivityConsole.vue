@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
+import { prefersReducedMotion } from "@/lib/motion";
 import { traceKey } from "@/lib/trace";
 import { safeHttpUrl } from "@/lib/url";
 import { useStickToBottom } from "@/lib/useStickToBottom";
@@ -414,6 +415,48 @@ function entryState(entry: TraceEntry): EntryState {
   return props.live ? "running" : "done";
 }
 
+// The journal body opens and closes on its real height, at one speed both ways (§7),
+// and a toggle mid-way reverses from the height on screen (§3). The live value is read
+// when the next hook starts: Vue has already hidden a v-show element by the time it
+// reports a cancelled leave, so its height would read 0 there. The interrupted
+// animation is still applied at that moment, so the element shows where it was.
+const EXPAND_MS = 280;
+const EXPAND_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
+let expandAnim: Animation | null = null;
+
+function animateBody(el: Element, opening: boolean, done: () => void) {
+  const node = el as HTMLElement;
+  const interrupted = expandAnim;
+  expandAnim = null;
+  if (typeof node.animate !== "function" || prefersReducedMotion()) {
+    interrupted?.cancel();
+    node.style.overflow = "";
+    done();
+    return;
+  }
+  const fromHeight = interrupted || !opening ? node.getBoundingClientRect().height : 0;
+  const fromOpacity = interrupted ? Number(getComputedStyle(node).opacity) : opening ? 0 : 1;
+  interrupted?.cancel();
+  const toHeight = opening ? node.offsetHeight : 0; // measured without the old animation
+  node.style.overflow = "hidden";
+  const anim = node.animate(
+    [
+      { height: `${fromHeight}px`, opacity: fromOpacity },
+      { height: `${toHeight}px`, opacity: opening ? 1 : 0 },
+    ],
+    { duration: EXPAND_MS, easing: EXPAND_EASE },
+  );
+  expandAnim = anim;
+  anim.onfinish = () => {
+    if (expandAnim === anim) expandAnim = null;
+    node.style.overflow = "";
+    done();
+  };
+}
+const onBodyEnter = (el: Element, done: () => void) => animateBody(el, true, done);
+const onBodyLeave = (el: Element, done: () => void) => animateBody(el, false, done);
+onBeforeUnmount(() => expandAnim?.cancel());
+
 function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
 }
@@ -486,10 +529,15 @@ function formatTime(isoStr?: string): string {
           <button
             class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap sm:min-w-[7.75rem]"
             :title="open ? t('console.collapse') : t('console.expand')"
+            :aria-expanded="open"
             @click="toggleOpen"
           >
             <span class="tabular-nums">{{ open ? t("console.collapse") : t("console.journal", { n: entries.length }) }}</span>
-            <span class="text-3xs">{{ open ? "▾" : "▸" }}</span>
+            <span
+              class="text-3xs transition-transform duration-200 motion-reduce:transition-none"
+              :class="open && 'rotate-90'"
+              aria-hidden="true"
+            >▸</span>
           </button>
         </div>
       </div>
@@ -544,7 +592,7 @@ function formatTime(isoStr?: string): string {
     </template>
 
     <!-- EXPANDABLE DETAILS BODY (State preserved across collapse/expand) -->
-    <Transition name="console-expand">
+    <Transition name="console-expand" :css="false" @enter="onBodyEnter" @leave="onBodyLeave">
       <div v-show="open" class="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
         <!-- LIVE SYNTHESIS DEEP PROGRESS CARD -->
         <div
@@ -826,17 +874,5 @@ function formatTime(isoStr?: string): string {
 }
 .feed-item-move {
   transition: transform 260ms var(--ease-emph);
-}
-
-.console-expand-enter-active,
-.console-expand-leave-active {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  overflow: hidden;
-}
-.console-expand-enter-from,
-.console-expand-leave-to {
-  opacity: 0;
-  max-height: 0;
-  transform: translateY(-6px);
 }
 </style>
