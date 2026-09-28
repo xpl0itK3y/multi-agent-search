@@ -2,10 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi, apiErrorMessage } from "@/lib/api";
+import { createVelocityTracker, decay, springTo, type Animation, type VelocityTracker } from "@/lib/gesture";
+import { useReducedMotion } from "@/lib/motion";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
 import {
   boundsOf,
+  clampPan,
+  clampPanSoft,
   fitBounds,
   limitPan,
   panRange,
@@ -19,6 +23,7 @@ import {
   type Point,
   type Size,
   type View,
+  unclampPanSoft,
 } from "./graphView";
 
 const { t, te } = useI18n();
@@ -60,7 +65,17 @@ const canvasViewportRef = ref<HTMLElement | null>(null);
 // released outside the window or leaving the window all end the gesture, so the canvas
 // can never be left "stuck" panning.
 type Gesture =
-  | { kind: "pan"; pointerId: number; start: Point; pan0: Point }
+  | {
+      kind: "pan";
+      pointerId: number;
+      pointerType: string;
+      start: Point;
+      // The raw (finger) pan at the start; what's shown is its soft-clamped value.
+      pan0: Point;
+      range: PanRange | null;
+      size: Size;
+      tracker: VelocityTracker;
+    }
   | {
       kind: "node";
       pointerId: number;
@@ -119,6 +134,10 @@ function flushFrame() {
 
 function applyFrame() {
   frameId = 0;
+  // A glide's latest values: both axes land in one write, one render per frame.
+  if (glideTarget.x !== null) panX.value = glideTarget.x;
+  if (glideTarget.y !== null) panY.value = glideTarget.y;
+  glideTarget.x = glideTarget.y = null;
   const g = gesture;
   if (!g) return;
   if (g.kind === "pinch") {
@@ -141,8 +160,118 @@ function applyFrame() {
     pos.y = Math.max(10, Math.min(850, Math.round(g.node0.y + (p.y - g.start.y) / zoom.value)));
     return;
   }
-  panX.value = g.pan0.x + (p.x - g.start.x);
-  panY.value = g.pan0.y + (p.y - g.start.y);
+  // Past the soft limits the canvas follows less and less (§9), never a hard stop.
+  const rawX = g.pan0.x + (p.x - g.start.x);
+  const rawY = g.pan0.y + (p.y - g.start.y);
+  panX.value = g.range ? clampPanSoft(rawX, g.range.minX, g.range.maxX, g.size.w) : rawX;
+  panY.value = g.range ? clampPanSoft(rawY, g.range.minY, g.range.maxY, g.size.h) : rawY;
+}
+
+// ── Release: settle, or glide (§5, §6, §9) ─────────────────────────────────────
+// Letting go of a canvas pulled past its limits brings it back; a touch flick glides on
+// with the finger's velocity and slows like a scroll, and if the glide runs into a
+// limit it springs back to it (critically damped, taking the glide's velocity). A new
+// press stops any of this where it is on screen, and the drag carries on from there.
+const FLICK_PX_S = 300;
+const DECAY_RATE = 0.998;
+const SETTLE_RESPONSE = 0.4;
+const reducedMotion = useReducedMotion();
+const glideTarget: { x: number | null; y: number | null } = { x: null, y: null };
+const glides: { x: Animation | null; y: Animation | null } = { x: null, y: null };
+const isGliding = ref(false);
+
+function stopGlides() {
+  glides.x?.stop();
+  glides.y?.stop();
+  glides.x = glides.y = null;
+  // What is on screen is the presentation value; a value not yet drawn is dropped.
+  glideTarget.x = glideTarget.y = null;
+  isGliding.value = false;
+}
+
+function glideDone(axis: "x" | "y") {
+  glides[axis] = null;
+  if (!glides.x && !glides.y) isGliding.value = false;
+}
+
+function writeAxis(axis: "x" | "y", value: number) {
+  glideTarget[axis] = value;
+  scheduleFrame();
+}
+
+function springAxis(axis: "x" | "y", from: number, to: number, velocity: number) {
+  glides[axis] = springTo({
+    from,
+    to,
+    velocity,
+    response: SETTLE_RESPONSE,
+    onUpdate: (v) => writeAxis(axis, v),
+    onComplete: () => glideDone(axis),
+  });
+}
+
+// One axis of a released pan: shown value, finger velocity (px/s), limits, viewport size.
+function releaseAxis(axis: "x" | "y", shown: number, velocity: number, min: number, max: number, dim: number, flick: boolean) {
+  const raw = unclampPanSoft(shown, min, max, dim);
+  if (raw < min || raw > max) {
+    // Out in the band: back to the limit. Inside the band the canvas moves at the
+    // band's slope (0.55), so that is the velocity it hands on.
+    springAxis(axis, shown, clampPan(raw, min, max), flick ? velocity * 0.55 : 0);
+    return;
+  }
+  if (!flick) return;
+  let last = raw;
+  let lastT = performance.now();
+  let rawVelocity = velocity;
+  const anim = decay({
+    from: raw,
+    velocity,
+    rate: DECAY_RATE,
+    onUpdate: (x) => {
+      const now = performance.now();
+      if (now > lastT) rawVelocity = ((x - last) / (now - lastT)) * 1000;
+      last = x;
+      lastT = now;
+      if (x < min || x > max) {
+        // The glide ran into a limit: stop it and settle there with its velocity.
+        anim.stop();
+        const edge = clampPan(x, min, max);
+        springAxis(axis, clampPanSoft(x, min, max, dim), edge, rawVelocity * 0.55);
+        return;
+      }
+      writeAxis(axis, x);
+    },
+    onComplete: () => {
+      if (glides[axis] === anim) glideDone(axis);
+    },
+  });
+  glides[axis] = anim;
+}
+
+function releasePan(g: Extract<Gesture, { kind: "pan" }>, released: boolean) {
+  const range = g.range;
+  if (!range) return;
+  const { vx, vy } = released ? g.tracker.velocity(performance.now()) : { vx: 0, vy: 0 };
+  const flick = released && g.pointerType !== "mouse" && Math.hypot(vx, vy) > FLICK_PX_S && !reducedMotion.value;
+  if (!flick) {
+    settleIntoRange();
+    return;
+  }
+  isGliding.value = true;
+  releaseAxis("x", panX.value, vx, range.minX, range.maxX, g.size.w, true);
+  releaseAxis("y", panY.value, vy, range.minY, range.maxY, g.size.h, true);
+  if (!glides.x && !glides.y) isGliding.value = false;
+}
+
+// A mouse release, a slow touch or a pinch that ended out of bounds: the canvas eases
+// back inside (the 200 ms view transition; instant under reduced motion).
+function settleIntoRange() {
+  const range = currentPanRange();
+  if (!range) return;
+  const x = clampPan(panX.value, range.minX, range.maxX);
+  const y = clampPan(panY.value, range.minY, range.maxY);
+  if (x === panX.value && y === panY.value) return;
+  animateView({ zoom: zoom.value, panX: x, panY: y });
 }
 
 function startPinch() {
@@ -162,6 +291,7 @@ function onPointerDown(e: PointerEvent) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   if (!canvasViewportRef.value) return;
   suppressClick = false;
+  stopGlides();
   settleView();
   if (!pointers.size) viewportRect = canvasViewportRef.value.getBoundingClientRect();
   pointers.set(e.pointerId, localPoint(e));
@@ -189,7 +319,19 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
 
-  gesture = { kind: "pan", pointerId: e.pointerId, start: pointers.get(e.pointerId)!, pan0: { x: panX.value, y: panY.value } };
+  const range = currentPanRange();
+  const size = viewportSize();
+  // Grabbed mid-band: continue from the raw pan that shows what is on screen now.
+  const pan0 = range
+    ? {
+        x: unclampPanSoft(panX.value, range.minX, range.maxX, size.w),
+        y: unclampPanSoft(panY.value, range.minY, range.maxY, size.h),
+      }
+    : { x: panX.value, y: panY.value };
+  const tracker = createVelocityTracker();
+  const start = pointers.get(e.pointerId)!;
+  tracker.add(start.x, start.y, performance.now());
+  gesture = { kind: "pan", pointerId: e.pointerId, pointerType: e.pointerType, start, pan0, range, size, tracker };
   capturePointer(e.pointerId);
   isPanning.value = true;
 }
@@ -204,6 +346,7 @@ function onPointerMove(e: PointerEvent) {
   const p = localPoint(e);
   pointers.set(e.pointerId, p);
   const g = gesture;
+  if (g?.kind === "pan" && g.pointerId === e.pointerId) g.tracker.add(p.x, p.y, performance.now());
   if (g?.kind === "node" && !g.dragging) {
     if (g.pointerId !== e.pointerId) return;
     const threshold = g.pointerType === "mouse" ? DRAG_THRESHOLD_MOUSE : DRAG_THRESHOLD_TOUCH;
@@ -220,13 +363,16 @@ function onPointerMove(e: PointerEvent) {
   scheduleFrame();
 }
 
-function endGesture() {
+// released: a real lift of the pointer (pointerup), which may throw the canvas; any
+// other end (cancel, lost capture, blur, a second finger) only settles it.
+function endGesture(released = false) {
   flushFrame();
   const g = gesture;
   gesture = null;
   if (!g) return;
   if (g.kind === "pinch") {
     pinching.value = false;
+    settleIntoRange();
   } else if (g.kind === "node") {
     if (g.dragging) {
       savePositions();
@@ -236,6 +382,7 @@ function endGesture() {
     draggingNodeId.value = null;
   } else {
     isPanning.value = false;
+    releasePan(g, released);
   }
 }
 
@@ -250,7 +397,7 @@ function onPointerUp(e: PointerEvent) {
     if (g.ids.includes(e.pointerId)) endGesture();
     return;
   }
-  if (g && g.pointerId === e.pointerId) endGesture();
+  if (g && g.pointerId === e.pointerId) endGesture(e.type === "pointerup");
   pointers.delete(e.pointerId);
   if (!pointers.size) viewportRect = null;
 }
@@ -298,6 +445,7 @@ function setView(v: View) {
 function onWheel(e: WheelEvent) {
   const el = canvasViewportRef.value;
   if (!el) return;
+  stopGlides();
   settleView();
   const unit = wheelUnit(e.deltaMode, el.clientHeight);
 
@@ -354,6 +502,10 @@ const worldRef = ref<HTMLElement | null>(null);
 let viewAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 
 function animateView(v: View) {
+  if (reducedMotion.value) {
+    setView(v);
+    return;
+  }
   isAnimatingView.value = true;
   setView(v);
   if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
@@ -382,6 +534,7 @@ function settleView() {
 // Quick repeated presses compound from the target (1.2 × 1.2 …); the CSS transition
 // itself retargets from wherever the canvas is on screen.
 function zoomBy(factor: number) {
+  stopGlides();
   const { w, h } = viewportSize();
   animateView(zoomAt(currentView(), factor, { x: w / 2, y: h / 2 }));
 }
@@ -399,6 +552,7 @@ function fitView(animate = true, pad = 48) {
   const size = viewportSize();
   const bbox = contentBounds.value;
   if (!bbox || size.w <= 0 || size.h <= 0) return;
+  stopGlides();
   const v = fitBounds(bbox, size, pad, ZOOM_LIMITS, 1);
   if (animate) animateView(v);
   else setView(v);
@@ -1484,6 +1638,7 @@ onBeforeUnmount(() => {
   if (wheelTimer) clearTimeout(wheelTimer);
   if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
   if (frameId) cancelFrame(frameId);
+  stopGlides();
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("blur", cancelAllGestures);
 });

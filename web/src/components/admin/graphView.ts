@@ -3,6 +3,8 @@
 // view and keeps some world point fixed under a screen point, so zooming, pinching and
 // fitting never make the content drift away from where the reader is looking.
 
+import { rubberband } from "@/lib/gesture";
+
 export interface Point {
   x: number;
   y: number;
@@ -141,4 +143,32 @@ export function wheelUnit(deltaMode: number, pageHeight: number): number {
 export function wheelZoomFactor(deltaY: number, unit = 1): number {
   const d = Math.max(-25, Math.min(25, deltaY * unit));
   return Math.exp(-d * 0.01);
+}
+
+// Soft pan limits (§9): past the limit the canvas follows less and less, as a rubber band
+// (lib/gesture's rubberband(o, d, c) = o·d·c / (d + c·|o|), with its default c).
+const RUBBER_C = 0.55;
+
+/** The pan to show for a raw (finger-driven) pan: 1:1 inside [min, max], banded outside. */
+export function clampPanSoft(raw: number, min: number, max: number, dim: number): number {
+  if (raw < min) return min + rubberband(raw - min, dim, RUBBER_C);
+  if (raw > max) return max + rubberband(raw - max, dim, RUBBER_C);
+  return raw;
+}
+
+/**
+ * The raw pan that clampPanSoft would show as `shown`: grabbing a canvas that is still
+ * out in the band continues from where it is on screen instead of jumping.
+ */
+export function unclampPanSoft(shown: number, min: number, max: number, dim: number): number {
+  const limit = shown < min ? min : shown > max ? max : null;
+  if (limit === null || dim <= 0) return shown;
+  // Invert r = o·d·c / (d + c·|o|):  o = r·d / (c·(d − |r|)).  |r| < d always.
+  const r = Math.max(-dim * 0.999, Math.min(dim * 0.999, shown - limit));
+  return limit + (r * dim) / (RUBBER_C * (dim - Math.abs(r)));
+}
+
+/** The pan inside [min, max] closest to `value` (where a released band settles). */
+export function clampPan(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

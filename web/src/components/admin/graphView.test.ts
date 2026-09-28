@@ -8,12 +8,15 @@ import type { AgentMetadataItem } from "@/lib/types";
 
 import {
   boundsOf,
+  clampPan,
+  clampPanSoft,
   clampZoom,
   fitBounds,
   limitPan,
   panRange,
   pinch,
   toWorld,
+  unclampPanSoft,
   wheelUnit,
   wheelZoomFactor,
   zoomAt,
@@ -485,5 +488,147 @@ describe("AgentsGraphTab wheel, zoom buttons and fit", () => {
     expect(style.backgroundPosition).toBe(`${v.panX}px ${v.panY}px`);
     const g = 20 * v.zoom * (v.zoom < 0.5 ? 2 : 1);
     expect(style.backgroundSize).toBe(`${g}px ${g}px`);
+  });
+});
+
+describe("graphView: soft pan limits", () => {
+  it("is 1:1 inside the range", () => {
+    expect(clampPanSoft(50, -100, 100, 600)).toBe(50);
+    expect(clampPanSoft(-100, -100, 100, 600)).toBe(-100);
+  });
+
+  it("resists more the further past the limit, and never reaches the finger", () => {
+    const a = clampPanSoft(150, -100, 100, 600) - 100;
+    const b = clampPanSoft(300, -100, 100, 600) - 100;
+    const c = clampPanSoft(1100, -100, 100, 600) - 100;
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(50);
+    expect(b).toBeGreaterThan(a);
+    expect((b - a) / 150).toBeLessThan(a / 50); // each further px of drag moves it less
+    expect(c).toBeLessThan(600); // bounded by the viewport dimension
+    expect(clampPanSoft(-250, -100, 100, 600)).toBeLessThan(-100);
+    expect(clampPanSoft(-250, -100, 100, 600)).toBeGreaterThan(-250);
+  });
+
+  it("follows at the rubber band's slope right at the edge", () => {
+    const shown = clampPanSoft(100.01, -100, 100, 600) - 100;
+    close(shown / 0.01, 0.55, 2);
+  });
+
+  it("inverts exactly, so a grab mid-band continues without a jump", () => {
+    for (const raw of [-900, -250, -101, -100, 0, 100, 140, 480, 2000]) {
+      const shown = clampPanSoft(raw, -100, 100, 600);
+      close(unclampPanSoft(shown, -100, 100, 600), raw, 6);
+    }
+  });
+
+  it("clampPan settles into the range", () => {
+    expect(clampPan(140, -100, 100)).toBe(100);
+    expect(clampPan(-140, -100, 100)).toBe(-100);
+    expect(clampPan(10, -100, 100)).toBe(10);
+  });
+});
+
+describe("AgentsGraphTab soft limits and glide", () => {
+  const W = 1200;
+  const H = 600;
+
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([agent("clarifier")]);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(W);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(H);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const panXShown = () => Number(/translate\((-?[\d.e-]+)px/.exec(worldTransform())![1]);
+
+  // The pan limit on the right: the content's left edge (x = 60) may come to 120 px
+  // before the viewport's right edge.
+  const maxPanX = (zoom: number) => W - 120 - 60 * zoom;
+
+  it("resists a drag past the limit and springs back into range on a mouse release", async () => {
+    await mountGraph();
+    const limit = maxPanX(0.55);
+    const x0 = panXShown();
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 300));
+    // Drag 3000 px to the right: far past the limit.
+    await viewport().trigger("pointermove", pointer("pointermove", 3100, 300));
+    await viewport().trigger("pointerup", pointer("pointerup", 3100, 300));
+    // (the last move is applied on release)
+    expect(x0 + 3000).toBeGreaterThan(limit);
+
+    // After release it is back on the limit, via the short view transition.
+    close(panXShown(), limit, 3);
+    expect(wrapper!.find(".origin-top-left").classes()).toContain("duration-200");
+  });
+
+  it("shows the band while dragging: past the limit it follows less than the pointer", async () => {
+    await mountGraph();
+    const limit = maxPanX(0.55);
+    const x0 = panXShown();
+    const toLimit = limit - x0;
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 300));
+    await viewport().trigger("pointermove", pointer("pointermove", 100 + toLimit + 400, 300));
+    // Apply the frame without releasing.
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const shown = panXShown();
+    expect(shown).toBeGreaterThan(limit);
+    expect(shown - limit).toBeLessThan(400);
+    await viewport().trigger("pointerup", pointer("pointerup", 100 + toLimit + 400, 300));
+  });
+
+  it("glides on after a touch flick, and a new touch stops it where it is", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "setTimeout", "clearTimeout"] });
+    await mountGraph();
+    const touch = (type: string, x: number) =>
+      viewport().trigger(type, pointer(type, x, 300, { pointerType: "touch", pointerId: 7 }));
+
+    // Flick left at 2000 px/s (inside the range: the canvas starts at the trigger).
+    await touch("pointerdown", 800);
+    for (let i = 1; i <= 5; i++) {
+      vi.advanceTimersByTime(10);
+      await touch("pointermove", 800 - 20 * i);
+    }
+    await touch("pointerup", 700);
+    const released = panXShown();
+
+    vi.advanceTimersByTime(100);
+    await flushPromises();
+    const gliding = panXShown();
+    expect(gliding).toBeLessThan(released - 20); // still moving the way it was thrown
+
+    // Grab it: it stops at once, where it is on screen.
+    await touch("pointerdown", 500);
+    const held = panXShown();
+    vi.advanceTimersByTime(500);
+    await flushPromises();
+    expect(panXShown()).toBe(held);
+    await touch("pointerup", 500);
+  });
+
+  it("stops a glide that runs into a limit on the limit", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "setTimeout", "clearTimeout"] });
+    await mountGraph();
+    const touch = (type: string, x: number) =>
+      viewport().trigger(type, pointer(type, x, 300, { pointerType: "touch", pointerId: 8 }));
+
+    // Flick right, hard: the canvas starts near its right limit already.
+    await touch("pointerdown", 100);
+    for (let i = 1; i <= 5; i++) {
+      vi.advanceTimersByTime(10);
+      await touch("pointermove", 100 + 40 * i);
+    }
+    await touch("pointerup", 300);
+    vi.advanceTimersByTime(4000);
+    await flushPromises();
+    close(panXShown(), maxPanX(0.55), 0);
   });
 });
