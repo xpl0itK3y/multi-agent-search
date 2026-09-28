@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 
 import { i18n } from "@/i18n";
+import type { TraceEntry } from "@/lib/stream";
 import AgentActivityConsole from "./AgentActivityConsole.vue";
+
+const FAKE = ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame", "performance", "Date"] as const;
 
 function consoleBodyVisible(status: string): boolean {
   const wrapper = mount(AgentActivityConsole, {
@@ -85,5 +89,32 @@ describe("AgentActivityConsole source chips", () => {
     const hrefs = wrapper.findAll("a").map((a) => a.attributes("href"));
     wrapper.unmount();
     expect(hrefs).toEqual(["https://ok.example/a", "https://evil.example/"]);
+  });
+});
+
+describe("AgentActivityConsole live feed", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it("keeps the newest live step in view, in one instant scroll", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE] });
+    const first: TraceEntry = { step: "search", detail: "Searching", timestamp: "2026-09-24T10:00:00+00:00" };
+    const wrapper = mount(AgentActivityConsole, {
+      props: { entries: [first], status: "processing", live: true },
+      global: { plugins: [i18n] },
+    });
+    // The feed's own scroller (not the TransitionGroup inside it) is what follows.
+    const box = wrapper.findAll("div").find((d) => d.classes().includes("max-h-[380px]"))!.element as HTMLElement;
+    Object.defineProperty(box, "scrollHeight", { configurable: true, get: () => 900 });
+    Object.defineProperty(box, "scrollTop", { configurable: true, writable: true, value: 0 });
+
+    await wrapper.setProps({ entries: [first, { step: "crawl", detail: "Reading", timestamp: "2026-09-24T10:00:05+00:00" }] });
+    await nextTick();
+    vi.advanceTimersByTime(20); // one animation frame
+
+    expect(box.scrollTop).toBe(box.scrollHeight);
+    wrapper.unmount();
   });
 });

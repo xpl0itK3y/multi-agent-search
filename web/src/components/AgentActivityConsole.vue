@@ -2,7 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
+import { traceKey } from "@/lib/trace";
 import { safeHttpUrl } from "@/lib/url";
+import { useStickToBottom } from "@/lib/useStickToBottom";
 
 const props = withDefaults(
   defineProps<{
@@ -302,19 +304,40 @@ const filteredEntries = computed(() => {
   return props.entries;
 });
 
-// Micro-actions feed auto-scroll and scroll position persistence
+// The feed and the reasoning follow new content only while the reader is at their bottom
+// (apple-design §3): scrolling up to read lets go, the "to latest" pill re-pins. Follows
+// are instant and at most one per frame, never a smooth scroll per streamed token.
 const feedBox = ref<HTMLElement | null>(null);
-const userHasScrolledUp = ref(false);
+const feed = useStickToBottom(feedBox, { threshold: 60 });
+const reasoningBox = ref<HTMLElement | null>(null);
+const reasoningOpen = ref(true);
+const cot = useStickToBottom(reasoningBox);
+
+// Only a step that really arrives live rises in (§7); a reload, a replay of the whole
+// trail or a filter switch renders at once instead of as a wave.
+const animateFeed = ref(false);
+watch(
+  () => props.entries.length,
+  (n, o) => {
+    animateFeed.value = !!props.live && n - (o ?? 0) === 1;
+    nextTick(feed.follow);
+  },
+);
+watch(activeFilter, () => {
+  animateFeed.value = false;
+  nextTick(feed.follow);
+});
+watch(
+  () => props.reasoning,
+  () => nextTick(cot.follow),
+);
+watch(reasoningOpen, (v) => {
+  if (v) nextTick(cot.follow);
+});
+
+// v-show drops a scroller's position, so collapsing remembers where the reader was.
 const savedFeedScrollTop = ref<number | null>(null);
 const savedReasoningScrollTop = ref<number | null>(null);
-
-function onFeedScroll() {
-  if (!feedBox.value) return;
-  savedFeedScrollTop.value = feedBox.value.scrollTop;
-  const { scrollTop, scrollHeight, clientHeight } = feedBox.value;
-  const atBottom = scrollHeight - (scrollTop + clientHeight) < 60;
-  userHasScrolledUp.value = !atBottom;
-}
 
 function onReasoningScroll() {
   if (!reasoningBox.value) return;
@@ -329,10 +352,11 @@ function toggleOpen() {
   } else {
     open.value = true;
     nextTick(() => {
-      if (feedBox.value && savedFeedScrollTop.value !== null) {
-        feedBox.value.scrollTop = savedFeedScrollTop.value;
-      }
-      if (reasoningBox.value && savedReasoningScrollTop.value !== null) {
+      // Still following: show what arrived while closed. Otherwise: the reader's place.
+      if (feed.pinned.value) feed.follow();
+      else if (feedBox.value && savedFeedScrollTop.value !== null) feedBox.value.scrollTop = savedFeedScrollTop.value;
+      if (cot.pinned.value) cot.follow();
+      else if (reasoningBox.value && savedReasoningScrollTop.value !== null) {
         reasoningBox.value.scrollTop = savedReasoningScrollTop.value;
       }
     });
@@ -344,43 +368,6 @@ function isEntryDone(idx: number): boolean {
   if (!props.live) return true;
   return idx < filteredEntries.value.length - 1;
 }
-
-function scrollToBottom(behavior: ScrollBehavior = "smooth") {
-  if (!feedBox.value) return;
-  feedBox.value.scrollTo({
-    top: feedBox.value.scrollHeight,
-    behavior,
-  });
-}
-
-watch(
-  () => props.entries.length,
-  () => {
-    if (props.live && !userHasScrolledUp.value) {
-      nextTick(() => {
-        scrollToBottom("smooth");
-      });
-    }
-  }
-);
-
-// Reasoning auto-scroll
-const reasoningBox = ref<HTMLElement | null>(null);
-const reasoningOpen = ref(true);
-
-watch(
-  () => props.reasoning,
-  () => {
-    if (reasoningOpen.value && reasoningBox.value) {
-      nextTick(() => {
-        reasoningBox.value?.scrollTo({
-          top: reasoningBox.value.scrollHeight,
-          behavior: "smooth",
-        });
-      });
-    }
-  }
-);
 
 function stepLabel(step: string): string {
   return te(`trace.${step}`) ? t(`trace.${step}`) : step;
@@ -595,148 +582,152 @@ function formatTime(isoStr?: string): string {
 
         <!-- STREAM OF MICRO-ACTIONS -->
         <div class="relative">
-          <TransitionGroup
-            name="feed-item"
-            tag="div"
-            ref="feedBox"
-            class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-bd"
-            @scroll="onFeedScroll"
-          >
-            <div
-              v-for="(entry, idx) in filteredEntries"
-              :key="idx"
-              class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-all duration-200 text-xs"
-              :class="{
-                'border-emerald-500/30 bg-surface/60': isEntryDone(idx) && !isLoopback(entry),
-                'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1 && !isLoopback(entry),
-                'border-amber-500/40 bg-amber-500/5 ring-1 ring-amber-500/20': isLoopback(entry),
-              }"
+          <div ref="feedBox" class="max-h-[380px] overflow-y-auto pr-1">
+            <TransitionGroup
+              name="feed-item"
+              tag="div"
+              class="relative space-y-2.5"
+              :css="animateFeed"
+              :move-class="animateFeed ? 'feed-item-move' : 'feed-item-still'"
             >
-              <!-- Loopback Badge when agent is sent back -->
               <div
-                v-if="isLoopback(entry)"
-                class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+                v-for="(entry, idx) in filteredEntries"
+                :key="traceKey(entry)"
+                class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-colors duration-150 text-xs"
+                :class="{
+                  'border-emerald-500/30 bg-surface/60': isEntryDone(idx) && !isLoopback(entry),
+                  'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1 && !isLoopback(entry),
+                  'border-amber-500/40 bg-amber-500/5 ring-1 ring-amber-500/20': isLoopback(entry),
+                }"
               >
-                <span class="animate-spin">↺</span>
-                <span>{{ loopbackBadgeText(entry) }}</span>
-              </div>
+                <!-- Loopback Badge when agent is sent back -->
+                <div
+                  v-if="isLoopback(entry)"
+                  class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+                >
+                  <span class="animate-spin">↺</span>
+                  <span>{{ loopbackBadgeText(entry) }}</span>
+                </div>
 
-              <div class="flex items-start justify-between gap-2">
-                <div class="flex items-center gap-2 min-w-0">
-                  <!-- Status icon/number -->
-                  <span
-                    v-if="isEntryDone(idx)"
-                    class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
-                    :title="t('console.entryDone')"
-                  >
-                    ✓
-                  </span>
-                  <span
-                    v-else-if="live && idx === filteredEntries.length - 1"
-                    class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
-                    :title="t('console.entryRunning')"
-                  >
-                    ⚡
-                  </span>
-                  <span
-                    v-else
-                    class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[9px] font-bold shrink-0"
-                  >
-                    {{ idx + 1 }}
-                  </span>
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <!-- Status icon/number -->
+                    <span
+                      v-if="isEntryDone(idx)"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
+                      :title="t('console.entryDone')"
+                    >
+                      ✓
+                    </span>
+                    <span
+                      v-else-if="live && idx === filteredEntries.length - 1"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
+                      :title="t('console.entryRunning')"
+                    >
+                      ⚡
+                    </span>
+                    <span
+                      v-else
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[9px] font-bold shrink-0"
+                    >
+                      {{ idx + 1 }}
+                    </span>
 
-                  <span v-if="entry.agent" class="font-medium text-ink truncate">
-                    {{ entry.agent }}
-                  </span>
-                  <span v-else class="font-medium text-ink truncate">
-                    {{ stepLabel(entry.step) }}
-                  </span>
+                    <span v-if="entry.agent" class="font-medium text-ink truncate">
+                      {{ entry.agent }}
+                    </span>
+                    <span v-else class="font-medium text-ink truncate">
+                      {{ stepLabel(entry.step) }}
+                    </span>
 
-                  <span
-                    v-if="entry.action"
-                    class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
-                  >
-                    {{ entry.action }}
-                  </span>
+                    <span
+                      v-if="entry.action"
+                      class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
+                    >
+                      {{ entry.action }}
+                    </span>
 
-                  <!-- Status label badge -->
-                  <span
-                    v-if="isEntryDone(idx)"
-                    class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
-                  >
-                    <span>✓</span>
-                    <span>{{ t("console.entryDone") }}</span>
-                  </span>
-                  <span
-                    v-else-if="live && idx === filteredEntries.length - 1"
-                    class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
-                  >
-                    <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
-                    <span>{{ t("console.entryRunning") }}</span>
+                    <!-- Status label badge -->
+                    <span
+                      v-if="isEntryDone(idx)"
+                      class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
+                    >
+                      <span>✓</span>
+                      <span>{{ t("console.entryDone") }}</span>
+                    </span>
+                    <span
+                      v-else-if="live && idx === filteredEntries.length - 1"
+                      class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
+                    >
+                      <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                      <span>{{ t("console.entryRunning") }}</span>
+                    </span>
+                  </div>
+
+                  <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
+                    {{ formatTime(entry.timestamp) }}
                   </span>
                 </div>
 
-                <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
-                  {{ formatTime(entry.timestamp) }}
-                </span>
-              </div>
+                <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
+                  {{ entry.detail }}
+                </p>
 
-              <p v-if="entry.detail" class="mt-1 text-muted leading-snug pl-6 break-words">
-                {{ entry.detail }}
-              </p>
+                <!-- Metrics badges if present -->
+                <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
+                  <span
+                    v-for="(val, key) in entry.metrics"
+                    :key="key"
+                    class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
+                  >
+                    <span class="opacity-60">{{ key }}:</span>
+                    <span class="font-semibold text-ink">{{ val }}</span>
+                  </span>
+                </div>
 
-              <!-- Metrics badges if present -->
-              <div v-if="entry.metrics" class="mt-1.5 pl-6 flex flex-wrap gap-1.5">
-                <span
-                  v-for="(val, key) in entry.metrics"
-                  :key="key"
-                  class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
-                >
-                  <span class="opacity-60">{{ key }}:</span>
-                  <span class="font-semibold text-ink">{{ val }}</span>
-                </span>
+                <!-- Discovered / Scraped Sources Chips -->
+                <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
+                  <a
+                    v-for="(s, j) in entry.sources"
+                    :key="j"
+                    :href="safeHttpUrl(s.url) ?? safeHttpUrl(`https://${s.domain}`) ?? undefined"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
+                    :title="s.title || s.domain"
+                  >
+                    <img
+                      :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
+                      alt=""
+                      class="h-3 w-3 shrink-0 rounded-xs"
+                      loading="lazy"
+                      @error="($event.target as HTMLImageElement).style.display = 'none'"
+                    />
+                    <span class="truncate">{{ s.domain }}</span>
+                    <span class="text-[9px] text-muted opacity-60">↗</span>
+                  </a>
+                </div>
               </div>
-
-              <!-- Discovered / Scraped Sources Chips -->
-              <div v-if="entry.sources && entry.sources.length" class="mt-2 pl-6 flex flex-wrap gap-1.5">
-                <a
-                  v-for="(s, j) in entry.sources"
-                  :key="j"
-                  :href="safeHttpUrl(s.url) ?? safeHttpUrl(`https://${s.domain}`) ?? undefined"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
-                  :title="s.title || s.domain"
-                >
-                  <img
-                    :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
-                    alt=""
-                    class="h-3 w-3 shrink-0 rounded-xs"
-                    loading="lazy"
-                    @error="($event.target as HTMLImageElement).style.display = 'none'"
-                  />
-                  <span class="truncate">{{ s.domain }}</span>
-                  <span class="text-[9px] text-muted opacity-60">↗</span>
-                </a>
-              </div>
-            </div>
-          </TransitionGroup>
+            </TransitionGroup>
+          </div>
 
           <div v-if="!filteredEntries.length" class="py-6 text-center text-xs text-muted">
             {{ $t("artifact.trailEmpty") }}
           </div>
 
           <!-- Floating button to return to latest actions -->
-          <div v-if="userHasScrolledUp && live" class="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
-            <button
-              type="button"
-              class="pointer-events-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-medium text-white shadow-lg transition hover:bg-accent/90 active:scale-95"
-              @click="userHasScrolledUp = false; scrollToBottom('smooth');"
-            >
-              <span>↓</span>
-              <span>{{ t("trace.to_latest") }}</span>
-            </button>
-          </div>
+          <Transition name="fade-quick">
+            <div v-if="live && !feed.pinned.value" class="absolute bottom-2 inset-x-0 flex justify-center pointer-events-none">
+              <button
+                type="button"
+                class="press pointer-events-auto flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-2xs font-medium text-onAccent shadow-e2 hover:bg-accent/90"
+                @click="feed.jumpToLatest()"
+              >
+                <span aria-hidden="true">↓</span>
+                <span>{{ t("trace.to_latest") }}</span>
+              </button>
+            </div>
+          </Transition>
         </div>
       </div>
     </Transition>
@@ -762,17 +753,16 @@ function formatTime(isoStr?: string): string {
   transform-origin: 0% 50%;
 }
 
-.feed-item-enter-active,
-.feed-item-leave-active {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+/* A live step rises in from below, where the feed grows (§7); nothing animates out. */
+.feed-item-enter-active {
+  transition: opacity 220ms var(--ease-emph), transform 260ms var(--ease-emph);
 }
 .feed-item-enter-from {
   opacity: 0;
-  transform: translateY(10px) scale(0.98);
+  transform: translateY(6px);
 }
-.feed-item-leave-to {
-  opacity: 0;
-  transform: translateY(-10px);
+.feed-item-move {
+  transition: transform 260ms var(--ease-emph);
 }
 
 .console-expand-enter-active,
