@@ -145,6 +145,17 @@ describe("AdminView", () => {
     expect(currentRouter!.currentRoute.value.query.tab).toBeUndefined();
   });
 
+  // jsdom has no layout, so the two CSS facts that keep the strip usable are pinned here.
+  it("never lets the page squeeze the tab strip, and keeps the focus ring inside it", async () => {
+    const wrapper = await mountAdmin();
+    // The strip scrolls sideways: without shrink-0 its min-height is 0 in the flex column.
+    expect(wrapper.find('[data-test="admin-tablist"]').classes()).toContain("shrink-0");
+    // The strip clips vertically too, so the ring is drawn inside each tab.
+    for (const tab of wrapper.findAll('[role="tab"]')) {
+      expect(tab.classes()).toContain("focus-visible:!outline-offset-[-2px]");
+    }
+  });
+
   it("ignores an unknown tab in the address", async () => {
     const wrapper = await mountAdmin("/admin?tab=nope");
     expect(wrapper.find('[data-test="OverviewTab"]').exists()).toBe(true);

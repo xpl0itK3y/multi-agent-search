@@ -248,9 +248,12 @@ onMounted(() => {
       </div>
 
       <!-- Navigation Tabs: one line that scrolls sideways on a phone, and sticks under a
-           translucent bar while the page scrolls (the view root, p-6, is the scroller). -->
+           translucent bar while the page scrolls (the view root, p-6, is the scroller).
+           shrink-0: a scroller's automatic min-height is 0, so in the overflowing column
+           it would otherwise be squeezed down to its 1px border. -->
       <div
-        class="sticky -top-6 z-20 -mx-6 mb-6 flex overflow-x-auto scrollbar-none border-b border-bd px-6 material-bar"
+        class="sticky -top-6 z-20 -mx-6 mb-6 flex shrink-0 overflow-x-auto scrollbar-none border-b border-bd px-6 material-bar"
+        data-test="admin-tablist"
         role="tablist"
         :aria-label="t('admin.title')"
         @keydown="onTabKey"
@@ -264,7 +267,7 @@ onMounted(() => {
           :aria-selected="activeTab === tab.id ? 'true' : 'false'"
           aria-controls="admin-tabpanel"
           :tabindex="activeTab === tab.id ? 0 : -1"
-          class="shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
+          class="shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors focus-visible:!outline-offset-[-2px]"
           :class="activeTab === tab.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
           @click="selectTab(tab.id)"
         >
