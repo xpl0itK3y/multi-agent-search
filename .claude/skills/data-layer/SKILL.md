@@ -107,10 +107,12 @@ Then run `ci_local.sh pytest tests/test_task_store_conformance.py`, bring up a d
   - `pending` → `running` on claim (attempts + 1).
   - From `running`: `completed`; back to `pending` on failure while attempts < max; `dead_letter` at the max; `failed` for a search job whose task is gone.
   - Requeue: the store allows it from `dead_letter` or `failed`, the admin service only from `dead_letter`.
-- **Finalize leases.** `lease_epoch` fences stale runners (`ensure_finalize_job_lease`, which raises `FinalizeLeaseLost`). Complete, update and record-failure take the epoch: a runner must always pass it, because `lease_epoch=None` skips the fence. Requeue and stale recovery bump it. Search jobs have **no** lease.
+- **Leases, on both job kinds.** `lease_epoch` fences a runner that stale recovery or a requeue took the job from. A claim keeps the epoch; stale recovery and every requeue bump it. The runner's complete, update and record-failure writes take the epoch, and land only while the job is RUNNING under it. A runner must always pass it, because `lease_epoch=None` skips the fence.
+  - **Finalize:** `ensure_finalize_job_lease` renews the lease between graph steps and raises `FinalizeLeaseLost`.
+  - **Search:** `SearchWorker` passes the claim's epoch to `process_search_task_job`. The run writes its task through `LeasedTaskStore` (`src/services/search_lease.py`), which calls `update_task_under_search_lease`: the job row is locked and the lease checked in the same transaction. The first refused write raises `SearchJobLeaseLost`, and the runner stops without settling the job, retrying or finalizing (`tests/test_search_job_lease.py`).
 - **Enqueue:**
   - Search: `add_search_task_job`, then `broker.push_search_job`.
-  - Finalize: `enqueue_research_finalization`, which runs the `try_begin_finalization` CAS into ANALYZING, then `_dispatch_finalize_job` (reuses, requeues or adds a job, then pushes).
+  - Finalize: `enqueue_research_finalization` (and the finalize-only retry) calls `begin_finalization`. That is the ANALYZING CAS and the job, which is reused, requeued or added, in **one transaction**, locking the latest job row before the research row. The job is pushed to the broker after commit. `try_begin_finalization` alone remains for stale recovery, whose job already exists.
 - **Workers.** `scripts/run_finalize_worker.py [--once]` runs `JobWorker`: maintenance if due, then `SearchWorker`, then `FinalizeWorker`, then a heartbeat.
   - Broker mode: BLPOP an id, then `claim_*_by_id`. If that is not claimable, fall back to `claim_next_*`, which recovers lost pushes.
   - Polling mode: drain `claim_next_*`.
@@ -119,7 +121,7 @@ Then run `ci_local.sh pytest tests/test_task_store_conformance.py`, bring up a d
 
 **Twins that must change together:**
 1. The memory store and the SQL store, for every method.
-2. **Every path that leaves a job PENDING must push to the broker:** create, retry after failure, stale recovery, admin requeue, `_dispatch_finalize_job`, for both search and finalize. The improvement plan's `JOB-RETRY` finding was a retry path without this push, which hung researches forever.
+2. **Every path that leaves a job PENDING must push to the broker:** create, retry after failure, stale recovery, admin requeue, and `begin_finalization`'s job (`_push_finalize_job`), for both search and finalize. Every path that takes a job from its runner must also bump its lease epoch. The improvement plan's `JOB-RETRY` finding was a retry path without this push, which hung researches forever.
 3. `claim_next_*` and `claim_*_by_id`; the broker and polling branches of both workers.
 4. The "latest job" ordering (created_at, updated_at, id descending). The in-memory `_latest_job` breaks ties by insertion order.
 5. A service pre-check and the store's guarded single-transaction method (`requeue_failed_research_finalize_job`, `requeue_search_task_job_of_active_research`). The store re-checks, and None becomes 409.
@@ -129,7 +131,7 @@ Then run `ci_local.sh pytest tests/test_task_store_conformance.py`, bring up a d
 - **The in-memory store hands out its live objects**, while SQL returns detached copies. Mutating a returned record passes on memory and fails on Postgres; the conformance suite's postgres leg is what catches it.
 - **In-memory claims take no row lock.** Real claim concurrency is only tested on Postgres.
 - **No FK from `user_events` to `researches`.** Prompt copies are deleted explicitly in the same transaction as the research. Any new JSON reference to a research needs the same explicit cleanup.
-- **Not atomic:** the finalize CAS and the job insert are separate transactions. A crash between them leaves ANALYZING with no job, and the stalled sweep is the safety net. Do not build new logic that assumes they are atomic.
+- **Keep CAS and job together.** A new path into ANALYZING goes through `begin_finalization`, not `try_begin_finalization` followed by a job insert. The two used to be separate transactions, and a crash between them left the research ANALYZING with no job.
 - **Trust the code over docstrings:** `000026`'s docstring names the wrong `Revises:`.
 - **`scripts/smoke_postgres_runtime.py` migrates and writes to the configured database.** It is not a throwaway.
 - **Restoring:** stop api, workers and pgbouncer, run `scripts/restore_postgres.sh <dump> --confirm`, then migrate. Back up before any irreversible migration.
