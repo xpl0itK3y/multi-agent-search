@@ -83,6 +83,106 @@ describe("useStickToBottom", () => {
     expect(stick.pinned.value).toBe(false);
   });
 
+  describe("gestures meant for something inside the scroller", () => {
+    // A nested scroller: 100px tall over 400px of content, scrolled to `top`.
+    function nested(parent: HTMLElement, { top = 150, axis = "y" }: { top?: number; axis?: "x" | "y" } = {}) {
+      const inner = document.createElement("div");
+      inner.style.setProperty(axis === "y" ? "overflow-y" : "overflow-x", "auto");
+      const size = axis === "y" ? ["scrollHeight", "clientHeight", "scrollTop"] : ["scrollWidth", "clientWidth", "scrollLeft"];
+      Object.defineProperty(inner, size[0], { configurable: true, value: 400 });
+      Object.defineProperty(inner, size[1], { configurable: true, value: 100 });
+      Object.defineProperty(inner, size[2], { configurable: true, writable: true, value: top });
+      const child = document.createElement("p");
+      inner.appendChild(child);
+      parent.appendChild(inner);
+      return { inner, child };
+    }
+    const wheel = (target: HTMLElement, init: WheelEventInit) =>
+      target.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }));
+    const key = (target: HTMLElement, k: string) =>
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+
+    it("keeps following while a nested scroller reads back up, and lets go once it reaches its top", () => {
+      const { el, dims, stick } = setup();
+      const { inner, child } = nested(el);
+
+      wheel(child, { deltaY: -40 });
+      expect(stick.pinned.value).toBe(true);
+      dims.scrollHeight = 1400;
+      stick.follow();
+      vi.advanceTimersByTime(20);
+      expect(el.scrollTop).toBe(1400); // still following the stream
+
+      inner.scrollTop = 0; // at its top the browser hands the wheel on to the thread
+      wheel(child, { deltaY: -40 });
+      expect(stick.pinned.value).toBe(false);
+    });
+
+    it("keeps following when a widget turned the wheel into its own (a tab strip scrolling sideways)", () => {
+      const { el, stick } = setup();
+      const strip = document.createElement("div");
+      strip.addEventListener("wheel", (e) => e.preventDefault());
+      el.appendChild(strip);
+
+      wheel(strip, { deltaY: -40 });
+
+      expect(stick.pinned.value).toBe(true);
+    });
+
+    it("gives a mostly sideways wheel to a sideways strip, but not a vertical one that drifts", () => {
+      const { el, stick } = setup();
+      const { child } = nested(el, { axis: "x", top: 0 });
+
+      wheel(child, { deltaX: 30, deltaY: -4 });
+      expect(stick.pinned.value).toBe(true);
+
+      wheel(child, { deltaX: 2, deltaY: -40 });
+      expect(stick.pinned.value).toBe(false);
+    });
+
+    it("keeps following on a key a widget handled or a nested scroller takes, lets go on the others", () => {
+      const { el, stick } = setup();
+      const tab = document.createElement("button");
+      tab.addEventListener("keydown", (e) => e.preventDefault()); // Home: first tab
+      el.appendChild(tab);
+      const { inner, child } = nested(el);
+      const plain = document.createElement("button");
+      el.appendChild(plain);
+
+      key(tab, "Home");
+      expect(stick.pinned.value).toBe(true);
+      key(child, "ArrowUp");
+      expect(stick.pinned.value).toBe(true);
+
+      inner.scrollTop = 0;
+      key(child, "PageUp");
+      expect(stick.pinned.value).toBe(false);
+
+      stick.jumpToLatest();
+      key(plain, "Home");
+      expect(stick.pinned.value).toBe(false);
+    });
+
+    it("takes only a press in its own scrollbar gutter as a scrollbar drag", () => {
+      const { el, stick, scrollTo } = setup();
+      Object.defineProperty(el, "clientWidth", { configurable: true, value: 300 });
+      const { inner } = nested(el);
+      const press = (target: HTMLElement, offsetX: number) => {
+        const e = new MouseEvent("pointerdown", { bubbles: true });
+        Object.defineProperty(e, "offsetX", { value: offsetX });
+        target.dispatchEvent(e);
+      };
+
+      press(inner, 310); // a wide nested scroller's own gutter
+      scrollTo(300);
+      expect(stick.pinned.value).toBe(true);
+
+      press(el, 310);
+      scrollTo(300);
+      expect(stick.pinned.value).toBe(false);
+    });
+  });
+
   it("jumpToLatest re-pins and scrolls to the bottom", () => {
     const { el, stick } = setup();
     const spy = vi.fn();
