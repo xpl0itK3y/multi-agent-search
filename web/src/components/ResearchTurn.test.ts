@@ -268,3 +268,57 @@ describe("ResearchTurn cancel", () => {
     expect(mocks.api.cancelResearch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ResearchTurn notifications", () => {
+  let NotificationMock: ReturnType<typeof vi.fn> & { permission: NotificationPermission; requestPermission: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mocks.api.getStatus.mockResolvedValue({ status: "processing", prompt: "Topic", llm_token_usage: null });
+    mocks.api.getGraph.mockResolvedValue({ graph_trail: [] });
+    mocks.openResearchStream.mockImplementation(() => vi.fn());
+    NotificationMock = Object.assign(vi.fn(), {
+      permission: "default" as NotificationPermission,
+      requestPermission: vi.fn(async () => {
+        NotificationMock.permission = "granted";
+        return "granted" as NotificationPermission;
+      }),
+    });
+    vi.stubGlobal("Notification", NotificationMock);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (document as unknown as Record<string, unknown>).visibilityState;
+    vi.clearAllMocks();
+  });
+
+  const notifyButton = (wrapper: Awaited<ReturnType<typeof mountRunning>>) =>
+    wrapper.findAll("button").find((b) => b.text().includes(i18n.global.t("research.notifyMe")));
+
+  it("never prompts for permission on its own when a run finishes", async () => {
+    const wrapper = await mountRunning();
+    mocks.api.getStatus.mockResolvedValue({ status: "completed", prompt: "Topic", llm_token_usage: null });
+
+    await handlers(0).onDone?.("completed");
+    await flushPromises();
+
+    expect(NotificationMock.requestPermission).not.toHaveBeenCalled();
+    expect(NotificationMock).not.toHaveBeenCalled();
+    expect(notifyButton(wrapper)).toBeUndefined(); // the run is over
+  });
+
+  it("asks from the reader's click and notifies a hidden tab when the report is ready", async () => {
+    const wrapper = await mountRunning();
+
+    await notifyButton(wrapper)!.trigger("click");
+    await flushPromises();
+    expect(NotificationMock.requestPermission).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain(i18n.global.t("research.notifyOn"));
+    expect(notifyButton(wrapper)).toBeUndefined();
+
+    mocks.api.getStatus.mockResolvedValue({ status: "completed", prompt: "Topic", llm_token_usage: null });
+    await handlers(0).onDone?.("completed");
+    expect(NotificationMock).toHaveBeenCalledTimes(1);
+  });
+});
