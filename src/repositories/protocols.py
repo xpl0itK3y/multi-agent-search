@@ -111,6 +111,10 @@ class TaskStore(Protocol):
     ) -> UserRecord | None: ...
 
     # ── one-time links: password reset, email verification ────────────────────
+    # Every write to an account's tokens takes the account first: the SQL store locks the
+    # users row before any auth_action_tokens row (a redeem, an issue, delete_user's
+    # cascade), the in-memory store holds its one user lock throughout. So concurrent
+    # calls for one account queue instead of deadlocking.
     # Stores a link token by its sha256 hex, for `email` (the address the link goes to),
     # and in the same transaction invalidates (used_at = now) the user's other unused
     # tokens of this purpose: only the newest link works. None when the user is gone.

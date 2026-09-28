@@ -459,7 +459,8 @@ class SQLAlchemyTaskStore:
         now = datetime.now(timezone.utc)
         with self.session_scope() as session:
             # The user row lock serializes two requests for the same account, so the
-            # second one's invalidation sees the first one's token.
+            # second one's invalidation sees the first one's token. Every token write takes
+            # it before the tokens (lock order, see _redeem_auth_action_token).
             owner = session.execute(
                 select(UserORM.id).where(UserORM.id == user_id).with_for_update()
             ).scalar_one_or_none()
@@ -510,34 +511,45 @@ class SQLAlchemyTaskStore:
         now: datetime,
         user_id: str | None = None,
     ) -> UserRecord | None:
-        """One transaction: consume the token, apply ``user_values`` to its account and
-        invalidate the account's other unused tokens of the purpose.
+        """One transaction: lock the account, consume the token, apply ``user_values`` to
+        the account and invalidate its other unused tokens of the purpose.
 
         The token redeems when it would (_live_auth_action_token), and only for the
         account ``user_id`` when given: another account's token matches nothing and stays
         unused. Consuming is one conditional UPDATE: of two concurrent redeems, the second
-        re-checks used_at once the first commits and matches nothing, so a link works once."""
-        conditions = self._live_auth_action_token(token_hash, purpose, now)
-        if user_id is not None:
-            conditions += (AuthActionTokenORM.user_id == user_id,)
-        consume = (
-            update(AuthActionTokenORM)
-            .where(*conditions)
-            .values(used_at=now)
-            .returning(AuthActionTokenORM.user_id, AuthActionTokenORM.email)
-            .execution_options(synchronize_session=False)
+        re-checks used_at once the first commits and matches nothing, so a link works once.
+
+        Lock order: the users row first, then its tokens, as create_auth_action_token,
+        update_user_password and delete_user (through the cascade) take them. Consuming
+        the token first and then waiting for the users row deadlocked against an issue or
+        a delete for the same account, which holds the users row and waits for the tokens."""
+        owner_id = (
+            user_id
+            if user_id is not None
+            else select(AuthActionTokenORM.user_id).where(AuthActionTokenORM.token_hash == token_hash).scalar_subquery()
         )
         with self.session_scope() as session:
-            consumed = session.execute(consume).first()
+            owner = session.execute(
+                select(UserORM.id).where(UserORM.id == owner_id).with_for_update()
+            ).scalar_one_or_none()
+            if owner is None:
+                return None
+            consumed = session.execute(
+                update(AuthActionTokenORM)
+                .where(*self._live_auth_action_token(token_hash, purpose, now), AuthActionTokenORM.user_id == owner)
+                .values(used_at=now)
+                .returning(AuthActionTokenORM.email)
+                .execution_options(synchronize_session=False)
+            ).first()
             if consumed is None:
                 return None
             user = session.execute(
                 update(UserORM)
-                .where(UserORM.id == consumed.user_id, UserORM.email == consumed.email)
+                .where(UserORM.id == owner, UserORM.email == consumed.email)
                 .values(**user_values)
                 .returning(UserORM)
             ).scalar_one_or_none()
-            if user is None:  # the account changed its email or went since the check
+            if user is None:  # unreachable while the row lock holds the email; kept as a guard
                 return None
             self._invalidate_auth_action_tokens(session, user.id, purpose.value, now)
             return _user_record(user)
