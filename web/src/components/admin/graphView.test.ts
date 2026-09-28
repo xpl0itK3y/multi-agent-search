@@ -703,3 +703,77 @@ describe("graphView: stage tones", () => {
     }
   });
 });
+
+describe("AgentsGraphTab inspector panel", () => {
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([
+      { ...agent("clarifier"), name: "ClarifierAgent" },
+      { ...agent("optimizer"), name: "PromptOptimizerAgent" },
+    ]);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  async function mountWithInspector() {
+    wrapper = mount(AgentsGraphTab, { attachTo: document.body, global: { plugins: [i18n], stubs: { teleport: true } } });
+    await flushPromises();
+    return wrapper;
+  }
+
+  const panel = () => wrapper!.find('[data-test="agent-inspector"]');
+  const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  async function click(id: string) {
+    const n = node(id);
+    await n.trigger("pointerdown", pointer("pointerdown", 500, 300));
+    await n.trigger("pointerup", pointer("pointerup", 500, 300));
+    await n.trigger("click");
+    await flushPromises();
+  }
+
+  it("opens beside the graph without a scrim, and swaps agents without closing", async () => {
+    await mountWithInspector();
+    await click("clarifier");
+    expect(panel().attributes("aria-hidden")).toBeUndefined();
+    expect(panel().attributes("aria-modal")).toBeUndefined();
+    expect(wrapper!.find('[data-test="slideover-scrim"]').exists()).toBe(false);
+    expect(panel().find("h2").text()).toBe("ClarifierAgent");
+
+    await click("optimizer");
+    expect(panel().attributes("aria-hidden")).toBeUndefined();
+    expect(panel().find("h2").text()).toBe("PromptOptimizerAgent");
+  });
+
+  it("closes on Escape first, and leaves fullscreen only on the next one", async () => {
+    await mountWithInspector();
+    const fullscreen = wrapper!.findAll("button").find((b) => b.attributes("title") === i18n.global.t("admin.agents.fullscreen"))!;
+    await fullscreen.trigger("click");
+    const root = () => wrapper!.find("div");
+    expect(root().classes()).toContain("fixed");
+
+    await click("clarifier");
+    escape();
+    await flushPromises();
+    expect(panel().attributes("aria-hidden")).toBe("true");
+    expect(root().classes()).toContain("fixed");
+
+    escape();
+    await flushPromises();
+    expect(root().classes()).not.toContain("fixed");
+  });
+
+  it("gives an accessible name to its close button", async () => {
+    await mountWithInspector();
+    await click("clarifier");
+    const close = panel().find(`button[aria-label="${i18n.global.t("admin.agents.close")}"]`);
+    expect(close.exists()).toBe(true);
+    await close.trigger("click");
+    expect(panel().attributes("aria-hidden")).toBe("true");
+  });
+});

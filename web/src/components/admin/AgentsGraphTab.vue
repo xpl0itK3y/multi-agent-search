@@ -1016,7 +1016,7 @@ function nodeCardState(nodeId: string): string {
   if (pressedNodeId.value === nodeId) {
     return "scale-[0.985] border-accent/60 bg-surface duration-100 ease-out";
   }
-  if (selectedAgent.value?.id === nodeId) {
+  if (drawerOpen.value && selectedAgent.value?.id === nodeId) {
     return "scale-[1.02] border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 duration-200 ease-out";
   }
   if (isNodeHighlighted(nodeId)) {
@@ -1622,15 +1622,12 @@ function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value;
 }
 
+// Escape peels one layer at a time: the inspector (SlideOver closes it and marks the
+// key handled) first, fullscreen on the next press.
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    if (drawerOpen.value) {
-      drawerOpen.value = false;
-      return;
-    }
-    if (isFullscreen.value) {
-      isFullscreen.value = false;
-    }
+  if (e.key !== "Escape" || e.defaultPrevented || drawerOpen.value) return;
+  if (isFullscreen.value) {
+    isFullscreen.value = false;
   }
 }
 
@@ -1651,6 +1648,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("blur", cancelAllGestures);
 });
 
+// Opening another node while the inspector is open swaps its content in place: the
+// panel is non-modal, so comparing agents needs no close-and-reopen.
 function openInspector(nodeId: string) {
   if (nodeId === "trigger_start") return;
   const target = agents.value.find((a) => a.id === nodeId);
@@ -1684,7 +1683,7 @@ function isNodeHighlighted(nodeId: string): boolean {
   if (hoveredAgentId.value && nodeId === hoveredAgentId.value) {
     return true;
   }
-  if (selectedAgent.value && nodeId === selectedAgent.value.id) {
+  if (drawerOpen.value && selectedAgent.value && nodeId === selectedAgent.value.id) {
     return true;
   }
   return false;

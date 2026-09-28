@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AgentMetadataItem } from "@/lib/types";
+import SlideOver from "@/components/SlideOver.vue";
 import { STAGE_TONE } from "./graphView";
 
 const props = defineProps<{
@@ -192,18 +193,20 @@ function copyJson(data: any, targetRef: "input" | "output") {
 </script>
 
 <template>
-  <div>
-    <!-- Backdrop Overlay -->
-    <div
-      v-if="open"
-      class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity"
-      @click="emit('close')"
-    />
-
-    <!-- Slide-over Drawer (Wider & Richer: max-w-2xl) -->
-    <div
-      class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-2xl flex-col border-l border-bd bg-bg text-ink shadow-2xl transition-transform duration-300 ease-in-out"
-      :class="open ? 'translate-x-0' : 'translate-x-full'"
+  <!-- A parallel, non-blocking panel (apple-design §12: separate to keep flow, no scrim):
+       the graph stays live beside it, so another node can be opened, compared, panned
+       and zoomed without closing it. It slides in from the right and leaves the same way;
+       Esc closes it and gives focus back; a finger can drag it away. Teleported, so the
+       fixed panel sits outside the graph's spaced column. -->
+  <Teleport to="body">
+    <SlideOver
+      :open="open"
+      side="right"
+      :modal="false"
+      :label="agent?.name ?? t('admin.tabs.agents')"
+      panel-class="w-full max-w-2xl"
+      data-test="agent-inspector"
+      @close="emit('close')"
     >
       <div v-if="agent" class="flex h-full flex-col">
         <!-- Drawer Header with Stage and Status Badges -->
@@ -260,11 +263,13 @@ function copyJson(data: any, targetRef: "input" | "output") {
 
             <!-- Close Button -->
             <button
-              class="grid h-8 w-8 place-items-center rounded-xl border border-bd/80 bg-surface/60 text-muted transition hover:border-bd hover:bg-surface hover:text-ink"
+              type="button"
+              class="press hit grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-bd/80 bg-surface/60 text-muted hover:border-bd hover:bg-surfaceHover hover:text-ink"
               :title="t('admin.agents.close')"
+              :aria-label="t('admin.agents.close')"
               @click="emit('close')"
             >
-              ✕
+              <span aria-hidden="true">✕</span>
             </button>
           </div>
 
@@ -346,7 +351,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
         </div>
 
         <!-- Drawer Body Tabs Content -->
-        <div class="flex-1 space-y-5 overflow-y-auto p-5 text-xs">
+        <div class="flex-1 space-y-5 overflow-y-auto bg-bg p-5 text-xs">
           <!-- TAB 1: OVERVIEW -->
           <div v-if="activeTab === 'overview'" class="space-y-5">
             <!-- Detailed Description -->
@@ -723,6 +728,6 @@ function copyJson(data: any, targetRef: "input" | "output") {
           </div>
         </div>
       </div>
-    </div>
-  </div>
+    </SlideOver>
+  </Teleport>
 </template>
