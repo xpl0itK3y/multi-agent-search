@@ -438,6 +438,8 @@ describe("SettingsView", () => {
     const inputs = wrapper.findAll('input[type="password"]');
     const hint = wrapper.find(`#${inputs[1].attributes("aria-describedby")}`);
     expect(hint.text()).toBe(i18n.global.t("auth.passwordRule", { min: PASSWORD_MIN_LENGTH }));
+    // Said once: the field's placeholder doesn't repeat the rule under it.
+    expect(inputs[1].attributes("placeholder")).toBeUndefined();
 
     const short = "x".repeat(PASSWORD_MIN_LENGTH - 1);
     await inputs[1].setValue(short);

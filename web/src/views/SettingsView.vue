@@ -1128,9 +1128,9 @@ onUnmounted(() => {
                     autocomplete="new-password"
                     :minlength="PASSWORD_MIN_LENGTH"
                     :aria-describedby="newPasswordHelpId"
-                    :placeholder="t('settings.security.newPasswordPlaceholder', { min: PASSWORD_MIN_LENGTH })"
                     class="w-full rounded-lg border border-bd bg-bg/60 px-3 py-2 text-xs text-ink"
                   />
+                  <!-- The rule is said once, under the field (no placeholder repeating it). -->
                   <PasswordRuleHint :id="newPasswordHelpId" :password="newPassword" :tried="passwordTried" />
                 </div>
 
