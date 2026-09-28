@@ -255,8 +255,10 @@ const html = computed(() => {
   //    Sentinels → a styled span + a trailing support badge; inline [Sn] → a link to the
   //    source, whose hover shows the grounding quote and a weak-citation flag when the
   //    source text doesn't actually back the claim.
+  //    A citation never starts a line: the whitespace before each [Sn] (and between
+  //    consecutive ones) becomes a no-break space that glues it to the preceding word.
   const rewriteText = (text: string) =>
-    text.replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
+    text.replace(/[ \t]+(?=\[S\d+\])/g, "\u00a0").replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
       if (n === undefined) {
         const c = claims[Number(idx)];
         if (!c || !opened.has(idx!) || !closed.has(idx!)) return "";
@@ -303,7 +305,7 @@ watch(
 <template>
   <article
     ref="articleEl"
-    class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-headings:font-serif prose-headings:text-ink prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
+    class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-h1:font-serif prose-h2:font-serif prose-h3:font-serif prose-h4:font-serif prose-headings:text-ink prose-h1:text-[1.75rem] sm:prose-h1:text-[2.125rem] prose-h2:text-[1.3125rem] sm:prose-h2:text-2xl prose-p:text-pretty max-sm:prose-p:leading-[1.65] max-sm:prose-li:leading-[1.65] max-sm:hyphens-auto prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
     v-html="html"
   />
 </template>

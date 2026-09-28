@@ -700,7 +700,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       :id="`${uid}-panel`"
       role="tabpanel"
       :aria-labelledby="`${uid}-tab-${tab}`"
-      class="min-h-0 flex-1 overflow-y-auto px-6 py-6"
+      class="edge-fade-y min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
     >
       <!-- A data tab whose request is on the way, or failed: its own skeleton or error. -->
       <div v-if="activeData && activeData.state === 'loading'" class="space-y-2" aria-busy="true">

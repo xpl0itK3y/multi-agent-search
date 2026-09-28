@@ -230,3 +230,27 @@ describe("MarkdownView inline verification", () => {
     }
   });
 });
+
+describe("MarkdownView reading surface", () => {
+  it("glues each citation to the word before it, so none starts a line", () => {
+    const wrapper = render("Prices fell sharply [S1] [S2]. Next claim\t[S1].", [
+      { source_id: "S1", url: "https://one.example/a" },
+      { source_id: "S2", url: "https://two.example/b" },
+    ]);
+    // Serialized HTML writes the no-break space (U+00A0) as &nbsp;.
+    const html = wrapper.find("article").element.innerHTML;
+
+    expect(html).toContain("sharply&nbsp;<a");
+    expect(html).toContain("</a>&nbsp;<a");
+    expect(html).toContain("claim&nbsp;<a");
+    expect(wrapper.find("article").text()).toContain(["sharply", "[S1]", "[S2]"].join(String.fromCharCode(0xa0)));
+    expect(wrapper.findAll("a.md-citation")).toHaveLength(3);
+  });
+
+  it("keeps table headers in the UI face: serif applies to headings only", () => {
+    const cls = render("# Title").find("article").classes();
+
+    expect(cls).toContain("prose-h1:font-serif");
+    expect(cls.some((c) => c.startsWith("prose-headings:font-"))).toBe(false);
+  });
+});
