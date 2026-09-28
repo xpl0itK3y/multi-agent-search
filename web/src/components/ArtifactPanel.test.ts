@@ -156,3 +156,61 @@ describe("ArtifactPanel sharing", () => {
     expect(buttonWithText(w, t("share.create")).exists()).toBe(true);
   });
 });
+
+function tabButton(w: VueWrapper, key: string) {
+  const label = t(`artifact.${key}`);
+  const found = w.findAll("button").find((b) => b.text() === label);
+  if (!found) throw new Error(`no tab ${key}`);
+  return found;
+}
+
+describe("ArtifactPanel tabs", () => {
+  it("starts the next tab's request while another one is still in flight", async () => {
+    let resolveSources!: (v: unknown) => void;
+    mocks.api.getSources.mockReturnValue(new Promise((r) => (resolveSources = r)));
+    mocks.api.getConflicts.mockResolvedValue([]);
+    const w = await mountPanel();
+
+    await tabButton(w, "sources").trigger("click");
+    expect(w.find("[aria-busy=true]").exists()).toBe(true);
+    await tabButton(w, "conflicts").trigger("click");
+    await flushPromises();
+
+    expect(mocks.api.getConflicts).toHaveBeenCalledTimes(1);
+    // An empty result reads as empty, never as a blank tab.
+    expect(w.text()).toContain(t("artifact.conflictsEmpty"));
+
+    resolveSources([]);
+    await flushPromises();
+    await tabButton(w, "sources").trigger("click");
+    expect(w.text()).toContain(t("artifact.sourcesEmpty"));
+    expect(mocks.api.getSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a failed request, with Retry, only on its own tab", async () => {
+    mocks.api.getRedTeam
+      .mockRejectedValueOnce(new Error("500"))
+      .mockRejectedValueOnce(new Error("500"))
+      .mockResolvedValueOnce({ findings: [], challenged: 0, held: 0 });
+    mocks.api.getConflicts.mockResolvedValue([]);
+    const w = await mountPanel();
+
+    await tabButton(w, "redteam").trigger("click");
+    await flushPromises();
+    expect(w.find("[role=alert]").text()).toContain("request failed");
+    expect(w.text()).not.toContain(t("redteam.empty"));
+
+    await tabButton(w, "conflicts").trigger("click");
+    await flushPromises();
+    expect(w.find("[role=alert]").exists()).toBe(false);
+
+    // Coming back tries once more by itself; Retry is there when that fails too.
+    await tabButton(w, "redteam").trigger("click");
+    await flushPromises();
+    expect(mocks.api.getRedTeam).toHaveBeenCalledTimes(2);
+    await buttonWithText(w, t("common.retry")).trigger("click");
+    await flushPromises();
+    expect(mocks.api.getRedTeam).toHaveBeenCalledTimes(3);
+    expect(w.text()).toContain(t("redteam.empty"));
+  });
+});

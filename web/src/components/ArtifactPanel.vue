@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { confirm } from "@/lib/confirm";
@@ -126,73 +126,69 @@ const contradictionSentences = computed<string[]>(() =>
 );
 const comparison = ref<ComparisonTable | null>(null);
 const trail = ref<GraphTrailEntry[] | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
 
-async function ensureSources() {
-  if (sources.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
+// ── per-tab loading ───────────────────────────────────────────────────────────
+// Each tab owns its request, its pending flag and its error, so switching tabs while one
+// request is in flight still starts the next one, and a failure shows (with Retry) only
+// on the tab it belongs to. A tab never claims "no findings" for data it never fetched.
+type TabDataKey = "sources" | "conflicts" | "verification" | "redteam" | "trail";
+const pending = reactive(new Set<TabDataKey>());
+const errors = reactive<Partial<Record<TabDataKey, string | null>>>({});
+// A newer request for the same key (a refetch) wins over one still in flight.
+const requestSeq: Partial<Record<TabDataKey, number>> = {};
+
+async function load<T>(key: TabDataKey, target: Ref<T | null>, fetcher: () => Promise<T>, force = false) {
+  if (!force && (target.value !== null || pending.has(key))) return;
+  const seq = (requestSeq[key] = (requestSeq[key] ?? 0) + 1);
+  errors[key] = null;
+  pending.add(key);
   try {
-    sources.value = await api.getSources(props.id);
+    const value = await fetcher();
+    if (requestSeq[key] === seq) target.value = value;
   } catch (e) {
-    error.value = apiErrorMessage(e, t);
+    if (requestSeq[key] === seq) errors[key] = apiErrorMessage(e, t);
   } finally {
-    loading.value = false;
+    if (requestSeq[key] === seq) pending.delete(key);
   }
 }
 
-async function ensureTrail() {
-  if (trail.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    trail.value = (await api.getGraph(props.id)).graph_trail;
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+// What a tab shows: skeleton rows while its data is on the way, its own error, or data.
+function tabState(key: TabDataKey, value: unknown): "loading" | "error" | "ready" {
+  if (pending.has(key)) return "loading";
+  if (errors[key]) return "error";
+  return value === null ? "loading" : "ready";
 }
 
-async function ensureConflicts() {
-  if (conflicts.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    conflicts.value = await api.getConflicts(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
-}
+const ensureSources = (force = false) => load("sources", sources, () => api.getSources(props.id), force);
+const ensureTrail = () => load("trail", trail, async () => (await api.getGraph(props.id)).graph_trail);
+const ensureConflicts = () => load("conflicts", conflicts, () => api.getConflicts(props.id));
+const ensureVerification = () => load("verification", verification, () => api.getVerification(props.id));
+const ensureRedTeam = () => load("redteam", redTeam, () => api.getRedTeam(props.id));
 
-async function ensureVerification() {
-  if (verification.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    verification.value = await api.getVerification(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+const tabData: Record<TabDataKey, { target: Ref<unknown>; ensure: () => Promise<void> }> = {
+  sources: { target: sources, ensure: () => ensureSources() },
+  conflicts: { target: conflicts, ensure: ensureConflicts },
+  verification: { target: verification, ensure: ensureVerification },
+  redteam: { target: redTeam, ensure: ensureRedTeam },
+  trail: { target: trail, ensure: ensureTrail },
+};
+function retry(key: TabDataKey) {
+  tabData[key].target.value = null;
+  tabData[key].ensure();
 }
-
-async function ensureRedTeam() {
-  if (redTeam.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    redTeam.value = await api.getRedTeam(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
-}
+// The data tab on screen and its state; the report, dashboard and comparison tabs load
+// their own way.
+const TAB_DATA: Partial<Record<Tab, TabDataKey>> = {
+  sources: "sources",
+  conflicts: "conflicts",
+  confidence: "verification",
+  redteam: "redteam",
+  trail: "trail",
+};
+const activeData = computed(() => {
+  const key = TAB_DATA[tab.value];
+  return key ? { key, state: tabState(key, tabData[key].target.value) } : null;
+});
 
 async function ensureCitations() {
   if (citations.value) return;
@@ -300,9 +296,9 @@ watch(
     if (final) {
       // While finalizing, /sources serves a fallback pool; the canonical [Sn] table lands with
       // the report, so a list fetched before completion is refetched once.
-      if (wasFinal === false && sources.value) {
+      if (wasFinal === false && (sources.value || pending.has("sources"))) {
         sources.value = null;
-        ensureSources();
+        ensureSources(true);
       }
       ensureCitations();
       ensureIndependence();
@@ -605,7 +601,17 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-      <template v-if="tab === 'report'">
+      <!-- A data tab whose request is on the way, or failed: its own skeleton or error. -->
+      <div v-if="activeData && activeData.state === 'loading'" class="space-y-2" aria-busy="true">
+        <span class="sr-only">{{ $t("common.loading") }}</span>
+        <div v-for="n in 3" :key="n" class="h-16 rounded-lg border border-bd bg-surface/50 animate-pulse" />
+      </div>
+      <div v-else-if="activeData && activeData.state === 'error'" role="alert" class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+        <span class="text-danger">{{ errors[activeData.key] }}</span>
+        <button class="press text-accent hover:underline" @click="retry(activeData.key)">{{ $t("common.retry") }}</button>
+      </div>
+
+      <template v-else-if="tab === 'report'">
         <div v-if="report && isFinal" class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
           <button
             class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition"
@@ -816,9 +822,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'sources'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="sources && !sources.length" class="text-muted">{{ $t("artifact.sourcesEmpty") }}</p>
+        <p v-if="sources && !sources.length" class="text-muted">{{ $t("artifact.sourcesEmpty") }}</p>
         <div v-else class="space-y-2">
           <!-- Source-independence / echo-chamber summary: how many independent origins these sources really are -->
           <div
@@ -976,9 +980,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'conflicts'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="conflicts && !conflicts.length" class="text-muted">
+        <p v-if="conflicts && !conflicts.length" class="text-muted">
           {{ $t("artifact.conflictsEmpty") }}
         </p>
         <div v-else class="space-y-4">
@@ -1002,9 +1004,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'confidence'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <div v-else-if="verification" class="space-y-6">
+        <div v-if="verification" class="space-y-6">
           <!-- Honesty meter: one calibrated confidence fused from all trust signals, with its inputs shown -->
           <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4 animate-rise">
             <div class="flex items-center gap-4">
@@ -1088,9 +1088,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'redteam'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <template v-else-if="redTeam && redTeam.findings.length">
+        <template v-if="redTeam && redTeam.findings.length">
           <div class="mb-4 flex gap-4 text-xs text-muted">
             <span><span class="font-semibold text-amber-500">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
             <span><span class="font-semibold text-emerald-500">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
@@ -1126,9 +1124,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else>
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="trail && !trail.length" class="text-muted">{{ $t("artifact.trailEmpty") }}</p>
+        <p v-if="trail && !trail.length" class="text-muted">{{ $t("artifact.trailEmpty") }}</p>
         <ol v-else class="space-y-3">
           <li v-for="(e, i) in trail" :key="i" class="flex gap-3 text-sm">
             <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accentSoft" />
