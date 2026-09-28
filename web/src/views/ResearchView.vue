@@ -345,7 +345,7 @@ onBeforeUnmount(() => close?.());
           <button
             type="button"
             class="press hit grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent text-onAccent disabled:opacity-40"
-            :aria-label="$t('chat.placeholder')"
+            :aria-label="$t('chat.send')"
             :disabled="!chatInput.trim() || chatBusy"
             @click="sendChat"
           >

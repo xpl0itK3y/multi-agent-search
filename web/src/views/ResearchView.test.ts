@@ -57,4 +57,12 @@ describe("ResearchView", () => {
     expect(dot()).toContain("bg-success");
     expect(dot()).not.toContain("live-dot");
   });
+
+  it("names the follow-up send button for what it does, not with the field's placeholder", async () => {
+    const wrapper = await mountView("completed");
+
+    const send = wrapper.get("textarea + button");
+    expect(send.attributes("aria-label")).toBe(i18n.global.t("chat.send"));
+    expect(send.attributes("aria-label")).not.toBe(i18n.global.t("chat.placeholder"));
+  });
 });
