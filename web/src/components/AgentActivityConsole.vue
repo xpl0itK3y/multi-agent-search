@@ -117,6 +117,10 @@ const STOPPED = new Set(["failed", "timeout", "cancelled", "not_found"]);
 const stopped = computed(() => STOPPED.has(props.status ?? ""));
 const errored = computed(() => props.status === "failed" || props.status === "timeout");
 
+// A finished, collapsed console says "done" once, in one quiet line (§13 Utility: one
+// signal per state), instead of a header, a stepper of ticks and a badge repeating it.
+const quietDone = computed(() => props.status === "completed" && !props.live && !open.value);
+
 // Phases definition
 export interface PipelinePhase {
   id: string;
@@ -200,22 +204,22 @@ interface AgentMeta {
 }
 
 const AGENT_MAP: Record<string, Omit<AgentMeta, "badge">> = {
-  OrchestratorAgent: { name: "Orchestrator", avatar: "🧠", colorClass: "text-indigo-400 bg-indigo-500/10 border-indigo-500/30" },
-  ClarifierAgent: { name: "Clarifier", avatar: "💬", colorClass: "text-blue-400 bg-blue-500/10 border-blue-500/30" },
-  CrossLanguageAgent: { name: "CrossLanguage", avatar: "🌐", colorClass: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
-  SearchAgent: { name: "SearchAgent", avatar: "🔍", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
-  SourceCriticAgent: { name: "SourceCritic", avatar: "📑", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
-  EvidenceMapperAgent: { name: "EvidenceMapper", avatar: "🗺️", colorClass: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
-  ReplanAgent: { name: "ReplanAgent", avatar: "🔄", colorClass: "text-sky-400 bg-sky-500/10 border-sky-500/30" },
-  SourceReputationAgent: { name: "ReputationAuditor", avatar: "🏛️", colorClass: "text-orange-400 bg-orange-500/10 border-orange-500/30" },
-  SourceIndependenceAgent: { name: "IndependenceAuditor", avatar: "🔗", colorClass: "text-purple-400 bg-purple-500/10 border-purple-500/30" },
-  AnalyzerAgent: { name: "AnalyzerAgent", avatar: "✨", colorClass: "text-violet-400 bg-violet-500/10 border-violet-500/30" },
-  ReportCriticAgent: { name: "ReportCritic", avatar: "📝", colorClass: "text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30" },
-  RedTeamAgent: { name: "RedTeamAgent", avatar: "⚔️", colorClass: "text-rose-400 bg-rose-500/10 border-rose-500/30" },
-  CitationAuditAgent: { name: "CitationAudit", avatar: "🔬", colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
-  NumericCheckAgent: { name: "NumericCheck", avatar: "📊", colorClass: "text-teal-400 bg-teal-500/10 border-teal-500/30" },
-  StanceAgent: { name: "StanceAgent", avatar: "⚖️", colorClass: "text-yellow-400 bg-yellow-500/10 border-yellow-500/30" },
-  System: { name: "System", avatar: "⚡", colorClass: "text-slate-400 bg-slate-500/10 border-slate-500/30" },
+  OrchestratorAgent: { name: "Orchestrator", avatar: "🧠", colorClass: "text-indigo-700 dark:text-indigo-400 bg-indigo-500/10 border-indigo-500/30" },
+  ClarifierAgent: { name: "Clarifier", avatar: "💬", colorClass: "text-blue-700 dark:text-blue-400 bg-blue-500/10 border-blue-500/30" },
+  CrossLanguageAgent: { name: "CrossLanguage", avatar: "🌐", colorClass: "text-cyan-700 dark:text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
+  SearchAgent: { name: "SearchAgent", avatar: "🔍", colorClass: "text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
+  SourceCriticAgent: { name: "SourceCritic", avatar: "📑", colorClass: "text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/30" },
+  EvidenceMapperAgent: { name: "EvidenceMapper", avatar: "🗺️", colorClass: "text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/30" },
+  ReplanAgent: { name: "ReplanAgent", avatar: "🔄", colorClass: "text-sky-700 dark:text-sky-400 bg-sky-500/10 border-sky-500/30" },
+  SourceReputationAgent: { name: "ReputationAuditor", avatar: "🏛️", colorClass: "text-orange-700 dark:text-orange-400 bg-orange-500/10 border-orange-500/30" },
+  SourceIndependenceAgent: { name: "IndependenceAuditor", avatar: "🔗", colorClass: "text-purple-700 dark:text-purple-400 bg-purple-500/10 border-purple-500/30" },
+  AnalyzerAgent: { name: "AnalyzerAgent", avatar: "✨", colorClass: "text-violet-700 dark:text-violet-400 bg-violet-500/10 border-violet-500/30" },
+  ReportCriticAgent: { name: "ReportCritic", avatar: "📝", colorClass: "text-fuchsia-700 dark:text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30" },
+  RedTeamAgent: { name: "RedTeamAgent", avatar: "⚔️", colorClass: "text-rose-700 dark:text-rose-300 bg-rose-500/10 border-rose-500/30" },
+  CitationAuditAgent: { name: "CitationAudit", avatar: "🔬", colorClass: "text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
+  NumericCheckAgent: { name: "NumericCheck", avatar: "📊", colorClass: "text-teal-700 dark:text-teal-400 bg-teal-500/10 border-teal-500/30" },
+  StanceAgent: { name: "StanceAgent", avatar: "⚖️", colorClass: "text-yellow-700 dark:text-yellow-400 bg-yellow-500/10 border-yellow-500/30" },
+  System: { name: "System", avatar: "⚡", colorClass: "text-slate-600 dark:text-slate-400 bg-slate-500/10 border-slate-500/30" },
 };
 
 function agentMeta(id: string): AgentMeta {
@@ -235,7 +239,7 @@ const currentAgent = computed<AgentMeta>(() => {
       name: t("console.reportName"),
       badge: t("console.reportBadge"),
       avatar: "📄",
-      colorClass: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+      colorClass: "text-success bg-success/10 border-success/30",
     };
   }
   if (props.status === "failed") {
@@ -243,7 +247,7 @@ const currentAgent = computed<AgentMeta>(() => {
       name: t("console.failedName"),
       badge: t("console.failedBadge"),
       avatar: "⚠️",
-      colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
+      colorClass: "text-danger bg-danger/10 border-danger/30",
     };
   }
   if (props.status === "timeout") {
@@ -251,7 +255,7 @@ const currentAgent = computed<AgentMeta>(() => {
       name: t("console.stoppedName"),
       badge: t("status.timeout"),
       avatar: "⚠️",
-      colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
+      colorClass: "text-danger bg-danger/10 border-danger/30",
     };
   }
   if (props.status === "cancelled" || props.status === "not_found") {
@@ -426,129 +430,146 @@ function formatTime(isoStr?: string): string {
 </script>
 
 <template>
-  <div
-    class="transition-all duration-300"
-    :class="embedded ? '' : 'rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden'"
-  >
-    <!-- TOP AGENT HUD HEADER BAR -->
-    <div class="px-4 py-2.5 bg-surface/90 border-b border-bd flex items-center justify-between gap-3 min-w-0">
-      <!-- Active Agent Identity -->
-      <div class="flex items-center gap-2.5 min-w-0 flex-1">
-        <div class="relative flex items-center justify-center h-8 w-8 rounded-lg border text-base shadow-inner shrink-0" :class="currentAgent.colorClass">
-          <span>{{ currentAgent.avatar }}</span>
-          <span
-            v-if="live"
-            class="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-surface animate-pulse"
-          />
-        </div>
-
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="font-semibold text-sm text-ink leading-tight truncate shrink-0">
-              {{ currentAgent.name }}
-            </span>
-            <span class="rounded px-1.5 py-0.2 text-[10px] font-medium uppercase tracking-wider border shrink-0" :class="currentAgent.colorClass">
-              {{ currentAgent.badge }}
-            </span>
-          </div>
-          <div class="text-xs text-muted flex items-center gap-1.5 min-w-0 mt-0.5" :title="currentStatusDetail">
-            <span v-if="live" class="inline-block h-1.5 w-1.5 rounded-full bg-accent animate-ping shrink-0" />
-            <span class="truncate block min-w-0">{{ currentStatusDetail }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Controls & Elapsed Timer -->
-      <div class="flex items-center gap-2 text-xs shrink-0">
-        <div v-if="formattedElapsed" class="flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
-          <span class="text-muted">⏱</span>
-          <span class="tabular-nums text-[11px]">{{ formattedElapsed }}</span>
-        </div>
-
-        <button
-          class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap min-w-[124px]"
-          :title="open ? t('console.collapse') : t('console.expand')"
-          @click="toggleOpen"
-        >
-          <span>{{ open ? t("console.collapse") : t("console.journal", { n: entries.length }) }}</span>
-          <span class="text-[10px]">{{ open ? "▾" : "▸" }}</span>
-        </button>
-      </div>
+  <div :class="embedded ? '' : 'rounded-xl border border-bd/80 bg-surface shadow-sm overflow-hidden'">
+    <!-- FINISHED AND COLLAPSED: one completion line -->
+    <div v-if="quietDone" class="flex items-center gap-1.5 px-4 py-2.5 text-xs text-muted">
+      <span class="text-success" aria-hidden="true">✓</span>
+      <span class="tabular-nums">{{ formattedElapsed ? t("console.doneIn", { time: formattedElapsed }) : t("status.completed") }}</span>
+      <span aria-hidden="true">·</span>
+      <button
+        type="button"
+        class="press inline-flex items-center gap-1 rounded-md px-1 py-0.5 hover:text-ink"
+        :aria-expanded="open"
+        @click="toggleOpen"
+      >
+        <span class="tabular-nums">{{ t("console.journal", { n: entries.length }) }}</span>
+        <span class="text-3xs" aria-hidden="true">▸</span>
+      </button>
     </div>
 
-    <!-- PIPELINE STEPPER BAR (Always visible or under header) -->
-    <div class="px-4 py-2.5 bg-bg/30 border-b border-bd/60 flex items-center justify-between gap-1 overflow-x-auto text-xs scrollbar-none">
+    <template v-else>
+      <!-- TOP AGENT HUD HEADER BAR -->
+      <div class="px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
+        <!-- Active Agent Identity -->
+        <div class="flex items-center gap-2.5 min-w-0 flex-1">
+          <div class="relative flex items-center justify-center h-8 w-8 rounded-lg border text-base shadow-inner shrink-0" :class="currentAgent.colorClass">
+            <span>{{ currentAgent.avatar }}</span>
+            <!-- The console's one live signal: a slow breath, not a pulse or a ping. -->
+            <span
+              v-if="live"
+              class="live-dot absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-success ring-2 ring-surface"
+            />
+          </div>
+
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="min-w-0 truncate font-semibold text-sm text-ink leading-tight">
+                {{ currentAgent.name }}
+              </span>
+              <span class="shrink-0 rounded px-1.5 py-px text-3xs font-semibold uppercase tracking-wider border" :class="currentAgent.colorClass">
+                {{ currentAgent.badge }}
+              </span>
+            </div>
+            <div class="text-xs text-muted flex items-center gap-1.5 min-w-0 mt-0.5" :title="currentStatusDetail">
+              <span class="truncate block min-w-0">{{ currentStatusDetail }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls & Elapsed Timer -->
+        <div class="flex items-center gap-2 text-xs shrink-0">
+          <div v-if="formattedElapsed" class="hidden sm:flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
+            <span class="text-muted">⏱</span>
+            <span class="tabular-nums text-2xs">{{ formattedElapsed }}</span>
+          </div>
+
+          <button
+            class="flex items-center justify-center gap-1 px-2.5 py-1 rounded-md border border-bd hover:bg-surface/60 text-muted hover:text-ink transition shrink-0 whitespace-nowrap sm:min-w-[7.75rem]"
+            :title="open ? t('console.collapse') : t('console.expand')"
+            @click="toggleOpen"
+          >
+            <span class="tabular-nums">{{ open ? t("console.collapse") : t("console.journal", { n: entries.length }) }}</span>
+            <span class="text-3xs">{{ open ? "▾" : "▸" }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- PIPELINE STEPPER BAR (while live, or with the journal open) -->
+      <!-- Its bottom line only separates it from an open body; closed, it would double the card's edge. -->
       <div
-        v-for="(phase, idx) in PHASES"
-        :key="phase.id"
-        class="flex items-center gap-1.5 shrink-0 transition-all duration-300"
-        :data-phase-state="phaseState(idx)"
-        :class="{
-          'opacity-100': phaseState(idx) !== 'pending',
-          'opacity-40': phaseState(idx) === 'pending',
-        }"
+        v-if="open || live"
+        class="px-4 py-2.5 bg-bg/30 flex items-center justify-between gap-1 overflow-x-auto text-xs scrollbar-none"
+        :class="open && 'border-b border-bd/60'"
       >
         <div
-          class="flex items-center justify-center h-5 w-5 rounded-full text-[11px] font-semibold border transition-all duration-300"
+          v-for="(phase, idx) in PHASES"
+          :key="phase.id"
+          class="flex items-center gap-1.5 shrink-0 transition-opacity duration-300"
+          :data-phase-state="phaseState(idx)"
           :class="{
-            'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm': phaseState(idx) === 'done',
-            'bg-accent text-bg border-accent shadow-md shadow-accent/20 ring-4 ring-accent/20 animate-pulse scale-105': phaseState(idx) === 'active',
-            'bg-danger/15 text-danger border-danger/40': phaseState(idx) === 'error',
-            'bg-surface text-muted border-bd': phaseState(idx) === 'pending' || phaseState(idx) === 'stopped',
+            'opacity-100': phaseState(idx) !== 'pending',
+            'opacity-40': phaseState(idx) === 'pending',
           }"
         >
-          <span v-if="phaseState(idx) === 'done'">✓</span>
-          <span v-else-if="phaseState(idx) === 'error'">✕</span>
-          <span v-else-if="phaseState(idx) === 'stopped'">–</span>
-          <span v-else>{{ idx + 1 }}</span>
-        </div>
+          <div
+            class="flex items-center justify-center h-5 w-5 rounded-full text-2xs font-semibold border transition-colors duration-300"
+            :class="{
+              'bg-success/15 text-success border-success/40': phaseState(idx) === 'done',
+              'bg-accent text-onAccent border-accent ring-4 ring-accent/20': phaseState(idx) === 'active',
+              'bg-danger/15 text-danger border-danger/40': phaseState(idx) === 'error',
+              'bg-surface text-muted border-bd': phaseState(idx) === 'pending' || phaseState(idx) === 'stopped',
+            }"
+          >
+            <span v-if="phaseState(idx) === 'done'">✓</span>
+            <span v-else-if="phaseState(idx) === 'error'">✕</span>
+            <span v-else-if="phaseState(idx) === 'stopped'">–</span>
+            <span v-else class="tabular-nums">{{ idx + 1 }}</span>
+          </div>
 
-        <span
-          class="text-[12px] whitespace-nowrap font-medium transition-colors"
-          :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'error' ? 'text-danger' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
-        >
-          {{ $t('trace.' + phase.key) }}
-        </span>
+          <span
+            class="text-xs whitespace-nowrap font-medium transition-colors"
+            :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'error' ? 'text-danger' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
+          >
+            {{ $t('trace.' + phase.key) }}
+          </span>
 
-        <!-- Connector line -->
-        <div
-          v-if="idx < PHASES.length - 1"
-          class="h-0.5 w-4 sm:w-8 rounded-full mx-1 transition-all duration-300 relative overflow-hidden"
-          :class="idx < phaseIndex ? 'bg-emerald-500/60' : idx === phaseIndex && live ? 'bg-accent/30' : 'bg-bd'"
-        >
-          <div v-if="idx === phaseIndex && live" class="absolute inset-0 bg-accent animate-pulse" />
+          <!-- Connector line -->
+          <div
+            v-if="idx < PHASES.length - 1"
+            class="h-0.5 w-4 sm:w-8 rounded-full mx-1 transition-colors duration-300"
+            :class="idx < phaseIndex ? 'bg-success/60' : idx === phaseIndex && live ? 'bg-accent/60' : 'bg-bd'"
+          />
         </div>
       </div>
-    </div>
+    </template>
 
     <!-- EXPANDABLE DETAILS BODY (State preserved across collapse/expand) -->
     <Transition name="console-expand">
-      <div v-show="open" class="p-4 space-y-4 max-h-[60vh] overflow-y-auto scrollbar-thin scrollbar-thumb-bd">
+      <div v-show="open" class="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
         <!-- LIVE SYNTHESIS DEEP PROGRESS CARD -->
         <div
           v-if="live && currentPhase === 'synthesis'"
-          class="rounded-xl border border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-accent/10 to-indigo-500/10 p-3.5 shadow-sm relative overflow-hidden transition-all duration-300"
+          class="rounded-xl border border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-accent/10 to-indigo-500/10 p-3.5 shadow-sm relative overflow-hidden"
         >
           <div class="flex items-start justify-between gap-3 relative z-10">
             <div class="flex items-center gap-2.5">
-              <div class="h-8 w-8 rounded-lg bg-violet-500/20 border border-violet-500/40 flex items-center justify-center text-base shrink-0 animate-pulse">
+              <div class="h-8 w-8 rounded-lg bg-violet-500/20 border border-violet-500/40 flex items-center justify-center text-base shrink-0">
                 ✨
               </div>
               <div>
                 <div class="flex items-center gap-2">
                   <span class="font-semibold text-xs text-ink">{{ t("console.synthesisTitle") }}</span>
-                  <span v-if="currentEntry?.metrics?.attempt" class="rounded bg-bg/70 text-muted px-1.5 py-0.2 text-[10px]">
+                  <span v-if="currentEntry?.metrics?.attempt" class="rounded bg-bg/70 text-muted px-1.5 py-px text-3xs tabular-nums">
                     {{ t("console.iteration", { n: currentEntry.metrics.attempt }) }}
                   </span>
                 </div>
-                <p class="text-xs text-violet-200/90 mt-1 font-medium leading-snug">
+                <p class="text-xs text-ink mt-1 font-medium leading-snug">
                   {{ currentStatusDetail }}
                 </p>
               </div>
             </div>
 
-            <div v-if="formattedElapsed" class="flex items-center gap-1.5 text-xs text-violet-300/90 shrink-0 tabular-nums bg-bg/60 px-2 py-1 rounded-md border border-violet-500/30">
-              <span class="h-1.5 w-1.5 rounded-full bg-violet-400 animate-ping" />
+            <div v-if="formattedElapsed" class="flex items-center gap-1.5 text-xs text-accent shrink-0 tabular-nums bg-bg/60 px-2 py-1 rounded-md border border-violet-500/30">
               <span>{{ formattedElapsed }}</span>
             </div>
           </div>
@@ -560,26 +581,23 @@ function formatTime(isoStr?: string): string {
         </div>
 
         <!-- LIVE CHAIN-OF-THOUGHT (THINKING) TERMINAL -->
-        <div v-if="reasoning" class="rounded-lg border border-bd/90 bg-[#0d1117] text-[#c9d1d9] shadow-inner overflow-hidden">
-          <div class="flex items-center justify-between px-3 py-1.5 bg-[#161b22] border-b border-[#30363d] text-xs">
+        <div v-if="reasoning" class="rounded-lg border border-bd bg-rail shadow-inner overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-1.5 bg-surface/60 border-b border-bd text-xs">
             <div class="flex items-center gap-2">
-              <div class="flex items-center gap-1">
-                <span class="h-2.5 w-2.5 rounded-full bg-[#ff5f56]" />
-                <span class="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
-                <span class="h-2.5 w-2.5 rounded-full bg-[#27c93f]" />
-              </div>
-              <span class="font-mono text-[11px] text-muted ml-1 flex items-center gap-1.5">
+              <span class="font-mono text-2xs text-muted flex items-center gap-1.5">
                 <span class="text-accentSoft">🧠</span>
                 {{ $t("trace.chain_of_thought") }}
               </span>
             </div>
 
             <div class="flex items-center gap-2">
-              <span class="text-[10px] text-muted font-mono">
+              <span class="text-3xs text-muted tabular-nums">
                 {{ t("console.chars", { n: reasoning.length }) }}
               </span>
               <button
-                class="text-muted hover:text-white transition px-1"
+                type="button"
+                class="text-muted hover:text-ink transition px-1"
+                :aria-expanded="reasoningOpen"
                 @click="reasoningOpen = !reasoningOpen"
               >
                 {{ reasoningOpen ? "▾" : "▸" }}
@@ -590,7 +608,7 @@ function formatTime(isoStr?: string): string {
           <div
             v-if="reasoningOpen"
             ref="reasoningBox"
-            class="p-3 max-h-56 overflow-y-auto font-mono text-[12px] leading-relaxed whitespace-pre-wrap selection:bg-accent/30 scrollbar-thin scrollbar-thumb-bd"
+            class="p-3 max-h-56 overflow-y-auto font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink/85 selection:bg-accent/30"
             @scroll="onReasoningScroll"
           >
             {{ reasoning }}<span v-if="live" class="inline-block h-3.5 w-1.5 ml-0.5 bg-accent animate-pulse align-middle" />
@@ -604,7 +622,7 @@ function formatTime(isoStr?: string): string {
             :class="activeFilter === 'all' ? 'bg-accent/15 text-accent font-medium border border-accent/30' : 'text-muted hover:text-ink'"
             @click="activeFilter = 'all'"
           >
-            {{ $t("trace.filter_all") }} <span class="opacity-70">({{ entries.length }})</span>
+            {{ $t("trace.filter_all") }} <span class="opacity-70 tabular-nums">({{ entries.length }})</span>
           </button>
           <button
             class="px-2.5 py-1 rounded-md transition"
@@ -638,16 +656,16 @@ function formatTime(isoStr?: string): string {
                 :data-entry-state="entryState(entry)"
                 class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-colors duration-150 text-xs"
                 :class="{
-                  'border-emerald-500/30 bg-surface/60': entryState(entry) === 'done' && !isLoopback(entry),
+                  'border-success/30 bg-surface/60': entryState(entry) === 'done' && !isLoopback(entry),
                   'border-accent/40 ring-1 ring-accent/20 bg-accent/5': entryState(entry) === 'running' && !isLoopback(entry),
                   'border-danger/30 bg-danger/5': entryState(entry) === 'error' && !isLoopback(entry),
-                  'border-amber-500/40 bg-amber-500/5 ring-1 ring-amber-500/20': isLoopback(entry),
+                  'border-warning/40 bg-warning/5 ring-1 ring-warning/20': isLoopback(entry),
                 }"
               >
                 <!-- Loopback Badge when agent is sent back -->
                 <div
                   v-if="isLoopback(entry)"
-                  class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+                  class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-warning/10 border border-warning/30 px-2 py-0.5 text-3xs font-semibold text-warning"
                 >
                   <!-- Spins only while this loop-back is the running step; the label's own ↩ stays. -->
                   <span v-if="entryState(entry) === 'running'" class="animate-spin">↺</span>
@@ -659,28 +677,28 @@ function formatTime(isoStr?: string): string {
                     <!-- Status icon/number -->
                     <span
                       v-if="entryState(entry) === 'done'"
-                      class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-success/15 border border-success/40 text-success text-3xs font-bold shrink-0 shadow-e1"
                       :title="t('console.entryDone')"
                     >
                       ✓
                     </span>
                     <span
                       v-else-if="entryState(entry) === 'running'"
-                      class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-onAccent text-[9px] font-bold shrink-0 ring-2 ring-accent/30"
                       :title="t('console.entryRunning')"
                     >
                       ⚡
                     </span>
                     <span
                       v-else-if="entryState(entry) === 'error'"
-                      class="flex items-center justify-center h-4 w-4 rounded-full bg-danger/15 border border-danger/40 text-danger text-[10px] font-bold shrink-0"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-danger/15 border border-danger/40 text-danger text-3xs font-bold shrink-0"
                       :title="t('console.entryStopped')"
                     >
                       ✕
                     </span>
                     <span
                       v-else
-                      class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[10px] font-bold shrink-0"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-3xs font-bold shrink-0"
                       :title="t('console.entryStopped')"
                     >
                       –
@@ -695,36 +713,29 @@ function formatTime(isoStr?: string): string {
 
                     <span
                       v-if="entry.action"
-                      class="rounded bg-bg/60 border border-bd/60 px-1 py-0.2 text-[10px] text-muted font-mono"
+                      class="rounded bg-bg/60 border border-bd/60 px-1 py-px text-3xs text-muted font-mono"
                     >
                       {{ entry.action }}
                     </span>
 
-                    <!-- Status label badge -->
+                    <!-- Status label: only for the step that is running or where the run stopped;
+                         a finished step's ✓ already says it (one signal, §13). -->
                     <span
-                      v-if="entryState(entry) === 'done'"
-                      class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
+                      v-if="entryState(entry) === 'running'"
+                      class="inline-flex items-center rounded bg-accent/15 border border-accent/30 px-1.5 py-px text-3xs font-medium text-accent shrink-0"
                     >
-                      <span>✓</span>
-                      <span>{{ t("console.entryDone") }}</span>
+                      {{ t("console.entryRunning") }}
                     </span>
                     <span
-                      v-else-if="entryState(entry) === 'running'"
-                      class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
-                    >
-                      <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
-                      <span>{{ t("console.entryRunning") }}</span>
-                    </span>
-                    <span
-                      v-else
-                      class="inline-flex items-center rounded border px-1.5 py-px text-[10px] font-medium shrink-0"
+                      v-else-if="entryState(entry) !== 'done'"
+                      class="inline-flex items-center rounded border px-1.5 py-px text-3xs font-medium shrink-0"
                       :class="entryState(entry) === 'error' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-surface border-bd text-muted'"
                     >
                       {{ t("console.entryStopped") }}
                     </span>
                   </div>
 
-                  <span v-if="entry.timestamp" class="text-[10px] font-mono text-muted/60 shrink-0">
+                  <span v-if="entry.timestamp" class="text-3xs tabular-nums text-muted/60 shrink-0">
                     {{ formatTime(entry.timestamp) }}
                   </span>
                 </div>
@@ -738,10 +749,10 @@ function formatTime(isoStr?: string): string {
                   <span
                     v-for="(val, key) in entry.metrics"
                     :key="key"
-                    class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-[10px] text-muted"
+                    class="inline-flex items-center gap-1 rounded bg-bg/80 border border-bd/80 px-1.5 py-0.5 text-3xs text-muted"
                   >
                     <span class="opacity-60">{{ key }}:</span>
-                    <span class="font-semibold text-ink">{{ val }}</span>
+                    <span class="font-semibold text-ink tabular-nums">{{ val }}</span>
                   </span>
                 </div>
 
@@ -753,13 +764,13 @@ function formatTime(isoStr?: string): string {
                     :href="safeHttpUrl(s.url) ?? safeHttpUrl(`https://${s.domain}`) ?? undefined"
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-[11px] text-ink hover:border-accent hover:text-accent transition shadow-2xs"
+                    class="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-bd/70 bg-bg/60 px-2 py-0.5 text-2xs text-ink hover:border-accent hover:text-accent transition shadow-e1"
                     :title="s.title || s.domain"
                   >
                     <img
                       :src="`https://www.google.com/s2/favicons?domain=${s.domain}&sz=32`"
                       alt=""
-                      class="h-3 w-3 shrink-0 rounded-xs"
+                      class="h-3 w-3 shrink-0 rounded-sm"
                       loading="lazy"
                       @error="($event.target as HTMLImageElement).style.display = 'none'"
                     />
@@ -795,14 +806,6 @@ function formatTime(isoStr?: string): string {
 </template>
 
 <style scoped>
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
 @keyframes progress-indeterminate {
   0% { transform: translateX(-100%) scaleX(0.2); }
   50% { transform: translateX(0%) scaleX(0.7); }

@@ -216,3 +216,28 @@ describe("AgentActivityConsole tells the truth", () => {
     wrapper.unmount();
   });
 });
+
+describe("AgentActivityConsole calm", () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("says a finished run is done in one line, without the header or the stepper", () => {
+    const entries: TraceEntry[] = [
+      { step: "plan_start", detail: "Planning", timestamp: "2026-09-24T11:57:50+00:00" },
+      { step: "analyze", detail: "Writing", timestamp: "2026-09-24T11:59:29+00:00" },
+    ];
+    const wrapper = mount(AgentActivityConsole, {
+      props: { entries, status: "completed", live: false },
+      global: { plugins: [i18n] },
+    });
+
+    expect(wrapper.text()).toContain(i18n.global.t("console.doneIn", { time: "01:39" }));
+    expect(wrapper.text()).toContain(i18n.global.t("console.journal", { n: 2 }));
+    expect(wrapper.text()).not.toContain(i18n.global.t("console.reportName"));
+    expect(wrapper.find("[data-phase-state]").exists()).toBe(false);
+    // A finished step keeps its ✓ but no longer repeats it as a badge.
+    expect(wrapper.text()).not.toContain(i18n.global.t("console.entryDone"));
+    wrapper.unmount();
+  });
+});
