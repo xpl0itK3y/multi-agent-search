@@ -55,6 +55,19 @@ describe("PlanCard editing", () => {
     expect(wrapper.text()).not.toContain(t("plan.removed"));
   });
 
+  it("shows each row's delete control at full muted contrast, not dimmed until hover", () => {
+    const wrapper = mountPlan(plan);
+    const del = wrapper.findAll(`button[aria-label="${t("plan.delete")}"]`);
+
+    expect(del).toHaveLength(plan.length);
+    for (const button of del) {
+      const classes = button.classes();
+      expect(classes).toContain("text-muted");
+      // An opacity or a faded colour at rest stays at about 1.5:1 on a touch screen.
+      expect(classes.filter((c) => /(^|:)opacity-|^text-muted\//.test(c))).toEqual([]);
+    }
+  });
+
   it("searches a sub-question typed without queries as written", async () => {
     const wrapper = mountPlan([{ id: "a", description: "  Only a question  ", queries: [] }]);
 

@@ -148,9 +148,11 @@ function approve() {
                 class="field-bare flex-1 truncate bg-transparent text-xs sm:text-sm font-medium text-ink placeholder:text-muted/60 focus:text-accent"
                 @input="dismissUndo"
               />
+              <!-- Full muted at rest (4.5:1 or more on the row in every theme): a touch
+                   screen never hovers, so a control dimmed until hover stays unreadable there. -->
               <button
                 type="button"
-                class="hit text-muted/50 hover:text-danger p-1 rounded transition opacity-60 group-hover:opacity-100 text-xs"
+                class="hit text-muted hover:text-danger p-1 rounded transition-colors text-xs"
                 :title="$t('plan.delete')"
                 :aria-label="$t('plan.delete')"
                 @click="removeRow(entry.index)"
