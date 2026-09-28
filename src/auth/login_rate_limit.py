@@ -184,11 +184,16 @@ FORGOT_PASSWORD_PER_EMAIL_PER_HOUR = 5
 LINK_REDEEM_PER_IP_PER_HOUR = 30
 VERIFICATION_EMAIL_PER_USER_PER_HOUR = 5
 
-_forgot_password_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=True)
-_forgot_password_email_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=True)
-_password_reset_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=True)
-_email_verify_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=True)
-_verification_email_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=True)
+# Without lockout protection (SEC-REC-4): with it, a table full of keys at their limit
+# (10,000 addresses or clients) refused every new one for the hour, turning recovery off
+# for everyone. What these limit is harmless to repeat, since a link token has 256 random
+# bits and every reset mail goes to the account's own address, so forgetting the oldest
+# lockout at the cap only hands one address or client a fresh budget.
+_forgot_password_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=False)
+_forgot_password_email_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=False)
+_password_reset_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=False)
+_email_verify_ip_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=False)
+_verification_email_limiter = SlidingWindowLimiter(RECOVERY_WINDOW_SECONDS, protect_lockouts=False)
 _RECOVERY_LIMITERS = (
     _forgot_password_ip_limiter,
     _forgot_password_email_limiter,

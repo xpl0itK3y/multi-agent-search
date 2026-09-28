@@ -168,6 +168,30 @@ async def test_forgot_password_is_throttled_per_address_whether_or_not_it_exists
 
 
 @pytest.mark.anyio
+async def test_forgot_password_serves_a_new_address_when_the_throttle_is_full_of_lockouts(recovery, monkeypatch):
+    """SEC-REC-4: enough addresses at their hourly limit (10,000 per API process) must not
+    turn password recovery off for every other address."""
+    from src.auth import login_rate_limit
+
+    client, _service, sender = recovery
+    monkeypatch.setattr(login_rate_limit._forgot_password_email_limiter, "_max_keys", 2)
+    for address in (_email("flood-1"), _email("flood-2")):
+        codes = [
+            (await client.post("/v1/auth/password/forgot", json={"email": address})).status_code
+            for _ in range(6)
+        ]
+        assert codes == [202] * 5 + [429]
+    owner = _email()
+    await _register(client, owner)
+    sender.sent.clear()
+
+    response = await client.post("/v1/auth/password/forgot", json={"email": owner})
+
+    assert response.status_code == 202
+    assert [message.to for message in sender.sent] == [owner]
+
+
+@pytest.mark.anyio
 async def test_forgot_password_is_throttled_per_client(recovery):
     client, _service, _sender = recovery
     codes = [
