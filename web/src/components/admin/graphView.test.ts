@@ -6,7 +6,21 @@ import { defineComponent, h } from "vue";
 import { i18n } from "@/i18n";
 import type { AgentMetadataItem } from "@/lib/types";
 
-import { boundsOf, clampZoom, fitBounds, pinch, toWorld, zoomAt, ZMAX, ZMIN, type View } from "./graphView";
+import {
+  boundsOf,
+  clampZoom,
+  fitBounds,
+  limitPan,
+  panRange,
+  pinch,
+  toWorld,
+  wheelUnit,
+  wheelZoomFactor,
+  zoomAt,
+  ZMAX,
+  ZMIN,
+  type View,
+} from "./graphView";
 
 const close = (a: number, b: number, digits = 6) => expect(a).toBeCloseTo(b, digits);
 
@@ -302,5 +316,174 @@ describe("AgentsGraphTab gestures", () => {
     await reset.trigger("click");
     expect((node("optimizer").element as HTMLElement).style.transform).toBe("translate(790px, 300px)");
     expect((node("clarifier").element as HTMLElement).style.transform).toBe("translate(420px, 300px)");
+  });
+});
+
+describe("graphView: wheel and pan limits", () => {
+  it("normalises wheel units: lines and pages become pixels", () => {
+    expect(wheelUnit(0, 800)).toBe(1);
+    expect(wheelUnit(1, 800)).toBe(16);
+    expect(wheelUnit(2, 800)).toBe(800);
+  });
+
+  it("follows a trackpad pinch exactly and tames a mouse notch", () => {
+    close(wheelZoomFactor(-4), Math.exp(0.04));
+    close(wheelZoomFactor(10), Math.exp(-0.1));
+    // Chrome's 100 px notch and Firefox's 3-line notch zoom by the same step.
+    close(wheelZoomFactor(100), wheelZoomFactor(3, 16));
+    expect(wheelZoomFactor(100)).toBeGreaterThan(0.75);
+    expect(wheelZoomFactor(-100)).toBeLessThan(1.3);
+  });
+
+  it("keeps at least 120px of the content on screen", () => {
+    const bbox = { minX: 60, minY: 160, maxX: 6910, maxY: 700 };
+    const r = panRange(bbox, 0.5, { w: 1200, h: 640 });
+    // Right edge of the content at the left limit: exactly 120px in from the left.
+    close(bbox.maxX * 0.5 + r.minX, 120);
+    close(bbox.minX * 0.5 + r.maxX, 1200 - 120);
+    close(bbox.maxY * 0.5 + r.minY, 120);
+    close(bbox.minY * 0.5 + r.maxY, 640 - 120);
+  });
+
+  it("never inverts the range for content smaller than the margin", () => {
+    const r = panRange({ minX: 0, minY: 0, maxX: 100, maxY: 50 }, 0.5, { w: 400, h: 300 });
+    expect(r.minX).toBeLessThanOrEqual(r.maxX);
+    expect(r.minY).toBeLessThanOrEqual(r.maxY);
+  });
+
+  it("limitPan clamps into range and never jumps a pan that is already outside", () => {
+    expect(limitPan(0, 50, -100, 100)).toBe(50);
+    expect(limitPan(0, 150, -100, 100)).toBe(100);
+    expect(limitPan(0, -150, -100, 100)).toBe(-100);
+    // Already past the max: it may come back, not go further.
+    expect(limitPan(180, 170, -100, 100)).toBe(170);
+    expect(limitPan(180, 200, -100, 100)).toBe(180);
+  });
+});
+
+describe("AgentsGraphTab wheel, zoom buttons and fit", () => {
+  const W = 1200;
+  const H = 600;
+
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([agent("clarifier")]);
+    // jsdom has no layout: give every element the viewport's size.
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(W);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(H);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  // The world's transform, as a view: "translate(Xpx, Ypx) scale(Z)".
+  function shownView(): View {
+    const m = /translate\((-?[\d.e-]+)px, (-?[\d.e-]+)px\) scale\(([\d.e-]+)\)/.exec(worldTransform());
+    if (!m) throw new Error(`unexpected transform ${worldTransform()}`);
+    return { panX: Number(m[1]), panY: Number(m[2]), zoom: Number(m[3]) };
+  }
+
+  function wheel(init: WheelEventInit) {
+    const e = new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: 0, clientY: 0, ...init });
+    viewport().element.dispatchEvent(e);
+    return e;
+  }
+
+  it("starts readable at the trigger when the whole graph would only fit unreadably small", async () => {
+    await mountGraph();
+    const v = shownView();
+    expect(v.zoom).toBe(0.55);
+    // The trigger card (x = 60) starts 48 px in from the left edge.
+    close(60 * v.zoom + v.panX, 48);
+  });
+
+  it("fits the whole graph on the % button", async () => {
+    await mountGraph();
+    await wrapper!.find('[data-test="graph-fit"]').trigger("click");
+    const v = shownView();
+    expect(v.zoom).toBeLessThan(0.55);
+    // Everything fits between the side paddings, and the label shows the live zoom.
+    expect(60 * v.zoom + v.panX).toBeGreaterThanOrEqual(47.9);
+    expect(6910 * v.zoom + v.panX).toBeLessThanOrEqual(W - 47.9);
+    expect(wrapper!.find('[data-test="graph-fit"]').text()).toBe(`${Math.round(v.zoom * 100)}%`);
+  });
+
+  it("zooms the + button around the viewport centre", async () => {
+    await mountGraph();
+    const centre = { x: W / 2, y: H / 2 };
+    const before = toWorld(shownView(), centre);
+    const plus = wrapper!.findAll("button").find((b) => b.attributes("title") === i18n.global.t("admin.agents.zoomIn"))!;
+    for (let i = 0; i < 5; i++) await plus.trigger("click");
+
+    const after = toWorld(shownView(), centre);
+    close(after.x, before.x, 3);
+    close(after.y, before.y, 3);
+    // A button change glides; the glide class goes once it is over.
+    expect(wrapper!.find(".origin-top-left").classes()).toContain("duration-200");
+  });
+
+  it("pans on a plain wheel, in pixels for Chrome and in lines for Firefox", async () => {
+    await mountGraph();
+    const v0 = shownView();
+    const e = wheel({ deltaX: 30, deltaY: 20 });
+    await flushPromises();
+    expect(e.defaultPrevented).toBe(true);
+    close(shownView().panX, v0.panX - 30);
+    close(shownView().panY, v0.panY - 20);
+
+    wheel({ deltaX: 2, deltaMode: 1 });
+    await flushPromises();
+    close(shownView().panX, v0.panX - 30 - 32);
+    expect(shownView().zoom).toBe(v0.zoom);
+  });
+
+  it("zooms around the cursor on Ctrl + wheel (and a trackpad pinch)", async () => {
+    await mountGraph();
+    const cursor = { x: 300, y: 200 };
+    const before = toWorld(shownView(), cursor);
+    const e = wheel({ deltaY: -8, ctrlKey: true, clientX: cursor.x, clientY: cursor.y });
+    await flushPromises();
+    expect(e.defaultPrevented).toBe(true);
+    const v = shownView();
+    expect(v.zoom).toBeGreaterThan(0);
+    const after = toWorld(v, cursor);
+    close(after.x, before.x, 3);
+    close(after.y, before.y, 3);
+  });
+
+  it("leaves a vertical wheel to the page once the canvas can't pan further", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await mountGraph();
+    // Pan the content up to its limit (at least 120 px must stay on screen).
+    wheel({ deltaY: 100000 });
+    await flushPromises();
+    vi.advanceTimersByTime(250); // the wheel sequence ends
+    const pinned = shownView();
+
+    const e = wheel({ deltaY: 100 });
+    await flushPromises();
+    expect(e.defaultPrevented).toBe(false);
+    expect(shownView()).toEqual(pinned);
+
+    // Back the other way the canvas takes the wheel again.
+    vi.advanceTimersByTime(250);
+    const back = wheel({ deltaY: -100 });
+    expect(back.defaultPrevented).toBe(true);
+  });
+
+  it("moves the dot grid with the content", async () => {
+    await mountGraph();
+    wheel({ deltaX: 10, deltaY: 10 });
+    await flushPromises();
+    const v = shownView();
+    const style = (viewport().element as HTMLElement).style;
+    expect(style.backgroundPosition).toBe(`${v.panX}px ${v.panY}px`);
+    const g = 20 * v.zoom * (v.zoom < 0.5 ? 2 : 1);
+    expect(style.backgroundSize).toBe(`${g}px ${g}px`);
   });
 });

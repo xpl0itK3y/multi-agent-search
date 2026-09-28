@@ -1,10 +1,25 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
-import { pinch, type Point, type View } from "./graphView";
+import {
+  boundsOf,
+  fitBounds,
+  limitPan,
+  panRange,
+  pinch,
+  wheelUnit,
+  wheelZoomFactor,
+  zoomAt,
+  ZOOM_LIMITS,
+  type BBox,
+  type PanRange,
+  type Point,
+  type Size,
+  type View,
+} from "./graphView";
 
 const { t, te } = useI18n();
 
@@ -33,8 +48,8 @@ const zoom = ref(0.55);
 const panX = ref(40);
 const panY = ref(60);
 const isPanning = ref(false);
-const isZooming = ref(false);
-let zoomTimeout: any = null;
+// True while wheel events keep arriving (a trackpad swipe or pinch in progress).
+const isWheeling = ref(false);
 const canvasViewportRef = ref<HTMLElement | null>(null);
 
 // ── Gestures on Pointer Events (apple-design §2, §3, §10) ─────────────────────
@@ -147,6 +162,7 @@ function onPointerDown(e: PointerEvent) {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   if (!canvasViewportRef.value) return;
   suppressClick = false;
+  settleView();
   if (!pointers.size) viewportRect = canvasViewportRef.value.getBoundingClientRect();
   pointers.set(e.pointerId, localPoint(e));
 
@@ -253,53 +269,180 @@ function cancelAllGestures() {
   viewportRect = null;
 }
 
-function onWheel(e: WheelEvent) {
-  e.preventDefault();
-  if (!canvasViewportRef.value) return;
+// ── Wheel, trackpad and the zoom buttons (§1, §3, §7) ──────────────────────────
+// Canvas conventions: the wheel and two-finger swipes pan both axes; Ctrl/⌘ + wheel
+// (which is also how a trackpad pinch arrives) zooms around the cursor. Units are
+// normalised, so a Firefox line-mode wheel moves like Chrome's pixel one. A wheel pan
+// that starts with the canvas already at its vertical limit is left to the page, so
+// scrolling the admin page past the inline canvas never gets trapped; the choice holds
+// for the whole wheel sequence, as native nested scrollers do.
+const WHEEL_SEQUENCE_MS = 200;
+let wheelOwner: "canvas" | "page" | null = null;
+let wheelTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const rect = canvasViewportRef.value.getBoundingClientRect();
-  const mouseX = e.clientX - rect.left;
-  const mouseY = e.clientY - rect.top;
-
-  // World coordinates under cursor before zoom
-  const worldX = (mouseX - panX.value) / zoom.value;
-  const worldY = (mouseY - panY.value) / zoom.value;
-
-  // Soft, smooth sensitivity: damp large trackpad & wheel impulses
-  const sensitivity = 0.0009;
-  const factor = Math.exp(-e.deltaY * sensitivity);
-  // Cap single-event scaling to max ±4% change so it never jumps abruptly
-  const clampedFactor = Math.max(0.96, Math.min(1.04, factor));
-
-  const newZoom = Math.max(0.3, Math.min(1.5, zoom.value * clampedFactor));
-
-  // Anchor zoom around cursor position
-  panX.value = Math.round(mouseX - worldX * newZoom);
-  panY.value = Math.round(mouseY - worldY * newZoom);
-  zoom.value = Math.round(newZoom * 1000) / 1000;
-
-  isZooming.value = true;
-  if (zoomTimeout) clearTimeout(zoomTimeout);
-  zoomTimeout = setTimeout(() => {
-    isZooming.value = false;
-  }, 120);
+function viewportSize(): Size {
+  const el = canvasViewportRef.value;
+  return { w: el?.clientWidth ?? 0, h: el?.clientHeight ?? 0 };
 }
 
-function resetView() {
-  zoom.value = 0.55;
-  panX.value = 40;
-  panY.value = 60;
+function currentView(): View {
+  return { zoom: zoom.value, panX: panX.value, panY: panY.value };
+}
+
+function setView(v: View) {
+  zoom.value = v.zoom;
+  panX.value = v.panX;
+  panY.value = v.panY;
+}
+
+function onWheel(e: WheelEvent) {
+  const el = canvasViewportRef.value;
+  if (!el) return;
+  settleView();
+  const unit = wheelUnit(e.deltaMode, el.clientHeight);
+
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault(); // otherwise the browser zooms the whole page
+    const rect = el.getBoundingClientRect();
+    setView(zoomAt(currentView(), wheelZoomFactor(e.deltaY, unit), { x: e.clientX - rect.left, y: e.clientY - rect.top }));
+  } else {
+    let dx: number;
+    let dy: number;
+    if (e.shiftKey) {
+      // Shift + a vertical wheel pans sideways (some systems already send it as deltaX).
+      dx = (e.deltaY || e.deltaX) * unit;
+      dy = 0;
+    } else {
+      dx = e.deltaX * unit;
+      dy = e.deltaY * unit;
+    }
+    const range = currentPanRange();
+    const nextX = range ? limitPan(panX.value, panX.value - dx, range.minX, range.maxX) : panX.value - dx;
+    const nextY = range ? limitPan(panY.value, panY.value - dy, range.minY, range.maxY) : panY.value - dy;
+    if (wheelOwner === null) {
+      const vertical = Math.abs(dy) > Math.abs(dx);
+      const stuck = nextX === panX.value && nextY === panY.value;
+      wheelOwner = vertical && stuck && !isFullscreen.value ? "page" : "canvas";
+    }
+    if (wheelOwner === "page") {
+      restartWheelSequence();
+      return; // the page scrolls on
+    }
+    e.preventDefault();
+    panX.value = nextX;
+    panY.value = nextY;
+  }
+
+  isWheeling.value = true;
+  restartWheelSequence();
+}
+
+function restartWheelSequence() {
+  if (wheelTimer) clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => {
+    wheelTimer = null;
+    wheelOwner = null;
+    isWheeling.value = false;
+  }, WHEEL_SEQUENCE_MS);
+}
+
+// Button-driven changes glide for 200 ms on the emphasized curve (no bounce: a button
+// carries no momentum). Wheel, drag and pinch stay 1:1, with no transition at all.
+const VIEW_ANIMATION_MS = 200;
+const isAnimatingView = ref(false);
+const worldRef = ref<HTMLElement | null>(null);
+let viewAnimationTimer: ReturnType<typeof setTimeout> | null = null;
+
+function animateView(v: View) {
+  isAnimatingView.value = true;
+  setView(v);
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
+  viewAnimationTimer = setTimeout(() => {
+    viewAnimationTimer = null;
+    isAnimatingView.value = false;
+  }, VIEW_ANIMATION_MS + 20);
+}
+
+// A new gesture during a button glide starts from where the canvas is on screen (the
+// presentation value), not from the glide's target, so it never jumps (§3).
+function settleView() {
+  if (!isAnimatingView.value) return;
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
+  viewAnimationTimer = null;
+  const el = worldRef.value;
+  const shown = el && typeof getComputedStyle === "function" ? getComputedStyle(el).transform : "";
+  const m = /^matrix\(([^)]+)\)$/.exec(shown ?? "");
+  if (m) {
+    const [a, , , , e, f] = m[1].split(",").map(Number);
+    if ([a, e, f].every(Number.isFinite) && a > 0) setView({ zoom: a, panX: e, panY: f });
+  }
+  isAnimatingView.value = false;
+}
+
+// Quick repeated presses compound from the target (1.2 × 1.2 …); the CSS transition
+// itself retargets from wherever the canvas is on screen.
+function zoomBy(factor: number) {
+  const { w, h } = viewportSize();
+  animateView(zoomAt(currentView(), factor, { x: w / 2, y: h / 2 }));
 }
 
 function zoomIn() {
-  const newZoom = Math.min(1.5, Math.round((zoom.value + 0.05) * 100) / 100);
-  zoom.value = newZoom;
+  zoomBy(1.2);
 }
 
 function zoomOut() {
-  const newZoom = Math.max(0.3, Math.round((zoom.value - 0.05) * 100) / 100);
-  zoom.value = newZoom;
+  zoomBy(1 / 1.2);
 }
+
+// The whole graph in view, centred, never past 100% (the % button).
+function fitView(animate = true, pad = 48) {
+  const size = viewportSize();
+  const bbox = contentBounds.value;
+  if (!bbox || size.w <= 0 || size.h <= 0) return;
+  const v = fitBounds(bbox, size, pad, ZOOM_LIMITS, 1);
+  if (animate) animateView(v);
+  else setView(v);
+}
+
+// The first view: the fit when it leaves the cards readable; otherwise (the long
+// pipeline on a laptop fits only at ~15%, where no name can be read) the readable
+// default zoom, starting at the trigger and centred vertically. The % button still
+// gives the whole-graph overview.
+const READABLE_ZOOM = 0.45;
+const START_ZOOM = 0.55;
+function showInitialView(pad = 48) {
+  const size = viewportSize();
+  const bbox = contentBounds.value;
+  if (!bbox || size.w <= 0 || size.h <= 0) return;
+  const fit = fitBounds(bbox, size, pad, ZOOM_LIMITS, 1);
+  if (fit.zoom >= READABLE_ZOOM) {
+    setView(fit);
+    return;
+  }
+  const z = START_ZOOM;
+  setView({ zoom: z, panX: pad - bbox.minX * z, panY: (size.h - (bbox.maxY - bbox.minY) * z) / 2 - bbox.minY * z });
+}
+
+function currentPanRange(): PanRange | null {
+  const bbox = contentBounds.value;
+  const size = viewportSize();
+  if (!bbox || size.w <= 0 || size.h <= 0) return null;
+  return panRange(bbox, zoom.value, size);
+}
+
+// The dot grid is drawn in world space: it pans and scales with the content, so the
+// surface under the pointer moves with it. Below 50% the step doubles to stay legible.
+const gridStyle = computed(() => {
+  const g = 20 * zoom.value * (zoom.value < 0.5 ? 2 : 1);
+  return {
+    backgroundImage: "radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px)",
+    backgroundSize: `${g}px ${g}px`,
+    backgroundPosition: `${panX.value}px ${panY.value}px`,
+    transition: isAnimatingView.value
+      ? `background-size ${VIEW_ANIMATION_MS}ms var(--ease-emph), background-position ${VIEW_ANIMATION_MS}ms var(--ease-emph)`
+      : "none",
+  };
+});
 
 // ── Fixed n8n Grid Coordinates for all Agents (Screenshot 2 Style) ────────────
 interface VisualNode {
@@ -1057,6 +1200,22 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
   return [...forwardEdges, ...returnEdges];
 });
 
+// What Fit shows and the pan limits keep on screen: the nodes, plus the return loops'
+// arcs and their labels below them when those are shown.
+const contentBounds = computed<BBox | null>(() => {
+  const box = boundsOf(visualNodes.value);
+  if (!box || !showReturnLoops.value) return box;
+  const byId = new Map(visualNodes.value.map((n) => [n.id, n]));
+  for (const conn of RETURN_CONNECTIONS) {
+    const src = byId.get(conn.from);
+    const tgt = byId.get(conn.to);
+    if (!src || !tgt) continue;
+    const arcY = Math.max(conn.arcY, Math.max(src.y + src.height, tgt.y + tgt.height) + 45);
+    box.maxY = Math.max(box.maxY, arcY + 12);
+  }
+  return box;
+});
+
 // ── Simulation Walkthrough Steps ("How they work") ───────────────────────────
 interface SimulationStep {
   stepNumber: number;
@@ -1284,6 +1443,16 @@ async function fetchAgents() {
   }
 }
 
+// The first time the canvas appears, frame the graph (no glide: nothing to follow yet).
+let fittedOnce = false;
+watch(loading, async (isLoading) => {
+  if (isLoading || fittedOnce) return;
+  await nextTick();
+  if (!canvasViewportRef.value) return;
+  fittedOnce = true;
+  showInitialView();
+});
+
 // ── Fullscreen Viewport Mode ──────────────────────────────────────────────────
 const isFullscreen = ref(false);
 
@@ -1312,7 +1481,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (simTimer) clearTimeout(simTimer);
-  if (zoomTimeout) clearTimeout(zoomTimeout);
+  if (wheelTimer) clearTimeout(wheelTimer);
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
   if (frameId) cancelFrame(frameId);
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("blur", cancelAllGestures);
@@ -1496,7 +1666,8 @@ function isNodeDimmed(nodeId: string): boolean {
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomIn')" @click="zoomIn">
             +
           </button>
-          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" :title="t('admin.agents.resetZoom')" @click="resetView">
+          <!-- Fit: the whole graph in view (the label keeps showing the live zoom). -->
+          <button class="min-w-[3.25rem] px-1.5 py-1 text-center text-[11px] tabular-nums hover:text-ink" :title="t('admin.agents.resetZoom')" data-test="graph-fit" @click="fitView()">
             {{ Math.round(zoom * 100) }}%
           </button>
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomOut')" @click="zoomOut">
@@ -1549,10 +1720,10 @@ function isNodeDimmed(nodeId: string): boolean {
       ref="canvasViewportRef"
       class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner"
       :class="[
-        isFullscreen ? 'min-h-[calc(100vh-140px)] touch-none' : 'min-h-[640px] touch-pan-y',
+        isFullscreen ? 'min-h-[calc(100vh-140px)] touch-none' : 'h-[min(640px,calc(100dvh-260px))] min-h-[360px] touch-pan-y',
         isPanning ? 'cursor-grabbing' : 'cursor-grab',
       ]"
-      style="background-image: radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px); background-size: 20px 20px;"
+      :style="gridStyle"
       data-test="graph-viewport"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -1575,8 +1746,9 @@ function isNodeDimmed(nodeId: string): boolean {
       </div>
       <!-- Scalable & Pannable Canvas World -->
       <div
+        ref="worldRef"
         class="absolute origin-top-left"
-        :class="isZooming || isPanning || pinching || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
+        :class="isAnimatingView ? 'transition-transform duration-200 ease-emphasized' : 'transition-none'"
         :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '7400px', height: '850px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
@@ -1841,7 +2013,8 @@ function isNodeDimmed(nodeId: string): boolean {
                   {{ getNodeName(node.id, node.name) }}
                 </span>
               </div>
-              <p class="truncate text-[10px] text-muted mt-0.5 font-sans">
+              <!-- Too small to read below 45%: the name alone carries the node. -->
+              <p v-if="zoom >= 0.45" class="truncate text-[10px] text-muted mt-0.5 font-sans">
                 {{ getNodeSubtitle(node.id, node.subtitle) }}
               </p>
             </div>
@@ -1889,7 +2062,7 @@ function isNodeDimmed(nodeId: string): boolean {
 
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div
-              v-if="node.llmModel"
+              v-if="node.llmModel && zoom >= 0.45"
               class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm backdrop-blur"
             >
               <span class="text-accent text-[7px]">◆</span>

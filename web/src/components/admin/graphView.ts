@@ -96,3 +96,49 @@ export function fitBounds(bbox: BBox, viewport: Size, pad = 48, limits: ZoomLimi
     panY: (viewport.h - bh * zoom) / 2 - bbox.minY * zoom,
   };
 }
+
+export interface PanRange {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/**
+ * The pans that keep at least `keep` px of the content box on screen, per axis, so the
+ * graph can never be pushed out of sight (less when the content itself is smaller).
+ */
+export function panRange(bbox: BBox, zoom: number, viewport: Size, keep = 120): PanRange {
+  const kx = Math.min(keep, (bbox.maxX - bbox.minX) * zoom, viewport.w);
+  const ky = Math.min(keep, (bbox.maxY - bbox.minY) * zoom, viewport.h);
+  return {
+    minX: kx - bbox.maxX * zoom,
+    maxX: viewport.w - kx - bbox.minX * zoom,
+    minY: ky - bbox.maxY * zoom,
+    maxY: viewport.h - ky - bbox.minY * zoom,
+  };
+}
+
+/**
+ * A hard limit that never jumps: a pan already outside [min, max] (after a zoom moved the
+ * range) may come back towards it, but not go further out.
+ */
+export function limitPan(current: number, next: number, min: number, max: number): number {
+  return Math.min(Math.max(max, current), Math.max(Math.min(min, current), next));
+}
+
+/** px per wheel unit for WheelEvent.deltaMode: pixels, lines (Firefox), pages. */
+export function wheelUnit(deltaMode: number, pageHeight: number): number {
+  return deltaMode === 1 ? 16 : deltaMode === 2 ? pageHeight : 1;
+}
+
+/**
+ * The zoom factor for a Ctrl/⌘ wheel event (a trackpad pinch arrives this way, as
+ * small deltas). Pinch deltas pass through untouched, so the zoom follows the fingers;
+ * a mouse notch (100 px in Chrome, 3 lines in Firefox) is held to about a 22% step
+ * instead of a 63% jump.
+ */
+export function wheelZoomFactor(deltaY: number, unit = 1): number {
+  const d = Math.max(-25, Math.min(25, deltaY * unit));
+  return Math.exp(-d * 0.01);
+}
