@@ -630,6 +630,92 @@ async def test_a_linked_admin_email_gets_admin_rights_once_linked(recovery, monk
     assert (await client.get("/v1/admin/users", headers=_bearer(owner))).status_code == 200
 
 
+# The lost race of a link (BE-3): link_user_google_subject matches nothing because, between
+# the email lookup and the write, something else linked the account or took the subject.
+
+
+def _lose_the_link_race(monkeypatch, store, meanwhile):
+    """Make the store's link write lose: ``meanwhile(user_id, subject)`` runs first (what
+    the winner did), then the write reports that it matched nothing."""
+
+    def link(user_id, google_subject, *, clear_password):
+        meanwhile(user_id, google_subject)
+        return None
+
+    monkeypatch.setattr(store, "link_user_google_subject", link)
+
+
+def _same_identity_won(store):
+    """A concurrent callback of this Google identity linked the account first."""
+    return lambda user_id, subject: InMemoryTaskStore.link_user_google_subject(
+        store, user_id, subject, clear_password=False
+    )
+
+
+def _another_account_took_the_subject(store):
+    return lambda user_id, subject: store.create_user(
+        f"taker-{secrets.token_hex(4)}", _email("taker"), None, google_subject=subject
+    )
+
+
+def _the_account_got_another_subject(store):
+    return lambda user_id, subject: InMemoryTaskStore.link_user_google_subject(
+        store, user_id, f"other-{subject}", clear_password=False
+    )
+
+
+def test_a_link_lost_to_the_same_identity_is_a_plain_sign_in(monkeypatch):
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store, mail_sender=RecordingSender())
+    user = store.create_user("u-race", "race@example.com", hash_password("first-pass1"))
+    _lose_the_link_race(monkeypatch, store, _same_identity_won(store))
+
+    result = service.sign_in_with_google("Race@Example.com", "g-race", name="Owner")
+
+    # No second notice: the winning callback sent the one for this link.
+    assert (result.user.id, result.created, result.linked_notice) == (user.id, False, None)
+    assert store.get_user_by_google_subject("g-race").id == user.id
+
+
+@pytest.mark.parametrize("meanwhile", [_another_account_took_the_subject, _the_account_got_another_subject])
+def test_a_link_lost_to_another_identity_or_account_is_a_conflict(monkeypatch, meanwhile):
+    from src.domain.errors import ConflictError
+
+    store = InMemoryTaskStore()
+    service = ResearchService(task_store=store, mail_sender=RecordingSender())
+    store.create_user("u-race", "race@example.com", hash_password("first-pass1"))
+    _lose_the_link_race(monkeypatch, store, meanwhile(store))
+
+    with pytest.raises(ConflictError):
+        service.sign_in_with_google("race@example.com", "g-race")
+
+
+@pytest.mark.anyio
+async def test_the_callback_that_loses_a_link_race_signs_in_or_reports_a_conflict(recovery, monkeypatch):
+    client, service, sender = recovery
+    email = _email()
+    await _register(client, email)
+    sender.sent.clear()
+    _lose_the_link_race(monkeypatch, service.task_store, _same_identity_won(service.task_store))
+
+    same = await _google_callback(client, monkeypatch, email, "g-race")
+
+    assert (same.status_code, same.headers["location"]) == (302, "/")
+    assert client.cookies.get(settings.auth_cookie_name)  # signed in
+    assert sender.sent == []  # the winner's notice is the only one
+    client.cookies.clear()
+
+    other = _email()
+    await _register(client, other)
+    sender.sent.clear()
+    _lose_the_link_race(monkeypatch, service.task_store, _another_account_took_the_subject(service.task_store))
+
+    conflict = await _google_callback(client, monkeypatch, other, "g-taken")
+
+    assert conflict.headers["location"] == "/login?error=oauth_conflict"
+    assert sender.sent == []
+
+
 async def _owner_clicks_the_verification_link(client, sender, token_path: str = "/verify-email") -> str:
     """What the address's owner can do with a link a stranger's sign-up sent them: open it
     signed out (or a link scanner that runs the page), or signed in to their own account.
