@@ -22,10 +22,13 @@ const FAKE = ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnim
 
 let scopes: ReturnType<typeof effectScope>[] = [];
 
-// A 300px drawer on the left edge (it closes towards negative x) over a scrim.
+// A 300px drawer on the left edge (it closes towards negative x) over a scrim. The finger
+// lands on a row inside it, as it does in a real sheet.
 function setup(side: "left" | "right" = "left") {
   const panel = document.createElement("div");
   Object.defineProperty(panel, "offsetWidth", { configurable: true, value: 300 });
+  const row = document.createElement("button");
+  panel.append(row);
   const scrim = document.createElement("div");
   document.body.append(scrim, panel);
   const open = ref(true);
@@ -36,26 +39,66 @@ function setup(side: "left" | "right" = "left") {
   scopes.push(scope);
   scope.run(() => useDragDismiss({ panel: ref(panel), side, enabled: () => open.value, onDismiss, scrim: ref(scrim) }));
 
+  // Pointer capture the way a browser does it (jsdom has none): a touch is implicitly
+  // captured by the element under the finger; setPointerCapture takes effect before the
+  // next pointer event, which fires a bubbling lostpointercapture on the old target and
+  // gotpointercapture on the new one; the capture is released after pointerup/cancel.
+  let captured: Element | null = null;
+  let pending: Element | null = null;
+  const log: string[] = [];
+  const name = (el: Element) => (el === panel ? "panel" : "row");
+  const fireCapture = (type: string, target: Element) => {
+    log.push(`${type}@${name(target)}`);
+    target.dispatchEvent(new TestPointerEvent(type, { bubbles: true, pointerId: 1, pointerType: "touch" }));
+  };
+  const processPending = () => {
+    if (pending === captured) return;
+    const from = captured;
+    captured = pending;
+    if (from) fireCapture("lostpointercapture", from);
+    if (captured) fireCapture("gotpointercapture", captured);
+  };
+  panel.setPointerCapture = vi.fn(() => {
+    pending = panel;
+  });
+  // Something else takes the capture away from the panel.
+  const loseCapture = () => {
+    pending = null;
+    processPending();
+  };
+
   let x = 0;
   let y = 0;
-  const send = (type: string, pointerType = "touch") =>
-    panel.dispatchEvent(
+  const send = (type: string, pointerType = "touch", target: Element = captured ?? row) =>
+    target.dispatchEvent(
       new TestPointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType, isPrimary: true }),
     );
-  const down = (at: number, pointerType?: string, atY = 100) => {
+  const down = (at: number, pointerType = "touch", atY = 100) => {
     x = at;
     y = atY;
-    send("pointerdown", pointerType);
+    // Touch and pen are implicitly captured, as if before the pointerdown listeners run.
+    captured = null;
+    pending = pointerType === "mouse" ? null : row;
+    send("pointerdown", pointerType, row);
+    processPending();
   };
   // Move to (to, y) after `ms` milliseconds.
   const move = (to: number, ms: number, pointerType?: string, toY = y) => {
     vi.advanceTimersByTime(ms);
     x = to;
     y = toY;
+    processPending();
     send("pointermove", pointerType);
   };
-  const up = (pointerType?: string) => send("pointerup", pointerType);
-  return { panel, scrim, open, onDismiss, down, move, up };
+  const end = (type: "pointerup" | "pointercancel", pointerType?: string) => {
+    processPending();
+    send(type, pointerType);
+    loseCapture();
+  };
+  const up = (pointerType?: string) => end("pointerup", pointerType);
+  const cancel = () => end("pointercancel");
+  const offset = () => Number(/translate3d\((-?[\d.]+)px/.exec(panel.style.transform)?.[1] ?? 0);
+  return { panel, row, scrim, open, onDismiss, down, move, up, cancel, loseCapture, log, offset };
 }
 
 describe("useDragDismiss", () => {
@@ -78,6 +121,48 @@ describe("useDragDismiss", () => {
     expect(panel.style.transform).toBe("translate3d(-60px, 0, 0)");
     expect(panel.style.transition).toBe("none");
     expect(Number(scrim.style.opacity)).toBeCloseTo(1 - 60 / 300);
+  });
+
+  it("takes the capture from the row under the finger and keeps following", () => {
+    const { panel, onDismiss, down, move, up, log, offset } = setup();
+    down(200);
+    move(185, 10); // claimed: the capture moves to the panel
+    move(160, 10);
+    expect(panel.setPointerCapture).toHaveBeenCalledWith(1);
+    // The row's lost implicit capture bubbled through the panel on the way.
+    expect(log).toEqual(["gotpointercapture@row", "lostpointercapture@row", "gotpointercapture@panel"]);
+    expect(offset()).toBe(-25);
+    move(125, 20);
+    expect(offset()).toBe(-60);
+    up();
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("springs back when the browser takes the pointer (pointercancel)", () => {
+    const { panel, onDismiss, down, move, cancel, offset } = setup();
+    down(200);
+    move(185, 10);
+    move(125, 20);
+    expect(offset()).toBe(-60);
+    cancel();
+    vi.advanceTimersByTime(17);
+    expect(offset()).toBeGreaterThan(-60);
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(panel.style.transform).toBe("");
+  });
+
+  it("springs back when the panel itself loses the capture mid-drag", () => {
+    const { panel, onDismiss, down, move, loseCapture } = setup();
+    down(200);
+    move(185, 10);
+    move(125, 20);
+    loseCapture();
+    move(60, 20); // no longer tracked
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(panel.style.transform).toBe("");
   });
 
   it("closes on a quick flick, after the spring hands off the release velocity", async () => {

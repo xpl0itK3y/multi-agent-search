@@ -9,6 +9,9 @@
 //   edge (a gap would show);
 // - grabbing it mid-settle stops the spring where it is on screen and carries on.
 // Touch and pen only: with a mouse, the scrim, ✕ and Escape already do this.
+// The panel gets touch-action: pan-y, but the browser stops looking for touch-action at
+// the nearest scroller, so a scroller inside the panel needs pan-y too (SlideOver does
+// this for its vertical scrollers) or a sideways drag there becomes a browser pan.
 import { getCurrentScope, nextTick, onScopeDispose, watch, type Ref } from "vue";
 
 import { createVelocityTracker, project, rubberband, springTo, type Animation } from "./gesture";
@@ -229,11 +232,19 @@ export function useDragDismiss(opts: DragDismissOptions): void {
       settle(close, v, g.width);
     };
 
+    // The browser took the pointer (a pan it owns, a pinch): nothing more will come.
     const onPointerCancel = (e: PointerEvent) => {
       const g = gesture;
       if (!g || e.pointerId !== g.id) return;
       gesture = null;
       if (g.claimed) settle(false, 0, g.width);
+    };
+
+    // Only the panel's own capture ending counts. A touch starts out implicitly captured
+    // by the element under the finger; when claim() moves the capture to the panel, that
+    // child's lostpointercapture bubbles up here and must not cancel the drag just claimed.
+    const onLostCapture = (e: PointerEvent) => {
+      if (e.target === el) onPointerCancel(e);
     };
 
     const previousTouchAction = el.style.touchAction;
@@ -242,14 +253,14 @@ export function useDragDismiss(opts: DragDismissOptions): void {
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerCancel);
-    el.addEventListener("lostpointercapture", onPointerCancel);
+    el.addEventListener("lostpointercapture", onLostCapture);
     return () => {
       el.style.touchAction = previousTouchAction;
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", onPointerUp);
       el.removeEventListener("pointercancel", onPointerCancel);
-      el.removeEventListener("lostpointercapture", onPointerCancel);
+      el.removeEventListener("lostpointercapture", onLostCapture);
     };
   }
 

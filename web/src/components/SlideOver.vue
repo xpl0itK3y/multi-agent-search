@@ -149,7 +149,7 @@ function onPanelPointerDown() {
     :aria-label="label"
     :aria-hidden="open ? undefined : 'true'"
     :inert="open ? undefined : true"
-    class="fixed inset-y-0 flex flex-col border-bd bg-surface text-ink shadow-e3"
+    class="sheet-panel fixed inset-y-0 flex flex-col border-bd bg-surface text-ink shadow-e3"
     :class="[
       side === 'left' ? 'left-0 border-r' : 'right-0 border-l',
       panelClass,
@@ -170,3 +170,15 @@ function onPanelPointerDown() {
     <slot />
   </div>
 </template>
+
+<style scoped>
+/* Drag-to-dismiss needs the browser to leave sideways touch moves alone. The panel says
+   touch-action: pan-y (useDragDismiss), but the browser stops looking for touch-action
+   at the nearest scroller, so a vertical scroller in the sheet (a consumer's
+   overflow-y-auto body) would turn a sideways drag into a browser pan and cancel it.
+   Horizontal scrollers (a wide table, a code block) keep their own pan. */
+.sheet-panel :deep(.overflow-y-auto:not(.overflow-x-auto):not(.overflow-x-scroll)),
+.sheet-panel :deep(.overflow-y-scroll:not(.overflow-x-auto):not(.overflow-x-scroll)) {
+  touch-action: pan-y;
+}
+</style>
