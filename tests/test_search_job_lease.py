@@ -1,4 +1,5 @@
-"""SEARCH-LEASE: a search runner that stale recovery or a requeue took its job from stops.
+"""SEARCH-LEASE: a search runner that stale recovery or a requeue took its job from stops,
+and one that keeps writing progress keeps its job (every leased task write renews the lease).
 
 Search jobs had no lease. A runner that hung past the job timeout lost its job to stale
 recovery, and a second runner claimed it; when the first one came back, it still wrote the
@@ -181,3 +182,41 @@ def test_the_search_agent_stops_on_a_lost_lease_instead_of_failing_the_task():
 
     assert store.get_task("t1").status == TaskStatus.PENDING
     assert store.get_task("t1").logs == []
+
+
+# ── renewal: a search that keeps writing keeps its lease (SEARCH-LEASE-RENEW) ──
+
+
+def test_a_long_search_that_keeps_writing_is_not_recovered_from_under_its_runner():
+    store, broker, service, research_id, job_id = _setup()
+    claimed_epoch = store.claim_search_task_job_by_id(job_id).lease_epoch
+    maintenance = {}
+
+    def run_search_task(task_id, depth):
+        writes = store_for_search(service.task_store)
+        # Ten minutes in, past the 300 s job timeout, and still writing progress.
+        store.get_search_task_job(job_id).updated_at -= timedelta(minutes=10)
+        writes.update_task(task_id, TaskUpdate(log="Searching for: second query"))
+        maintenance["recovered"] = service.recover_stale_search_task_jobs().recovered_job_ids
+        writes.update_task(
+            task_id, TaskUpdate(status=TaskStatus.COMPLETED, result=[{"url": "https://a.example", "title": "A"}])
+        )
+
+    service.run_search_task = run_search_task
+    result = service.process_search_task_job(job_id, lease_epoch=claimed_epoch)
+
+    assert maintenance["recovered"] == []
+    assert (result.status, result.lease_epoch) == (SearchJobStatus.COMPLETED, claimed_epoch)
+    assert search_attempt_status(result, claimed_epoch) == "success"
+    assert len(broker.finalize) == 1
+
+
+def test_a_run_that_stopped_writing_is_still_recovered():
+    store, broker, service, _, job_id = _setup()
+    store.claim_search_task_job_by_id(job_id)
+    store.get_search_task_job(job_id).updated_at -= timedelta(minutes=10)  # hung: no write since
+
+    assert service.recover_stale_search_task_jobs().recovered_job_ids == [job_id]
+    job = store.get_search_task_job(job_id)
+    assert (job.status, job.lease_epoch) == (SearchJobStatus.PENDING, 1)
+    assert broker.search == [job_id]

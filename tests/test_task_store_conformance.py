@@ -1965,3 +1965,31 @@ def test_search_job_requeues_bump_the_lease_epoch(store):
     store.update_search_task_job(job.id, SearchJobStatus.DEAD_LETTER, "boom")
     requeued = store.requeue_search_task_job_of_active_research(job.id, "Search job manually requeued")
     assert requeued.lease_epoch == epoch + 2
+
+
+def test_a_leased_task_write_renews_the_lease_against_stale_recovery(store):
+    task = _task(store)
+    job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.claim_search_task_job_by_id(job.id)
+    long_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+    _backdate(store, "search_job", job.id, updated_at=long_ago)  # a long run, last renewed 10 min ago
+
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="still searching"), job.id, 0) is not None
+
+    assert store.get_search_task_job(job.id).updated_at > long_ago + timedelta(minutes=9)
+    job_timeout_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert store.recover_stale_search_task_jobs(job_timeout_ago) == []
+    assert store.get_search_task_job(job.id).status == SearchJobStatus.RUNNING
+
+
+def test_a_refused_leased_task_write_renews_nothing(store):
+    task = _task(store)
+    job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.claim_search_task_job_by_id(job.id)
+    store.recover_stale_search_task_jobs(datetime.now(timezone.utc) + timedelta(hours=1))  # epoch 0 -> 1
+    long_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+    _backdate(store, "search_job", job.id, updated_at=long_ago)
+
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="late"), job.id, 0) is None
+
+    assert store.get_search_task_job(job.id).updated_at == long_ago

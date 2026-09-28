@@ -1300,6 +1300,7 @@ class InMemoryTaskStore:
             job = self._leased_search_job(job_id, lease_epoch)
             if job is None or job.task_id != task_id:
                 return None
+            job.updated_at = datetime.now(timezone.utc)  # renews the lease, as SQL does
             return self.update_task(task_id, update)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:

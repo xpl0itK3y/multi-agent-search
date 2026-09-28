@@ -1831,6 +1831,10 @@ class SQLAlchemyTaskStore:
             ).scalar_one_or_none()
             if job is None:
                 return None
+            # Renew the lease, the search twin of renew_research_finalize_job_lease: stale
+            # recovery goes by updated_at, so a run that keeps writing its task is never
+            # taken for a dead one, however long it searches.
+            job.updated_at = datetime.now(timezone.utc)
             return self._apply_task_update(session, task_id, update)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
