@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
+import { confirm } from "@/lib/confirm";
 import { openResearchStream } from "@/lib/stream";
 import { createTraceDeduper, reconnectDelayMs, traceFromGraph } from "@/lib/trace";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
@@ -62,6 +63,25 @@ async function onCancel() {
   } finally {
     cancelling.value = false;
   }
+}
+
+// Stopping a research that is already searching or writing throws away its sources and
+// draft, and it can't be resumed: the one cancel worth a confirmation (apple-design §16
+// Agency). Cancelling while queued, clarifying or reviewing the plan loses nothing and
+// stays one click.
+async function onCancelClick() {
+  if (status.value === "processing" || status.value === "analyzing") {
+    const ok = await confirm({
+      title: t("research.cancelConfirmTitle"),
+      message: t("research.cancelConfirmBody"),
+      confirmText: t("research.cancelConfirmOk"),
+      cancelText: t("research.cancelConfirmKeep"),
+      danger: true,
+    });
+    // The run may have finished while the dialog was open.
+    if (!ok || done.value) return;
+  }
+  await onCancel();
 }
 
 let notified = false;
@@ -436,7 +456,7 @@ onBeforeUnmount(() => {
           v-if="!DONE.has(status)"
           class="rounded-md border border-bd px-2 py-0.5 text-xs text-muted transition hover:border-red-400/50 hover:text-red-400 disabled:opacity-50"
           :disabled="cancelling"
-          @click="onCancel"
+          @click="onCancelClick"
         >
           {{ cancelling ? $t("research.cancelling") : $t("research.cancel") }}
         </button>

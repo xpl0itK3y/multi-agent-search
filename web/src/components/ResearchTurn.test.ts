@@ -11,8 +11,11 @@ const mocks = vi.hoisted(() => ({
     getGraph: vi.fn(),
     getReport: vi.fn(),
     retryResearch: vi.fn(),
+    cancelResearch: vi.fn(),
+    getPlan: vi.fn(),
   },
   openResearchStream: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 // The real ApiError (ResearchTurn tells a deleted research from a transient failure by it).
@@ -22,6 +25,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   apiErrorMessage: () => "error",
 }));
 vi.mock("@/lib/stream", () => ({ openResearchStream: mocks.openResearchStream }));
+vi.mock("@/lib/confirm", () => ({ confirm: mocks.confirm }));
 
 import { ApiError } from "@/lib/api";
 import ResearchTurn from "./ResearchTurn.vue";
@@ -216,5 +220,51 @@ describe("ResearchTurn live stream", () => {
 
       expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + one poll
     });
+  });
+});
+
+describe("ResearchTurn cancel", () => {
+  const cancelButton = (wrapper: Awaited<ReturnType<typeof mountRunning>>) =>
+    wrapper.findAll("button").find((b) => b.text() === i18n.global.t("research.cancel"))!;
+
+  beforeEach(() => {
+    mocks.api.getGraph.mockResolvedValue({ graph_trail: [] });
+    mocks.api.cancelResearch.mockResolvedValue({});
+    mocks.openResearchStream.mockImplementation(() => vi.fn());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asks before stopping a running research, and Keep leaves it running", async () => {
+    mocks.api.getStatus.mockResolvedValue({ status: "processing", prompt: "Topic", llm_token_usage: null });
+    const wrapper = await mountRunning();
+
+    mocks.confirm.mockResolvedValueOnce(false); // «Keep researching»
+    await cancelButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.confirm.mock.calls[0][0]).toMatchObject({ danger: true, cancelText: i18n.global.t("research.cancelConfirmKeep") });
+    expect(mocks.api.cancelResearch).not.toHaveBeenCalled();
+    expect(wrapper.emitted("done")).toBeUndefined();
+
+    mocks.confirm.mockResolvedValueOnce(true); // «Stop»
+    await cancelButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(mocks.api.cancelResearch).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted("done")).toEqual([["cancelled"]]);
+  });
+
+  it("cancels a plan under review at once: nothing is lost yet", async () => {
+    mocks.api.getStatus.mockResolvedValue({ status: "plan_review", prompt: "Topic", llm_token_usage: null });
+    mocks.api.getPlan.mockResolvedValue({ items: [{ id: "p1", description: "Q", queries: ["q"] }] });
+    const wrapper = await mountRunning();
+
+    wrapper.findComponent({ name: "PlanCard" }).vm.$emit("cancel");
+    await flushPromises();
+
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.api.cancelResearch).toHaveBeenCalledTimes(1);
   });
 });
