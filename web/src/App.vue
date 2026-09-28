@@ -110,18 +110,27 @@ onBeforeUnmount(() => {
   if (typeof document !== "undefined") document.removeEventListener("keydown", onKeydown);
 });
 
+// §11: only transform and opacity animate. The drawer's shadow never interpolates (a
+// full-height blur repainted every frame): it is painted once on a pseudo-element behind
+// the sidebar and only fades, so a closed drawer leaves no shadow at the screen's edge.
+const DRAWER_SHADOW =
+  "after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:shadow-e3 after:transition-opacity after:ease-sheet lg:after:hidden";
+
 const drawerClass = computed(() => {
   if (reducedMotion.value) {
-    // §14: a short cross-fade instead of a slide.
+    // §14: a short cross-fade instead of a slide; the fade hides the shadow too.
     return [
-      "transition-opacity duration-150 lg:opacity-100 lg:pointer-events-auto",
-      ui.mobileOpen ? "opacity-100 shadow-e3" : "pointer-events-none opacity-0",
+      "shadow-e3 transition-opacity duration-150 lg:opacity-100 lg:pointer-events-auto",
+      ui.mobileOpen ? "opacity-100" : "pointer-events-none opacity-0",
     ];
   }
   // The sheet curve: a fast start that settles softly, a little quicker on the way out.
   return [
-    "transition-[transform,box-shadow] ease-sheet",
-    ui.mobileOpen ? "translate-x-0 shadow-e3 duration-300" : "-translate-x-full duration-[220ms]",
+    "transition-transform ease-sheet",
+    DRAWER_SHADOW,
+    ui.mobileOpen
+      ? "translate-x-0 duration-300 after:opacity-100 after:duration-300"
+      : "-translate-x-full duration-[220ms] after:opacity-0 after:duration-[220ms]",
   ];
 });
 </script>

@@ -120,6 +120,21 @@ describe("App shell", () => {
     expect(document.activeElement).toBe(menuButton(wrapper).element);
   });
 
+  it("slides the drawer on transform only; its shadow fades on a pseudo-element, never animates", async () => {
+    const { wrapper } = await mountApp("/");
+    const classes = () => drawer().className.split(/\s+/);
+    expect(drawer().className).not.toMatch(/box-shadow/);
+    expect(classes()).toContain("transition-transform");
+    expect(classes()).toContain("after:shadow-e3");
+    expect(classes()).not.toContain("shadow-e3"); // on the drawer itself, it would slide in with it
+    expect(classes()).toContain("after:opacity-0"); // closed: no shadow at the screen's edge
+
+    await menuButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(classes()).toContain("after:opacity-100");
+    expect(classes()).toContain("after:shadow-e3");
+  });
+
   it("keeps a child's lost implicit capture from cancelling the drawer's drag", async () => {
     const { wrapper } = await mountApp("/");
     await menuButton(wrapper).trigger("click");
