@@ -909,6 +909,39 @@ def test_token_version_bump_touches_nothing_else(store):
     assert store.bump_user_token_version(f"missing-{tag}") is None
 
 
+def test_a_password_write_or_a_delete_checked_on_a_stale_token_version_changes_nothing(store):
+    """SEC-REC2-1: set-password and account deletion check the current password on a read
+    and write after it. A sign-out everywhere, a reset or a Google link that removed the
+    password committed in between bumped token_version: the late write matches nothing."""
+    tag = uuid.uuid4().hex[:8]
+    user = store.create_user(f"cas-{tag}", f"cas-{tag}@example.com", "hash-1")
+    checked = user.token_version
+    store.bump_user_token_version(user.id)  # sign-out everywhere, after the check
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, f"reset-cas-{tag}")
+    before = store.get_user_by_id(user.id)
+
+    assert store.update_user_password(user.id, "hash-late", expected_token_version=checked) is None
+    assert store.delete_user(user.id, expected_token_version=checked) is False
+    assert store.get_user_by_id(user.id) == before  # same hash, same token_version
+    # Nor did the refused write retire the reset link, as a password write does.
+    assert store.get_live_auth_action_token(_hash(f"reset-cas-{tag}"), AuthActionPurpose.PASSWORD_RESET) is not None
+
+    store.link_user_google_subject(user.id, f"sub-cas-{tag}", clear_password=True)
+    linked = store.get_user_by_id(user.id)
+    stale = before.token_version
+    assert store.update_user_password(user.id, "hash-squat", expected_token_version=stale) is None
+    assert store.delete_user(user.id, expected_token_version=stale) is False
+    assert store.get_user_by_id(user.id) == linked and linked.password_hash is None
+
+    # The version as it is now writes, and bumps it as ever.
+    written = store.update_user_password(user.id, "hash-2", expected_token_version=linked.token_version)
+    assert (written.password_hash, written.token_version) == ("hash-2", linked.token_version + 1)
+    assert store.update_user_password(f"missing-{tag}", "hash-3", expected_token_version=0) is None
+    assert store.delete_user(f"missing-{tag}", expected_token_version=0) is False
+    assert store.delete_user(user.id, expected_token_version=written.token_version) is True
+    assert store.get_user_by_id(user.id) is None
+
+
 def test_oauth_lookup_by_google_subject(store):
     tag = uuid.uuid4().hex[:8]
     user = store.create_user(f"g-{tag}", f"g-{tag}@example.com", None, google_subject=f"sub-{tag}")

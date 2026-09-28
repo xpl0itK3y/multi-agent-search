@@ -195,9 +195,15 @@ class AuthMixin:
                 raise ForbiddenError(_reauth_required("resetting the password without the current one"))
         else:
             raise BadRequestError("Current password is required")
-        updated = self.task_store.update_user_password(user_id, hash_password(password))
+        # Compare-and-set on the account as checked above (SEC-REC2-1). A Google sign-in
+        # that removed an unverified password, a reset or a sign-out everywhere committed
+        # while the checks and the hashing ran bumped token_version and revoked the session
+        # this request came with: it gets what a revoked session gets, and no new one.
+        updated = self.task_store.update_user_password(
+            user_id, hash_password(password), expected_token_version=user.token_version
+        )
         if updated is None:
-            raise UnauthorizedError("User not found")
+            raise UnauthorizedError("Not authenticated")
         return self._to_auth_user(updated)
 
     def revoke_user_sessions(self, user_id: str) -> bool:
@@ -274,8 +280,10 @@ class AuthMixin:
                 raise BadRequestError("Current password is required")
             if not verify_password(current_password, user.password_hash):
                 raise UnauthorizedError("Current password is incorrect")
-        if not self.task_store.delete_user(user_id):
-            raise UnauthorizedError("User not found")
+        # Only the account as checked (SEC-REC2-1, as set_user_password): one that a Google
+        # sign-in took from an unverified sign-up meanwhile is its owner's now.
+        if not self.task_store.delete_user(user_id, expected_token_version=user.token_version):
+            raise UnauthorizedError("Not authenticated")
 
     def update_profile(self, user_id: str, name: str | None = None, avatar_url: str | None = None) -> AuthUser:
         user = self.task_store.update_user_profile(user_id, name, avatar_url)

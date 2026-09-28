@@ -85,14 +85,26 @@ class TaskStore(Protocol):
     def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None: ...
 
     # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
-    def delete_user(self, user_id: str) -> bool: ...
+    # expected_token_version makes it compare-and-set, as for update_user_password: False,
+    # and nothing deleted, once the account's token_version is another.
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool: ...
 
     # Bumps token_version (revokes earlier sessions) and invalidates the account's unused
     # password reset links, so a copied link cannot undo the new password. admin_provisioned
     # also stamps admin_provisioned_at, and email_verified_at when unset, in the same
     # write: scripts/create_admin.py (admin_identity).
+    # expected_token_version makes the write compare-and-set (SEC-REC2-1): it happens only
+    # while token_version still equals it, else None and nothing written. Set-password
+    # checks the current password on an earlier read; a Google link that removed the
+    # password, a reset or a sign-out everywhere committed since then bumped it, and must
+    # not be overwritten. None writes unconditionally (scripts/create_admin.py).
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None: ...
 
     # Revokes every session of the account (logout signs out everywhere): token_version + 1

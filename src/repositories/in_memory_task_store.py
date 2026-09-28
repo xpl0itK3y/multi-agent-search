@@ -279,10 +279,18 @@ class InMemoryTaskStore:
             None,
         )
 
-    def delete_user(self, user_id: str) -> bool:
-        if user_id not in self.users:
-            return False
-        del self.users[user_id]
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return False
+            if expected_token_version is not None and user.token_version != expected_token_version:
+                return False
+            del self.users[user_id]
+            # auth_action_tokens.user_id is ON DELETE CASCADE.
+            self.auth_action_tokens = {
+                token_id: row for token_id, row in self.auth_action_tokens.items() if row["user_id"] != user_id
+            }
         self._user_created_at.pop(user_id, None)
         # Mirror the SQL FK cascade: the user's researches (and their tasks) go too,
         # which also revokes every public share token they had minted.
@@ -297,19 +305,21 @@ class InMemoryTaskStore:
         for usage in self.llm_usage_logs:
             if usage["user_id"] == user_id:
                 usage["user_id"] = None
-        # auth_action_tokens.user_id is ON DELETE CASCADE.
-        with self._user_lock:
-            self.auth_action_tokens = {
-                token_id: row for token_id, row in self.auth_action_tokens.items() if row["user_id"] != user_id
-            }
         return True
 
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None:
         with self._user_lock:
             user = self.users.get(user_id)
             if user is None:
+                return None
+            if expected_token_version is not None and user.token_version != expected_token_version:
                 return None
             now = datetime.now(timezone.utc)
             patch = {"password_hash": password_hash, "token_version": user.token_version + 1}

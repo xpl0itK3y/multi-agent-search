@@ -373,6 +373,11 @@ Google sign-in (see [Sessions and passwords](#sessions-and-passwords)). If you
 signed up with a password and want to keep it, verify your address (signed in
 to that account) before you first sign in with Google.
 
+A password change or an account deletion that was under way in another session
+when the Google sign-in, or a password reset, took the account is refused with
+401 `Not authenticated`. It checked the old password before the account changed
+hands, so it changes nothing, sends no notice and signs nobody in.
+
 Upgrading to this release (migration `20260925_000033`) counts accounts that
 are linked to Google or were provisioned with `scripts/create_admin.py` as
 verified, and the script marks every account it provisions from then on

@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from src.api.app import create_app
+from src.auth import security
 from src.auth.security import create_token, hash_password
 from src.config import settings
 from src.domain import AuthActionPurpose
@@ -781,6 +782,108 @@ async def test_a_squatted_admin_address_gives_the_squatter_no_admin_rights(recov
     assert login.status_code == 401
     assert (await client.get("/v1/admin/users", headers=_bearer(owner))).status_code == 200
     assert service.task_store.get_user_by_email("ops@example.com").password_hash is None
+
+
+# SEC-REC2-1: set-password and account deletion check the current password on a read and
+# write after it (two PBKDF2 runs later, for set-password). The owner's Google sign-in or
+# reset that takes a squatted account in between must stand: the late request of the
+# squatter's session, revoked by then, gets 401 and neither a password, a notice nor a
+# session.
+
+
+def _meanwhile(monkeypatch, name: str, competing_write) -> None:
+    """Run ``competing_write()`` inside that window: when the service first calls
+    src.auth.security.<name> (hash_password, verify_password), after its read."""
+    original = getattr(security, name)
+    calls = []
+
+    def hooked(*args):
+        if not calls:
+            calls.append(name)
+            competing_write()
+        return original(*args)
+
+    monkeypatch.setattr(security, name, hooked)
+
+
+async def _change_password(client, session: str):
+    return await client.post(
+        "/v1/auth/set-password",
+        json={"current_password": "squatter-pass1", "password": "squatter-pass2"},
+        headers=_bearer(session),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_google_sign_in_during_a_password_change_leaves_the_owner_the_only_way_in(recovery, monkeypatch):
+    client, service, sender = recovery
+    email = _email()
+    squatter = await _register(client, email, password="squatter-pass1")
+    sender.sent.clear()
+    owner = {}
+
+    def owner_signs_in_with_google():
+        owner["user"] = service.sign_in_with_google(email, google_subject="g-owner").user
+
+    _meanwhile(monkeypatch, "hash_password", owner_signs_in_with_google)
+
+    changed = await _change_password(client, squatter)
+
+    assert (changed.status_code, changed.json()["detail"]) == (401, "Not authenticated")
+    assert settings.auth_cookie_name not in changed.cookies  # no session minted
+    stored = service.task_store.get_user_by_email(email)
+    assert (stored.google_subject, stored.password_hash) == ("g-owner", None)
+    assert stored.token_version == owner["user"].token_version  # nothing written after the link
+    assert sender.sent == []  # no "password changed" notice
+    login = await client.post("/v1/auth/login", json={"email": email, "password": "squatter-pass2"})
+    assert login.status_code == 401
+    owner_session = create_token(stored.id, email=email, token_version=owner["user"].token_version)
+    assert (await client.get("/v1/auth/me", headers=_bearer(owner_session))).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_a_reset_during_a_password_change_keeps_the_owners_password(recovery, monkeypatch):
+    client, service, sender = recovery
+    email = _email()
+    squatter = await _register(client, email, password="squatter-pass1")
+    _user, link = service.issue_password_reset_link(email)  # the owner's reset mail
+    sender.sent.clear()
+    _meanwhile(
+        monkeypatch,
+        "hash_password",
+        lambda: service.reset_password_with_token(link.rpartition("#token=")[2], "owner-pass1"),
+    )
+
+    changed = await _change_password(client, squatter)
+
+    assert (changed.status_code, changed.json()["detail"]) == (401, "Not authenticated")
+    assert settings.auth_cookie_name not in changed.cookies
+    stored = service.task_store.get_user_by_email(email)
+    assert security.verify_password("owner-pass1", stored.password_hash)
+    assert stored.email_verified_at is not None
+    assert sender.sent == []
+    assert service.authenticate_user(email, "owner-pass1").id == stored.id
+    assert (await client.post("/v1/auth/login", json={"email": email, "password": "squatter-pass2"})).status_code == 401
+    assert (await client.get("/v1/auth/me", headers=_bearer(squatter))).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_a_google_sign_in_during_an_account_deletion_keeps_the_account(recovery, monkeypatch):
+    client, service, _sender = recovery
+    email = _email()
+    squatter = await _register(client, email, password="squatter-pass1")
+    _meanwhile(monkeypatch, "verify_password", lambda: service.sign_in_with_google(email, google_subject="g-owner"))
+
+    deleted = await client.request(
+        "DELETE",
+        "/v1/auth/account",
+        json={"current_password": "squatter-pass1", "confirm": True},
+        headers=_bearer(squatter),
+    )
+
+    assert (deleted.status_code, deleted.json()["detail"]) == (401, "Not authenticated")
+    stored = service.task_store.get_user_by_email(email)
+    assert stored is not None and (stored.google_subject, stored.password_hash) == ("g-owner", None)
 
 
 # ── maintenance ───────────────────────────────────────────────────────────────

@@ -351,28 +351,47 @@ class SQLAlchemyTaskStore:
                 return None
             return _user_record(user)
 
-    def delete_user(self, user_id: str) -> bool:
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool:
         """Delete a user; researches (and via FK cascades: tasks, results, jobs,
         share tokens inside graph_state) are removed with them (DATA-LIFECYCLE)."""
         with self.session_scope() as session:
-            user = session.get(UserORM, user_id)
+            if expected_token_version is None:
+                user = session.get(UserORM, user_id)
+            else:
+                # Locked from the compare to the delete: a write that bumped token_version
+                # first leaves nothing to match, one that comes later waits for the delete.
+                user = session.execute(
+                    select(UserORM)
+                    .where(UserORM.id == user_id, UserORM.token_version == expected_token_version)
+                    .with_for_update()
+                ).scalar_one_or_none()
             if user is None:
                 return False
             session.delete(user)
             return True
 
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None:
         now = datetime.now(timezone.utc)
         values = {"password_hash": password_hash, "token_version": UserORM.token_version + 1}
         if admin_provisioned:
             values["admin_provisioned_at"] = now
             values["email_verified_at"] = func.coalesce(UserORM.email_verified_at, now)
+        conditions = [UserORM.id == user_id]
+        if expected_token_version is not None:
+            # A concurrent write holding the row makes this wait, then re-check the new
+            # token_version: once it bumped, the UPDATE matches nothing.
+            conditions.append(UserORM.token_version == expected_token_version)
         with self.session_scope() as session:
             statement = (
                 update(UserORM)
-                .where(UserORM.id == user_id)
+                .where(*conditions)
                 .values(**values)
                 .returning(UserORM)
             )
