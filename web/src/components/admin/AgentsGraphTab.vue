@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
+import { pinch, type Point, type View } from "./graphView";
 
 const { t, te } = useI18n();
 
@@ -34,21 +35,222 @@ const panY = ref(60);
 const isPanning = ref(false);
 const isZooming = ref(false);
 let zoomTimeout: any = null;
-const startPan = ref({ x: 0, y: 0 });
 const canvasViewportRef = ref<HTMLElement | null>(null);
 
-function onMouseDown(e: MouseEvent) {
-  if (e.button !== 0) return;
-  const target = e.target as HTMLElement;
-  if (
-    target.closest(".interactive-node") ||
-    target.closest("button") ||
-    target.closest("input")
-  ) {
+// ── Gestures on Pointer Events (apple-design §2, §3, §10) ─────────────────────
+// One set of listeners on the viewport serves mouse, pen and touch. The canvas and a
+// dragged node follow the pointer 1:1 from where they were grabbed (deltas from the
+// start point, never snapped to a centre); moves are applied once per animation frame;
+// two fingers pinch around their midpoint. pointercancel, a lost capture, a mouse
+// released outside the window or leaving the window all end the gesture, so the canvas
+// can never be left "stuck" panning.
+type Gesture =
+  | { kind: "pan"; pointerId: number; start: Point; pan0: Point }
+  | {
+      kind: "node";
+      pointerId: number;
+      pointerType: string;
+      nodeId: string;
+      start: Point;
+      node0: Point;
+      dragging: boolean;
+    }
+  | { kind: "pinch"; ids: [number, number]; view0: View; a0: Point; b0: Point };
+
+// Presses on real controls inside the canvas are theirs, not a pan.
+const INTERACTIVE_SELECTOR = "button, input, a, select, textarea";
+// A press becomes a node drag only past this many screen px (hysteresis, §10): enough
+// for a hand's jitter on a click, and a fingertip's on a tap.
+const DRAG_THRESHOLD_MOUSE = 4;
+const DRAG_THRESHOLD_TOUCH = 10;
+
+const pointers = new Map<number, Point>();
+let gesture: Gesture | null = null;
+let viewportRect: DOMRect | null = null;
+let frameId = 0;
+// Set when a press turned into a real drag, so the click that may follow it doesn't
+// open the inspector; read by the click, and cleared by the next press.
+let suppressClick = false;
+const pressedNodeId = ref<string | null>(null);
+const pinching = ref(false);
+
+function localPoint(e: PointerEvent): Point {
+  const r = viewportRect ?? canvasViewportRef.value?.getBoundingClientRect();
+  return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+}
+
+function capturePointer(id: number) {
+  try {
+    canvasViewportRef.value?.setPointerCapture?.(id);
+  } catch {
+    // The pointer is already gone (released between the event and this call).
+  }
+}
+
+const requestFrame = (cb: () => void): number =>
+  typeof requestAnimationFrame === "function" ? requestAnimationFrame(cb) : (setTimeout(cb, 16) as unknown as number);
+const cancelFrame = (id: number) =>
+  typeof cancelAnimationFrame === "function" ? cancelAnimationFrame(id) : clearTimeout(id);
+
+function scheduleFrame() {
+  if (!frameId) frameId = requestFrame(applyFrame);
+}
+
+function flushFrame() {
+  if (!frameId) return;
+  cancelFrame(frameId);
+  applyFrame();
+}
+
+function applyFrame() {
+  frameId = 0;
+  const g = gesture;
+  if (!g) return;
+  if (g.kind === "pinch") {
+    const a = pointers.get(g.ids[0]);
+    const b = pointers.get(g.ids[1]);
+    if (!a || !b) return;
+    const v = pinch(g.view0, g.a0, g.b0, a, b);
+    zoom.value = v.zoom;
+    panX.value = v.panX;
+    panY.value = v.panY;
     return;
   }
+  const p = pointers.get(g.pointerId);
+  if (!p) return;
+  if (g.kind === "node") {
+    if (!g.dragging) return;
+    // In place, so a drag frame is one small reactive write, not a new positions map.
+    const pos = nodePositions.value[g.nodeId];
+    pos.x = Math.max(10, Math.min(7200, Math.round(g.node0.x + (p.x - g.start.x) / zoom.value)));
+    pos.y = Math.max(10, Math.min(850, Math.round(g.node0.y + (p.y - g.start.y) / zoom.value)));
+    return;
+  }
+  panX.value = g.pan0.x + (p.x - g.start.x);
+  panY.value = g.pan0.y + (p.y - g.start.y);
+}
+
+function startPinch() {
+  const ids = [...pointers.keys()].slice(-2) as [number, number];
+  const a0 = pointers.get(ids[0])!;
+  const b0 = pointers.get(ids[1])!;
+  // A second finger turns whatever the first one was doing into a pinch.
+  if (gesture) endGesture();
+  ids.forEach(capturePointer);
+  gesture = { kind: "pinch", ids, view0: { zoom: zoom.value, panX: panX.value, panY: panY.value }, a0, b0 };
+  pinching.value = true;
+}
+
+function onPointerDown(e: PointerEvent) {
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target || target.closest(INTERACTIVE_SELECTOR)) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (!canvasViewportRef.value) return;
+  suppressClick = false;
+  if (!pointers.size) viewportRect = canvasViewportRef.value.getBoundingClientRect();
+  pointers.set(e.pointerId, localPoint(e));
+
+  if (pointers.size >= 2) {
+    startPinch();
+    return;
+  }
+
+  const nodeEl = target.closest<HTMLElement>(".interactive-node");
+  const nodeId = nodeEl?.dataset.nodeId;
+  if (nodeId) {
+    const pos = nodePositions.value[nodeId] ?? defaultNodePositions[nodeId] ?? { x: 0, y: 0 };
+    // Not a drag yet: the pointer isn't captured, so a plain click still reaches the node.
+    gesture = {
+      kind: "node",
+      pointerId: e.pointerId,
+      pointerType: e.pointerType,
+      nodeId,
+      start: pointers.get(e.pointerId)!,
+      node0: { x: pos.x, y: pos.y },
+      dragging: false,
+    };
+    pressedNodeId.value = nodeId;
+    return;
+  }
+
+  gesture = { kind: "pan", pointerId: e.pointerId, start: pointers.get(e.pointerId)!, pan0: { x: panX.value, y: panY.value } };
+  capturePointer(e.pointerId);
   isPanning.value = true;
-  startPan.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!pointers.has(e.pointerId)) return;
+  // A mouse released outside the window never sends pointerup.
+  if (e.pointerType === "mouse" && e.buttons === 0) {
+    onPointerUp(e);
+    return;
+  }
+  const p = localPoint(e);
+  pointers.set(e.pointerId, p);
+  const g = gesture;
+  if (g?.kind === "node" && !g.dragging) {
+    if (g.pointerId !== e.pointerId) return;
+    const threshold = g.pointerType === "mouse" ? DRAG_THRESHOLD_MOUSE : DRAG_THRESHOLD_TOUCH;
+    if (Math.hypot(p.x - g.start.x, p.y - g.start.y) <= threshold) return;
+    // Past the threshold: a drag. Tracking continues from the original start point, so
+    // the grab offset is kept (the node catches up by the threshold, under the pointer).
+    g.dragging = true;
+    capturePointer(e.pointerId);
+    pressedNodeId.value = null;
+    draggingNodeId.value = g.nodeId;
+    // A fresh entry: the drag never writes into the shared default positions.
+    nodePositions.value[g.nodeId] = { x: g.node0.x, y: g.node0.y };
+  }
+  scheduleFrame();
+}
+
+function endGesture() {
+  flushFrame();
+  const g = gesture;
+  gesture = null;
+  if (!g) return;
+  if (g.kind === "pinch") {
+    pinching.value = false;
+  } else if (g.kind === "node") {
+    if (g.dragging) {
+      savePositions();
+      suppressClick = true;
+    }
+    pressedNodeId.value = null;
+    draggingNodeId.value = null;
+  } else {
+    isPanning.value = false;
+  }
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!pointers.has(e.pointerId)) return;
+  // A cancel (or lost capture) carries no meaningful position; keep the last move's.
+  if (e.type === "pointerup") pointers.set(e.pointerId, localPoint(e));
+  const g = gesture;
+  if (g?.kind === "pinch") {
+    pointers.delete(e.pointerId);
+    // Down to one finger: the pinch ends, and the remaining finger doesn't start a pan.
+    if (g.ids.includes(e.pointerId)) endGesture();
+    return;
+  }
+  if (g && g.pointerId === e.pointerId) endGesture();
+  pointers.delete(e.pointerId);
+  if (!pointers.size) viewportRect = null;
+}
+
+// Capture taken away (the element went away, another capture, a system gesture).
+// Only the viewport's own capture counts: a finger's implicit capture on a node is
+// handed over to the viewport when its drag starts, and that must not end the drag.
+function onLostPointerCapture(e: PointerEvent) {
+  if (e.target !== e.currentTarget || !pointers.has(e.pointerId)) return;
+  onPointerUp(e);
+}
+
+function cancelAllGestures() {
+  if (gesture) endGesture();
+  pointers.clear();
+  viewportRect = null;
 }
 
 function onWheel(e: WheelEvent) {
@@ -437,6 +639,11 @@ const defaultNodePositions: Record<string, { x: number; y: number }> = Object.fr
   Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => [id, { x: conf.x, y: conf.y }])
 );
 
+// Copies, never the default objects themselves: a drag writes positions in place.
+function freshDefaultPositions(): Record<string, { x: number; y: number }> {
+  return Object.fromEntries(Object.entries(defaultNodePositions).map(([id, p]) => [id, { x: p.x, y: p.y }]));
+}
+
 function loadSavedPositions(): Record<string, { x: number; y: number }> {
   try {
     // Clear legacy keys with cramped coordinates
@@ -447,13 +654,13 @@ function loadSavedPositions(): Record<string, { x: number; y: number }> {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
-        return { ...defaultNodePositions, ...parsed };
+        return { ...freshDefaultPositions(), ...parsed };
       }
     }
   } catch {
     // Ignore localStorage errors
   }
-  return { ...defaultNodePositions };
+  return freshDefaultPositions();
 }
 
 const nodePositions = ref<Record<string, { x: number; y: number }>>(loadSavedPositions());
@@ -467,7 +674,7 @@ function savePositions() {
 }
 
 function resetNodePositions() {
-  nodePositions.value = { ...defaultNodePositions };
+  nodePositions.value = freshDefaultPositions();
   try {
     localStorage.removeItem(LOCAL_STORAGE_POSITIONS_KEY);
     localStorage.removeItem("multi-agent-search:admin-nodes-pos");
@@ -489,73 +696,38 @@ const visualNodes = computed<VisualNode[]>(() => {
   });
 });
 
-// ── Node Dragging State ───────────────────────────────────────────────────────
+// ── Node press, drag and click ────────────────────────────────────────────────
+// The drag itself runs in the pointer handlers above; these are its visible states:
+// pressed (down, not moved past the threshold) and dragging (lifted).
 const draggingNodeId = ref<string | null>(null);
-const dragStartMouse = ref({ x: 0, y: 0 });
-const dragStartNodePos = ref({ x: 0, y: 0 });
-const hasDraggedNode = ref(false);
 
-function onNodeMouseDown(e: MouseEvent, nodeId: string) {
-  if (e.button !== 0) return;
-  e.stopPropagation();
-
-  draggingNodeId.value = nodeId;
-  dragStartMouse.value = { x: e.clientX, y: e.clientY };
-  const currentPos = nodePositions.value[nodeId] || {
-    x: VISUAL_NODES_CONFIG[nodeId]?.x ?? 0,
-    y: VISUAL_NODES_CONFIG[nodeId]?.y ?? 0,
-  };
-  dragStartNodePos.value = { x: currentPos.x, y: currentPos.y };
-  hasDraggedNode.value = false;
-}
-
-function onGlobalMouseMove(e: MouseEvent) {
-  // 1. If dragging a single node
-  if (draggingNodeId.value) {
-    const dx = (e.clientX - dragStartMouse.value.x) / zoom.value;
-    const dy = (e.clientY - dragStartMouse.value.y) / zoom.value;
-
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      hasDraggedNode.value = true;
-    }
-
-    if (hasDraggedNode.value) {
-      const newX = Math.round(dragStartNodePos.value.x + dx);
-      const newY = Math.round(dragStartNodePos.value.y + dy);
-
-      nodePositions.value = {
-        ...nodePositions.value,
-        [draggingNodeId.value]: {
-          x: Math.max(10, Math.min(7200, newX)),
-          y: Math.max(10, Math.min(850, newY)),
-        },
-      };
-    }
-    return;
+// Exactly one visual state per card, so only one scale and one ring apply at a time.
+// Pressed dips at once (100 ms); lifted rises over 150 ms; letting go eases back over
+// 200 ms. The lift appears only once a press has become a drag (§1, §10).
+function nodeCardState(nodeId: string): string {
+  if (draggingNodeId.value === nodeId) {
+    return "scale-[1.03] border-accent bg-surface shadow-e3 ring-2 ring-accent/50 duration-150 ease-out";
   }
-
-  // 2. If panning canvas
-  if (isPanning.value) {
-    panX.value = e.clientX - startPan.value.x;
-    panY.value = e.clientY - startPan.value.y;
+  if (pressedNodeId.value === nodeId) {
+    return "scale-[0.985] border-accent/60 bg-surface duration-100 ease-out";
   }
-}
-
-function onGlobalMouseUp() {
-  if (draggingNodeId.value) {
-    if (hasDraggedNode.value) {
-      savePositions();
-    }
-    setTimeout(() => {
-      draggingNodeId.value = null;
-      hasDraggedNode.value = false;
-    }, 50);
+  if (selectedAgent.value?.id === nodeId) {
+    return "scale-[1.02] border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 duration-200 ease-out";
   }
-  isPanning.value = false;
+  if (isNodeHighlighted(nodeId)) {
+    return "scale-[1.01] border-indigo-400/80 bg-surface ring-2 ring-indigo-400/40 duration-200 ease-out";
+  }
+  const sim = getAgentSimStatus(nodeId);
+  if (sim === "active") {
+    return "scale-[1.03] border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 duration-200 ease-out";
+  }
+  if (sim === "completed") return "border-emerald-500/60 bg-surface duration-200 ease-out";
+  return "border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg duration-200 ease-out";
 }
 
 function handleNodeClick(nodeId: string) {
-  if (hasDraggedNode.value) {
+  if (suppressClick) {
+    suppressClick = false;
     return;
   }
   openInspector(nodeId);
@@ -1133,17 +1305,17 @@ function onKeyDown(e: KeyboardEvent) {
 
 onMounted(() => {
   fetchAgents();
-  window.addEventListener("mousemove", onGlobalMouseMove);
-  window.addEventListener("mouseup", onGlobalMouseUp);
   window.addEventListener("keydown", onKeyDown);
+  // Alt-Tab mid-drag: the release happens elsewhere, so end the gesture here.
+  window.addEventListener("blur", cancelAllGestures);
 });
 
 onBeforeUnmount(() => {
   if (simTimer) clearTimeout(simTimer);
   if (zoomTimeout) clearTimeout(zoomTimeout);
-  window.removeEventListener("mousemove", onGlobalMouseMove);
-  window.removeEventListener("mouseup", onGlobalMouseUp);
+  if (frameId) cancelFrame(frameId);
   window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("blur", cancelAllGestures);
 });
 
 function openInspector(nodeId: string) {
@@ -1375,10 +1547,18 @@ function isNodeDimmed(nodeId: string): boolean {
     <div
       v-else
       ref="canvasViewportRef"
-      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner cursor-grab active:cursor-grabbing"
-      :class="isFullscreen ? 'min-h-[calc(100vh-140px)]' : 'min-h-[640px]'"
+      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner"
+      :class="[
+        isFullscreen ? 'min-h-[calc(100vh-140px)] touch-none' : 'min-h-[640px] touch-pan-y',
+        isPanning ? 'cursor-grabbing' : 'cursor-grab',
+      ]"
       style="background-image: radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px); background-size: 20px 20px;"
-      @mousedown="onMouseDown"
+      data-test="graph-viewport"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerUp"
+      @lostpointercapture="onLostPointerCapture"
       @wheel="onWheel"
     >
       <!-- Quick Floating Fullscreen Button on Canvas -->
@@ -1396,7 +1576,7 @@ function isNodeDimmed(nodeId: string): boolean {
       <!-- Scalable & Pannable Canvas World -->
       <div
         class="absolute origin-top-left"
-        :class="isZooming || isPanning || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
+        :class="isZooming || isPanning || pinching || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
         :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '7400px', height: '850px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
@@ -1597,7 +1777,7 @@ function isNodeDimmed(nodeId: string): boolean {
         <div
           v-for="node in visualNodes"
           :key="node.id"
-          class="interactive-node absolute group select-none transition-none"
+          class="interactive-node press-none absolute group select-none rounded-2xl transition-none"
           :class="[
             draggingNodeId === node.id
               ? 'z-30 cursor-grabbing'
@@ -1608,31 +1788,21 @@ function isNodeDimmed(nodeId: string): boolean {
             width: `${node.width}px`,
             height: `${node.height}px`,
           }"
-          @mousedown="onNodeMouseDown($event, node.id)"
+          :data-node-id="node.id"
+          :role="node.isTrigger ? undefined : 'button'"
+          :tabindex="node.isTrigger ? undefined : 0"
+          :aria-label="getNodeName(node.id, node.name)"
           @click="handleNodeClick(node.id)"
+          @keydown.enter.prevent="openInspector(node.id)"
+          @keydown.space.prevent="openInspector(node.id)"
           @mouseenter="onNodeHover(node.id)"
           @mouseleave="onNodeHover(null)"
         >
-          <!-- Node Card Container -->
+          <!-- Node Card Container: the wrapper above carries the position and never
+               animates; this card shows press (a dip), lift (while dragged) and state. -->
           <div
-            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-md backdrop-blur transition-all"
-            :class="[
-              draggingNodeId === node.id
-                ? 'transition-none border-accent bg-surface ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
-                : 'duration-150',
-              isNodeDimmed(node.id)
-                ? 'opacity-30'
-                : 'opacity-100',
-              selectedAgent?.id === node.id
-                ? 'border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
-                : isNodeHighlighted(node.id)
-                ? 'border-indigo-400/80 bg-surface ring-2 ring-indigo-400/40 scale-[1.01]'
-                : getAgentSimStatus(node.id) === 'active'
-                ? 'border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 scale-[1.03]'
-                : getAgentSimStatus(node.id) === 'completed'
-                ? 'border-emerald-500/60 bg-surface'
-                : 'border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg',
-            ]"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-md backdrop-blur transition-[border-color,box-shadow,opacity,transform]"
+            :class="[isNodeDimmed(node.id) ? 'opacity-30' : 'opacity-100', nodeCardState(node.id)]"
           >
             <!-- Left Input Port (Handle) -->
             <div

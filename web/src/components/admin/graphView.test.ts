@@ -1,0 +1,306 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { defineComponent, h } from "vue";
+
+import { i18n } from "@/i18n";
+import type { AgentMetadataItem } from "@/lib/types";
+
+import { boundsOf, clampZoom, fitBounds, pinch, toWorld, zoomAt, ZMAX, ZMIN, type View } from "./graphView";
+
+const close = (a: number, b: number, digits = 6) => expect(a).toBeCloseTo(b, digits);
+
+describe("graphView: zoomAt", () => {
+  it("keeps the world point under the anchor fixed", () => {
+    const view: View = { zoom: 0.55, panX: 40, panY: 60 };
+    const anchor = { x: 300, y: 200 };
+    const before = toWorld(view, anchor);
+    const next = zoomAt(view, 1.2, anchor);
+
+    close(next.zoom, 0.66);
+    const after = toWorld(next, anchor);
+    close(after.x, before.x);
+    close(after.y, before.y);
+  });
+
+  it("clamps to the zoom limits and still keeps the anchor fixed", () => {
+    const view: View = { zoom: 1.4, panX: -100, panY: 20 };
+    const anchor = { x: 500, y: 300 };
+    const next = zoomAt(view, 3, anchor);
+    expect(next.zoom).toBe(ZMAX);
+    const w0 = toWorld(view, anchor);
+    const w1 = toWorld(next, anchor);
+    close(w1.x, w0.x);
+    close(w1.y, w0.y);
+
+    expect(zoomAt({ zoom: 0.2, panX: 0, panY: 0 }, 0.1, anchor).zoom).toBe(ZMIN);
+  });
+
+  it("is reversible: in then out returns to the same view", () => {
+    const view: View = { zoom: 0.55, panX: 40, panY: 60 };
+    const c = { x: 640, y: 320 };
+    const back = zoomAt(zoomAt(view, 1.2, c), 1 / 1.2, c);
+    close(back.zoom, view.zoom);
+    close(back.panX, view.panX);
+    close(back.panY, view.panY);
+  });
+});
+
+describe("graphView: pinch", () => {
+  const view0: View = { zoom: 0.5, panX: 10, panY: 20 };
+  const a0 = { x: 100, y: 100 };
+  const b0 = { x: 200, y: 100 };
+
+  it("zooms by the change in finger spread", () => {
+    const next = pinch(view0, a0, b0, { x: 50, y: 100 }, { x: 250, y: 100 });
+    close(next.zoom, 1);
+  });
+
+  it("keeps the world point under the starting midpoint under the current midpoint", () => {
+    const w = toWorld(view0, { x: 150, y: 100 });
+    // Spread and move both fingers 40px right and 30px down.
+    const next = pinch(view0, a0, b0, { x: 90, y: 130 }, { x: 290, y: 130 });
+    const under = toWorld(next, { x: 190, y: 130 });
+    close(under.x, w.x);
+    close(under.y, w.y);
+  });
+
+  it("pans 1:1 when the fingers move together without spreading", () => {
+    const next = pinch(view0, a0, b0, { x: 130, y: 90 }, { x: 230, y: 90 });
+    close(next.zoom, view0.zoom);
+    close(next.panX, view0.panX + 30);
+    close(next.panY, view0.panY - 10);
+  });
+
+  it("respects the zoom limits", () => {
+    expect(pinch(view0, a0, b0, { x: 0, y: 100 }, { x: 2000, y: 100 }).zoom).toBe(ZMAX);
+    expect(pinch(view0, a0, b0, { x: 149, y: 100 }, { x: 151, y: 100 }).zoom).toBe(ZMIN);
+  });
+
+  it("does not divide by zero when both fingers start on one point", () => {
+    const next = pinch(view0, a0, a0, { x: 120, y: 100 }, { x: 180, y: 100 });
+    expect(Number.isFinite(next.zoom)).toBe(true);
+    expect(next.zoom).toBe(view0.zoom);
+  });
+});
+
+describe("graphView: bounds and fit", () => {
+  it("boundsOf wraps every rectangle, and is null for none", () => {
+    expect(boundsOf([])).toBeNull();
+    expect(
+      boundsOf([
+        { x: 60, y: 300, width: 230, height: 76 },
+        { x: 6660, y: 160, width: 250, height: 76 },
+      ]),
+    ).toEqual({ minX: 60, minY: 160, maxX: 6910, maxY: 376 });
+  });
+
+  it("fits the whole box inside the padded viewport, centred", () => {
+    const bbox = { minX: 60, minY: 160, maxX: 6910, maxY: 700 };
+    const viewport = { w: 1440, h: 640 };
+    const v = fitBounds(bbox, viewport, 48);
+
+    const left = bbox.minX * v.zoom + v.panX;
+    const right = bbox.maxX * v.zoom + v.panX;
+    const top = bbox.minY * v.zoom + v.panY;
+    const bottom = bbox.maxY * v.zoom + v.panY;
+    expect(left).toBeGreaterThanOrEqual(48 - 1e-6);
+    expect(right).toBeLessThanOrEqual(1440 - 48 + 1e-6);
+    expect(top).toBeGreaterThanOrEqual(0);
+    expect(bottom).toBeLessThanOrEqual(640);
+    close(left + right, 1440);
+    close(top + bottom, 640);
+  });
+
+  it("never zooms a small graph past 100%", () => {
+    const v = fitBounds({ minX: 0, minY: 0, maxX: 200, maxY: 100 }, { w: 1440, h: 900 });
+    expect(v.zoom).toBe(1);
+    close(v.panX, (1440 - 200) / 2);
+  });
+
+  it("stops at the minimum zoom on a tiny phone viewport", () => {
+    const v = fitBounds({ minX: 60, minY: 160, maxX: 6910, maxY: 700 }, { w: 358, h: 600 });
+    expect(v.zoom).toBe(clampZoom(0.01));
+  });
+});
+
+// ── The graph component's gestures (jsdom: MouseEvent-based pointer events, no layout) ──
+
+const adminApi = vi.hoisted(() => ({ getAgents: vi.fn() }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  adminApi,
+}));
+
+import AgentsGraphTab from "./AgentsGraphTab.vue";
+
+const POSITIONS_KEY = "multi-agent-search:admin-nodes-pos-v3";
+
+function agent(id: string): AgentMetadataItem {
+  return {
+    id, name: id, stage: "planning", role: "r", trigger: "t", inputs: [], outputs: [],
+    source_file: "src/x.py", line_number: 1, description: "d", dependencies: [],
+  };
+}
+
+// The inspector is stubbed: these tests only care whether it is asked to open, and for whom.
+const InspectorStub = defineComponent({
+  name: "AgentInspectorDrawer",
+  props: { open: Boolean, agent: { type: Object, default: null } },
+  render() {
+    return h("div", { "data-test": "inspector", "data-open": String(this.open), "data-agent": (this.agent as AgentMetadataItem | null)?.id ?? "" });
+  },
+});
+
+let wrapper: VueWrapper | null = null;
+
+async function mountGraph() {
+  wrapper = mount(AgentsGraphTab, {
+    attachTo: document.body,
+    global: { plugins: [i18n], stubs: { AgentInspectorDrawer: InspectorStub, teleport: true } },
+  });
+  await flushPromises();
+  return wrapper;
+}
+
+const viewport = () => wrapper!.find('[data-test="graph-viewport"]');
+const node = (id: string) => wrapper!.find(`[data-node-id="${id}"]`);
+const inspector = () => wrapper!.find('[data-test="inspector"]');
+const worldTransform = () => (wrapper!.find(".origin-top-left").element as HTMLElement).style.transform;
+
+function pointer(type: string, x: number, y: number, extra: Record<string, unknown> = {}) {
+  return { clientX: x, clientY: y, pointerId: 1, pointerType: "mouse", button: 0, buttons: type === "pointerup" ? 0 : 1, ...extra };
+}
+
+describe("AgentsGraphTab gestures", () => {
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+    localStorage.clear();
+    adminApi.getAgents.mockResolvedValue([agent("clarifier"), agent("optimizer")]);
+  });
+
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+    vi.clearAllMocks();
+  });
+
+  it("opens the inspector on a click, even with a few px of hand jitter", async () => {
+    await mountGraph();
+    const n = node("clarifier");
+    await n.trigger("pointerdown", pointer("pointerdown", 500, 300));
+    await n.trigger("pointermove", pointer("pointermove", 503, 302));
+    await n.trigger("pointerup", pointer("pointerup", 503, 302));
+    await n.trigger("click");
+
+    expect(inspector().attributes("data-open")).toBe("true");
+    expect(inspector().attributes("data-agent")).toBe("clarifier");
+    // A click is not a drag: the saved layout is untouched.
+    expect(localStorage.getItem(POSITIONS_KEY)).toBeNull();
+  });
+
+  it("dips a pressed node and lifts it only once the press becomes a drag", async () => {
+    await mountGraph();
+    const n = node("clarifier");
+    const card = () => node("clarifier").find("div");
+    await n.trigger("pointerdown", pointer("pointerdown", 500, 300));
+    expect(card().classes()).toContain("scale-[0.985]");
+
+    await n.trigger("pointermove", pointer("pointermove", 520, 300));
+    expect(card().classes()).toContain("scale-[1.03]");
+    expect(card().classes()).not.toContain("scale-[0.985]");
+
+    await n.trigger("pointerup", pointer("pointerup", 520, 300));
+    expect(card().classes()).not.toContain("scale-[1.03]");
+  });
+
+  it("drags a node 1:1 from where it was grabbed, saves the layout and swallows the click", async () => {
+    await mountGraph();
+    const n = node("clarifier");
+    const before = (n.element as HTMLElement).style.transform; // translate(420px, 300px)
+    expect(before).toBe("translate(420px, 300px)");
+
+    await n.trigger("pointerdown", pointer("pointerdown", 500, 300));
+    await n.trigger("pointermove", pointer("pointermove", 555, 311));
+    await n.trigger("pointerup", pointer("pointerup", 555, 311));
+    await n.trigger("click");
+
+    // 55 and 11 screen px at 55% zoom: 100 and 20 world px, the grab offset kept.
+    expect((node("clarifier").element as HTMLElement).style.transform).toBe("translate(520px, 320px)");
+    expect(JSON.parse(localStorage.getItem(POSITIONS_KEY)!).clarifier).toEqual({ x: 520, y: 320 });
+    expect(inspector().attributes("data-open")).toBe("false");
+
+    // The next press starts fresh: a click after it opens the inspector again.
+    await n.trigger("pointerdown", pointer("pointerdown", 600, 300));
+    await n.trigger("pointerup", pointer("pointerup", 600, 300));
+    await n.trigger("click");
+    expect(inspector().attributes("data-open")).toBe("true");
+  });
+
+  it("pans the canvas by the pointer delta and ends the pan on pointercancel", async () => {
+    await mountGraph();
+    const start = worldTransform();
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 100));
+    expect(viewport().classes()).toContain("cursor-grabbing");
+    await viewport().trigger("pointermove", pointer("pointermove", 160, 130));
+    await viewport().trigger("pointercancel", pointer("pointercancel", 0, 0));
+
+    expect(viewport().classes()).toContain("cursor-grab");
+    expect(worldTransform()).not.toBe(start);
+    expect(worldTransform()).toContain("translate(100px, 90px)");
+
+    // Nothing is left tracking: a later hover move doesn't pan.
+    await viewport().trigger("pointermove", pointer("pointermove", 400, 400, { buttons: 0 }));
+    expect(worldTransform()).toContain("translate(100px, 90px)");
+  });
+
+  it("ends a pan when the window loses focus", async () => {
+    await mountGraph();
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 100));
+    window.dispatchEvent(new Event("blur"));
+    await flushPromises();
+    expect(viewport().classes()).toContain("cursor-grab");
+  });
+
+  it("leaves presses on the canvas's own buttons alone", async () => {
+    await mountGraph();
+    const start = worldTransform();
+    const fullscreen = viewport().find("button");
+    await fullscreen.trigger("pointerdown", pointer("pointerdown", 100, 100));
+    await viewport().trigger("pointermove", pointer("pointermove", 200, 200));
+    expect(viewport().classes()).toContain("cursor-grab");
+    expect(worldTransform()).toBe(start);
+  });
+
+  it("ignores the right mouse button", async () => {
+    await mountGraph();
+    await viewport().trigger("pointerdown", pointer("pointerdown", 100, 100, { button: 2 }));
+    expect(viewport().classes()).toContain("cursor-grab");
+  });
+
+  it("opens a node from the keyboard", async () => {
+    await mountGraph();
+    const n = node("optimizer");
+    expect(n.attributes("role")).toBe("button");
+    expect(n.attributes("tabindex")).toBe("0");
+    await n.trigger("keydown", { key: "Enter" });
+    expect(inspector().attributes("data-agent")).toBe("optimizer");
+    expect(inspector().attributes("data-open")).toBe("true");
+  });
+
+  it("keeps a saved layout and restores defaults without mutating them", async () => {
+    localStorage.setItem(POSITIONS_KEY, JSON.stringify({ clarifier: { x: 999, y: 111 } }));
+    await mountGraph();
+    expect((node("clarifier").element as HTMLElement).style.transform).toBe("translate(999px, 111px)");
+
+    // Drag a node that still sits at its default, then reset: it goes back to the default.
+    const n = node("optimizer");
+    await n.trigger("pointerdown", pointer("pointerdown", 500, 300));
+    await n.trigger("pointermove", pointer("pointermove", 555, 300));
+    await n.trigger("pointerup", pointer("pointerup", 555, 300));
+    const reset = wrapper!.findAll("button").find((b) => b.attributes("title") === i18n.global.t("admin.agents.resetLayoutTooltip"))!;
+    await reset.trigger("click");
+    expect((node("optimizer").element as HTMLElement).style.transform).toBe("translate(790px, 300px)");
+    expect((node("clarifier").element as HTMLElement).style.transform).toBe("translate(420px, 300px)");
+  });
+});
