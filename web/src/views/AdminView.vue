@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { adminApi, apiErrorMessage } from "@/lib/api";
+import { adminApi } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
@@ -20,9 +20,15 @@ const ui = useUiStore();
 type Tab = "overview" | "users" | "analytics" | "agents" | "operations";
 const activeTab = ref<Tab>("overview");
 
+// The header's status line (apple-design §16 Feedback: status must reflect reality).
+// On the Overview tab it follows that tab's data, live stream included; elsewhere the
+// header fetches its own copy. Unknown health shows nothing rather than a guess.
 const overview = ref<AdminOverviewResponse | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
+const health = computed<"healthy" | "degraded" | null>(() => {
+  const o = overview.value;
+  if (!o) return null;
+  return o.system_health?.overall === "healthy" && !o.failed_tasks_count ? "healthy" : "degraded";
+});
 
 async function handleLogout() {
   await auth.logout();
@@ -36,25 +42,34 @@ async function handleSwitchAccount() {
   router.push({ path: "/login", query: { redirect: "/admin" } });
 }
 
+let loadingOverview = false;
 async function loadOverview() {
-  if (!auth.user?.is_admin) return;
+  if (!auth.user?.is_admin || loadingOverview) return;
+  loadingOverview = true;
   try {
-    loading.value = true;
-    error.value = null;
     overview.value = await adminApi.getOverview();
-  } catch (err) {
-    error.value = apiErrorMessage(err, t);
+  } catch {
+    // The header stays blank; the Overview tab shows the error with a retry, and no
+    // other tab is hidden behind it.
   } finally {
-    loading.value = false;
+    loadingOverview = false;
   }
 }
+
+function onOverviewUpdate(data: AdminOverviewResponse) {
+  overview.value = data;
+}
+
+watch(activeTab, (tab) => {
+  if (tab !== "overview" && !overview.value) loadOverview();
+});
 
 onMounted(() => {
   if (!auth.user) {
     router.replace({ path: "/login", query: { redirect: "/admin" } });
     return;
   }
-  if (auth.user.is_admin) {
+  if (auth.user.is_admin && activeTab.value !== "overview") {
     loadOverview();
   }
 });
@@ -134,8 +149,15 @@ onMounted(() => {
                 {{ auth.user?.email }}
               </span>
             </div>
-            <p class="text-xs text-muted">
-              {{ overview?.system_health?.overall === "healthy" ? t("admin.allSystemsOperational") : t("admin.systemOperational") }}
+            <p
+              v-if="health"
+              class="flex items-center gap-1.5 text-xs"
+              :class="health === 'healthy' ? 'text-muted' : 'text-warning'"
+              role="status"
+              data-test="admin-health"
+            >
+              <span class="h-2 w-2 shrink-0 rounded-full" :class="health === 'healthy' ? 'bg-success' : 'bg-warning'" aria-hidden="true" />
+              {{ health === "healthy" ? t("admin.allSystemsOperational") : t("admin.systemDegraded") }}
             </p>
           </div>
         </div>
@@ -214,24 +236,17 @@ onMounted(() => {
       </div>
 
       <!-- Tab Viewport -->
+      <!-- Every tab renders on its own; each one shows its own loading and errors. -->
       <div class="flex-1">
-        <div v-if="loading" class="flex h-48 items-center justify-center text-sm text-muted">
-          {{ t("common.loading") }}
-        </div>
-        <div v-else-if="error" class="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
-          {{ error }}
-        </div>
-        <div v-else>
-          <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" />
+        <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" @update="onOverviewUpdate" />
 
-          <UsersTab v-else-if="activeTab === 'users'" />
+        <UsersTab v-else-if="activeTab === 'users'" />
 
-          <AnalyticsTab v-else-if="activeTab === 'analytics'" />
+        <AnalyticsTab v-else-if="activeTab === 'analytics'" />
 
-          <AgentsGraphTab v-else-if="activeTab === 'agents'" />
+        <AgentsGraphTab v-else-if="activeTab === 'agents'" />
 
-          <OperationsTab v-else-if="activeTab === 'operations'" />
-        </div>
+        <OperationsTab v-else-if="activeTab === 'operations'" />
       </div>
     </template>
   </div>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AdminOverviewResponse } from "@/lib/types";
 
 const { t } = useI18n();
@@ -9,12 +9,30 @@ const { t } = useI18n();
 const props = defineProps<{
   initialOverview?: AdminOverviewResponse | null;
 }>();
+// Every fresh snapshot (a load or a stream event) goes up, so the admin header reports
+// the same health as this tab.
+const emit = defineEmits<{ (e: "update", data: AdminOverviewResponse): void }>();
 
 const overview = ref<AdminOverviewResponse | null>(props.initialOverview || null);
-const loading = ref(!props.initialOverview);
+const loading = ref(false);
+const loadError = ref<string | null>(null);
 const isStreaming = ref(false);
 const streamError = ref(false);
 let closeStream: (() => void) | null = null;
+
+function setOverview(data: AdminOverviewResponse) {
+  overview.value = data;
+  loadError.value = null;
+  emit("update", data);
+}
+
+// A snapshot the header fetched after this tab mounted.
+watch(
+  () => props.initialOverview,
+  (data) => {
+    if (data && !overview.value) overview.value = data;
+  },
+);
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -35,12 +53,15 @@ function timeAgo(isoString: string): string {
   return t("admin.overview.hoursAgo", { n: diffHours });
 }
 
+// A failed load is said out loud (apple-design §16: error feedback), with a retry.
 async function loadData() {
+  if (loading.value) return;
+  loading.value = true;
+  loadError.value = null;
   try {
-    loading.value = true;
-    overview.value = await adminApi.getOverview();
-  } catch {
-    /* handled */
+    setOverview(await adminApi.getOverview());
+  } catch (err) {
+    loadError.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }
@@ -55,11 +76,11 @@ onMounted(() => {
     isStreaming.value = true;
     closeStream = adminApi.connectStream(
       (data) => {
-        overview.value = data;
-        loading.value = false;
+        setOverview(data);
         streamError.value = false;
       },
       () => {
+        // EventSource reconnects on its own; say so instead of claiming a live feed.
         streamError.value = true;
       }
     );
@@ -84,7 +105,22 @@ const isHealthy = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <!-- No snapshot yet: its own loading state, or the failure with a retry. -->
+  <div v-if="!overview" class="flex h-48 flex-col items-center justify-center gap-3 text-sm" data-test="overview-empty">
+    <template v-if="loadError && !loading">
+      <p class="text-danger" role="alert">{{ loadError }}</p>
+      <button
+        type="button"
+        class="press rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surfaceHover"
+        @click="loadData"
+      >
+        {{ $t("common.retry") }}
+      </button>
+    </template>
+    <span v-else class="text-muted">{{ t("common.loading") }}</span>
+  </div>
+
+  <div v-else class="space-y-6">
     <!-- Top System Health & Live Indicator -->
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
@@ -95,19 +131,23 @@ const isHealthy = computed(() => {
         <h2 class="text-base font-semibold text-ink">
           {{ isHealthy ? t("admin.overview.systemHealthy") : t("admin.overview.systemDegradedTitle") }}
         </h2>
-        <span class="rounded bg-surface px-2 py-0.5 text-xs text-muted">
-          {{ isStreaming && !streamError ? t("admin.overview.liveSse") : t("admin.overview.polling") }}
+        <span class="rounded bg-surface px-2 py-0.5 text-xs text-muted" data-test="overview-stream">
+          {{ isStreaming && !streamError ? t("admin.overview.liveSse") : t("admin.overview.reconnecting") }}
         </span>
       </div>
 
       <button
-        class="flex items-center gap-1.5 rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80"
+        type="button"
+        class="press flex items-center gap-1.5 rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surfaceHover disabled:opacity-60"
+        :disabled="loading"
+        :aria-busy="loading ? 'true' : undefined"
         @click="loadData"
       >
-        <span>🔄</span>
+        <span class="inline-block leading-none" :class="loading ? 'animate-spin' : ''" aria-hidden="true">↻</span>
         <span>{{ t("admin.overview.refresh") }}</span>
       </button>
     </div>
+    <p v-if="loadError" class="-mt-4 text-right text-xs text-danger" role="alert">{{ loadError }}</p>
 
     <!-- Metric KPI Cards -->
     <div class="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
