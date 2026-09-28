@@ -214,3 +214,56 @@ describe("ArtifactPanel tabs", () => {
     expect(w.text()).toContain(t("redteam.empty"));
   });
 });
+
+describe("ArtifactPanel trust row", () => {
+  const independence = {
+    independence_score: 0.88,
+    independent_origins: 7,
+    total_sources: 8,
+    clusters: [{ kind: "syndicated", label: "Echo", size: 2, source_ids: ["S7", "S8"], domains: ["a.example"] }],
+  };
+  const citations = {
+    research_id: "r-1",
+    total: 25,
+    supported: 23,
+    integrity: 0.92,
+    unverified: 0,
+    unsupported_claims: ["An unsupported claim."],
+    grounding: [],
+  };
+
+  it("appears once, after every trust signal has answered", async () => {
+    let resolveCitations!: (v: unknown) => void;
+    mocks.api.getCitations.mockReturnValue(new Promise((r) => (resolveCitations = r)));
+    mocks.api.getSourceIndependence.mockResolvedValue(independence);
+    const w = await mountPanel();
+
+    // Independence has answered, citations have not: nothing moves above the report yet.
+    expect(w.text()).not.toContain(t("independence.title"));
+
+    resolveCitations(citations);
+    await flushPromises();
+    expect(w.text()).toContain(t("independence.title"));
+    expect(w.text()).toContain("92%");
+  });
+
+  it("opens a chip's list or tab, and has no trail tab", async () => {
+    mocks.api.getCitations.mockResolvedValue(citations);
+    mocks.api.getSourceIndependence.mockResolvedValue(independence);
+    mocks.api.getSources.mockResolvedValue([]);
+    const w = await mountPanel();
+
+    expect(w.findAll("button").some((b) => b.text() === t("artifact.trail"))).toBe(false);
+
+    const citationsChip = buttonWithText(w, t("citations.integrity"));
+    expect(citationsChip.attributes("aria-expanded")).toBe("false");
+    await citationsChip.trigger("click");
+    expect(citationsChip.attributes("aria-expanded")).toBe("true");
+    expect(w.text()).toContain("An unsupported claim.");
+
+    await buttonWithText(w, t("independence.title")).trigger("click");
+    await flushPromises();
+    expect(mocks.api.getSources).toHaveBeenCalledWith("r-1");
+    expect(w.text()).toContain(t("artifact.sourcesEmpty"));
+  });
+});

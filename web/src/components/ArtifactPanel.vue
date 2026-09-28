@@ -5,7 +5,7 @@ import { api, apiErrorMessage } from "@/lib/api";
 import { confirm } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
 import { safeHttpUrl } from "@/lib/url";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, ShareInfo, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, NumericCheck, RedTeamReport, ShareInfo, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -15,7 +15,7 @@ const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
 // Declared before every watcher: the immediate isFinal watcher below reads `t` and the
 // share state, and a `const` read before its line throws (a TDZ ReferenceError).
-const { t, te } = useI18n();
+const { t } = useI18n();
 
 // ── public share link ─────────────────────────────────────────────────────────
 // Private by default: opening the popover only shows the state. A link is created by
@@ -93,7 +93,7 @@ async function revokeShare() {
   }
 }
 
-type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
+type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
@@ -108,8 +108,6 @@ const crossLang = ref<CrossLanguageReport | null>(null);
 const stance = ref<StanceBalance | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
-const showNumbers = ref(false);
-const showWeak = ref(false);
 
 // Inline verification: a persisted toggle plus the signals MarkdownView decorates with.
 const verifyInline = ref((typeof localStorage !== "undefined" ? localStorage.getItem("verify.inline") : null) !== "0");
@@ -125,13 +123,12 @@ const contradictionSentences = computed<string[]>(() =>
   (numbers.value?.contradictions || []).flatMap((c) => c.sentences || []),
 );
 const comparison = ref<ComparisonTable | null>(null);
-const trail = ref<GraphTrailEntry[] | null>(null);
 
 // ── per-tab loading ───────────────────────────────────────────────────────────
 // Each tab owns its request, its pending flag and its error, so switching tabs while one
 // request is in flight still starts the next one, and a failure shows (with Retry) only
 // on the tab it belongs to. A tab never claims "no findings" for data it never fetched.
-type TabDataKey = "sources" | "conflicts" | "verification" | "redteam" | "trail";
+type TabDataKey = "sources" | "conflicts" | "verification" | "redteam";
 const pending = reactive(new Set<TabDataKey>());
 const errors = reactive<Partial<Record<TabDataKey, string | null>>>({});
 // A newer request for the same key (a refetch) wins over one still in flight.
@@ -160,7 +157,6 @@ function tabState(key: TabDataKey, value: unknown): "loading" | "error" | "ready
 }
 
 const ensureSources = (force = false) => load("sources", sources, () => api.getSources(props.id), force);
-const ensureTrail = () => load("trail", trail, async () => (await api.getGraph(props.id)).graph_trail);
 const ensureConflicts = () => load("conflicts", conflicts, () => api.getConflicts(props.id));
 const ensureVerification = () => load("verification", verification, () => api.getVerification(props.id));
 const ensureRedTeam = () => load("redteam", redTeam, () => api.getRedTeam(props.id));
@@ -170,7 +166,6 @@ const tabData: Record<TabDataKey, { target: Ref<unknown>; ensure: () => Promise<
   conflicts: { target: conflicts, ensure: ensureConflicts },
   verification: { target: verification, ensure: ensureVerification },
   redteam: { target: redTeam, ensure: ensureRedTeam },
-  trail: { target: trail, ensure: ensureTrail },
 };
 function retry(key: TabDataKey) {
   tabData[key].target.value = null;
@@ -183,83 +178,88 @@ const TAB_DATA: Partial<Record<Tab, TabDataKey>> = {
   conflicts: "conflicts",
   confidence: "verification",
   redteam: "redteam",
-  trail: "trail",
 };
 const activeData = computed(() => {
   const key = TAB_DATA[tab.value];
   return key ? { key, state: tabState(key, tabData[key].target.value) } : null;
 });
 
-async function ensureCitations() {
-  if (citations.value) return;
-  try {
-    citations.value = await api.getCitations(props.id);
-  } catch {
-    /* grounding is optional — the report still renders without it */
-  }
+// ── trust signals ─────────────────────────────────────────────────────────────
+// Optional analyses: each may be missing (only debate questions have a stance, only
+// academic sources have DOIs, …) and the report renders without it. A request already
+// in flight is shared, so the Sources tab opening during the final load never
+// duplicates it.
+const optionalInFlight = new Map<string, Promise<void>>();
+function loadOptional<T>(key: string, target: Ref<T | null>, fetcher: () => Promise<T>): Promise<void> {
+  if (target.value !== null) return Promise.resolve();
+  const running = optionalInFlight.get(key);
+  if (running) return running;
+  const request = fetcher()
+    .then(
+      (value) => {
+        target.value = value;
+      },
+      () => {
+        /* optional signal — its chip or card simply stays hidden */
+      },
+    )
+    .finally(() => optionalInFlight.delete(key));
+  optionalInFlight.set(key, request);
+  return request;
+}
+const ensureCitations = () => loadOptional("citations", citations, () => api.getCitations(props.id));
+const ensureIndependence = () => loadOptional("independence", independence, () => api.getSourceIndependence(props.id));
+const ensureReputation = () => loadOptional("reputation", reputation, () => api.getSourceReputation(props.id));
+const ensureStance = () => loadOptional("stance", stance, () => api.getStance(props.id));
+const ensureIntegrity = () => loadOptional("integrity", integrity, () => api.getSourceIntegrity(props.id));
+const ensureCrossLang = () => loadOptional("crossLang", crossLang, () => api.getCrossLanguage(props.id));
+const ensureConfidence = () => loadOptional("confidence", confidence, () => api.getConfidence(props.id));
+const ensureNumbers = () => loadOptional("numbers", numbers, () => api.getNumericCheck(props.id));
+
+// The trust row appears once, when every signal has answered (or after a cap, so one
+// hung request cannot hide the rest): one layout change above the report instead of up
+// to eight separate jumps while the reader has just started reading.
+const TRUST_REVEAL_CAP_MS = 6000;
+const trustReady = ref(false);
+let trustCapTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(trustCapTimer));
+function revealTrust() {
+  if (trustReady.value || trustCapTimer !== undefined) return;
+  trustCapTimer = setTimeout(() => (trustReady.value = true), TRUST_REVEAL_CAP_MS);
+  Promise.allSettled([
+    ensureCitations(),
+    ensureIndependence(),
+    ensureReputation(),
+    ensureStance(),
+    ensureIntegrity(),
+    ensureCrossLang(),
+    ensureConfidence(),
+    ensureNumbers(),
+  ]).then(() => {
+    clearTimeout(trustCapTimer);
+    trustReady.value = true;
+  });
 }
 
-async function ensureIndependence() {
-  if (independence.value) return;
-  try {
-    independence.value = await api.getSourceIndependence(props.id);
-  } catch {
-    /* independence analysis is optional — sources still render without it */
-  }
+// Chips that expand a list below the row (the others open a tab).
+const openList = ref<"citations" | "numbers" | null>(null);
+function toggleList(list: "citations" | "numbers") {
+  openList.value = openList.value === list ? null : list;
 }
+const pct = (ratio: number) => Math.round(ratio * 100);
+const weakCount = computed(() => citations.value?.unsupported_claims.length ?? 0);
+const numericIssueCount = computed(() =>
+  numbers.value ? numbers.value.unsupported.length + numbers.value.contradictions.length : 0,
+);
+const echoCount = computed(() => independence.value?.clusters.length ?? 0);
 
-async function ensureReputation() {
-  if (reputation.value) return;
-  try {
-    reputation.value = await api.getSourceReputation(props.id);
-  } catch {
-    /* reputation flags are optional */
-  }
+// A chip is tinted (border and value) only when it carries an issue.
+type Tone = "danger" | "warning" | null;
+function chipBorder(tone: Tone): string {
+  return tone === "danger" ? "border-danger/40" : tone === "warning" ? "border-warning/40" : "border-bd";
 }
-
-async function ensureStance() {
-  if (stance.value) return;
-  try {
-    stance.value = await api.getStance(props.id);
-  } catch {
-    /* stance balance is optional — only debate questions have one */
-  }
-}
-
-async function ensureIntegrity() {
-  if (integrity.value) return;
-  try {
-    integrity.value = await api.getSourceIntegrity(props.id);
-  } catch {
-    /* retraction check is optional — only academic sources have DOIs */
-  }
-}
-
-async function ensureCrossLang() {
-  if (crossLang.value) return;
-  try {
-    crossLang.value = await api.getCrossLanguage(props.id);
-  } catch {
-    /* cross-language is optional */
-  }
-}
-
-async function ensureConfidence() {
-  if (confidence.value) return;
-  try {
-    confidence.value = await api.getConfidence(props.id);
-  } catch {
-    /* honesty meter is optional — the report still renders without it */
-  }
-}
-
-async function ensureNumbers() {
-  if (numbers.value) return;
-  try {
-    numbers.value = await api.getNumericCheck(props.id);
-  } catch {
-    /* numeric check is optional — the report still renders without it */
-  }
+function chipValue(tone: Tone): string {
+  return tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-ink";
 }
 
 watch(tab, (t) => {
@@ -277,7 +277,6 @@ watch(tab, (t) => {
   }
   if (t === "conflicts") ensureConflicts();
   if (t === "redteam") ensureRedTeam();
-  if (t === "trail") ensureTrail();
 });
 
 async function ensureComparison() {
@@ -300,14 +299,7 @@ watch(
         sources.value = null;
         ensureSources(true);
       }
-      ensureCitations();
-      ensureIndependence();
-      ensureReputation();
-      ensureStance();
-      ensureIntegrity();
-      ensureCrossLang();
-      ensureConfidence();
-      ensureNumbers();
+      revealTrust();
       ensureShare();
       ensureComparison();
     }
@@ -319,19 +311,6 @@ function cellFor(row: ComparisonRow, option: string) {
   return row.cells.find((c) => c.option === option) || null;
 }
 
-const integrityClass = computed(() => {
-  const r = citations.value?.integrity ?? 0;
-  if (r >= 0.8) return "text-emerald-500";
-  if (r >= 0.5) return "text-amber-500";
-  return "text-red-400";
-});
-
-const numericClass = computed(() => {
-  const r = numbers.value?.integrity ?? 1;
-  if (r >= 0.9) return "text-emerald-500";
-  if (r >= 0.6) return "text-amber-500";
-  return "text-red-400";
-});
 const numericHasIssues = computed(() => {
   const n = numbers.value;
   return !!n && (n.total > 0 || n.contradictions.length > 0);
@@ -395,7 +374,7 @@ const bandClass: Record<string, string> = {
 };
 
 const tabKeys = computed<Tab[]>(() => {
-  const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
+  const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam"];
   // The comparison tab only appears when the query actually produced a table.
   if (comparison.value && comparison.value.options.length >= 2) base.splice(2, 0, "comparison");
   return base;
@@ -421,10 +400,6 @@ const levelClass: Record<string, string> = {
   medium: "text-amber-500 border-amber-500/40",
   weak: "text-red-400 border-red-400/40",
 };
-
-function stepLabel(step: string): string {
-  return te(`trace.${step}`) ? t(`trace.${step}`) : step;
-}
 
 const exporting = ref<string | null>(null);
 const exportError = ref<string | null>(null);
@@ -596,7 +571,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           </div>
         </div>
       </div>
-      <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.dataGroup") }} · {{ $t("artifact.webGroup") }}</span>
       <p v-if="exportError" class="ml-auto text-xs text-red-400">{{ exportError }}</p>
     </div>
 
@@ -612,163 +586,178 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </div>
 
       <template v-else-if="tab === 'report'">
-        <div v-if="report && isFinal" class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-          <button
-            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition"
-            :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
-            @click="verifyInline = !verifyInline"
-          >
-            <span>{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
-          </button>
-          <template v-if="verifyInline">
-            <span class="text-muted">{{ $t("verify.legend") }}</span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-success" /> {{ $t("verify.strong") }}
-            </span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-warning" /> {{ $t("verify.weak") }}
-            </span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-danger" /> {{ $t("verify.contested") }}
-            </span>
-          </template>
-        </div>
-        <div v-if="citations && (citations.total || citations.unverified)" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("citations.integrity") }}</span>
-            <span v-if="citations.total" class="font-semibold" :class="integrityClass">{{ Math.round(citations.integrity * 100) }}%</span>
-            <span v-if="citations.total" class="text-muted">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
-            <span v-if="citations.unverified" class="text-muted" :title="$t('citations.unverifiedHint')">
-              · {{ citations.unverified }} {{ $t("citations.unverified") }}
-            </span>
+        <!-- Trust summary: one chip row that appears once, when the signals have answered.
+             Each chip opens its tab or its list; only a chip with an issue is tinted. -->
+        <Transition name="fade-quick" appear>
+          <div v-if="report && isFinal && trustReady" class="mb-5 space-y-2 text-xs">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                v-if="citations && (citations.total || citations.unverified)"
+                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :class="chipBorder(weakCount ? 'danger' : null)"
+                :aria-expanded="openList === 'citations'"
+                :title="citations.total ? `${citations.supported}/${citations.total} ${$t('citations.matched')}` : undefined"
+                @click="toggleList('citations')"
+              >
+                {{ $t("citations.integrity") }}
+                <b class="font-semibold tabular-nums" :class="chipValue(weakCount ? 'danger' : null)">{{ citations.total ? pct(citations.integrity) + "%" : "—" }}</b>
+                <span v-if="weakCount" class="tabular-nums text-danger"> · ⚠ {{ weakCount }}</span>
+              </button>
+              <button
+                v-if="independence && independence.total_sources > 1"
+                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :class="chipBorder(echoCount ? 'warning' : null)"
+                :title="`${independence.independent_origins}/${independence.total_sources} ${$t('independence.origins')}` + (echoCount ? ` · ${echoCount} ${$t('independence.echoClusters')}` : '')"
+                @click="tab = 'sources'"
+              >
+                {{ $t("independence.title") }}
+                <b class="font-semibold tabular-nums" :class="chipValue(echoCount ? 'warning' : null)">{{ pct(independence.independence_score) }}%</b>
+                <span v-if="echoCount" class="tabular-nums text-warning"> · ⚠ {{ echoCount }}</span>
+              </button>
+              <button
+                v-if="confidence && confidence.components.length"
+                class="press rounded-full border border-bd bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :title="confidence.total_claims ? `${bandPct(confidence.solid)}% ${$t('confidence.band.solid')} · ${bandPct(confidence.contested)}% ${$t('confidence.band.contested')} · ${bandPct(confidence.speculative)}% ${$t('confidence.band.speculative')}` : undefined"
+                @click="tab = 'confidence'"
+              >
+                {{ $t("confidence.meter") }}
+                <b class="font-semibold tabular-nums text-ink">{{ pct(confidence.overall) }}%</b>
+                · {{ $t("confidence.grade." + confidence.grade) }}
+              </button>
+              <button
+                v-if="numbers && numericHasIssues"
+                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :class="chipBorder(numericIssueCount ? 'danger' : null)"
+                :aria-expanded="openList === 'numbers'"
+                @click="toggleList('numbers')"
+              >
+                {{ $t("numbers.title") }}
+                <b class="font-semibold tabular-nums" :class="chipValue(numericIssueCount ? 'danger' : null)">{{ numbers.total ? `${numbers.supported}/${numbers.total}` : "—" }}</b>
+                <span v-if="numericIssueCount" class="tabular-nums text-danger"> · ⚠ {{ numericIssueCount }}</span>
+              </button>
+              <button
+                v-if="stance && stance.applicable"
+                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :class="chipBorder(stanceOneSided ? 'warning' : null)"
+                :title="`${stancePct(stance.neutral)}% ${$t('stance.neutral')}`"
+                @click="tab = 'sources'"
+              >
+                {{ $t("stance.title") }}
+                <b class="font-semibold tabular-nums" :class="chipValue(stanceOneSided ? 'warning' : null)">{{ stancePct(stance.supports) }}%</b> {{ $t("stance.for") }} ·
+                <b class="font-semibold tabular-nums" :class="chipValue(stanceOneSided ? 'warning' : null)">{{ stancePct(stance.opposes) }}%</b> {{ $t("stance.against") }}
+                <span v-if="stanceOneSided" class="text-warning"> · ⚠ {{ $t("stance.oneSided") }}</span>
+              </button>
+              <button
+                v-if="crossLang && crossLang.languages.length > 1"
+                class="press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink"
+                :class="chipBorder(crossLang.monolingual ? 'warning' : null)"
+                :title="crossLang.languages.slice(0, 5).map((l) => l.lang + '·' + l.count).join(' ')"
+                @click="tab = 'sources'"
+              >
+                {{ $t("crosslang.title") }}
+                <b class="font-semibold tabular-nums" :class="chipValue(crossLang.monolingual ? 'warning' : null)">{{ crossLang.languages.length }}</b>
+                <span v-if="crossLang.monolingual" class="text-warning"> · ⚠ {{ $t("crosslang.bubble") }}</span>
+                <span v-else-if="crossLang.unique_findings.length" class="text-accent"> · +{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
+              </button>
+
+              <!-- The in-text verification switch and its legend wrap together, last in the
+                   row: closest to the text they change. -->
+              <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <button
+                  class="press flex items-center gap-1.5 rounded-full border px-2.5 py-1"
+                  :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
+                  :aria-pressed="verifyInline"
+                  @click="verifyInline = !verifyInline"
+                >
+                  <span aria-hidden="true">{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
+                </button>
+                <template v-if="verifyInline">
+                  <span class="text-muted">{{ $t("verify.legend") }}</span>
+                  <span class="inline-flex items-center gap-1 text-muted">
+                    <span class="h-2 w-2 rounded-full bg-success" /> {{ $t("verify.strong") }}
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-muted">
+                    <span class="h-2 w-2 rounded-full bg-warning" /> {{ $t("verify.weak") }}
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-muted">
+                    <span class="h-2 w-2 rounded-full bg-danger" /> {{ $t("verify.contested") }}
+                  </span>
+                </template>
+              </div>
+            </div>
+
+            <!-- Citations chip: match counts and the claims the sources don't back. -->
+            <div v-if="openList === 'citations' && citations" class="rounded-lg border border-bd bg-surface/40 px-3 py-2">
+              <div class="flex flex-wrap gap-x-3 gap-y-1 text-muted">
+                <span v-if="citations.total" class="tabular-nums">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
+                <span v-if="citations.unverified" :title="$t('citations.unverifiedHint')">
+                  <span class="tabular-nums">{{ citations.unverified }}</span> {{ $t("citations.unverified") }}
+                </span>
+              </div>
+              <div v-if="citations.unsupported_claims.length" class="mt-2 border-t border-bd pt-2">
+                <div class="mb-1 font-medium text-danger">⚠ {{ citations.unsupported_claims.length }} {{ $t("citations.weak") }}</div>
+                <ul class="space-y-1">
+                  <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Numbers chip: figures missing from their source and internal contradictions. -->
+            <div v-if="openList === 'numbers' && numbers" class="rounded-lg border border-bd bg-surface/40 px-3 py-2">
+              <div class="text-muted">
+                <template v-if="numbers.total">
+                  <span class="tabular-nums">{{ pct(numbers.integrity) }}%</span> ·
+                  <span class="tabular-nums">{{ numbers.supported }}/{{ numbers.total }}</span> {{ $t("numbers.matched") }}
+                </template>
+                <template v-else>{{ $t("numbers.none") }}</template>
+              </div>
+              <div v-if="numericIssueCount" class="mt-2 space-y-2 border-t border-bd pt-2">
+                <div v-if="numbers.unsupported.length">
+                  <div class="mb-1 font-medium text-muted">{{ $t("numbers.unsupported") }}</div>
+                  <ul class="space-y-1">
+                    <li v-for="(c, i) in numbers.unsupported" :key="'u' + i" class="flex gap-2 text-muted">
+                      <span class="shrink-0 font-semibold tabular-nums text-danger">{{ c.value }}</span>
+                      <span class="line-clamp-2">{{ c.sentence }} <span class="text-accent">[{{ c.source_id }}]</span></span>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="numbers.contradictions.length">
+                  <div class="mb-1 font-medium text-muted">{{ $t("numbers.contradictions") }}</div>
+                  <ul class="space-y-1">
+                    <li v-for="(c, i) in numbers.contradictions" :key="'c' + i" class="text-muted">
+                      <span class="font-semibold tabular-nums text-warning">{{ c.values.join(" ≠ ") }}</span>
+                      <span v-for="(s, j) in c.sentences" :key="j" class="ml-2 block line-clamp-1 pl-2 text-2xs">○ {{ s }}</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <!-- Full-width alerts only for the two findings that undermine a source. -->
             <button
-              v-if="citations.unsupported_claims.length"
-              class="ml-auto text-red-400 hover:underline"
-              @click="showWeak = !showWeak"
-            >
-              ⚠ {{ citations.unsupported_claims.length }} {{ $t("citations.weak") }}
-            </button>
-          </div>
-          <ul v-if="showWeak && citations.unsupported_claims.length" class="mt-2 space-y-1 border-t border-bd pt-2">
-            <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
-          </ul>
-        </div>
-        <div
-          v-if="independence && independence.total_sources > 1"
-          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
-        >
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("independence.title") }}</span>
-            <span class="font-semibold" :class="independenceClass">{{ Math.round(independence.independence_score * 100) }}%</span>
-            <span class="text-muted">{{ independence.independent_origins }}/{{ independence.total_sources }} {{ $t("independence.origins") }}</span>
-            <button
-              v-if="independence.clusters.length"
-              class="ml-auto text-amber-500 hover:underline"
+              v-if="integrity && integrity.flagged.length"
+              class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-left"
               @click="tab = 'sources'"
             >
-              ⚠ {{ independence.clusters.length }} {{ $t("independence.echoClusters") }}
+              <span class="text-danger" aria-hidden="true">⛔</span>
+              <span class="font-medium text-ink">{{ $t("integrity.title") }}</span>
+              <span class="font-semibold tabular-nums text-danger">
+                {{ integrity.retracted_count }} {{ $t("integrity.retracted") }}
+              </span>
+              <span class="text-muted">{{ $t("integrity.hintShort") }}</span>
             </button>
-          </div>
-        </div>
-        <button
-          v-if="confidence && confidence.components.length"
-          class="mb-4 flex w-full items-center gap-3 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-left text-xs"
-          @click="tab = 'confidence'"
-        >
-          <span class="font-medium text-ink">{{ $t("confidence.meter") }}</span>
-          <span class="text-lg font-semibold leading-none" :class="gradeClass">{{ Math.round(confidence.overall * 100) }}%</span>
-          <span class="text-muted">{{ $t("confidence.grade." + confidence.grade) }}</span>
-          <span v-if="confidence.total_claims" class="ml-auto text-muted">
-            {{ bandPct(confidence.solid) }}% {{ $t("confidence.band.solid") }} ·
-            {{ bandPct(confidence.contested) }}% {{ $t("confidence.band.contested") }} ·
-            {{ bandPct(confidence.speculative) }}% {{ $t("confidence.band.speculative") }}
-          </span>
-        </button>
-        <div
-          v-if="numericHasIssues"
-          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
-        >
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("numbers.title") }}</span>
-            <template v-if="numbers!.total">
-              <span class="font-semibold" :class="numericClass">{{ Math.round(numbers!.integrity * 100) }}%</span>
-              <span class="text-muted">{{ numbers!.supported }}/{{ numbers!.total }} {{ $t("numbers.matched") }}</span>
-            </template>
-            <span v-else class="text-muted">{{ $t("numbers.none") }}</span>
             <button
-              v-if="numbers!.unsupported.length || numbers!.contradictions.length"
-              class="ml-auto text-red-400 hover:underline"
-              @click="showNumbers = !showNumbers"
+              v-if="reputation && reputation.flagged_count"
+              class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-left"
+              @click="tab = 'sources'"
             >
-              ⚠ {{ numbers!.unsupported.length + numbers!.contradictions.length }} {{ $t("numbers.issues") }}
+              <span class="text-danger" aria-hidden="true">⚑</span>
+              <span class="font-medium text-ink">{{ $t("reputation.title") }}</span>
+              <span class="tabular-nums text-danger">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
+              <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
             </button>
           </div>
-          <div v-if="showNumbers" class="mt-2 space-y-2 border-t border-bd pt-2">
-            <div v-if="numbers!.unsupported.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("numbers.unsupported") }}</div>
-              <ul class="space-y-1">
-                <li v-for="(c, i) in numbers!.unsupported" :key="'u' + i" class="flex gap-2 text-muted">
-                  <span class="shrink-0 font-semibold text-red-400">{{ c.value }}</span>
-                  <span class="line-clamp-2">{{ c.sentence }} <span class="text-accent">[{{ c.source_id }}]</span></span>
-                </li>
-              </ul>
-            </div>
-            <div v-if="numbers!.contradictions.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("numbers.contradictions") }}</div>
-              <ul class="space-y-1">
-                <li v-for="(c, i) in numbers!.contradictions" :key="'c' + i" class="text-muted">
-                  <span class="font-semibold text-amber-500">{{ c.values.join(" ≠ ") }}</span>
-                  <span v-for="(s, j) in c.sentences" :key="j" class="ml-2 block line-clamp-1 pl-2 text-[11px]">○ {{ s }}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-        <button
-          v-if="reputation && reputation.flagged_count"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-400/40 bg-red-400/5 px-3 py-2 text-left text-xs"
-          @click="tab = 'sources'"
-        >
-          <span class="text-red-400">⚑</span>
-          <span class="font-medium text-ink">{{ $t("reputation.title") }}</span>
-          <span class="text-red-400">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
-          <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
-        </button>
-        <button
-          v-if="integrity && integrity.flagged.length"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 text-left text-xs"
-          @click="tab = 'sources'"
-        >
-          <span class="text-red-500">⛔</span>
-          <span class="font-medium text-ink">{{ $t("integrity.title") }}</span>
-          <span class="font-semibold text-red-500">
-            {{ integrity.retracted_count }} {{ $t("integrity.retracted") }}
-          </span>
-          <span class="text-muted">{{ $t("integrity.hintShort") }}</span>
-        </button>
-        <button
-          v-if="stance && stance.applicable"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
-          :class="stanceOneSided ? 'border-amber-500/40 bg-amber-500/5' : 'border-bd bg-surface/40'"
-          @click="tab = 'sources'"
-        >
-          <span class="font-medium text-ink">{{ $t("stance.title") }}</span>
-          <span class="text-emerald-500">{{ stancePct(stance.supports) }}% {{ $t("stance.for") }}</span>
-          <span class="text-red-400">{{ stancePct(stance.opposes) }}% {{ $t("stance.against") }}</span>
-          <span class="text-muted">{{ stancePct(stance.neutral) }}% {{ $t("stance.neutral") }}</span>
-          <span v-if="stanceOneSided" class="ml-auto text-amber-500">⚠ {{ $t("stance.oneSided") }}</span>
-        </button>
-        <button
-          v-if="crossLang && crossLang.languages.length > 1"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
-          :class="crossLang.monolingual ? 'border-bd bg-surface/40' : 'border-accent/40 bg-accent/5'"
-          @click="tab = 'sources'"
-        >
-          <span class="font-medium text-ink">🌐 {{ $t("crosslang.title") }}</span>
-          <span class="text-muted">{{ crossLang.languages.slice(0, 5).map((l) => l.lang + "·" + l.count).join(" ") }}</span>
-          <span v-if="crossLang.monolingual" class="ml-auto text-amber-500">⚠ {{ $t("crosslang.bubble") }}</span>
-          <span v-else-if="crossLang.unique_findings.length" class="ml-auto text-accent">+{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
-        </button>
+        </Transition>
         <MarkdownView
           v-if="report"
           :source="report"
@@ -777,7 +766,8 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           :independence="independence"
           :weak-claims="weakClaims"
           :contradictions="contradictionSentences"
-          :verify="verifyInline && isFinal"
+          :verify="verifyInline && isFinal && trustReady"
+          class="transition-opacity duration-300"
           :class="{ 'opacity-80': !isFinal }"
         />
         <ReportSkeletonCanvas v-else :source-count="sources?.length" />
@@ -827,7 +817,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Source-independence / echo-chamber summary: how many independent origins these sources really are -->
           <div
             v-if="independence && independence.total_sources > 1"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="flex items-center gap-3">
               <div class="text-2xl font-semibold leading-none" :class="independenceClass">
@@ -873,7 +863,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Domain-credibility flags: satire / fabricated / conspiracy / state-controlled -->
           <div
             v-if="reputation && reputation.flagged_count"
-            class="mb-3 rounded-xl border border-red-400/40 bg-red-400/5 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-red-400/40 bg-red-400/5 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
               <span class="text-red-400">⚑</span>{{ $t("reputation.title") }}
@@ -899,7 +889,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Retraction check: cited DOIs flagged as retracted / under concern -->
           <div
             v-if="integrity && integrity.flagged.length"
-            class="mb-3 rounded-xl border border-red-500/50 bg-red-500/10 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-red-500/50 bg-red-500/10 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
               <span class="text-red-500">⛔</span>{{ $t("integrity.title") }}
@@ -925,7 +915,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Viewpoint balance: how the evidence splits for/against the central claim -->
           <div
             v-if="stance && stance.applicable"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="mb-1 flex items-center gap-2 text-sm font-medium text-ink">
               {{ $t("stance.title") }}
@@ -949,7 +939,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Cross-language coverage: language spread + what non-query-language sources add -->
           <div
             v-if="crossLang && crossLang.languages.length > 1"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="mb-2 text-sm font-medium text-ink">🌐 {{ $t("crosslang.title") }}</div>
             <div class="mb-3 flex flex-wrap gap-1.5">
@@ -1006,7 +996,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       <template v-else-if="tab === 'confidence'">
         <div v-if="verification" class="space-y-6">
           <!-- Honesty meter: one calibrated confidence fused from all trust signals, with its inputs shown -->
-          <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4 animate-rise">
+          <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4">
             <div class="flex items-center gap-4">
               <div class="text-3xl font-semibold leading-none" :class="gradeClass">
                 {{ Math.round(confidence.overall * 100) }}%
@@ -1121,19 +1111,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           </div>
         </template>
         <p v-else class="text-muted">{{ $t("redteam.empty") }}</p>
-      </template>
-
-      <template v-else>
-        <p v-if="trail && !trail.length" class="text-muted">{{ $t("artifact.trailEmpty") }}</p>
-        <ol v-else class="space-y-3">
-          <li v-for="(e, i) in trail" :key="i" class="flex gap-3 text-sm">
-            <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accentSoft" />
-            <div class="min-w-0">
-              <div class="text-ink">{{ stepLabel(e.step || "") }}</div>
-              <div v-if="e.detail" class="text-muted">{{ e.detail }}</div>
-            </div>
-          </li>
-        </ol>
       </template>
     </div>
   </div>
