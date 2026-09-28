@@ -607,4 +607,21 @@ input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible {
   .material-bar {
     border: 1px solid CanvasText;
   }
+  /* A transparent border only reserves space (tab underlines, swatch rings). Forced
+     colours would paint it, and every tab would look selected, so it stays hidden... */
+  .border-transparent,
+  [role="tab"]:not([aria-selected="true"]) {
+    border-color: Canvas;
+  }
+  /* ...and the selected tab keeps its underline in the system highlight colour. */
+  [role="tab"][aria-selected="true"] {
+    border-color: Highlight;
+  }
+  /* Colour-only status dots (row status, legends, live dots) would be flattened to
+     the canvas and vanish: keep their own colour and ring them in the text colour. */
+  .rounded-full:empty:is(.live-dot, .h-1\.5, .h-2, .h-2\.5) {
+    forced-color-adjust: none;
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
 }

@@ -109,4 +109,11 @@ describe("theme contrast", () => {
     // It has to come after the field rule, which makes the outline transparent.
     expect(css.indexOf('input:is([type="checkbox"]')).toBeGreaterThan(css.indexOf(":is(input, textarea, select):focus-visible"));
   });
+
+  it("forced colours hide reserved borders, mark the selected tab and keep status dots", () => {
+    const forced = [...css.matchAll(/@media \(forced-colors: active\) {([\s\S]*?)\n}/g)].map((m) => m[1]).join("\n");
+    expect(forced).toMatch(/\.border-transparent,\s*\[role="tab"\]:not\(\[aria-selected="true"\]\) {\s*border-color: Canvas;/);
+    expect(forced).toMatch(/\[role="tab"\]\[aria-selected="true"\] {\s*border-color: Highlight;/);
+    expect(forced).toMatch(/\.rounded-full:empty:is\([^)]*\.live-dot[^)]*\) {\s*forced-color-adjust: none;/);
+  });
 });
