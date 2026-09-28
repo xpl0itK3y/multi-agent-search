@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { ResearchHistoryItem } from "@/lib/types";
+import { apiErrorMessage } from "@/lib/api";
+import { rubberband } from "@/lib/gesture";
+import { prefersReducedMotion } from "@/lib/motion";
+import { useDismiss } from "@/lib/useDismiss";
 import { useResearchStore } from "@/stores/research";
-import { useUiStore, THEMES } from "@/stores/ui";
+import { useUiStore, THEMES, SIDEBAR_MAX, SIDEBAR_MIN, type ThemeId } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { confirm } from "@/lib/confirm";
 import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
@@ -67,24 +71,37 @@ const filteredHistory = computed(() => {
   return store.threads.filter((item) => rawTitle(item).toLowerCase().includes(q));
 });
 
+// A rename or delete the server refused says so under its row for a few seconds, and the
+// row keeps its old title (apple-design §16 feedback: an error next to what caused it).
+const ROW_ERROR_MS = 4000;
+const rowError = ref<{ id: string; message: string } | null>(null);
+let rowErrorTimer: ReturnType<typeof setTimeout> | undefined;
+function showRowError(id: string, e: unknown) {
+  clearTimeout(rowErrorTimer);
+  rowError.value = { id, message: apiErrorMessage(e, t) };
+  rowErrorTimer = setTimeout(() => (rowError.value = null), ROW_ERROR_MS);
+}
+
 function startRename(item: ResearchHistoryItem) {
   editingId.value = item.id;
   editValue.value = rawTitle(item);
 }
-async function commitRename(id: string) {
+async function commitRename(item: ResearchHistoryItem) {
+  // Enter and Escape end the edit before the field's blur arrives: that blur is not a commit.
+  if (editingId.value !== item.id) return;
   const value = editValue.value.trim();
   editingId.value = null;
-  if (value) {
-    try {
-      await store.renameResearch(id, value);
-    } catch {
-      /* ignore */
-    }
+  if (!value || value === rawTitle(item)) return;
+  try {
+    await store.renameResearch(item.id, value);
+  } catch (e) {
+    showRowError(item.id, e);
   }
 }
 async function onDelete(item: ResearchHistoryItem) {
   const ok = await confirm({
-    message: t("sidebar.confirmDelete"),
+    title: t("sidebar.delete"),
+    message: t("sidebar.confirmDeleteNamed", { title: displayTitle(item) }),
     confirmText: t("sidebar.delete"),
     cancelText: t("common.cancel"),
     danger: true,
@@ -93,14 +110,10 @@ async function onDelete(item: ResearchHistoryItem) {
   try {
     await store.deleteResearch(item.id);
     if (currentThreadId.value === threadKey(item)) router.push("/");
-  } catch {
-    /* ignore */
+  } catch (e) {
+    showRowError(item.id, e);
   }
 }
-
-const nav = [
-  { key: "researches", active: true },
-];
 
 const LOCALE_LABEL: Record<string, string> = { ru: "RU", en: "EN", es: "ES" };
 function cycleLocale() {
@@ -110,9 +123,10 @@ function cycleLocale() {
 }
 
 function statusColor(status: string): string {
-  if (status === "completed") return "bg-emerald-400";
-  if (status === "failed") return "bg-red-400";
-  if (status === "analyzing" || status === "processing") return "bg-accent";
+  if (status === "completed") return "bg-success";
+  if (status === "failed") return "bg-danger";
+  // The one looping "live" signal (§14: slow, opacity only).
+  if (status === "analyzing" || status === "processing") return "bg-accent live-dot";
   return "bg-muted";
 }
 
@@ -120,20 +134,149 @@ function openThread(item: ResearchHistoryItem) {
   router.push({ name: "thread", params: { threadId: threadKey(item) } });
 }
 
-// Drag the right edge to resize the sidebar (persisted in the ui store).
-function startResize(e: MouseEvent) {
-  const startX = e.clientX;
-  const startW = ui.sidebarWidth;
-  const onMove = (ev: MouseEvent) => ui.setSidebarWidth(startW + (ev.clientX - startX));
-  const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
-    document.body.style.userSelect = "";
-  };
-  document.body.style.userSelect = "none";
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+// ── Theme menu: grows from ◐ (origin-top-right), closes on an outside press or Escape ──
+const themeRoot = ref<HTMLElement | null>(null);
+const themeTrigger = ref<HTMLButtonElement | null>(null);
+const themeMenu = ref<HTMLElement | null>(null);
+useDismiss(themeRoot, themeMenuOpen, { trigger: themeTrigger });
+
+function themeItems(): HTMLElement[] {
+  return [...(themeMenu.value?.querySelectorAll<HTMLElement>("[role='menuitemradio']") ?? [])];
 }
+watch(themeMenuOpen, async (open) => {
+  if (!open) return;
+  await nextTick();
+  const items = themeItems();
+  (items.find((el) => el.getAttribute("aria-checked") === "true") ?? items[0])?.focus({ preventScroll: true });
+});
+function onThemeMenuKey(e: KeyboardEvent) {
+  if (e.key === "Tab") {
+    themeMenuOpen.value = false;
+    return;
+  }
+  const items = themeItems();
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  let next = -1;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (at + 1) % items.length;
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (at - 1 + items.length) % items.length;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = items.length - 1;
+  if (next < 0 || !items.length) return;
+  e.preventDefault();
+  items[next].focus();
+}
+// Close first, then switch: the menu isn't caught in the theme cross-fade.
+function pickTheme(id: ThemeId) {
+  themeMenuOpen.value = false;
+  ui.setTheme(id);
+  themeTrigger.value?.focus({ preventScroll: true });
+}
+
+// ── Resize: drag the right edge (§2 direct manipulation, §9 rubber-banding) ──
+// The pointer is captured, so a fast drag out of the window keeps resizing and ends on
+// release. Past the limits the edge resists instead of stopping dead, and settles back on
+// release; dragged under COLLAPSE_BELOW it fades toward the rail (§8: the frames hint at
+// the outcome) and collapses to it. The width is stored once, on release.
+const aside = ref<HTMLElement | null>(null);
+const resizing = ref(false);
+const COLLAPSE_BELOW = 180;
+const RUBBER_BAND_PX = 120;
+const KEY_STEP_PX = 16;
+const SETTLE_MS = 200;
+let drag: { id: number; startX: number; startW: number; x: number } | null = null;
+let dragFrame = 0;
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+function bandedWidth(raw: number): number {
+  if (raw > SIDEBAR_MAX) return SIDEBAR_MAX + rubberband(raw - SIDEBAR_MAX, RUBBER_BAND_PX);
+  if (raw < SIDEBAR_MIN) return SIDEBAR_MIN - rubberband(SIDEBAR_MIN - raw, RUBBER_BAND_PX);
+  return raw;
+}
+const rawWidth = (d: NonNullable<typeof drag>) => d.startW + (d.x - d.startX);
+
+// One layout write per frame, however many pointermoves arrive in it.
+function applyDrag() {
+  dragFrame = 0;
+  if (!drag) return;
+  const raw = rawWidth(drag);
+  ui.setSidebarWidth(bandedWidth(raw), { persist: false, clamp: false });
+  if (aside.value) aside.value.style.opacity = raw < COLLAPSE_BELOW ? "0.6" : "";
+}
+
+function onResizeDown(e: PointerEvent) {
+  if (drag) return;
+  if (e.pointerType === "mouse" ? e.button !== 0 : !e.isPrimary) return;
+  e.preventDefault(); // no text selection, no focus ring from a mouse press
+  const handle = e.currentTarget as HTMLElement;
+  try {
+    handle.setPointerCapture?.(e.pointerId);
+  } catch {
+    // the pointer is already gone
+  }
+  clearTimeout(settleTimer);
+  if (aside.value) aside.value.style.transition = "";
+  drag = { id: e.pointerId, startX: e.clientX, startW: ui.sidebarWidth, x: e.clientX };
+  resizing.value = true;
+  document.documentElement.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+}
+
+function onResizeMove(e: PointerEvent) {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.x = e.clientX;
+  if (!dragFrame) dragFrame = requestAnimationFrame(applyDrag);
+}
+
+// A settle from a rubber-banded overshoot back to the limit (never for a plain drag).
+function settleWidth() {
+  const el = aside.value;
+  if (!el || prefersReducedMotion()) return;
+  el.style.transition = `width ${SETTLE_MS}ms var(--ease-emph)`;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    el.style.transition = "";
+  }, SETTLE_MS + 40);
+}
+
+function onResizeEnd(e: PointerEvent) {
+  const d = drag;
+  if (!d || e.pointerId !== d.id) return;
+  if (e.type === "pointerup") d.x = e.clientX;
+  drag = null;
+  if (dragFrame) cancelAnimationFrame(dragFrame);
+  dragFrame = 0;
+  resizing.value = false;
+  document.documentElement.style.cursor = "";
+  document.body.style.userSelect = "";
+  if (aside.value) aside.value.style.opacity = "";
+
+  const raw = rawWidth(d);
+  if (raw < COLLAPSE_BELOW) {
+    ui.setSidebarWidth(d.startW); // the rail expands back to the width it had
+    ui.toggleSidebar();
+    return;
+  }
+  const clamped = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, raw));
+  if (clamped !== raw) settleWidth();
+  ui.setSidebarWidth(clamped);
+}
+
+function onResizeKey(e: KeyboardEvent) {
+  const step = e.key === "ArrowLeft" ? -KEY_STEP_PX : e.key === "ArrowRight" ? KEY_STEP_PX : 0;
+  if (!step) return;
+  e.preventDefault();
+  ui.setSidebarWidth(ui.sidebarWidth + step);
+}
+
+onBeforeUnmount(() => {
+  clearTimeout(rowErrorTimer);
+  clearTimeout(settleTimer);
+  if (dragFrame) cancelAnimationFrame(dragFrame);
+  if (drag) {
+    document.documentElement.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+});
 
 const currentThreadId = computed(() => (route.name === "thread" ? route.params.threadId : null));
 
@@ -153,21 +296,25 @@ function openSettings() {
     v-if="collapsed"
     class="flex h-full w-16 flex-col items-center gap-2 border-r border-bd bg-rail py-3"
   >
-    <button class="rail-btn" :title="$t('sidebar.expand')" @click="ui.toggleSidebar()">⌗</button>
-    <button class="rail-btn" :title="$t('sidebar.newResearch')" @click="router.push('/')">+</button>
+    <button type="button" class="rail-btn hit press" :title="$t('sidebar.expand')" :aria-label="$t('sidebar.expand')" @click="ui.toggleSidebar()">⌗</button>
+    <button type="button" class="rail-btn hit press" :title="$t('sidebar.newResearch')" :aria-label="$t('sidebar.newResearch')" @click="router.push('/')">+</button>
     <button
       v-if="auth.user?.is_admin"
-      class="rail-btn"
+      type="button"
+      class="rail-btn hit press"
       :class="route.path.startsWith('/admin') ? 'text-accent bg-surface' : ''"
       :title="$t('admin.title')"
+      :aria-label="$t('admin.title')"
       @click="router.push('/admin')"
     >
       🛡️
     </button>
     <button
-      class="rail-btn mt-auto"
+      type="button"
+      class="rail-btn hit press mt-auto"
       :class="route.path === '/settings' ? 'text-accent bg-surface' : ''"
       :title="$t('sidebar.settings')"
+      :aria-label="$t('sidebar.settings')"
       @click="openSettings"
     >
       <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -196,15 +343,33 @@ function openSettings() {
   <!-- Expanded sidebar (user-resizable) -->
   <aside
     v-else
+    ref="aside"
     class="relative flex h-full max-w-[85vw] flex-col border-r border-bd bg-rail lg:max-w-none"
     :style="{ width: ui.sidebarWidth + 'px' }"
   >
-    <!-- Drag handle to resize the sidebar -->
+    <!-- Resize handle: a 12px hit area around a 1px line; drag, double-click (default
+         width) or ←/→ with the keyboard -->
     <div
-      class="group absolute inset-y-0 right-0 z-20 hidden w-1.5 translate-x-1/2 cursor-col-resize lg:block"
-      @mousedown.prevent="startResize"
+      role="separator"
+      aria-orientation="vertical"
+      tabindex="0"
+      :aria-label="$t('sidebar.resize')"
+      :aria-valuenow="ui.sidebarWidth"
+      :aria-valuemin="SIDEBAR_MIN"
+      :aria-valuemax="SIDEBAR_MAX"
+      class="group absolute inset-y-0 right-0 z-20 hidden w-3 translate-x-1/2 cursor-col-resize touch-none lg:block"
+      @pointerdown="onResizeDown"
+      @pointermove="onResizeMove"
+      @pointerup="onResizeEnd"
+      @pointercancel="onResizeEnd"
+      @lostpointercapture="onResizeEnd"
+      @dblclick="ui.resetSidebarWidth()"
+      @keydown="onResizeKey"
     >
-      <div class="mx-auto h-full w-px bg-transparent transition group-hover:bg-accent/50" />
+      <div
+        class="mx-auto h-full w-px transition-colors group-hover:bg-accent/50 group-focus-visible:bg-accent"
+        :class="resizing ? 'bg-accent' : 'bg-transparent'"
+      />
     </div>
 
     <!-- Brand -->
@@ -213,29 +378,74 @@ function openSettings() {
         <SparkLogo :size="26" />
         <span class="veris-wordmark text-xl font-semibold tracking-tight">{{ $t("sidebar.brand") }}</span>
       </div>
+      <!-- Touch hit areas grow 8px up and down but only 2px sideways: half the gap, so
+           no button covers its neighbour. -->
       <div class="flex items-center gap-1 text-muted">
-        <button class="icon-btn" :title="$t('sidebar.search')" @click="toggleSearch()">⌕</button>
-        <button class="icon-btn text-[11px] font-medium" :title="LOCALE_LABEL[ui.locale]" @click="cycleLocale()">
+        <button
+          type="button"
+          class="icon-btn hit press after:-inset-x-0.5"
+          :title="$t('sidebar.search')"
+          :aria-label="$t('sidebar.search')"
+          :aria-expanded="searchOpen ? 'true' : 'false'"
+          @click="toggleSearch()"
+        >
+          ⌕
+        </button>
+        <button
+          type="button"
+          class="icon-btn hit press text-2xs font-medium after:-inset-x-0.5"
+          :title="LOCALE_LABEL[ui.locale]"
+          @click="cycleLocale()"
+        >
           {{ LOCALE_LABEL[ui.locale] }}
         </button>
-        <div class="relative">
-          <button class="icon-btn" :title="$t('sidebar.theme')" @click="themeMenuOpen = !themeMenuOpen">◐</button>
-          <div
-            v-if="themeMenuOpen"
-            class="absolute right-0 z-30 mt-1 flex gap-1.5 rounded-xl border border-bd bg-surface p-2 shadow-lg"
+        <div ref="themeRoot" class="relative">
+          <button
+            ref="themeTrigger"
+            type="button"
+            class="icon-btn hit press after:-inset-x-0.5"
+            :title="$t('sidebar.theme')"
+            :aria-label="$t('sidebar.theme')"
+            aria-haspopup="menu"
+            :aria-expanded="themeMenuOpen ? 'true' : 'false'"
+            @click="themeMenuOpen = !themeMenuOpen"
           >
-            <button
-              v-for="t in THEMES"
-              :key="t.id"
-              class="h-6 w-6 rounded-full border-2 transition-transform hover:scale-110"
-              :class="ui.theme === t.id ? 'border-ink' : 'border-transparent'"
-              :style="{ background: t.swatch }"
-              :title="$t('themes.' + t.id)"
-              @click="ui.setTheme(t.id); themeMenuOpen = false"
-            />
-          </div>
+            ◐
+          </button>
+          <Transition name="pop">
+            <div
+              v-if="themeMenuOpen"
+              ref="themeMenu"
+              role="menu"
+              :aria-label="$t('sidebar.theme')"
+              class="material-popover absolute right-0 z-30 mt-1 flex origin-top-right gap-1.5 rounded-xl border border-bd p-2"
+              @keydown="onThemeMenuKey"
+            >
+              <button
+                v-for="th in THEMES"
+                :key="th.id"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="ui.theme === th.id ? 'true' : 'false'"
+                class="h-6 w-6 rounded-full border-2 transition-transform motion-safe:hover:scale-110"
+                :class="ui.theme === th.id ? 'border-ink' : 'border-transparent'"
+                :style="{ background: th.swatch }"
+                :title="$t('themes.' + th.id)"
+                :aria-label="$t('themes.' + th.id)"
+                @click="pickTheme(th.id)"
+              />
+            </div>
+          </Transition>
         </div>
-        <button class="icon-btn" :title="$t('sidebar.collapse')" @click="ui.toggleSidebar()">⌗</button>
+        <button
+          type="button"
+          class="icon-btn hit press after:-inset-x-0.5"
+          :title="$t('sidebar.collapse')"
+          :aria-label="$t('sidebar.collapse')"
+          @click="ui.toggleSidebar()"
+        >
+          ⌗
+        </button>
       </div>
     </div>
 
@@ -250,18 +460,6 @@ function openSettings() {
       </button>
     </div>
 
-    <!-- Primary nav -->
-    <nav class="mt-1 px-3">
-      <button
-        v-for="item in nav"
-        :key="item.key"
-        class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-surface"
-        :class="item.active ? 'bg-surface text-ink' : 'text-muted'"
-      >
-        {{ $t("nav." + item.key) }}
-      </button>
-    </nav>
-
     <!-- Recents -->
     <div class="mt-4 flex min-h-0 flex-1 flex-col">
       <div class="px-5 pb-1 text-xs uppercase tracking-wide text-muted">{{ $t("sidebar.recents") }}</div>
@@ -270,58 +468,77 @@ function openSettings() {
         <input
           ref="searchInput"
           v-model="searchQuery"
+          type="search"
           :placeholder="$t('sidebar.searchPlaceholder')"
-          class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-1.5 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
+          :aria-label="$t('sidebar.search')"
+          class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-1.5 text-sm text-ink placeholder:text-muted"
           @keydown.esc="toggleSearch()"
         />
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-2">
-        <div v-if="store.loadingHistory" class="space-y-2 px-3 py-2">
+        <!-- Skeleton only on a first load: a refresh keeps the list in place. -->
+        <div v-if="store.loadingHistory && !store.history.length" class="space-y-2 px-3 py-2">
           <div v-for="i in 5" :key="i" class="h-4 animate-pulse rounded bg-surface" :style="{ width: 70 + ((i * 7) % 25) + '%' }" />
         </div>
-        <p v-else-if="!filteredHistory.length" class="px-3 py-2 text-sm text-muted">
-          {{ $t("sidebar.empty") }}
-        </p>
-        <div
-          v-for="item in filteredHistory"
-          :key="item.id"
-          class="group flex items-center gap-1 rounded-lg pr-1 text-sm transition-all duration-150 hover:translate-x-0.5 hover:bg-surface"
-          :class="currentThreadId === threadKey(item) ? 'bg-surface text-ink' : 'text-muted'"
-        >
-          <input
-            v-if="editingId === item.id"
-            v-model="editValue"
-            class="min-w-0 flex-1 rounded bg-transparent px-3 py-2 text-ink focus:outline-none"
-            @keydown.enter="commitRename(item.id)"
-            @keydown.esc="editingId = null"
-            @blur="commitRename(item.id)"
-            v-focus
-          />
-          <template v-else>
-            <button
-              class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
-              @click="openThread(item)"
-            >
-              <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusColor(item.status)" />
-              <span class="truncate">{{ displayTitle(item) }}</span>
-            </button>
-            <button
-              class="hidden shrink-0 rounded p-1 text-muted hover:text-ink group-hover:block"
-              :title="$t('sidebar.rename')"
-              @click.stop="startRename(item)"
-            >
-              ✎
-            </button>
-            <button
-              class="hidden shrink-0 rounded p-1 text-muted hover:text-red-400 group-hover:block"
-              :title="$t('sidebar.delete')"
-              @click.stop="onDelete(item)"
-            >
-              ✕
-            </button>
-          </template>
+        <div v-else-if="store.historyError && !store.history.length" class="px-3 py-2 text-sm">
+          <p role="alert" class="text-danger">{{ store.historyError }}</p>
+          <button type="button" class="press mt-1 text-accent hover:underline" @click="store.fetchHistory()">
+            {{ $t("common.retry") }}
+          </button>
         </div>
+        <p v-else-if="!filteredHistory.length" class="px-3 py-2 text-sm text-muted">
+          {{ searchQuery.trim() ? $t("sidebar.noMatches", { q: searchQuery.trim() }) : $t("sidebar.empty") }}
+        </p>
+        <template v-for="item in filteredHistory" :key="item.id">
+          <div
+            class="group flex items-center gap-1 rounded-lg pr-1 text-sm transition-colors hover:bg-surface"
+            :class="currentThreadId === threadKey(item) ? 'bg-surface text-ink' : 'text-muted'"
+          >
+            <input
+              v-if="editingId === item.id"
+              v-model="editValue"
+              :aria-label="$t('sidebar.rename')"
+              class="min-w-0 flex-1 rounded bg-transparent px-3 py-2 text-ink focus:outline-none"
+              @keydown.enter="commitRename(item)"
+              @keydown.esc="editingId = null"
+              @blur="commitRename(item)"
+              v-focus
+            />
+            <template v-else>
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                :aria-current="currentThreadId === threadKey(item) ? 'page' : undefined"
+                @click="openThread(item)"
+              >
+                <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="statusColor(item.status)" />
+                <span class="truncate">{{ displayTitle(item) }}</span>
+              </button>
+              <!-- Shown on hover, on keyboard focus in the row, and always on touch screens
+                   (36px there). No extra hit padding: it would cover the next row. -->
+              <button
+                type="button"
+                class="press hidden h-7 w-7 shrink-0 place-items-center rounded text-muted hover:text-ink group-hover:grid group-focus-within:grid [@media(hover:none)]:grid [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9"
+                :title="$t('sidebar.rename')"
+                :aria-label="$t('sidebar.rename')"
+                @click.stop="startRename(item)"
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                class="press hidden h-7 w-7 shrink-0 place-items-center rounded text-muted hover:text-danger group-hover:grid group-focus-within:grid [@media(hover:none)]:grid [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9"
+                :title="$t('sidebar.delete')"
+                :aria-label="$t('sidebar.delete')"
+                @click.stop="onDelete(item)"
+              >
+                ✕
+              </button>
+            </template>
+          </div>
+          <p v-if="rowError?.id === item.id" role="alert" class="px-3 pb-1 text-2xs text-danger">{{ rowError.message }}</p>
+        </template>
       </div>
     </div>
 
@@ -335,7 +552,7 @@ function openSettings() {
         <span class="text-base">🛡️</span>
         <span>{{ $t("admin.title") }}</span>
         <span
-          class="ml-auto rounded bg-accent/20 px-1.5 py-0.2 text-[9px] font-bold text-accent"
+          class="ml-auto rounded bg-accent/20 px-1.5 py-px text-3xs font-semibold text-accent"
         >
           Admin
         </span>
@@ -361,7 +578,7 @@ function openSettings() {
       </div>
       <div class="min-w-0 flex-1">
         <div class="truncate text-sm font-medium text-ink group-hover:text-accent transition-colors">{{ displayName }}</div>
-        <div class="text-xs text-muted">{{ $t("sidebar.plan") }}</div>
+        <div class="truncate text-xs text-muted">{{ auth.user?.email }}</div>
       </div>
       <button
         class="shrink-0 rounded p-1.5 text-muted hover:text-ink hover:bg-surface transition-colors"
@@ -396,10 +613,6 @@ function openSettings() {
   border-radius: 0.5rem;
   color: rgb(var(--c-muted));
 }
-.rail-btn:hover {
-  background: rgb(var(--c-surface));
-  color: rgb(var(--c-ink));
-}
 .icon-btn {
   display: grid;
   place-items: center;
@@ -407,8 +620,12 @@ function openSettings() {
   width: 1.75rem;
   border-radius: 0.5rem;
 }
-.icon-btn:hover {
-  background: rgb(var(--c-surface));
-  color: rgb(var(--c-ink));
+/* Hover only where a real hover exists: a tap must not leave a button lit. */
+@media (hover: hover) and (pointer: fine) {
+  .rail-btn:hover,
+  .icon-btn:hover {
+    background: rgb(var(--c-surface));
+    color: rgb(var(--c-ink));
+  }
 }
 </style>
