@@ -107,3 +107,30 @@ describe("App shell", () => {
     expect(ui.mobileOpen).toBe(false);
   });
 });
+
+describe("App history loading", () => {
+  afterEach(() => {
+    wrapper?.unmount();
+    wrapper = null;
+  });
+
+  it("loads the history only for a signed-in user, again after a sign-in, and drops it on sign-out", async () => {
+    const { api } = await import("@/lib/api");
+    const listResearch = vi.mocked(api.listResearch);
+    listResearch.mockClear();
+
+    await mountApp("/login", { signedIn: false });
+    expect(listResearch).not.toHaveBeenCalled();
+
+    const auth = useAuthStore();
+    auth.user = { id: "u2", email: "anna@example.com" } as never;
+    await flushPromises();
+    expect(listResearch).toHaveBeenCalledTimes(1);
+
+    const { useResearchStore } = await import("@/stores/research");
+    useResearchStore().history = [{ id: "r1", prompt: "p", depth: "easy", status: "completed" }];
+    auth.user = null;
+    await flushPromises();
+    expect(useResearchStore().history).toEqual([]);
+  });
+});

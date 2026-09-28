@@ -18,8 +18,24 @@ const route = useRoute();
 
 onMounted(() => {
   store.fetchModels();
-  store.fetchHistory();
 });
+
+// The sidebar's history belongs to whoever is signed in: loaded once there is a user
+// (not as a 401 on a signed-out page), again after a sign-in without a page load, and
+// dropped on sign-out so the next account never sees it.
+watch(
+  () => auth.user?.id ?? null,
+  (id, previous) => {
+    if (!id) {
+      store.history = [];
+      store.historyError = null;
+      return;
+    }
+    store.fetchHistory();
+    if (previous !== undefined) store.fetchModels(); // signed in after the page loaded
+  },
+  { immediate: true },
+);
 
 // Sign-in screens, and a shared report opened by someone who isn't signed in, have no
 // app shell. (/r/:token keeps its router meta: a signed-in reader sees it in the shell.)
