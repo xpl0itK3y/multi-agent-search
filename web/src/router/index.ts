@@ -14,8 +14,9 @@ const router = createRouter({
       component: () => import("@/views/ForgotPasswordView.vue"),
       meta: { public: true, bare: true },
     },
-    // meta.linkToken: opened from an emailed link, whose one-time token the guard below
-    // takes out of the address (lib/linkToken.ts).
+    // meta.linkToken: opened from an emailed link, whose one-time token lib/linkToken.ts
+    // takes out of the address before the router starts (src/linkCapture.ts). The guard
+    // below does it for a link that reaches a running app (opened again into this tab).
     {
       path: "/reset-password",
       name: "reset-password",

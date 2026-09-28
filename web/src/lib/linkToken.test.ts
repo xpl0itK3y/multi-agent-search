@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { holdLinkToken, linkTokenFromHash, takeLinkToken } from "./linkToken";
+import { captureLinkToken, holdLinkToken, linkPageOf, linkTokenFromHash, takeLinkToken } from "./linkToken";
 
 describe("linkTokenFromHash", () => {
   it("reads the token parameter of a fragment", () => {
@@ -37,5 +38,49 @@ describe("holdLinkToken / takeLinkToken", () => {
     holdLinkToken("verify-email", "#section");
 
     expect(takeLinkToken("verify-email")).toBeNull();
+  });
+});
+
+describe("linkPageOf", () => {
+  it("names the link pages in the spellings vue-router matches", () => {
+    expect(linkPageOf("/reset-password")).toBe("reset-password");
+    expect(linkPageOf("/Reset-Password/")).toBe("reset-password");
+    expect(linkPageOf("/verify-email")).toBe("verify-email");
+    for (const path of ["/", "/forgot-password", "/reset-password/x", "/login"]) expect(linkPageOf(path), path).toBeNull();
+  });
+});
+
+describe("captureLinkToken", () => {
+  beforeEach(() => {
+    takeLinkToken("reset-password");
+  });
+
+  it("holds a link page's token and takes the fragment out of the address", () => {
+    window.history.replaceState({ kept: 1 }, "", "/reset-password?lang=en#token=cap-tok");
+
+    captureLinkToken();
+
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/reset-password?lang=en");
+    // The entry is replaced, not added, and keeps its state.
+    expect(window.history.state).toEqual({ kept: 1 });
+    expect(takeLinkToken("reset-password")).toBe("cap-tok");
+  });
+
+  it("drops any other fragment of a link page", () => {
+    window.history.replaceState(null, "", "/verify-email#section");
+
+    captureLinkToken();
+
+    expect(window.location.hash).toBe("");
+    expect(takeLinkToken("verify-email")).toBeNull();
+  });
+
+  it("leaves other pages alone", () => {
+    window.history.replaceState(null, "", "/forgot-password#token=not-a-link");
+
+    captureLinkToken();
+
+    expect(window.location.hash).toBe("#token=not-a-link");
+    expect(takeLinkToken("forgot-password")).toBeNull();
   });
 });
