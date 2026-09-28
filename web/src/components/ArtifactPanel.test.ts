@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { compileStyle, parse } from "vue/compiler-sfc";
+import postcss, { type AtRule } from "postcss";
 
 import { i18n } from "@/i18n";
 
@@ -36,8 +38,32 @@ vi.mock("@/lib/confirm", async (importOriginal) => ({
 }));
 
 import ArtifactPanel from "./ArtifactPanel.vue";
+import artifactPanelSource from "./ArtifactPanel.vue?raw";
+import markdownViewSource from "./MarkdownView.vue?raw";
 
 const t = (key: string) => i18n.global.t(key) as string;
+
+// A component's scoped CSS rules as the build emits them (scope id data-v-test), one per
+// selector, with the media query they sit in (null at the top level).
+function scopedRules(source: string, filename: string) {
+  const { descriptor } = parse(source);
+  const { code } = compileStyle({
+    source: descriptor.styles.find((s) => s.scoped)!.content,
+    id: "data-v-test",
+    scoped: true,
+    filename,
+  });
+  const rules: { media: string | null; selector: string; decls: Record<string, string> }[] = [];
+  postcss.parse(code).walkRules((rule) => {
+    const media = rule.parent?.type === "atrule" ? (rule.parent as AtRule).params : null;
+    const decls: Record<string, string> = {};
+    rule.walkDecls((d) => {
+      decls[d.prop] = d.value;
+    });
+    for (const selector of rule.selectors) rules.push({ media, selector, decls });
+  });
+  return rules;
+}
 
 // Every optional trust fetch fails quietly unless a test says otherwise.
 function quietOptionalFetches() {
@@ -265,6 +291,40 @@ describe("ArtifactPanel trust row", () => {
     await flushPromises();
     expect(mocks.api.getSources).toHaveBeenCalledWith("r-1");
     expect(w.text()).toContain(t("artifact.sourcesEmpty"));
+  });
+
+  // Colour dots vanished in forced colours, and they did not look like the marks.
+  it("shows the verification legend as the marks themselves", async () => {
+    const w = await mountPanel();
+
+    expect(w.find(".verify-sample-weak").text()).toBe(t("verify.weak"));
+    expect(w.find(".verify-sample-contested").text()).toBe(t("verify.contested"));
+    expect(w.text()).toContain(`✓ ${t("verify.strong")}`);
+    expect(w.find(".rounded-full.bg-success, .rounded-full.bg-warning, .rounded-full.bg-danger").exists()).toBe(false);
+
+    await buttonWithText(w, t("verify.on")).trigger("click");
+    expect(w.find(".verify-sample-weak").exists()).toBe(false);
+  });
+
+  it("draws the legend's lines exactly like the report's claim marks", () => {
+    const legend = scopedRules(artifactPanelSource, "ArtifactPanel.vue");
+    const report = scopedRules(markdownViewSource, "MarkdownView.vue");
+    const pick = (rules: typeof legend, selector: string, media: string | null = null) =>
+      Object.assign({}, ...rules.filter((r) => r.selector === selector && r.media === media).map((r) => r.decls));
+    const L = "[data-v-test]";
+
+    // Same line, colour tokens, contrast and forced-colours forms.
+    for (const media of [null, "(prefers-contrast: more)"]) {
+      expect(pick(legend, `.verify-sample${L}`, media)).toEqual(pick(report, `${L} .md-claim-text`, media));
+      expect(pick(legend, `.verify-sample-weak${L}`, media)).toEqual(pick(report, `${L} .md-claim-weak .md-claim-text`, media));
+      expect(pick(legend, `.verify-sample-contested${L}`, media)).toEqual(
+        pick(report, `${L} .md-claim-contested .md-claim-text`, media),
+      );
+    }
+    expect(pick(legend, `.verify-sample-contested${L}`, "(forced-colors: active)")).toEqual(
+      pick(report, `${L} .md-claim-contested .md-claim-text`, "(forced-colors: active)"),
+    );
+    expect(pick(legend, `.verify-sample${L}`)["text-decoration-style"]).toBe("dotted");
   });
 });
 

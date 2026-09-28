@@ -798,17 +798,15 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 >
                   <span aria-hidden="true">{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
                 </button>
+                <!-- The legend shows the marks themselves: the ✓ of a strong claim's badge
+                     and the dotted lines under weak and contested words (MarkdownView). -->
                 <template v-if="verifyInline">
                   <span class="text-muted">{{ $t("verify.legend") }}</span>
-                  <span class="inline-flex items-center gap-1 text-muted">
-                    <span class="h-2 w-2 rounded-full bg-success" /> {{ $t("verify.strong") }}
+                  <span class="text-muted">
+                    <span class="font-semibold text-success" aria-hidden="true">✓</span> {{ $t("verify.strong") }}
                   </span>
-                  <span class="inline-flex items-center gap-1 text-muted">
-                    <span class="h-2 w-2 rounded-full bg-warning" /> {{ $t("verify.weak") }}
-                  </span>
-                  <span class="inline-flex items-center gap-1 text-muted">
-                    <span class="h-2 w-2 rounded-full bg-danger" /> {{ $t("verify.contested") }}
-                  </span>
+                  <span class="verify-sample verify-sample-weak text-muted">{{ $t("verify.weak") }}</span>
+                  <span class="verify-sample verify-sample-contested text-muted">{{ $t("verify.contested") }}</span>
                 </template>
               </div>
             </div>
@@ -1265,5 +1263,39 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 .export-item:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Verification legend: the same dotted lines MarkdownView draws under weak and contested
+   claims (.md-claim-text), with its contrast and forced-colours forms, so the legend
+   reads like the text. Keep the two in step. */
+.verify-sample {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+  text-decoration-skip-ink: auto;
+}
+.verify-sample-weak {
+  text-decoration-color: rgb(var(--c-warning) / 0.9);
+}
+.verify-sample-contested {
+  text-decoration-color: rgb(var(--c-danger) / 0.9);
+}
+@media (prefers-contrast: more) {
+  .verify-sample {
+    text-decoration-thickness: 2px;
+  }
+  .verify-sample-weak {
+    text-decoration-color: rgb(var(--c-warning));
+  }
+  .verify-sample-contested {
+    text-decoration-color: rgb(var(--c-danger));
+  }
+}
+@media (forced-colors: active) {
+  .verify-sample-contested {
+    text-decoration-style: dashed;
+    text-decoration-thickness: 2px;
+  }
 }
 </style>

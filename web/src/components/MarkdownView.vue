@@ -637,46 +637,103 @@ onBeforeUnmount(() => {
   transform: translateY(var(--pop-dy, -4px)) scale(0.96);
 }
 
-/* Inline verification: confirm strong claims subtly, flag the problem ones loudly.
+/* Inline verification, calm by default. It is on for every report, so it must not read
+   like a spell checker (§16 restraint: every mark earns its place). At rest only the
+   claims that need a second look are marked: a thin dotted underline in the status
+   token, warning for a weak claim and danger for a contested one. Nothing is wavy. The
+   line sits under the claim's words (.md-claim-text), never under its [Sn] chips. Each
+   claim's support badge (✓2, 1, ⚠, ✕) waits for hover, or for focus inside the claim.
    The marks live in v-html, which never carries this component's data-v attribute, so
-   every rule goes through :deep(). Colours are the theme's status tokens, readable on
-   their own tint in light and dark. The underline sits on the claim's words
-   (.md-claim-text), never on the claim span: it would spread to the [Sn] chips. */
+   every rule goes through :deep(). ArtifactPanel's legend mirrors these marks. */
+:deep(.md-claim) {
+  /* The badge's containing block: it scrolls and clips with the report, not the page. */
+  position: relative;
+}
+:deep(.md-claim-text) {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+  text-decoration-skip-ink: auto;
+}
 :deep(.md-claim-weak .md-claim-text) {
-  border-bottom: 1.5px dotted rgb(var(--c-warning) / 0.85);
+  text-decoration-color: rgb(var(--c-warning) / 0.9);
 }
 :deep(.md-claim-contested .md-claim-text) {
-  text-decoration: underline wavy rgb(var(--c-danger) / 0.9);
-  text-underline-offset: 3px;
+  text-decoration-color: rgb(var(--c-danger) / 0.9);
 }
+/* A citation whose source text does not back the claim carries the same quiet dotted
+   mark on itself (the global rule draws a wavy one). */
+:deep(.md-citation-weak) {
+  text-decoration: underline dotted rgb(var(--c-danger) / 0.85);
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+}
+/* Out of flow, at the spot where it would sit (the claim's end), lifted above the line
+   and pulled back over the claim. So showing it never reflows the text or widens a
+   table cell under the pointer, and it never covers the words that follow. It only
+   fades, and nothing about it moves (reduced motion needs no other form). */
 :deep(.md-claim-badge) {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-100%, -60%);
   font-size: 0.62em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   line-height: 1;
-  vertical-align: super;
-  margin-left: 2px;
   padding: 1px 4px;
+  /* Transparent here; forced colours paint it, so the pill keeps its shape there. */
+  border: 1px solid transparent;
   border-radius: 999px;
+  background-color: rgb(var(--c-surface));
+  box-shadow: var(--elev-1);
   white-space: nowrap;
   user-select: none;
-  cursor: help;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
 }
+:deep(.md-claim:hover > .md-claim-badge),
+:deep(.md-claim:focus-within > .md-claim-badge) {
+  opacity: 1;
+}
+/* The tint is a layer over the opaque surface: the pill sits on top of text. */
 :deep(.md-claim-badge-strong) {
   color: rgb(var(--c-success));
-  background: rgb(var(--c-success) / 0.12);
+  background-image: linear-gradient(rgb(var(--c-success) / 0.12), rgb(var(--c-success) / 0.12));
 }
 :deep(.md-claim-badge-medium) {
   color: rgb(var(--c-muted));
-  background: rgb(var(--c-muted) / 0.12);
+  background-image: linear-gradient(rgb(var(--c-muted) / 0.12), rgb(var(--c-muted) / 0.12));
 }
 :deep(.md-claim-badge-weak) {
   color: rgb(var(--c-warning));
-  background: rgb(var(--c-warning) / 0.16);
+  background-image: linear-gradient(rgb(var(--c-warning) / 0.16), rgb(var(--c-warning) / 0.16));
 }
 :deep(.md-claim-badge-contested) {
   color: rgb(var(--c-danger));
-  background: rgb(var(--c-danger) / 0.16);
+  background-image: linear-gradient(rgb(var(--c-danger) / 0.16), rgb(var(--c-danger) / 0.16));
+}
+@media (prefers-contrast: more) {
+  :deep(.md-claim-text),
+  :deep(.md-citation-weak) {
+    text-decoration-thickness: 2px;
+  }
+  :deep(.md-claim-weak .md-claim-text) {
+    text-decoration-color: rgb(var(--c-warning));
+  }
+  :deep(.md-claim-contested .md-claim-text) {
+    text-decoration-color: rgb(var(--c-danger));
+  }
+}
+/* Forced colours turn every underline into the text colour, so colour cannot tell the
+   bands apart: a contested claim's line becomes dashed and heavier (the legend does
+   the same). The badges' ⚠ and ✕ still name the band on hover or focus. */
+@media (forced-colors: active) {
+  :deep(.md-claim-contested .md-claim-text) {
+    text-decoration-style: dashed;
+    text-decoration-thickness: 2px;
+  }
 }
 </style>

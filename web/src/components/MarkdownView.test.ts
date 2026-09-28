@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { compileStyle, parse } from "vue/compiler-sfc";
+import postcss, { type AtRule } from "postcss";
 
 import { i18n } from "@/i18n";
 import MarkdownView from "./MarkdownView.vue";
@@ -15,6 +16,35 @@ function render(
   extra: { grounding?: CitationGround[]; verify?: boolean } = {},
 ) {
   return mount(MarkdownView, { props: { source, sources, ...extra }, global: { plugins: [i18n] } });
+}
+
+// The component's scoped CSS as the build emits it, with data-v-test as the scope id.
+function scopedCss(): string {
+  const { descriptor } = parse(markdownViewSource);
+  return compileStyle({
+    source: descriptor.styles.find((st) => st.scoped)!.content,
+    id: "data-v-test",
+    scoped: true,
+    filename: "MarkdownView.vue",
+  }).code;
+}
+// Its rules, one per selector, with the media query they sit in (null at the top level).
+function scopedRules(): { media: string | null; selector: string; decls: Record<string, string> }[] {
+  const rules: { media: string | null; selector: string; decls: Record<string, string> }[] = [];
+  postcss.parse(scopedCss()).walkRules((rule) => {
+    const media = rule.parent?.type === "atrule" ? (rule.parent as AtRule).params : null;
+    const decls: Record<string, string> = {};
+    rule.walkDecls((d) => {
+      decls[d.prop] = d.value;
+    });
+    for (const selector of rule.selectors) rules.push({ media, selector, decls });
+  });
+  return rules;
+}
+function declsOf(selector: string, media: string | null = null): Record<string, string> {
+  const found = scopedRules().filter((r) => r.selector === selector && r.media === media);
+  expect(found, `a rule for ${selector}${media ? " in " + media : ""}`).not.toHaveLength(0);
+  return Object.assign({}, ...found.map((r) => r.decls));
 }
 
 function citationHrefs(wrapper: ReturnType<typeof render>): Record<string, string | null> {
@@ -247,6 +277,64 @@ describe("MarkdownView inline verification", () => {
     expect(wrapper.find("td .md-claim-contested .md-claim-text").exists()).toBe(true);
   });
 
+  // Calm by default: the red wavy line and a ✕ on most numbers read like a spell checker.
+  describe("calm marks", () => {
+    const S = "[data-v-test]";
+
+    it("draws no wavy line anywhere, and none on the claim span itself", () => {
+      const rules = scopedRules();
+
+      expect(rules.filter((r) => Object.values(r.decls).some((v) => /wavy/.test(v)))).toEqual([]);
+      for (const band of ["strong", "medium", "weak", "contested"]) {
+        const own = rules.filter((r) => r.selector === `${S} .md-claim-${band}`);
+        for (const r of own) expect(Object.keys(r.decls).filter((k) => /decoration|border/.test(k))).toEqual([]);
+      }
+    });
+
+    it("underlines weak words with a thin dotted warning line and contested ones in danger", () => {
+      const line = declsOf(`${S} .md-claim-text`);
+      expect(line).toMatchObject({ "text-decoration-line": "underline", "text-decoration-style": "dotted" });
+      expect(line["text-decoration-thickness"]).toBe("max(1px, 0.08em)");
+      expect(declsOf(`${S} .md-claim-weak .md-claim-text`)["text-decoration-color"]).toContain("--c-warning");
+      expect(declsOf(`${S} .md-claim-contested .md-claim-text`)["text-decoration-color"]).toContain("--c-danger");
+      // An unsupported citation keeps its own flag, dotted and in danger too.
+      expect(declsOf(`${S} .md-citation-weak`)["text-decoration"]).toMatch(/^underline dotted rgb\(var\(--c-danger\)/);
+    });
+
+    it("keeps every badge hidden until its claim is hovered or holds focus, and only fades it", () => {
+      const badge = declsOf(`${S} .md-claim-badge`);
+      expect(badge).toMatchObject({ opacity: "0", position: "absolute", "pointer-events": "none" });
+      // Only opacity changes: nothing moves, so reduced motion needs no other form.
+      expect(badge.transition).toMatch(/^opacity \d+ms/);
+      expect(badge.transition).not.toMatch(/transform|,/);
+      expect(declsOf(`${S} .md-claim:hover > .md-claim-badge`).opacity).toBe("1");
+      expect(declsOf(`${S} .md-claim:focus-within > .md-claim-badge`).opacity).toBe("1");
+      // The pill sits on an opaque surface (it covers text) and keeps a shape in forced colours.
+      expect(badge["background-color"]).toBe("rgb(var(--c-surface))");
+      expect(badge.border).toBe("1px solid transparent");
+    });
+
+    it("tells contested from weak by line style when forced colours drop the colour", () => {
+      const forced = declsOf(`${S} .md-claim-contested .md-claim-text`, "(forced-colors: active)");
+      expect(forced["text-decoration-style"]).toBe("dashed");
+      expect(scopedRules().some((r) => r.media === "(forced-colors: active)" && r.selector.includes("md-claim-weak"))).toBe(false);
+      expect(declsOf(`${S} .md-claim-text`, "(prefers-contrast: more)")["text-decoration-thickness"]).toBe("2px");
+    });
+
+    it("renders each band's badge in the markup, for hover and focus to reveal", () => {
+      const wrapper = renderVerified("Output doubled in 2024 [S1][S2]. Sales rose again last year [S1].", {
+        contradictions: ["Sales rose again last year [S1]."],
+      });
+
+      expect(wrapper.find(".md-claim-strong > .md-claim-badge-strong").text()).toBe("✓2");
+      expect(wrapper.find(".md-claim-contested > .md-claim-badge-contested").text()).toBe("✕");
+      // The badge is a direct child of its claim, which the reveal rules rely on.
+      for (const b of wrapper.findAll(".md-claim-badge")) {
+        expect(b.element.parentElement?.classList.contains("md-claim")).toBe(true);
+      }
+    });
+  });
+
   it("leaves the text undecorated with verification off", () => {
     const wrapper = render("Output doubled in 2024 [S1][S2].", sources);
 
@@ -325,13 +413,7 @@ describe("MarkdownView reading surface", () => {
   });
 
   it("lets the table scroller, not the report column, take the overflow", () => {
-    const { descriptor } = parse(markdownViewSource);
-    const { code } = compileStyle({
-      source: descriptor.styles.find((s) => s.scoped)!.content,
-      id: "data-v-test",
-      scoped: true,
-      filename: "MarkdownView.vue",
-    });
+    const code = scopedCss();
 
     expect(code).toMatch(/\[data-v-test\] \.md-table-scroll \{[^}]*overflow-x: auto/);
   });
@@ -454,13 +536,7 @@ describe("MarkdownView citation popover", () => {
   });
 
   it("points the pop offset through --pop-dy for the citation popover only", () => {
-    const { descriptor } = parse(markdownViewSource);
-    const { code } = compileStyle({
-      source: descriptor.styles.find((s) => s.scoped)!.content,
-      id: "data-v-test",
-      scoped: true,
-      filename: "MarkdownView.vue",
-    });
+    const code = scopedCss();
 
     expect(code).toMatch(
       /\.cite-pop\.pop-enter-from\[data-v-test\],\s*\.cite-pop\.pop-leave-to\[data-v-test\] \{\s*transform: translateY\(var\(--pop-dy, -4px\)\) scale\(0\.96\);/,
