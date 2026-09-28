@@ -91,8 +91,27 @@ onMounted(() => {
   }
 });
 onUnmounted(() => tabNavObserver?.disconnect());
-watch(activeTab, () => nextTick(() => revealActiveTab(smoothOrAuto())));
 watch(locale, () => nextTick(updateTabOverflow));
+
+// A switch shows the new tab from its start. The view keeps its scroll across a switch
+// (App keys views by path), so from far down Analytics the next tab would open somewhere
+// in its middle: beside the sticky tabs (md+) the page comes back up until the tab's
+// start lines up with theirs, no further. Below the tabs (phones) it is already in view.
+const viewRoot = ref<HTMLElement | null>(null);
+const tabFrame = ref<HTMLElement | null>(null);
+const tabPanel = ref<HTMLElement | null>(null);
+function showPanelStart() {
+  const root = viewRoot.value;
+  if (!root?.scrollTop || !tabFrame.value || !tabPanel.value) return;
+  const over = tabFrame.value.getBoundingClientRect().top - tabPanel.value.getBoundingClientRect().top;
+  if (over > 1) root.scrollTop = Math.max(0, root.scrollTop - over);
+}
+watch(activeTab, () =>
+  nextTick(() => {
+    showPanelStart();
+    revealActiveTab(smoothOrAuto());
+  }),
+);
 
 // Back to where the reader came from; Settings opened on its own (a new tab, a link) goes
 // home instead of leaving the app.
@@ -477,7 +496,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto bg-bg text-ink p-4 sm:p-8">
+  <div ref="viewRoot" class="h-full overflow-y-auto bg-bg text-ink p-4 sm:p-8">
     <div class="max-w-5xl mx-auto space-y-6">
       <!-- Top Navigation & Header -->
       <!-- On phones: back and the title only; the gear tile and the email come back from sm. -->
@@ -518,7 +537,7 @@ onUnmounted(() => {
       <div class="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
         <!-- Sidebar Tabs: the frame keeps its border and fill; only the row inside scrolls
              and fades. min-w-0: the row's full width never widens the grid column. -->
-        <div class="min-w-0 overflow-hidden rounded-xl border border-bd bg-surface/40 md:sticky md:top-0 md:z-10">
+        <div ref="tabFrame" class="min-w-0 overflow-hidden rounded-xl border border-bd bg-surface/40 md:sticky md:top-0 md:z-10">
           <nav
             ref="tabNav"
             class="flex flex-row md:flex-col gap-1 p-1.5 overflow-x-auto scrollbar-none"
@@ -598,7 +617,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Tab Content Area -->
-        <main class="md:col-span-3 space-y-6">
+        <main ref="tabPanel" class="md:col-span-3 space-y-6">
           <!-- ── TAB 1: PROFILE ───────────────────────────────────────────── -->
           <section v-if="activeTab === 'profile'" class="rounded-xl border border-bd bg-surface/50 p-6 space-y-6">
             <div>

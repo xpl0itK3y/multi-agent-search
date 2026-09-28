@@ -156,6 +156,32 @@ describe("AdminView", () => {
     }
   });
 
+  it("opens the next tab at its start after scrolling far down one, and moves no further", async () => {
+    adminApi.getOverview.mockResolvedValue(snapshot("healthy"));
+    const wrapper = await mountAdmin("/admin?tab=users");
+    const root = wrapper.element as HTMLElement;
+    let top = 1500;
+    Object.defineProperty(root, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = v) });
+    // The bar is stuck at the top (bottom 44px); the panel started 900px above the view.
+    let panelTop = -900;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.getAttribute("data-test") === "admin-tabbar") return { top: 0, bottom: 44 } as DOMRect;
+      if (this.id === "admin-tabpanel") return { top: panelTop, bottom: panelTop + 400 } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0 } as DOMRect;
+    });
+    try {
+      await openTab(wrapper, "analytics");
+      // Back up by 900 + 44 + the 24px gap: the panel now starts just under the bar.
+      expect(top).toBe(1500 - (900 + 44 + 24));
+
+      panelTop = 68; // already starts under the bar
+      await openTab(wrapper, "operations");
+      expect(top).toBe(1500 - (900 + 44 + 24));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   describe("on a phone, where the strip scrolls sideways", () => {
     // jsdom has no layout: a 390px strip whose five 160px tabs run to 848px.
     const undo: (() => void)[] = [];

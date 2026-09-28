@@ -96,8 +96,27 @@ watch(
   },
   { flush: "post" },
 );
-watch(activeTab, () => nextTick(() => revealActiveTab(smoothOrAuto())));
 watch(locale, () => nextTick(updateOverflow));
+
+// A switch shows the new tab from its start. The view keeps its scroll across a switch
+// (App keys views by path), so after scrolling far down Users the next tab would open
+// somewhere in its middle: the page comes back up to just under the stuck bar, no further.
+const viewRoot = ref<HTMLElement | null>(null);
+const tabBar = ref<HTMLElement | null>(null);
+const tabPanel = ref<HTMLElement | null>(null);
+const PANEL_GAP_PX = 24; // the bar's mb-6
+function showPanelStart() {
+  const root = viewRoot.value;
+  if (!root?.scrollTop || !tabBar.value || !tabPanel.value) return;
+  const over = tabBar.value.getBoundingClientRect().bottom + PANEL_GAP_PX - tabPanel.value.getBoundingClientRect().top;
+  if (over > 1) root.scrollTop = Math.max(0, root.scrollTop - over);
+}
+watch(activeTab, () =>
+  nextTick(() => {
+    showPanelStart();
+    revealActiveTab(smoothOrAuto());
+  }),
+);
 
 function onTabKey(e: KeyboardEvent) {
   const i = TABS.findIndex((tab) => tab.id === activeTab.value);
@@ -164,7 +183,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto bg-bg p-6 text-ink">
+  <div ref="viewRoot" class="flex h-full flex-col overflow-y-auto bg-bg p-6 text-ink">
     <!-- Non-Admin Authorization Guard (User is logged in, but not an admin) -->
     <div
       v-if="!auth.user?.is_admin"
@@ -292,7 +311,7 @@ onMounted(() => {
            root, p-6, is the scroller), holding one line of tabs that scrolls sideways on a
            phone. The bar keeps its material and border; only the line inside fades.
            shrink-0: in the overflowing column the bar is never squeezed. -->
-      <div class="sticky -top-6 z-20 -mx-6 mb-6 shrink-0 border-b border-bd material-bar" data-test="admin-tabbar">
+      <div ref="tabBar" class="sticky -top-6 z-20 -mx-6 mb-6 shrink-0 border-b border-bd material-bar" data-test="admin-tabbar">
         <div
           ref="tabStrip"
           class="flex overflow-x-auto scrollbar-none px-6"
@@ -322,7 +341,7 @@ onMounted(() => {
       </div>
 
       <!-- Every tab renders on its own; each one shows its own loading and errors. -->
-      <div id="admin-tabpanel" class="flex-1" role="tabpanel" :aria-labelledby="`admin-tab-${activeTab}`">
+      <div id="admin-tabpanel" ref="tabPanel" class="flex-1" role="tabpanel" :aria-labelledby="`admin-tab-${activeTab}`">
         <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" @update="onOverviewUpdate" />
 
         <UsersTab v-else-if="activeTab === 'users'" />

@@ -244,6 +244,34 @@ describe("SettingsView", () => {
     expect(unknown.text()).not.toContain(t("settings.security.passwordTitle"));
   });
 
+  it("beside the sticky tabs, opens the next tab at its start after scrolling far down one", async () => {
+    const wrapper = await mountSettings("/settings?tab=analytics");
+    const root = wrapper.element as HTMLElement;
+    let top = 1200;
+    Object.defineProperty(root, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = v) });
+    // md+: the tabs are stuck 32px down the view; the panel started 700px above it.
+    let panelTop = -700;
+    const frame = wrapper.find("[data-test='settings-tabs']").element.parentElement!;
+    const panel = wrapper.find("main").element;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this === frame) return { top: 32, bottom: 300 } as DOMRect;
+      if (this === panel) return { top: panelTop, bottom: panelTop + 500 } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0 } as DOMRect;
+    });
+    try {
+      await openTab(wrapper, "settings.tabs.profile");
+      await flushPromises();
+      expect(top).toBe(1200 - (700 + 32));
+
+      panelTop = 32; // lined up already
+      await openTab(wrapper, "settings.tabs.research");
+      await flushPromises();
+      expect(top).toBe(1200 - (700 + 32));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   describe("on a phone, where the tabs are one sideways row", () => {
     // jsdom has no layout: a 390px row whose five 120px tabs run to 636px.
     const undo: (() => void)[] = [];
