@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { streamChatAnswer } from "@/lib/stream";
+import { useStickToBottom } from "@/lib/useStickToBottom";
 import { useResearchStore } from "@/stores/research";
 import ResearchTurn from "@/components/ResearchTurn.vue";
 import Composer from "@/components/Composer.vue";
@@ -57,10 +58,12 @@ const latestCompletedResearchId = computed(() => {
 // Quick questions need a finished report to ground on — only allow once one has completed.
 const hasCompletedReport = computed(() => completed.value.size > 0);
 
-async function scrollToBottom() {
-  await nextTick();
-  scroller.value?.scrollTo({ top: scroller.value.scrollHeight, behavior: "smooth" });
-}
+// Streamed turns follow the newest content only while the reader stays at the bottom;
+// scrolling up to read lets go, and the pill brings them back (apple-design §3).
+const stick = useStickToBottom(scroller);
+const showToLatest = computed(
+  () => !stick.pinned.value && (anyResearchRunning.value || items.value.some((it) => it.kind === "chat" && it.busy)),
+);
 
 // Pair a flat [user, assistant, user, assistant, …] message log into Q&A turns,
 // tolerating an unanswered trailing question or a missing question.
@@ -105,9 +108,10 @@ function onTurnDone(id: string, status: string) {
 }
 
 // "Refresh" cloned the research into a new run — add it as a new turn in the thread.
-function onRefreshed(payload: { id: string; prompt: string }) {
+async function onRefreshed(payload: { id: string; prompt: string }) {
   items.value.push({ kind: "research", id: payload.id, prompt: payload.prompt });
-  scrollToBottom();
+  await nextTick();
+  stick.jumpToLatest();
 }
 
 async function onSubmit(payload: { prompt: string; depth: Depth; model: string; planFirst: boolean }) {
@@ -119,7 +123,8 @@ async function onSubmit(payload: { prompt: string; depth: Depth; model: string; 
     );
     items.value.push({ kind: "research", id: res.research_id, prompt: payload.prompt });
     composerPrompt.value = "";
-    await scrollToBottom();
+    await nextTick();
+    stick.jumpToLatest();
   } catch (e) {
     errorMsg.value = apiErrorMessage(e, t);
   } finally {
@@ -139,22 +144,27 @@ async function onAsk(question: string) {
   }) - 1;
   const chat = () => items.value[idx] as ChatItem; // mutate through the reactive proxy
   composerPrompt.value = "";
-  await scrollToBottom();
+  await nextTick();
+  stick.jumpToLatest();
   await streamChatAnswer(researchId, question, {
     onSearching: () => { chat().searching = true; },
-    onDelta: (a) => { const c = chat(); c.searching = false; c.answer = a; scrollToBottom(); },
-    onDone: (a, sources) => { const c = chat(); c.searching = false; c.answer = a; c.sources = sources; c.busy = false; scrollToBottom(); },
+    onDelta: (a) => { const c = chat(); c.searching = false; c.answer = a; stick.follow(); },
+    onDone: (a, sources) => { const c = chat(); c.searching = false; c.answer = a; c.sources = sources; c.busy = false; stick.follow(); },
     onError: (m) => { chat().busy = false; errorMsg.value = m; },
   });
 }
 
 onMounted(loadThread);
-watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); });
+watch(() => props.threadId, () => {
+  stick.pinned.value = true; // a newly opened thread starts at its latest turn
+  completed.value = new Set();
+  loadThread();
+});
 </script>
 
 <template>
   <div class="relative flex h-full flex-col">
-    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-48">
+    <div ref="scroller" class="edge-fade-top min-h-0 flex-1 overflow-y-auto px-4 pt-6 pb-48">
       <div class="mx-auto max-w-3xl space-y-10">
         <template v-for="(it, i) in items" :key="i">
           <ResearchTurn
@@ -163,7 +173,7 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
             :initial-prompt="it.prompt"
             @done="onTurnDone(it.id, $event)"
             @refreshed="onRefreshed"
-            @grow="scrollToBottom"
+            @grow="stick.follow()"
           />
           <div v-else class="space-y-3">
             <div class="flex justify-end">
@@ -185,6 +195,16 @@ watch(() => props.threadId, () => { completed.value = new Set(); loadThread(); }
     </div>
 
     <div class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg via-bg/70 to-transparent p-4 pt-10">
+      <Transition name="fade-quick">
+        <button
+          v-if="showToLatest"
+          type="button"
+          class="press pointer-events-auto mx-auto mb-2 flex w-fit items-center gap-1.5 rounded-full border border-bd material-float px-3 py-1 text-xs font-medium text-ink"
+          @click="stick.jumpToLatest()"
+        >
+          <span aria-hidden="true">↓</span> {{ $t("thread.toLatest") }}
+        </button>
+      </Transition>
       <div class="pointer-events-auto mx-auto flex max-w-3xl justify-center">
         <Composer
           v-model:prompt="composerPrompt"

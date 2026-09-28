@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { openResearchStream, streamChatAnswer } from "@/lib/stream";
 import { createTraceDeduper, traceFromGraph } from "@/lib/trace";
+import { useStickToBottom } from "@/lib/useStickToBottom";
 import type { ChatMessage, Clarification, PlanItem, ResearchPlan } from "@/lib/types";
 import AgentActivityConsole from "@/components/AgentActivityConsole.vue";
 import type { TraceEntry } from "@/lib/stream";
@@ -44,6 +45,8 @@ const chatInput = ref("");
 const chatBusy = ref(false);
 const chatSearching = ref(false);
 const threadScroll = ref<HTMLElement | null>(null);
+// The follow-up answer streams in and is followed only while the reader stays at the bottom.
+const threadStick = useStickToBottom(threadScroll);
 
 const canChat = computed(() => status.value === "completed");
 const awaitingAnswer = computed(() => {
@@ -125,11 +128,6 @@ async function onApprove(items: PlanItem[]) {
   }
 }
 
-async function scrollThreadToBottom() {
-  await nextTick();
-  threadScroll.value?.scrollTo({ top: threadScroll.value.scrollHeight, behavior: "smooth" });
-}
-
 async function sendChat() {
   const question = chatInput.value.trim();
   if (!question || chatBusy.value) return;
@@ -139,7 +137,7 @@ async function sendChat() {
   chatBusy.value = true;
   chatSearching.value = false;
   errorMsg.value = null;
-  scrollThreadToBottom();
+  nextTick(threadStick.jumpToLatest);
   await streamChatAnswer(props.id, question, {
     onSearching: () => {
       chatSearching.value = true;
@@ -147,14 +145,14 @@ async function sendChat() {
     onDelta: (answer) => {
       chatSearching.value = false;
       messages.value[assistantIndex].content = answer;
-      scrollThreadToBottom();
+      threadStick.follow();
     },
     onDone: (answer, sources) => {
       chatSearching.value = false;
       messages.value[assistantIndex].content = answer;
       messages.value[assistantIndex].sources = sources;
       chatBusy.value = false;
-      scrollThreadToBottom();
+      threadStick.follow();
     },
     onError: (m) => {
       chatSearching.value = false;
