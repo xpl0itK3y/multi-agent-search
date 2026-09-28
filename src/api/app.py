@@ -197,13 +197,18 @@ def _is_csrf_violation(request: Request) -> bool:
 _SENSITIVE_GRAPH_STATE_KEYS = frozenset({"share_token", "webhook_url", "decompose_payload"})
 
 
+def _public_graph_state(graph_state: dict) -> dict:
+    """A copy of graph_state without the keys a client must never see (AUD-012)."""
+    return {k: v for k, v in graph_state.items() if k not in _SENSITIVE_GRAPH_STATE_KEYS}
+
+
 def _public_record(record: ResearchRecord | None) -> ResearchRecord | None:
     """Strip internal/sensitive graph_state keys before returning a ResearchRecord to a client
-    (AUD-012). Returns a copy — the internal record and persistence keep the full state."""
+    (AUD-012). Returns a copy — the internal record and persistence keep the full state.
+    Every response that carries a graph_state goes through this or _public_graph_state."""
     if record is None or not record.graph_state:
         return record
-    cleaned = {k: v for k, v in record.graph_state.items() if k not in _SENSITIVE_GRAPH_STATE_KEYS}
-    return record.model_copy(update={"graph_state": cleaned})
+    return record.model_copy(update={"graph_state": _public_graph_state(record.graph_state)})
 
 
 def _owner_job_view(job):
@@ -1800,7 +1805,8 @@ def register_routes(app: FastAPI) -> None:
 
     @app.get("/v1/research/{research_id}/graph", response_model=ResearchGraphResponse, dependencies=research_guard)
     def get_research_graph(research_id: str, request: Request):
-        return get_research_service(request).get_research_graph(research_id)
+        graph = get_research_service(request).get_research_graph(research_id)
+        return graph.model_copy(update={"graph_state": _public_graph_state(graph.graph_state)})
 
     @app.get("/v1/research/{research_id}/events", dependencies=research_guard)
     async def research_events(research_id: str, request: Request):
@@ -1921,7 +1927,7 @@ def register_routes(app: FastAPI) -> None:
     ):
         research, job = get_research_service(request).enqueue_research_finalization(research_id)
         return ResearchFinalizeResponse(
-            research=research,
+            research=_public_record(research),
             finalize_job_id=job.id if job else None,
         )
 
