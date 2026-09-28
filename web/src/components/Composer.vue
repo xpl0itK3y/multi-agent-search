@@ -92,9 +92,9 @@ defineExpose({ focus });
 </script>
 
 <template>
-  <!-- One floating material: the composer is the lightest surface on the page, and the
-       whole card shows focus (field-host) rather than a square ring inside it. -->
   <div class="field-host material-float w-full max-w-composer rounded-card border border-bd px-4 py-3">
+    <!-- One floating material: the composer is the lightest surface on the page, and the
+         whole card shows focus (field-host) rather than a square ring inside it. -->
     <textarea
       ref="textarea"
       v-model="prompt"
