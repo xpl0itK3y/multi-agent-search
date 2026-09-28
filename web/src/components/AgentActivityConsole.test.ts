@@ -118,3 +118,101 @@ describe("AgentActivityConsole live feed", () => {
     wrapper.unmount();
   });
 });
+
+describe("AgentActivityConsole tells the truth", () => {
+  const at = (hms: string) => `2026-09-24T${hms}+00:00`;
+  const mountConsole = (props: Record<string, unknown>) =>
+    mount(AgentActivityConsole, { props: { entries: [], ...props }, global: { plugins: [i18n] } });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it("shows a finished run's real duration from its step timestamps", () => {
+    const wrapper = mountConsole({
+      entries: [
+        { step: "plan_start", detail: "Planning", timestamp: at("11:57:50") },
+        { step: "analyze", detail: "Writing", timestamp: at("11:59:29") },
+      ],
+      status: "completed",
+      live: false,
+    });
+    expect(wrapper.text()).toContain("01:39");
+    wrapper.unmount();
+  });
+
+  it("hides the timer when the steps carry no timestamps", () => {
+    const wrapper = mountConsole({ entries: [{ step: "search", detail: "Searching" }], status: "processing", live: true });
+    expect(wrapper.text()).not.toContain("⏱");
+    wrapper.unmount();
+  });
+
+  it("keeps showing the latest real step during a long synthesis, with the elapsed run time", async () => {
+    vi.useFakeTimers({ toFake: [...FAKE] });
+    vi.setSystemTime(new Date(at("10:01:00")));
+    const detail = "Drafting the comparison of the three reactor designs";
+    const wrapper = mountConsole({
+      entries: [
+        { step: "plan_start", detail: "Planning", timestamp: at("10:00:00") },
+        { step: "analyze", phase: "synthesis", agent: "AnalyzerAgent", detail, timestamp: at("10:00:30") },
+      ],
+      status: "analyzing",
+      live: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(80_000);
+
+    expect(wrapper.get(`[title="${detail}"]`).text()).toBe(detail);
+    for (const key of ["synthesisEvidence", "synthesisWriting", "synthesisCitations", "synthesisFinishing"]) {
+      expect(wrapper.text()).not.toContain(i18n.global.t(`console.${key}`));
+    }
+    expect(wrapper.text()).toContain("02:20"); // 10:00:00 → 10:02:20, not the 80 s since mount
+    wrapper.unmount();
+  });
+
+  it("never marks the step a failed run ended on as done", () => {
+    const wrapper = mountConsole({
+      entries: [
+        { step: "plan_start", detail: "Planning", timestamp: at("10:00:00") },
+        { step: "search", detail: "Searching", timestamp: at("10:00:05") },
+      ],
+      status: "failed",
+      live: false,
+    });
+
+    const last = wrapper.findAll("[data-entry-state]").at(-1)!;
+    expect(last.attributes("data-entry-state")).toBe("error");
+    expect(last.text()).not.toContain("✓");
+    expect(last.text()).toContain("✕");
+    expect(last.text()).toContain(i18n.global.t("console.entryStopped"));
+
+    const phases = wrapper.findAll("[data-phase-state]");
+    expect(phases.map((p) => p.attributes("data-phase-state"))).toEqual(["done", "error", "pending", "pending", "pending"]);
+    expect(phases[1].text()).toContain("✕");
+    for (const later of phases.slice(2)) expect(later.classes()).toContain("opacity-40");
+    wrapper.unmount();
+  });
+
+  it("shows a cancelled run's last step with a quiet stop marker", () => {
+    const wrapper = mountConsole({
+      entries: [
+        { step: "plan_start", detail: "Planning", timestamp: at("10:00:00") },
+        { step: "search", detail: "Searching", timestamp: at("10:00:05") },
+      ],
+      status: "cancelled",
+      live: false,
+    });
+
+    const last = wrapper.findAll("[data-entry-state]").at(-1)!;
+    expect(last.attributes("data-entry-state")).toBe("stopped");
+    expect(last.text()).toContain("–");
+    expect(last.text()).not.toContain("✓");
+    const marker = last.get(`[title="${i18n.global.t("console.entryStopped")}"]`);
+    expect(marker.classes()).toContain("text-muted");
+    expect(marker.classes()).not.toContain("text-danger");
+    expect(wrapper.find('[data-phase-state="stopped"]').text()).toContain("–");
+    expect(wrapper.text()).toContain(i18n.global.t("console.stoppedName"));
+    wrapper.unmount();
+  });
+});

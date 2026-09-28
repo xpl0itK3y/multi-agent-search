@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TraceEntry } from "@/lib/stream";
 import { traceKey } from "@/lib/trace";
@@ -51,41 +51,71 @@ watch(open, (v) => {
   }
 });
 
-// Timer for elapsed seconds
-const elapsedSeconds = ref(0);
-let timerInterval: number | undefined;
-
-onMounted(() => {
-  if (props.live) {
-    timerInterval = window.setInterval(() => {
-      elapsedSeconds.value += 1;
-    }, 1000);
+// Elapsed time comes from the run's own step timestamps, not from when this page was
+// opened (status must be real, apple-design §16): live, it counts on from the first step;
+// finished, it is the first-to-last span. Without timestamps there is no timer at all.
+function stampMs(entry: TraceEntry): number | null {
+  if (!entry.timestamp) return null;
+  const ms = Date.parse(entry.timestamp);
+  return Number.isNaN(ms) ? null : ms;
+}
+const startMs = computed(() => {
+  for (const entry of props.entries) {
+    const ms = stampMs(entry);
+    if (ms !== null) return ms;
   }
+  return null;
+});
+const lastMs = computed(() => {
+  for (let i = props.entries.length - 1; i >= 0; i--) {
+    const ms = stampMs(props.entries[i]);
+    if (ms !== null) return ms;
+  }
+  return null;
 });
 
-watch(
-  () => props.live,
-  (isLive) => {
-    if (isLive && !timerInterval) {
-      timerInterval = window.setInterval(() => {
-        elapsedSeconds.value += 1;
-      }, 1000);
-    } else if (!isLive && timerInterval) {
-      clearInterval(timerInterval);
-      timerInterval = undefined;
-    }
+// Ticks once a second, and only while the run is live.
+const now = ref(Date.now());
+let ticker: number | undefined;
+function syncTicker() {
+  if (props.live && ticker === undefined) {
+    now.value = Date.now();
+    ticker = window.setInterval(() => (now.value = Date.now()), 1000);
+  } else if (!props.live && ticker !== undefined) {
+    clearInterval(ticker);
+    ticker = undefined;
   }
-);
-
+}
+onMounted(syncTicker);
+watch(() => props.live, syncTicker);
 onBeforeUnmount(() => {
-  if (timerInterval) clearInterval(timerInterval);
+  if (ticker !== undefined) clearInterval(ticker);
 });
 
-const formattedElapsed = computed(() => {
-  const m = Math.floor(elapsedSeconds.value / 60);
-  const s = elapsedSeconds.value % 60;
-  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+const elapsedMs = computed<number | null>(() => {
+  const start = startMs.value;
+  if (start === null) return null;
+  const last = lastMs.value ?? start;
+  // A client clock behind the server's never shows less than the steps already span.
+  const end = props.live ? Math.max(now.value, last) : last;
+  return Math.max(0, end - start);
 });
+
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+const formattedElapsed = computed(() => (elapsedMs.value === null ? null : formatDuration(elapsedMs.value)));
+
+// A run that ended without a report: failed or timed out (an error), or cancelled or
+// deleted (a plain stop). Neither may look like a success.
+const STOPPED = new Set(["failed", "timeout", "cancelled", "not_found"]);
+const stopped = computed(() => STOPPED.has(props.status ?? ""));
+const errored = computed(() => props.status === "failed" || props.status === "timeout");
 
 // Phases definition
 export interface PipelinePhase {
@@ -144,8 +174,18 @@ const phaseIndex = computed(() => {
   return idx >= 0 ? idx : 0;
 });
 
-function phaseState(idx: number): "done" | "active" | "pending" {
-  if (props.status === "completed" || phaseIndex.value > idx) return "done";
+type PhaseState = "done" | "active" | "pending" | "error" | "stopped";
+
+function phaseState(idx: number): PhaseState {
+  if (props.status === "completed") return "done";
+  if (stopped.value) {
+    // The phase the run ended in carries the stop; nothing after it ever ran.
+    const at = Math.min(phaseIndex.value, PHASES.length - 1);
+    if (idx < at) return "done";
+    if (idx > at) return "pending";
+    return errored.value ? "error" : "stopped";
+  }
+  if (phaseIndex.value > idx) return "done";
   if (phaseIndex.value === idx && props.live) return "active";
   if (phaseIndex.value === idx) return "done";
   return "pending";
@@ -206,6 +246,22 @@ const currentAgent = computed<AgentMeta>(() => {
       colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
     };
   }
+  if (props.status === "timeout") {
+    return {
+      name: t("console.stoppedName"),
+      badge: t("status.timeout"),
+      avatar: "⚠️",
+      colorClass: "text-red-400 bg-red-500/10 border-red-500/30",
+    };
+  }
+  if (props.status === "cancelled" || props.status === "not_found") {
+    return {
+      name: t("console.stoppedName"),
+      badge: props.status === "cancelled" ? t("status.cancelled") : t("status.not_found"),
+      avatar: "⏹️",
+      colorClass: "text-muted bg-surface border-bd",
+    };
+  }
   const entry = currentEntry.value;
   if (!entry || !entry.agent) {
     if (currentPhase.value === "synthesis") return agentMeta("AnalyzerAgent");
@@ -241,40 +297,19 @@ function loopbackBadgeText(entry: TraceEntry): string {
   return t("console.loopGeneric");
 }
 
+// What the run is doing now: the latest real step, never text made up from a timer.
 const currentStatusDetail = computed(() => {
-  if (props.status === "completed") {
-    return t("console.statusCompleted");
+  switch (props.status) {
+    case "completed":
+      return t("console.statusCompleted");
+    case "failed":
+    case "timeout":
+      return t("console.statusFailed");
+    case "cancelled":
+      return t("status.cancelled");
+    case "not_found":
+      return t("status.not_found");
   }
-  if (props.status === "failed") {
-    return t("console.statusFailed");
-  }
-
-  // Dynamic deep status during long synthesis phase
-  if (props.live && currentPhase.value === "synthesis") {
-    const sec = elapsedSeconds.value % 120;
-    if (sec < 12) {
-      return t("console.synthesisEvidence");
-    } else if (sec < 28) {
-      return t("console.synthesisStructure");
-    } else if (sec < 50) {
-      return t("console.synthesisWriting");
-    } else if (sec < 75) {
-      return t("console.synthesisCitations");
-    } else if (sec < 105) {
-      return t("console.synthesisProofread");
-    } else {
-      return t("console.synthesisFinishing");
-    }
-  }
-
-  // Dynamic status during search phase
-  if (props.live && currentPhase.value === "search" && elapsedSeconds.value > 15) {
-    const sec = elapsedSeconds.value % 60;
-    if (sec < 20) return t("console.searchQuerying");
-    if (sec < 40) return t("console.searchExtracting");
-    return t("console.searchStructuring");
-  }
-
   return currentEntry.value?.detail || t("trace.live_status");
 });
 
@@ -363,10 +398,16 @@ function toggleOpen() {
   }
 }
 
-function isEntryDone(idx: number): boolean {
-  if (props.status === "completed") return true;
-  if (!props.live) return true;
-  return idx < filteredEntries.value.length - 1;
+// The latest step overall (not the last one a filter shows) is the one running, or the
+// one a stopped run ended on; every step before it finished.
+type EntryState = "done" | "running" | "error" | "stopped";
+
+function entryState(entry: TraceEntry): EntryState {
+  const latest = currentEntry.value;
+  const isLatest = !!latest && toRaw(entry) === toRaw(latest);
+  if (!isLatest || props.status === "completed") return "done";
+  if (stopped.value) return errored.value ? "error" : "stopped";
+  return props.live ? "running" : "done";
 }
 
 function stepLabel(step: string): string {
@@ -419,9 +460,9 @@ function formatTime(isoStr?: string): string {
 
       <!-- Controls & Elapsed Timer -->
       <div class="flex items-center gap-2 text-xs shrink-0">
-        <div class="flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
+        <div v-if="formattedElapsed" class="flex items-center gap-1 text-muted/90 bg-bg/50 px-2 py-1 rounded-md border border-bd shrink-0">
           <span class="text-muted">⏱</span>
-          <span class="font-mono text-[11px]">{{ formattedElapsed }}</span>
+          <span class="tabular-nums text-[11px]">{{ formattedElapsed }}</span>
         </div>
 
         <button
@@ -441,6 +482,7 @@ function formatTime(isoStr?: string): string {
         v-for="(phase, idx) in PHASES"
         :key="phase.id"
         class="flex items-center gap-1.5 shrink-0 transition-all duration-300"
+        :data-phase-state="phaseState(idx)"
         :class="{
           'opacity-100': phaseState(idx) !== 'pending',
           'opacity-40': phaseState(idx) === 'pending',
@@ -451,16 +493,19 @@ function formatTime(isoStr?: string): string {
           :class="{
             'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm': phaseState(idx) === 'done',
             'bg-accent text-bg border-accent shadow-md shadow-accent/20 ring-4 ring-accent/20 animate-pulse scale-105': phaseState(idx) === 'active',
-            'bg-surface text-muted border-bd': phaseState(idx) === 'pending',
+            'bg-danger/15 text-danger border-danger/40': phaseState(idx) === 'error',
+            'bg-surface text-muted border-bd': phaseState(idx) === 'pending' || phaseState(idx) === 'stopped',
           }"
         >
           <span v-if="phaseState(idx) === 'done'">✓</span>
+          <span v-else-if="phaseState(idx) === 'error'">✕</span>
+          <span v-else-if="phaseState(idx) === 'stopped'">–</span>
           <span v-else>{{ idx + 1 }}</span>
         </div>
 
         <span
           class="text-[12px] whitespace-nowrap font-medium transition-colors"
-          :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
+          :class="phaseState(idx) === 'active' ? 'text-accent font-semibold' : phaseState(idx) === 'error' ? 'text-danger' : phaseState(idx) === 'done' ? 'text-ink' : 'text-muted'"
         >
           {{ $t('trace.' + phase.key) }}
         </span>
@@ -492,9 +537,6 @@ function formatTime(isoStr?: string): string {
               <div>
                 <div class="flex items-center gap-2">
                   <span class="font-semibold text-xs text-ink">{{ t("console.synthesisTitle") }}</span>
-                  <span class="rounded bg-violet-500/20 text-violet-300 border border-violet-500/30 px-1.5 py-0.2 text-[10px] font-mono">
-                    LLM Synthesis
-                  </span>
                   <span v-if="currentEntry?.metrics?.attempt" class="rounded bg-bg/70 text-muted px-1.5 py-0.2 text-[10px]">
                     {{ t("console.iteration", { n: currentEntry.metrics.attempt }) }}
                   </span>
@@ -505,7 +547,7 @@ function formatTime(isoStr?: string): string {
               </div>
             </div>
 
-            <div class="flex items-center gap-1.5 text-xs text-violet-300/90 shrink-0 font-mono bg-bg/60 px-2 py-1 rounded-md border border-violet-500/30">
+            <div v-if="formattedElapsed" class="flex items-center gap-1.5 text-xs text-violet-300/90 shrink-0 tabular-nums bg-bg/60 px-2 py-1 rounded-md border border-violet-500/30">
               <span class="h-1.5 w-1.5 rounded-full bg-violet-400 animate-ping" />
               <span>{{ formattedElapsed }}</span>
             </div>
@@ -591,12 +633,14 @@ function formatTime(isoStr?: string): string {
               :move-class="animateFeed ? 'feed-item-move' : 'feed-item-still'"
             >
               <div
-                v-for="(entry, idx) in filteredEntries"
+                v-for="entry in filteredEntries"
                 :key="traceKey(entry)"
+                :data-entry-state="entryState(entry)"
                 class="group rounded-lg border border-bd/40 bg-surface/50 p-2.5 hover:border-bd hover:bg-surface/80 transition-colors duration-150 text-xs"
                 :class="{
-                  'border-emerald-500/30 bg-surface/60': isEntryDone(idx) && !isLoopback(entry),
-                  'border-accent/40 ring-1 ring-accent/20 bg-accent/5': live && idx === filteredEntries.length - 1 && !isLoopback(entry),
+                  'border-emerald-500/30 bg-surface/60': entryState(entry) === 'done' && !isLoopback(entry),
+                  'border-accent/40 ring-1 ring-accent/20 bg-accent/5': entryState(entry) === 'running' && !isLoopback(entry),
+                  'border-danger/30 bg-danger/5': entryState(entry) === 'error' && !isLoopback(entry),
                   'border-amber-500/40 bg-amber-500/5 ring-1 ring-amber-500/20': isLoopback(entry),
                 }"
               >
@@ -605,7 +649,8 @@ function formatTime(isoStr?: string): string {
                   v-if="isLoopback(entry)"
                   class="mb-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
                 >
-                  <span class="animate-spin">↺</span>
+                  <!-- Spins only while this loop-back is the running step; the label's own ↩ stays. -->
+                  <span v-if="entryState(entry) === 'running'" class="animate-spin">↺</span>
                   <span>{{ loopbackBadgeText(entry) }}</span>
                 </div>
 
@@ -613,24 +658,32 @@ function formatTime(isoStr?: string): string {
                   <div class="flex items-center gap-2 min-w-0">
                     <!-- Status icon/number -->
                     <span
-                      v-if="isEntryDone(idx)"
+                      v-if="entryState(entry) === 'done'"
                       class="flex items-center justify-center h-4 w-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold shrink-0 shadow-2xs"
                       :title="t('console.entryDone')"
                     >
                       ✓
                     </span>
                     <span
-                      v-else-if="live && idx === filteredEntries.length - 1"
+                      v-else-if="entryState(entry) === 'running'"
                       class="flex items-center justify-center h-4 w-4 rounded-full bg-accent text-white text-[9px] font-bold shrink-0 animate-pulse ring-2 ring-accent/30"
                       :title="t('console.entryRunning')"
                     >
                       ⚡
                     </span>
                     <span
-                      v-else
-                      class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[9px] font-bold shrink-0"
+                      v-else-if="entryState(entry) === 'error'"
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-danger/15 border border-danger/40 text-danger text-[10px] font-bold shrink-0"
+                      :title="t('console.entryStopped')"
                     >
-                      {{ idx + 1 }}
+                      ✕
+                    </span>
+                    <span
+                      v-else
+                      class="flex items-center justify-center h-4 w-4 rounded-full bg-surface border border-bd text-muted text-[10px] font-bold shrink-0"
+                      :title="t('console.entryStopped')"
+                    >
+                      –
                     </span>
 
                     <span v-if="entry.agent" class="font-medium text-ink truncate">
@@ -649,18 +702,25 @@ function formatTime(isoStr?: string): string {
 
                     <!-- Status label badge -->
                     <span
-                      v-if="isEntryDone(idx)"
+                      v-if="entryState(entry) === 'done'"
                       class="inline-flex items-center gap-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 px-1.5 py-0.2 text-[10px] font-medium text-emerald-400 shrink-0"
                     >
                       <span>✓</span>
                       <span>{{ t("console.entryDone") }}</span>
                     </span>
                     <span
-                      v-else-if="live && idx === filteredEntries.length - 1"
+                      v-else-if="entryState(entry) === 'running'"
                       class="inline-flex items-center gap-1 rounded bg-accent/15 border border-accent/30 px-1.5 py-0.2 text-[10px] font-medium text-accent shrink-0 animate-pulse"
                     >
                       <span class="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
                       <span>{{ t("console.entryRunning") }}</span>
+                    </span>
+                    <span
+                      v-else
+                      class="inline-flex items-center rounded border px-1.5 py-px text-[10px] font-medium shrink-0"
+                      :class="entryState(entry) === 'error' ? 'bg-danger/10 border-danger/30 text-danger' : 'bg-surface border-bd text-muted'"
+                    >
+                      {{ t("console.entryStopped") }}
                     </span>
                   </div>
 
