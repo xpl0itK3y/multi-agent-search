@@ -225,6 +225,15 @@ class TaskStore(Protocol):
 
     def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool: ...
 
+    # try_begin_finalization and the research's finalize job in ONE transaction: the job is
+    # its latest one while that is PENDING or RUNNING, the latest requeued (lease bumped,
+    # attempts reset) when it is DEAD_LETTER/FAILED, else a new job. None, with nothing
+    # changed, when the CAS is lost. Locks the latest job row before the research row, the
+    # order complete_research_finalize_job uses. The caller pushes the job to the broker.
+    def begin_finalization(
+        self, research_id: str, *, max_attempts: int = 3, require_settled_searches: bool = False
+    ) -> ResearchFinalizeJob | None: ...
+
     def set_research_task_ids(
         self,
         research_id: str,
@@ -368,18 +377,34 @@ class TaskStore(Protocol):
 
     def claim_search_task_job_by_id(self, job_id: str) -> SearchTaskJob | None: ...
 
+    # Search-job leases, like the finalize ones: a claim keeps the epoch; stale recovery and
+    # every requeue bump it. With lease_epoch the write lands only while the job is RUNNING
+    # under that epoch (None: another runner holds it, or it ended); without, unfenced.
     def update_search_task_job(
         self,
         job_id: str,
         status: SearchJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None: ...
 
     def record_search_task_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None: ...
+
+    # A search runner's task write, fenced by its job's lease in the same transaction: the
+    # job row is locked, and the update applies only while that job is RUNNING under
+    # lease_epoch. None when the lease is gone (or the task or job is missing).
+    def update_task_under_search_lease(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        job_id: str,
+        lease_epoch: int,
+    ) -> SearchTask | None: ...
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None: ...
 

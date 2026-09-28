@@ -1836,3 +1836,132 @@ def test_both_stores_implement_the_protocol_signatures(implementation):
         or parameters(getattr(implementation, name)) != parameters(getattr(TaskStore, name))
     ]
     assert mismatched == []
+
+
+# ── begin_finalization: the ANALYZING CAS and the finalize job in one step ──────
+
+
+def test_begin_finalization_takes_the_cas_and_queues_a_job(store):
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+
+    job = store.begin_finalization(record.id, max_attempts=5)
+
+    assert job is not None and job.status == FinalizeJobStatus.PENDING and job.max_attempts == 5
+    assert store.get_research(record.id).status == ResearchStatus.ANALYZING
+    assert store.get_latest_research_finalize_job(record.id).id == job.id
+    # Lost CAS: nothing changes, no second job.
+    assert store.begin_finalization(record.id) is None
+    assert [j.id for j in store.get_pending_research_finalize_jobs() if j.research_id == record.id] == [job.id]
+    assert store.begin_finalization("missing-research") is None
+
+
+@pytest.mark.parametrize("ended", [ResearchStatus.COMPLETED, ResearchStatus.FAILED, ResearchStatus.CANCELLED])
+def test_begin_finalization_leaves_an_ended_research_alone(store, ended):
+    record = _research(store)
+    store.update_research_status(record.id, ended)
+
+    assert store.begin_finalization(record.id) is None
+    assert store.get_research(record.id).status == ended
+    assert store.get_latest_research_finalize_job(record.id) is None
+
+
+def test_begin_finalization_can_require_every_search_settled(store):
+    record, _task_row = _processing_research_with_a_queued_search(store)
+
+    assert store.begin_finalization(record.id, require_settled_searches=True) is None
+    assert store.get_research(record.id).status == ResearchStatus.PROCESSING
+    assert store.get_latest_research_finalize_job(record.id) is None
+    # Without the requirement (a finalize-only retry) the queued search does not block.
+    assert store.begin_finalization(record.id) is not None
+
+
+def test_begin_finalization_reuses_a_queued_job_and_requeues_a_stopped_one(store):
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    first = store.begin_finalization(record.id)
+    claimed_epoch = store.claim_research_finalize_job_by_id(first.id).lease_epoch  # a number: memory hands out live objects
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)  # e.g. a retry reset it
+
+    assert store.begin_finalization(record.id).id == first.id  # still held by a runner: reused
+
+    store.update_research_finalize_job(first.id, FinalizeJobStatus.DEAD_LETTER, "boom")  # out of retries
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    requeued = store.begin_finalization(record.id)
+    assert requeued.id == first.id and requeued.status == FinalizeJobStatus.PENDING
+    assert (requeued.attempt_count, requeued.error) == (0, None)
+    assert requeued.lease_epoch == claimed_epoch + 1  # fences the old runner
+
+    store.update_research_finalize_job(first.id, FinalizeJobStatus.COMPLETED)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    fresh = store.begin_finalization(record.id)
+    assert fresh.id != first.id and fresh.status == FinalizeJobStatus.PENDING
+
+
+# ── search-job leases ───────────────────────────────────────────────────────────
+
+
+def test_search_job_writes_with_a_lease_are_fenced(store):
+    task = _task(store)
+    job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    claimed = store.claim_search_task_job_by_id(job.id)
+    assert claimed.lease_epoch == job.lease_epoch == 0  # a claim keeps the epoch
+
+    # Recovery takes the job from the runner: the epoch moves on.
+    store.recover_stale_search_task_jobs(datetime.now(timezone.utc) + timedelta(hours=1))
+    recovered = store.get_search_task_job(job.id)
+    assert (recovered.status, recovered.lease_epoch) == (SearchJobStatus.PENDING, 1)
+    reclaimed = store.claim_search_task_job_by_id(job.id)
+
+    # The old runner's writes are refused and change nothing.
+    assert store.update_search_task_job(job.id, SearchJobStatus.COMPLETED, lease_epoch=0) is None
+    assert store.record_search_task_job_failure(job.id, "late", lease_epoch=0) is None
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="late"), job.id, 0) is None
+    current = store.get_search_task_job(job.id)
+    assert (current.status, current.error) == (SearchJobStatus.RUNNING, None)
+    assert "late" not in store.get_task(task.id).logs
+
+    # The new runner's writes land.
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="mine"), job.id, 1).logs[-1] == "mine"
+    done = store.update_search_task_job(job.id, SearchJobStatus.COMPLETED, lease_epoch=reclaimed.lease_epoch)
+    assert done.status == SearchJobStatus.COMPLETED
+    # A settled job refuses leased writes too; an unleased write is not fenced.
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="after"), job.id, 1) is None
+    assert store.update_search_task_job(job.id, SearchJobStatus.FAILED, "admin") is not None
+
+
+def test_search_job_lease_fences_only_its_own_task(store):
+    task, other = _task(store), _task(store)
+    job = store.add_search_task_job(task.id, SearchDepth.EASY.value)
+    store.claim_search_task_job_by_id(job.id)
+
+    assert store.update_task_under_search_lease(other.id, TaskUpdate(log="x"), job.id, 0) is None
+    assert store.update_task_under_search_lease("missing-task", TaskUpdate(log="x"), job.id, 0) is None
+    assert store.update_task_under_search_lease(task.id, TaskUpdate(log="x"), "missing-job", 0) is None
+    assert store.get_task(other.id).logs == []
+
+
+def test_search_job_failure_with_a_lease_retries_then_dead_letters(store):
+    task = _task(store)
+    job = store.add_search_task_job(task.id, SearchDepth.EASY.value, max_attempts=2)
+    first = store.claim_search_task_job_by_id(job.id)
+    assert store.record_search_task_job_failure(job.id, "boom", lease_epoch=first.lease_epoch).status == SearchJobStatus.PENDING
+    second = store.claim_search_task_job_by_id(job.id)
+    assert second.lease_epoch == first.lease_epoch  # the retry is the same runner lineage
+    dead = store.record_search_task_job_failure(job.id, "boom", lease_epoch=second.lease_epoch)
+    assert dead.status == SearchJobStatus.DEAD_LETTER
+
+
+def test_search_job_requeues_bump_the_lease_epoch(store):
+    record = _research(store)
+    store.update_research_status(record.id, ResearchStatus.PROCESSING)
+    task = _task(store, record.id)
+    job = _dead_letter_search_job(store, task.id)
+    epoch = store.get_search_task_job(job.id).lease_epoch
+
+    assert store.requeue_search_task_job(job.id).lease_epoch == epoch + 1
+    store.claim_search_task_job_by_id(job.id)
+    store.record_search_task_job_failure(job.id, "boom")
+    store.update_search_task_job(job.id, SearchJobStatus.DEAD_LETTER, "boom")
+    requeued = store.requeue_search_task_job_of_active_research(job.id, "Search job manually requeued")
+    assert requeued.lease_epoch == epoch + 2

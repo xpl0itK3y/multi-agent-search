@@ -552,10 +552,11 @@ def test_retry_that_cannot_dispatch_its_finalize_job_hands_the_research_back_as_
     research = _failed_research(store, _completed_task())
     _dead_letter_finalize_job(store, research.id)
 
-    def connection_dropped(job_id):
+    def connection_dropped(research_id, **kwargs):
         raise RuntimeError("DB connection dropped")
 
-    monkeypatch.setattr(store, "requeue_research_finalize_job", connection_dropped)
+    # The CAS and the job are one store call now: it failing rolls both back.
+    monkeypatch.setattr(store, "begin_finalization", connection_dropped)
     with pytest.raises(RuntimeError):
         service.retry_research(research.id)
 

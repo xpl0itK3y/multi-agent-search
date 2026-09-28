@@ -134,6 +134,10 @@ def test_search_attempt_is_a_success_only_when_it_leaves_the_job_completed(statu
     expected = "success" if status == SearchJobStatus.COMPLETED else "failure"
     assert search_attempt_status(job) == expected
     assert search_attempt_status(None) == "failure"  # the job vanished mid-attempt
+    # Completed, but under a newer lease: another runner finished it (SEARCH-LEASE).
+    assert search_attempt_status(job, claimed_lease_epoch=0) == expected
+    newer = job.model_copy(update={"lease_epoch": 1})
+    assert search_attempt_status(newer, claimed_lease_epoch=0) == "failure"
 
 
 @pytest.mark.parametrize("status", list(FinalizeJobStatus))

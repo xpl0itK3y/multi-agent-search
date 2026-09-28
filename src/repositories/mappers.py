@@ -183,6 +183,7 @@ def search_task_job_orm_to_schema(job: SearchTaskJobORM) -> SearchTaskJob:
         task_id=job.task_id,
         depth=job.depth,
         status=SearchJobStatus(job.status),
+        lease_epoch=job.lease_epoch,
         attempt_count=job.attempt_count,
         max_attempts=job.max_attempts,
         error=job.error,

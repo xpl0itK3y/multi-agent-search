@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from src.agents.trail_text import research_language, trail_detail
 from src.config import settings
 from src.providers.search import SearchProvider, ContentExtractor
-from src.domain import SearchTaskMetrics, TaskStatus, TaskUpdate
+from src.domain import SearchJobLeaseLost, SearchTaskMetrics, TaskStatus, TaskUpdate
 from src.core import domain_policy, rust_accel
 from src.repositories.protocols import TaskStore
 from src.repositories.mappers import enrich_search_result_dict
@@ -521,6 +521,8 @@ class SearchAgent:
                 ),
             )
 
+        except SearchJobLeaseLost:
+            raise  # another runner holds the job now: stop, and write nothing more
         except Exception as exc:
             logger.error(f"Error executing task {task_id}: {exc}")
             self.task_store.update_task(
