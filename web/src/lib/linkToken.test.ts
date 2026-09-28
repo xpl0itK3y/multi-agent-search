@@ -1,15 +1,20 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureLinkToken,
+  dropLinkToken,
   holdLinkToken,
+  LINK_TOKEN_TTL_MS,
   linkPageOf,
   linkTokenFromHash,
   onLinkToken,
+  peekLinkToken,
   takeLinkToken,
   watchLinkTokens,
 } from "./linkToken";
+
+const VERIFY_KEY = "auth.verify_email_link";
 
 describe("linkTokenFromHash", () => {
   it("reads the token parameter of a fragment", () => {
@@ -26,6 +31,12 @@ describe("linkTokenFromHash", () => {
 });
 
 describe("holdLinkToken / takeLinkToken", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    dropLinkToken("reset-password");
+    dropLinkToken("verify-email");
+  });
+
   it("hands the held token to its page once", () => {
     holdLinkToken("reset-password", "#token=abc");
 
@@ -37,15 +48,93 @@ describe("holdLinkToken / takeLinkToken", () => {
     holdLinkToken("reset-password", "#token=abc");
 
     expect(takeLinkToken("verify-email")).toBeNull();
-    // Dropped all the same: a later visit to the right page gets nothing either.
-    expect(takeLinkToken("reset-password")).toBeNull();
+    expect(takeLinkToken("reset-password")).toBe("abc");
   });
 
-  it("a fragment without a token drops the one held before", () => {
+  it("a newer link replaces the one held before; a fragment without a token is no link", () => {
     holdLinkToken("verify-email", "#token=old");
+    holdLinkToken("verify-email", "#token=new");
     holdLinkToken("verify-email", "#section");
 
-    expect(takeLinkToken("verify-email")).toBeNull();
+    expect(takeLinkToken("verify-email")).toBe("new");
+  });
+
+  it("lets a token go once it waited LINK_TOKEN_TTL_MS for its page", () => {
+    const at = 1_000_000;
+    holdLinkToken("reset-password", "#token=abc", at);
+    holdLinkToken("verify-email", "#token=def", at);
+
+    expect(peekLinkToken("verify-email", at + LINK_TOKEN_TTL_MS)).toBe("def");
+    expect(peekLinkToken("verify-email", at + LINK_TOKEN_TTL_MS + 1)).toBeNull();
+    expect(sessionStorage.getItem(VERIFY_KEY)).toBeNull();
+    expect(takeLinkToken("reset-password", at + LINK_TOKEN_TTL_MS + 1)).toBeNull();
+    // Nor one from a clock that went back.
+    holdLinkToken("verify-email", "#token=ghi", at);
+    expect(peekLinkToken("verify-email", at - 1)).toBeNull();
+  });
+});
+
+describe("a verification link's token", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    dropLinkToken("verify-email");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stays held for its page until it is dropped", () => {
+    holdLinkToken("verify-email", "#token=vt");
+
+    expect(peekLinkToken("verify-email")).toBe("vt");
+    expect(peekLinkToken("verify-email")).toBe("vt");
+    dropLinkToken("verify-email");
+    expect(peekLinkToken("verify-email")).toBeNull();
+  });
+
+  it("waits in this tab's sessionStorage through a page load (a Google sign-in), unlike a reset's", async () => {
+    holdLinkToken("verify-email", "#token=vt");
+    holdLinkToken("reset-password", "#token=rt");
+
+    vi.resetModules();
+    const later = await import("./linkToken");
+
+    expect(later.peekLinkToken("verify-email")).toBe("vt");
+    expect(later.takeLinkToken("reset-password")).toBeNull();
+    expect(Object.keys(sessionStorage)).toEqual([VERIFY_KEY]);
+    expect(sessionStorage.getItem(VERIFY_KEY)).not.toContain("rt");
+  });
+
+  it("is dropped only while it is the one held: a newer link stays", () => {
+    holdLinkToken("verify-email", "#token=old");
+    holdLinkToken("verify-email", "#token=new");
+
+    dropLinkToken("verify-email", "old");
+    expect(peekLinkToken("verify-email")).toBe("new");
+    dropLinkToken("verify-email", "new");
+    expect(peekLinkToken("verify-email")).toBeNull();
+  });
+
+  it("is held for this page load when storage is blocked", () => {
+    const blocked = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(blocked);
+
+    holdLinkToken("verify-email", "#token=vt");
+    expect(peekLinkToken("verify-email")).toBe("vt");
+    dropLinkToken("verify-email");
+    expect(peekLinkToken("verify-email")).toBeNull();
+  });
+
+  it("ignores what is not its own entry in storage", () => {
+    for (const raw of ["not json", "null", '{"token":""}', '{"token":"x"}', '{"token":1,"at":1}']) {
+      sessionStorage.setItem(VERIFY_KEY, raw);
+      expect(peekLinkToken("verify-email"), raw).toBeNull();
+    }
   });
 });
 
@@ -60,7 +149,9 @@ describe("linkPageOf", () => {
 
 describe("captureLinkToken", () => {
   beforeEach(() => {
-    takeLinkToken("reset-password");
+    sessionStorage.clear();
+    dropLinkToken("reset-password");
+    dropLinkToken("verify-email");
   });
 
   it("holds a link page's token and takes the fragment out of the address", () => {
@@ -72,6 +163,21 @@ describe("captureLinkToken", () => {
     // The entry is replaced, not added, and keeps its state.
     expect(window.history.state).toEqual({ kept: 1 });
     expect(takeLinkToken("reset-password")).toBe("cap-tok");
+  });
+
+  it("keeps a verification link's token for the sign-in to come, never in the address", () => {
+    window.history.replaceState(null, "", "/verify-email#token=cap-vt");
+    const seen: string[] = [];
+    const stop = onLinkToken("verify-email", () => seen.push(window.location.hash));
+
+    captureLinkToken();
+    stop();
+
+    expect(window.location.hash).toBe("");
+    // An open page is told only once the address is clean.
+    expect(seen).toEqual([""]);
+    expect(JSON.parse(sessionStorage.getItem(VERIFY_KEY)!).token).toBe("cap-vt");
+    expect(peekLinkToken("verify-email")).toBe("cap-vt");
   });
 
   it("drops any other fragment of a link page", () => {

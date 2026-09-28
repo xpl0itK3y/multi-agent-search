@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { api, apiErrorMessage } from "@/lib/api";
+import { startGoogleSignIn } from "@/lib/googleSignIn";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import SparkLogo from "@/components/SparkLogo.vue";
@@ -47,8 +48,11 @@ onMounted(() => {
   loadAuthConfig();
 });
 
+// The page that sent the user here (?redirect=) waits through Google's sign-in too: the
+// callback lands on its own page, and the router continues from there (googleSignIn.ts).
 function googleLogin() {
-  window.location.href = api.googleLoginUrl();
+  const redirect = route.query.redirect;
+  startGoogleSignIn(typeof redirect === "string" ? redirect : undefined);
 }
 
 async function submit() {
@@ -99,6 +103,15 @@ async function submit() {
         </div>
         <p class="leading-relaxed text-accent/80">{{ $t("admin.authPasswordHint") }}</p>
       </div>
+
+      <!-- An emailed verification link, which confirms only the account it was sent to -->
+      <p
+        v-if="route.query.redirect === '/verify-email'"
+        role="status"
+        class="mb-5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-xs leading-relaxed text-accent"
+      >
+        {{ $t("verifyEmail.signInFirst") }}
+      </p>
 
       <div class="mb-6 flex items-center justify-center gap-3">
         <SparkLogo :size="28" />

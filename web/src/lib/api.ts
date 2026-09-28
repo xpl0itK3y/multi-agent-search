@@ -121,7 +121,10 @@ export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
 // Routes that legitimately make unauthenticated calls — the public share page, /login
 // itself (redirecting there from a failed sign-in would loop) and the signed-out account
 // pages. Compared the way vue-router matches them: any case, trailing slashes aside.
-const PUBLIC_PAGES = new Set(["/login", "/forgot-password", "/reset-password", "/verify-email"]);
+// /verify-email is not one: it confirms the signed-in account's address, so a session
+// that ended there goes back through /login like on any other page (the link waits in
+// lib/linkToken.ts).
+const PUBLIC_PAGES = new Set(["/login", "/forgot-password", "/reset-password"]);
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PAGES.has(pathname.toLowerCase().replace(/\/+$/, "")) || pathname.startsWith("/r/");
 }
@@ -256,6 +259,9 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
     // An action that needs a fresh Google sign-in (see isReauthRequired). The text
     // speaks of passwords; the account deletion shows its own (SettingsView).
     [/^reauth_required/, "reauthRequired"],
+    // A verification link of another account than the signed-in one; the server left the
+    // link unused (see isVerificationWrongAccount).
+    [/^verification_wrong_account/, "verificationWrongAccount"],
   ],
   409: [
     [/^A research is already in progress\b/, "researchInProgress"],
@@ -287,6 +293,12 @@ export function isResetTokenInvalid(err: unknown): boolean {
 
 export function isVerificationTokenInvalid(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400 && err.detail.startsWith("verification_token_invalid");
+}
+
+// A verification link redeems only for the account it was sent to, and someone else is
+// signed in here. The link is still good: the page offers to switch accounts.
+export function isVerificationWrongAccount(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && err.detail.startsWith("verification_wrong_account");
 }
 
 // The shortest password the server accepts on sign-up, set-password and password reset
@@ -376,8 +388,10 @@ export const api = {
   requestEmailVerification: () =>
     request<{ status: "sent" | "already_verified" }>("/v1/auth/email/verification", { method: "POST" }),
 
-  // Confirms an address with the one-time token of a verification link; it needs no
-  // session. A dead link is a 400 (isVerificationTokenInvalid).
+  // Confirms the signed-in account's address with the one-time token of a verification
+  // link: it needs the session (and the csrf token) of the account the link was sent to.
+  // Another account's session is a 403 that leaves the link unused
+  // (isVerificationWrongAccount); a dead link is a 400 (isVerificationTokenInvalid).
   verifyEmail: (token: string) =>
     request<{ status: string }>("/v1/auth/email/verify", {
       method: "POST",

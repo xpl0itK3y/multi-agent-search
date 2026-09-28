@@ -175,6 +175,8 @@ describe("googleReturnRedirect", () => {
     ["plain login page", { path: "/settings", at: NOW }, landing("login", "/login"), true],
     ["new account onboarding", { path: "/settings", at: NOW }, landing("set-password", "/set-password"), true],
     ["public page", { path: "/settings", at: NOW }, landing("public-report", "/r/t", { public: true }), true],
+    // A page load there is an emailed link, never Google's landing.
+    ["emailed link's page", { path: "/settings", at: NOW }, landing("verify-email", "/verify-email", { linkToken: true }), true],
     ["already there", { path: "/settings?tab=security", at: NOW }, landing("settings", "/settings?tab=security"), true],
     ["tampered path", { path: "//evil.example", at: NOW }, landing("home", "/"), true],
     ["dot segment to another host", { path: "/..//evil.example", at: NOW }, landing("home", "/"), true],

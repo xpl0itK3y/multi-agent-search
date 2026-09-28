@@ -34,6 +34,15 @@ describe("router: back from a Google sign-in", () => {
     window.history.replaceState(null, "", "/");
   });
 
+  it("comes back to a verification link that waited for a Google sign-in", async () => {
+    sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/verify-email", at: Date.now() }));
+    const router = await loadApp(true);
+
+    await router.push("/");
+
+    expect(router.currentRoute.value.fullPath).toBe("/verify-email");
+  });
+
   it("continues from the callback's landing to the page that asked for the sign-in", async () => {
     sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/settings?tab=security", at: Date.now() }));
     const router = await loadApp(true);
@@ -90,13 +99,25 @@ describe("router: signed-out account pages", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it.each(["/forgot-password", "/reset-password", "/verify-email"])("opens %s without a session, outside the app shell", async (path) => {
+  it.each(["/forgot-password", "/reset-password"])("opens %s without a session, outside the app shell", async (path) => {
     const router = await loadApp(false);
 
     await router.push(path);
 
     expect(router.currentRoute.value.fullPath).toBe(path);
     expect(router.currentRoute.value.meta).toMatchObject({ public: true, bare: true });
+  });
+
+  it("sends a signed-out visitor of /verify-email to sign in first, to come back there", async () => {
+    // The server confirms an address only for the signed-in account the link was sent to.
+    const router = await loadApp(false);
+
+    await router.push("/verify-email");
+
+    expect(router.currentRoute.value.name).toBe("login");
+    expect(router.currentRoute.value.query.redirect).toBe("/verify-email");
+    expect(router.resolve("/verify-email").meta).toMatchObject({ bare: true });
+    expect(router.resolve("/verify-email").meta.public).toBeUndefined();
   });
 
   it.each(["/forgot-password", "/reset-password", "/verify-email"])("keeps a signed-in user on %s", async (path) => {
@@ -162,12 +183,31 @@ describe("router: an emailed link's one-time token", () => {
   });
 
   it("does the same for a verification link", async () => {
-    const { router, takeLinkToken } = await openLink("/verify-email#token=verify-tok");
+    const { router, takeLinkToken } = await openLink("/verify-email#token=verify-tok", true);
 
     expect(router.currentRoute.value.fullPath).toBe("/verify-email");
     expect(window.location.hash).toBe("");
     expectNoTokenInRouter(router, "verify-tok");
     expect(takeLinkToken("reset-password")).toBeNull();
+  });
+
+  it("sends a signed-out visitor of a verification link to sign in, the token in no route", async () => {
+    const { router, takeLinkToken } = await openLink("/verify-email#token=verify-tok");
+
+    expect(router.currentRoute.value.fullPath).toBe("/login?redirect=/verify-email");
+    expect(router.currentRoute.value.redirectedFrom?.fullPath).toBe("/verify-email");
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/login?redirect=/verify-email");
+    expect(JSON.stringify({ ...router.currentRoute.value, matched: undefined })).not.toContain("verify-tok");
+    expect(JSON.stringify(window.history.state)).not.toContain("verify-tok");
+    // It waits for the page, after the sign-in.
+    expect(takeLinkToken("verify-email")).toBe("verify-tok");
+  });
+
+  it("keeps a signed-in user on the link's page, whatever a Google sign-in left to come back to", async () => {
+    sessionStorage.setItem(RETURN_KEY, JSON.stringify({ path: "/settings", at: Date.now() }));
+    const { router } = await openLink("/verify-email#token=verify-tok", true);
+
+    expect(router.currentRoute.value.fullPath).toBe("/verify-email");
   });
 
   it("holds a verification token for the verification page", async () => {

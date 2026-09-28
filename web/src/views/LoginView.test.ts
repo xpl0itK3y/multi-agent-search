@@ -7,10 +7,12 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import { i18n } from "@/i18n";
 
 const authConfig = vi.hoisted(() => vi.fn());
+const startGoogleSignIn = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({
   api: { authConfig, googleLoginUrl: () => "/g" },
   apiErrorMessage: () => "error",
 }));
+vi.mock("@/lib/googleSignIn", () => ({ startGoogleSignIn }));
 
 import LoginView from "./LoginView.vue";
 
@@ -33,6 +35,7 @@ const t = (key: string) => i18n.global.t(key);
 describe("LoginView", () => {
   beforeEach(() => {
     authConfig.mockResolvedValue({ google_oauth: true });
+    startGoogleSignIn.mockClear();
   });
 
   it.each([
@@ -66,6 +69,27 @@ describe("LoginView", () => {
     for (const loc of ["ru", "en", "es"] as const) {
       expect(i18n.global.getLocaleMessage(loc).admin.authPasswordHint).toContain("scripts/create_admin.py");
     }
+  });
+
+  it("asks the visitor of a verification link to sign in to the account it was sent to", async () => {
+    const wrapper = await mountAt("/login?redirect=/verify-email");
+    expect(wrapper.find('[role="status"]').text()).toBe(t("verifyEmail.signInFirst"));
+
+    const plain = await mountAt("/login");
+    expect(plain.text()).not.toContain(t("verifyEmail.signInFirst"));
+  });
+
+  it("comes back to the page that sent the user here after a Google sign-in too", async () => {
+    const googleButton = (w: Awaited<ReturnType<typeof mountAt>>) =>
+      w.findAll("button").find((b) => b.text() === t("auth.google"))!;
+
+    await googleButton(await mountAt("/login?redirect=/verify-email")).trigger("click");
+    expect(startGoogleSignIn).toHaveBeenLastCalledWith("/verify-email");
+
+    // No page to come back to: Google's own landing, and no older return path either.
+    await googleButton(await mountAt("/login")).trigger("click");
+    expect(startGoogleSignIn).toHaveBeenLastCalledWith(undefined);
+    expect(startGoogleSignIn).toHaveBeenCalledTimes(2);
   });
 
   it("links a forgotten password to the reset page when the server can send the link", async () => {

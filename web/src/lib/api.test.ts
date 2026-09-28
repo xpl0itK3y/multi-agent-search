@@ -157,7 +157,23 @@ describe("api request error handling", () => {
   });
 
   // The account pages a signed-out visitor opens, in the spellings vue-router matches.
-  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/", "/reset-password", "/verify-email"];
+  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/", "/reset-password"];
+
+  // It confirms the signed-in account's address: a session that ended there signs in
+  // again, and comes back to the link waiting in this tab.
+  it("on 401 on /verify-email: a stale session goes back through /login", async () => {
+    for (const pathname of ["/verify-email", "/Verify-Email/"]) {
+      const { assign } = stubEnv("stale-token", pathname);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+      const { api } = await import("./api");
+      await expect(api.verifyEmail("verify-tok")).rejects.toMatchObject({ status: 401 });
+      expect(assign).toHaveBeenCalledWith(`/login?redirect=${encodeURIComponent(pathname)}`);
+
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
 
   it("on 401 on public routes (/r/…, /login, account pages): no redirect loop", async () => {
     for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
@@ -322,6 +338,21 @@ describe("account recovery endpoints", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/v1/auth/email/verification");
     expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
+  });
+
+  it("confirms an address with the session and the csrf token of the signed-in account", async () => {
+    stubEnv("access", "/verify-email", "", "csrf_token=tok");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "verified" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api } = await import("./api");
+    expect(await api.verifyEmail("verify-tok")).toEqual({ status: "verified" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/v1/auth/email/verify");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ token: "verify-tok" });
     expect(init.headers).toMatchObject({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
   });
 
@@ -590,6 +621,21 @@ describe("apiErrorMessage", () => {
     expect(isReauthRequired(new ApiError(401, "reauth_required"))).toBe(false);
     expect(isReauthRequired(new ApiError(403, "Forbidden: reauth_required"))).toBe(false);
     expect(isReauthRequired(new Error("403 reauth_required"))).toBe(false);
+  });
+
+  it("explains a verification link of another account than the signed-in one", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage, isVerificationTokenInvalid, isVerificationWrongAccount } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+    const wrong = new ApiError(403, "verification_wrong_account: sign in to the account this link was sent to");
+
+    expect(apiErrorMessage(wrong, t)).toBe("[errors.api.verificationWrongAccount]");
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.verificationWrongAccount", value)).toBe(true);
+    expect([isVerificationWrongAccount(wrong), isVerificationTokenInvalid(wrong)]).toEqual([true, false]);
+    // Only a 403 whose detail starts with the code; other 403s stay generic.
+    expect(isVerificationWrongAccount(new ApiError(400, wrong.detail))).toBe(false);
+    expect(isVerificationWrongAccount(new ApiError(403, `Forbidden: ${wrong.detail}`))).toBe(false);
+    expect(apiErrorMessage(new ApiError(403, "Admin privileges required"), t)).toBe("[errors.api.forbidden]");
   });
 
   it("names a dead password reset or verification link", async () => {

@@ -21,11 +21,14 @@ const router = createRouter({
       component: () => import("@/views/ResetPasswordView.vue"),
       meta: { public: true, bare: true, linkToken: true },
     },
+    // Not public: the server confirms an address only for the signed-in account the link
+    // was sent to, so a signed-out visitor signs in first (/login?redirect=/verify-email)
+    // while the link waits in this tab (lib/linkToken.ts).
     {
       path: "/verify-email",
       name: "verify-email",
       component: () => import("@/views/VerifyEmailView.vue"),
-      meta: { public: true, bare: true, linkToken: true },
+      meta: { bare: true, linkToken: true },
     },
     { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },

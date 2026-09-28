@@ -3,8 +3,15 @@
 // never send to a server or put in a Referer. captureLinkToken() takes it out of the
 // address first thing on a page load (src/linkCapture.ts, the first import of main.ts),
 // before the router records the address and before the app makes any request, so it
-// does not stay in the history, a bookmark or a copied address. It is held here, in
-// memory only, for that page to take once.
+// does not stay in the history, a bookmark or a copied address. It is held here for its
+// page, for LINK_TOKEN_TTL_MS at most.
+//
+// A reset token is held in memory only, and its page takes it once: the reset itself
+// needs no session. A verification token is also kept in this tab's sessionStorage,
+// because the server redeems it only for the signed-in account the link was sent to: a
+// signed-out visitor signs in first, maybe through Google, which leaves the page and
+// comes back to /verify-email. It stays until the page redeems it or the server refuses
+// it (dropLinkToken), and a wrong account's refusal leaves it for the right one.
 //
 // A bare history.replaceState is enough there: the router does not exist yet, so it
 // builds its record of the entry (history.state.current) from the clean address. A link
@@ -13,7 +20,17 @@
 // runs before the router's own, which then only sees the clean address too. The router
 // never holds the token, so no route (redirectedFrom, query, params) carries it.
 
-let held: { page: string; token: string } | null = null;
+/** How long a captured token waits for its page: enough to sign in first. */
+export const LINK_TOKEN_TTL_MS = 30 * 60 * 1000;
+
+interface Held {
+  token: string;
+  at: number; // when it was captured (ms)
+}
+
+const held = new Map<string, Held>();
+// The pages whose token is kept in sessionStorage as well, by storage key.
+const STORAGE_KEYS = new Map([["verify-email", "auth.verify_email_link"]]);
 
 // The pages an emailed link opens, by path, as the route names they have.
 const LINK_PAGES = new Map([
@@ -34,15 +51,41 @@ export function linkTokenFromHash(hash: string): string | null {
   return match ? match[1] : null;
 }
 
+function stored(page: string): Held | null {
+  const key = STORAGE_KEYS.get(page);
+  if (!key) return null;
+  try {
+    const entry: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    const { token, at } = (entry ?? {}) as Partial<Held>;
+    return typeof token === "string" && token && typeof at === "number" ? { token, at } : null;
+  } catch {
+    return null; // storage blocked, or not our JSON
+  }
+}
+
+// The entry held for `page`, however old: this page load's, else this tab's stored one.
+function current(page: string): Held | null {
+  return held.get(page) ?? stored(page);
+}
+
 // The open pages that want a link's new token (onLinkToken).
 const listeners = new Set<{ page: string; fn: () => void }>();
 
 /** Holds the token of `hash`, for `page` (a route name), in place of any held before, and
- * tells that page if it is open. */
-export function holdLinkToken(page: string, hash: string): void {
+ * tells that page if it is open. A fragment without a token is no link: it changes nothing. */
+export function holdLinkToken(page: string, hash: string, now = Date.now()): void {
   const token = linkTokenFromHash(hash);
-  held = token ? { page, token } : null;
   if (!token) return;
+  const entry = { token, at: now };
+  held.set(page, entry);
+  const key = STORAGE_KEYS.get(page);
+  if (key) {
+    try {
+      sessionStorage.setItem(key, JSON.stringify(entry));
+    } catch {
+      /* storage blocked: held for this page load only */
+    }
+  }
   for (const listener of [...listeners]) if (listener.page === page) listener.fn();
 }
 
@@ -56,10 +99,34 @@ export function onLinkToken(page: string, fn: () => void): () => void {
   };
 }
 
+/** The token held for `page`, if captured less than LINK_TOKEN_TTL_MS ago; it stays held. */
+export function peekLinkToken(page: string, now = Date.now()): string | null {
+  const entry = current(page);
+  if (!entry) return null;
+  const age = now - entry.at;
+  if (age >= 0 && age <= LINK_TOKEN_TTL_MS) return entry.token;
+  dropLinkToken(page);
+  return null;
+}
+
+/** Stops holding the token of `page`; with `token`, only if that is still the one held
+ * (not a newer link's). */
+export function dropLinkToken(page: string, token?: string): void {
+  if (token !== undefined && current(page)?.token !== token) return;
+  held.delete(page);
+  const key = STORAGE_KEYS.get(page);
+  if (!key) return;
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* storage blocked: nothing was stored */
+  }
+}
+
 /** The token held for `page`, once: the next call returns null. */
-export function takeLinkToken(page: string): string | null {
-  const token = held?.page === page ? held.token : null;
-  held = null;
+export function takeLinkToken(page: string, now = Date.now()): string | null {
+  const token = peekLinkToken(page, now);
+  dropLinkToken(page);
   return token;
 }
 
@@ -72,8 +139,9 @@ export function captureLinkToken(): void {
   const { pathname, search, hash } = window.location;
   const page = linkPageOf(pathname);
   if (!page || !hash) return;
-  holdLinkToken(page, hash);
+  // The address first: an open page told of the token must not find it still there.
   window.history.replaceState(window.history.state, "", pathname + search);
+  holdLinkToken(page, hash);
 }
 
 /**
