@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { compileStyle, parse } from "vue/compiler-sfc";
 
 import { i18n } from "@/i18n";
@@ -252,5 +253,109 @@ describe("MarkdownView reading surface", () => {
 
     expect(cls).toContain("prose-h1:font-serif");
     expect(cls.some((c) => c.startsWith("prose-headings:font-"))).toBe(false);
+  });
+});
+
+describe("MarkdownView citation popover", () => {
+  const sources = [{ source_id: "S1", url: "https://www.one.example/a" }];
+  const grounding: CitationGround[] = [
+    { source_id: "S1", url: "https://www.one.example/a", title: "One", quote: "Exact words from the source.", supported: true },
+  ];
+  let mounted: ReturnType<typeof render> | null = null;
+
+  function renderCited(extra: { grounding?: CitationGround[] } = { grounding }) {
+    mounted = mount(MarkdownView, {
+      props: { source: "Prices fell [S1].", sources, ...extra },
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    });
+    return mounted;
+  }
+  // jsdom has no PointerEvent: a MouseEvent carrying a pointerType stands in for one.
+  function pointer(type: string, pointerType: string) {
+    const e = new MouseEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "pointerType", { value: pointerType });
+    return e;
+  }
+  function popoverFor(link: Element): HTMLElement | null {
+    return document.getElementById(link.getAttribute("aria-describedby") || "");
+  }
+
+  afterEach(() => {
+    mounted?.unmount();
+    mounted = null;
+    vi.useRealTimers();
+  });
+
+  it("marks a grounded citation for the popover instead of a title tooltip", () => {
+    const link = renderCited().find("a.md-citation");
+
+    expect(link.attributes("title")).toBeUndefined();
+    expect(link.attributes("data-cite")).toBe("S1");
+    expect(link.attributes("aria-describedby")).toMatch(/^cite-pop-/);
+  });
+
+  it("keeps an ungrounded citation a plain link", () => {
+    const link = renderCited({}).find("a.md-citation");
+
+    expect(link.attributes("data-cite")).toBeUndefined();
+    expect(link.attributes("aria-describedby")).toBeUndefined();
+  });
+
+  it("shows the quote, status and source on keyboard focus", async () => {
+    const link = renderCited().find("a.md-citation");
+
+    await link.trigger("focusin");
+    const pop = popoverFor(link.element);
+    expect(pop?.textContent).toContain("Exact words from the source.");
+    expect(pop?.textContent).toContain(i18n.global.t("citation.supported"));
+    expect(pop?.textContent).toContain("one.example");
+    expect(pop?.querySelector("a")?.getAttribute("href")).toBe("https://www.one.example/a");
+  });
+
+  it("opens after a short hover intent with a mouse", async () => {
+    vi.useFakeTimers();
+    const link = renderCited().find("a.md-citation");
+
+    link.element.dispatchEvent(pointer("pointerover", "mouse"));
+    await nextTick();
+    expect(popoverFor(link.element)).toBeNull();
+    vi.advanceTimersByTime(150);
+    await nextTick();
+    expect(popoverFor(link.element)).not.toBeNull();
+  });
+
+  it("opens on the first tap instead of navigating; the second tap follows the link", async () => {
+    const link = renderCited().find("a.md-citation");
+    // Sees each click after the view has handled it, then stops jsdom's navigation.
+    function tap(): boolean | null {
+      let prevented: boolean | null = null;
+      const probe = (e: Event) => {
+        prevented = e.defaultPrevented;
+        e.preventDefault();
+      };
+      document.addEventListener("click", probe, { once: true });
+      link.element.dispatchEvent(pointer("pointerdown", "touch"));
+      link.element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return prevented;
+    }
+
+    expect(tap()).toBe(true);
+    await nextTick();
+    expect(popoverFor(link.element)).not.toBeNull();
+
+    expect(tap()).toBe(false);
+  });
+
+  it("closes on Escape", async () => {
+    const link = renderCited().find("a.md-citation");
+
+    await link.trigger("focusin");
+    expect(popoverFor(link.element)).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    // The pop leave transition removes the element a frame later.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(popoverFor(link.element)).toBeNull();
+    expect(document.activeElement).toBe(link.element);
   });
 });

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { CitationGround, SourceIndependence, SourcePreview } from "@/lib/types";
 import { safeHttpUrl } from "@/lib/url";
+import { useDismiss } from "@/lib/useDismiss";
 
 const props = defineProps<{
   source: string;
@@ -169,18 +170,27 @@ function tableRowLines(source: string): Set<number> {
 // A cell separator as markdown-it's table rule sees it: any "|" not right after a "\".
 const CELL_PIPE = /(?<!\\)\|/;
 
-const html = computed(() => {
-  // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
-  // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
-  // Control characters that double as claim sentinels are dropped so report text can't forge one.
-  // Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
-  // numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
-  const source = (props.source || "")
+// Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
+// collide with KaTeX's \[…\] delimiter / show as literal backslashes.
+// Control characters that double as claim sentinels are dropped so report text can't forge one.
+// Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
+// numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
+const normalizedSource = computed(() =>
+  (props.source || "")
     .replace(/\r\n?/g, "\n")
     .replace(/[\u0001-\u0003]/g, "")
-    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
-  const urls = sourceUrlMap(source, props.sources);
-  const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
+    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]"),
+);
+const urlMap = computed(() => sourceUrlMap(normalizedSource.value, props.sources));
+const groundMap = computed(() => new Map((props.grounding || []).map((g) => [g.source_id, g])));
+
+// One popover per view, outside the v-html; citations point at it with aria-describedby.
+const popId = `cite-pop-${useId()}`;
+
+const html = computed(() => {
+  const source = normalizedSource.value;
+  const urls = urlMap.value;
+  const ground = groundMap.value;
 
   // 1. Wrap each cited sentence with control-char sentinels BEFORE markdown runs, so
   //    the wrapping survives rendering and never breaks tag nesting (sentences stay
@@ -253,8 +263,9 @@ const html = computed(() => {
   });
 
   //    Sentinels → a styled span + a trailing support badge; inline [Sn] → a link to the
-  //    source, whose hover shows the grounding quote and a weak-citation flag when the
-  //    source text doesn't actually back the claim.
+  //    source. A citation with grounding carries data-cite instead of a title: the
+  //    citation popover shows its quote, and a weak-citation flag when the source text
+  //    doesn't actually back the claim. Without grounding it just links.
   //    A citation never starts a line: the whitespace before each [Sn] (and between
   //    consecutive ones) becomes a no-break space that glues it to the preceding word.
   const rewriteText = (text: string) =>
@@ -269,10 +280,10 @@ const html = computed(() => {
       const g = ground.get(`S${n}`);
       const url = safeHref(g?.url || urls.get(n));
       const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
-      const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
+      const cite = g ? ` data-cite="S${n}" aria-describedby="${escAttr(popId)}"` : "";
       return url
-        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
-        : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
+        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${cite}>[S${n}]</a>`
+        : `<sup class="${cls}"${cite}${g ? ' tabindex="0"' : ""}>[S${n}]</sup>`;
     });
 
   return parts.map((part, i) => (i % 2 ? part.replace(SENTINEL, "") : rewriteText(part))).join("");
@@ -300,14 +311,237 @@ watch(
   },
   { immediate: true },
 );
+
+// ── citation popover ──────────────────────────────────────────────────────────
+// The grounding quote for [Sn] used to live in a title tooltip: about a second of hover on
+// a desktop, never on touch (the tap left for the source), unreliable for keyboards. Now
+// (apple-design §1 response, §7 anchored origin, §16 feedback) it opens:
+// - mouse or pen: after 150 ms of hover intent; it stays while the pointer moves onto it
+//   and closes 200 ms after the pointer has left both;
+// - keyboard: on focus;
+// - touch: the first tap opens it instead of navigating, a second tap follows the link.
+// It closes on an outside press or Escape (useDismiss), and on any scroll or resize.
+const HOVER_INTENT_MS = 150;
+const LEAVE_GRACE_MS = 200;
+const GAP = 6;
+const MARGIN = 8;
+
+const popEl = ref<HTMLElement | null>(null);
+const popOpen = ref(false);
+const popAnchor = ref<HTMLElement | null>(null);
+const popSid = ref("");
+const popStyle = ref<Record<string, string>>({});
+useDismiss(popEl, popOpen, { trigger: popAnchor });
+
+function hostOf(href: string | null): string {
+  if (!href) return "";
+  try {
+    return new URL(href).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+const popInfo = computed(() => {
+  const g = groundMap.value.get(popSid.value);
+  if (!g) return null;
+  const href = safeHttpUrl(g.url || urlMap.value.get(popSid.value.slice(1)));
+  return { supported: !!g.supported, quote: g.quote || "", domain: hostOf(href), href };
+});
+
+let openTimer: ReturnType<typeof setTimeout> | undefined;
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+function clearTimers() {
+  clearTimeout(openTimer);
+  clearTimeout(closeTimer);
+}
+function closePop() {
+  clearTimers();
+  popOpen.value = false;
+}
+function scheduleClose() {
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(closePop, LEAVE_GRACE_MS);
+}
+
+// Fixed position from the citation's box: below it when it fits, else above; kept inside
+// the viewport, and growing from the citation's side (transform-origin).
+async function place() {
+  const anchor = popAnchor.value;
+  if (!anchor) return;
+  const r = anchor.getBoundingClientRect();
+  popStyle.value = { top: `${r.bottom + GAP}px`, left: `${Math.max(MARGIN, r.left)}px`, transformOrigin: "left top" };
+  await nextTick();
+  const pop = popEl.value;
+  if (!pop || !popOpen.value || popAnchor.value !== anchor) return;
+  const w = pop.offsetWidth;
+  const h = pop.offsetHeight;
+  const center = r.left + r.width / 2;
+  const left = Math.min(Math.max(MARGIN, center - 16), Math.max(MARGIN, window.innerWidth - w - MARGIN));
+  const below = r.bottom + GAP + h <= window.innerHeight - MARGIN || r.top - GAP - h < MARGIN;
+  popStyle.value = {
+    top: `${below ? r.bottom + GAP : r.top - GAP - h}px`,
+    left: `${left}px`,
+    transformOrigin: `${Math.min(Math.max(0, center - left), w)}px ${below ? "0" : "100%"}`,
+  };
+}
+function openFor(el: HTMLElement) {
+  clearTimers();
+  const sid = el.dataset.cite || "";
+  if (!groundMap.value.has(sid)) return;
+  popAnchor.value = el;
+  popSid.value = sid;
+  popOpen.value = true;
+  place();
+}
+
+const citeOf = (target: EventTarget | null): HTMLElement | null =>
+  target instanceof Element ? target.closest<HTMLElement>("[data-cite]") : null;
+
+function onPointerOver(e: PointerEvent) {
+  if (e.pointerType === "touch") return;
+  const el = citeOf(e.target);
+  if (!el) return;
+  clearTimeout(closeTimer);
+  if (popOpen.value && popAnchor.value === el) return;
+  clearTimeout(openTimer);
+  // Moving from one open citation to the next shows the next at once.
+  if (popOpen.value) openFor(el);
+  else openTimer = setTimeout(() => openFor(el), HOVER_INTENT_MS);
+}
+function onPointerOut(e: PointerEvent) {
+  if (e.pointerType === "touch") return;
+  const el = citeOf(e.target);
+  if (!el || (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) return;
+  clearTimeout(openTimer);
+  if (popOpen.value) scheduleClose();
+}
+function onPopEnter(e: PointerEvent) {
+  if (e.pointerType !== "touch") clearTimeout(closeTimer);
+}
+function onPopLeave(e: PointerEvent) {
+  if (e.pointerType !== "touch" && popOpen.value) scheduleClose();
+}
+
+// A press on a citation: remembered so the focus it gives is not taken for keyboard focus,
+// and, on touch, so the click that follows opens the popover instead of navigating.
+let pressedCite: HTMLElement | null = null;
+let pressedAt = 0;
+let touchCite: HTMLElement | null = null;
+let touchWasOpen = false;
+function onPointerDown(e: PointerEvent) {
+  const el = citeOf(e.target);
+  pressedCite = el;
+  pressedAt = Date.now();
+  touchCite = el && e.pointerType === "touch" ? el : null;
+  touchWasOpen = !!touchCite && popOpen.value && popAnchor.value === touchCite;
+  if (el) clearTimeout(openTimer);
+}
+function onClick(e: MouseEvent) {
+  const el = citeOf(e.target);
+  const tapped = !!el && el === touchCite;
+  touchCite = null;
+  if (!tapped || touchWasOpen) return; // not a tap, or the second tap: follow the link
+  e.preventDefault();
+  openFor(el!);
+}
+// Escape hands focus back to the citation (useDismiss): that focus must not reopen it.
+let closedAnchor: HTMLElement | null = null;
+let closedAt = 0;
+watch(
+  popOpen,
+  (open) => {
+    if (open) return;
+    closedAnchor = popAnchor.value;
+    closedAt = Date.now();
+  },
+  { flush: "sync" },
+);
+function onFocusIn(e: FocusEvent) {
+  const el = citeOf(e.target);
+  if (!el || (el === pressedCite && Date.now() - pressedAt < 1000)) return;
+  if (el === closedAnchor && Date.now() - closedAt < 300) return;
+  openFor(el);
+}
+function onFocusOut(e: FocusEvent) {
+  const el = citeOf(e.target);
+  if (!el || popAnchor.value !== el || !popOpen.value) return;
+  const next = e.relatedTarget;
+  if (next instanceof Node && (popEl.value?.contains(next) || citeOf(next))) return;
+  // Keyboard focus moved on; a hovering pointer keeps the popover until it leaves.
+  if (Date.now() - pressedAt > 1000) closePop();
+}
+
+function onViewportChange() {
+  if (popOpen.value) closePop();
+}
+watch(popOpen, (open) => {
+  if (typeof window === "undefined") return;
+  if (open) {
+    window.addEventListener("scroll", onViewportChange, true);
+    window.addEventListener("resize", onViewportChange);
+  } else {
+    window.removeEventListener("scroll", onViewportChange, true);
+    window.removeEventListener("resize", onViewportChange);
+  }
+});
+// A re-render replaces every citation element: a popover would point at a stale one.
+watch(html, () => closePop());
+onBeforeUnmount(() => {
+  clearTimers();
+  window.removeEventListener("scroll", onViewportChange, true);
+  window.removeEventListener("resize", onViewportChange);
+});
 </script>
 
 <template>
-  <article
-    ref="articleEl"
-    class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-h1:font-serif prose-h2:font-serif prose-h3:font-serif prose-h4:font-serif prose-headings:text-ink prose-h1:text-[1.75rem] sm:prose-h1:text-[2.125rem] prose-h2:text-[1.3125rem] sm:prose-h2:text-2xl prose-p:text-pretty max-sm:prose-p:leading-[1.65] max-sm:prose-li:leading-[1.65] max-sm:hyphens-auto prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
-    v-html="html"
-  />
+  <div
+    @pointerover="onPointerOver"
+    @pointerout="onPointerOut"
+    @pointerdown="onPointerDown"
+    @click="onClick"
+    @focusin="onFocusIn"
+    @focusout="onFocusOut"
+  >
+    <article
+      ref="articleEl"
+      class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-h1:font-serif prose-h2:font-serif prose-h3:font-serif prose-h4:font-serif prose-headings:text-ink prose-h1:text-[1.75rem] sm:prose-h1:text-[2.125rem] prose-h2:text-[1.3125rem] sm:prose-h2:text-2xl prose-p:text-pretty max-sm:prose-p:leading-[1.65] max-sm:prose-li:leading-[1.65] max-sm:hyphens-auto prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
+      v-html="html"
+    />
+    <Teleport to="body">
+      <Transition name="pop">
+        <div
+          v-if="popOpen && popInfo"
+          :id="popId"
+          ref="popEl"
+          class="material-popover fixed z-50 w-max max-w-[min(20rem,calc(100vw-1rem))] rounded-xl border border-bd p-3 text-xs"
+          :style="popStyle"
+          @pointerenter="onPopEnter"
+          @pointerleave="onPopLeave"
+        >
+          <div class="flex items-start gap-1.5 font-medium" :class="popInfo.supported ? 'text-success' : 'text-danger'">
+            <span aria-hidden="true">{{ popInfo.supported ? "✓" : "⚠" }}</span>
+            <span>{{ popInfo.supported ? $t("citation.supported") : $t("citation.weak") }}</span>
+          </div>
+          <p v-if="popInfo.quote" class="mt-1.5 line-clamp-6 border-l-2 border-bd pl-2 leading-relaxed text-ink">
+            {{ popInfo.quote }}
+          </p>
+          <div v-if="popInfo.domain || popInfo.href" class="mt-2 flex items-center gap-3">
+            <span v-if="popInfo.domain" class="min-w-0 truncate text-muted">{{ popInfo.domain }}</span>
+            <a
+              v-if="popInfo.href"
+              :href="popInfo.href"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="press ml-auto shrink-0 font-medium text-accent hover:underline"
+              @click="closePop"
+            >
+              {{ $t("citation.openSource") }} ↗
+            </a>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+  </div>
 </template>
 
 <style scoped>
