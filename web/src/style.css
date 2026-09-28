@@ -13,10 +13,31 @@
   --c-ink: 23 25 38;
   --c-muted: 104 108 128;
   --c-accent: 91 84 232;
-  --c-accent-soft: 139 132 244;
+  /* Accent as text on light surfaces (≥4.5:1 on an accent/15 tint over white). */
+  --c-accent-soft: 76 68 214;
+  /* Text/icons on a solid accent fill. */
+  --c-on-accent: 255 255 255;
+  /* Status colours, readable on their own 10% tint (light values; html.dark below). */
+  --c-success: 4 108 78;
+  --c-warning: 154 72 8;
+  --c-danger: 185 28 28;
+  --c-info: 3 105 161;
   /* Brand gradient (logo, highlights) — violet → cyan */
   --c-grad-a: 109 94 240;
   --c-grad-b: 34 211 238;
+
+  /* Motion curves: emphasized settle, sheet slide, press dip. */
+  --ease-emph: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-press: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Modal dim and elevation. Light: soft ink shadows that grow with the surface. */
+  --scrim: 15 17 26;
+  --scrim-a: 0.32;
+  --shadow: 23 25 38;
+  --elev-1: 0 1px 2px rgb(var(--shadow) / 0.06);
+  --elev-2: 0 1px 2px rgb(var(--shadow) / 0.06), 0 10px 28px -10px rgb(var(--shadow) / 0.22);
+  --elev-3: 0 2px 8px rgb(var(--shadow) / 0.08), 0 28px 56px -16px rgb(var(--shadow) / 0.32);
   color-scheme: light;
 }
 
@@ -32,6 +53,7 @@ html[data-theme="dark"] {
   --c-muted: 147 151 176;
   --c-accent: 139 124 255;
   --c-accent-soft: 167 156 255;
+  --c-on-accent: 14 15 23;
   --c-grad-a: 139 124 255;
   --c-grad-b: 56 220 245;
   color-scheme: dark;
@@ -47,6 +69,7 @@ html[data-theme="midnight"] {
   --c-muted: 138 152 182;
   --c-accent: 56 160 255;
   --c-accent-soft: 120 190 255;
+  --c-on-accent: 9 14 28;
   --c-grad-a: 56 160 255;
   --c-grad-b: 90 230 220;
   color-scheme: dark;
@@ -62,6 +85,7 @@ html[data-theme="emerald"] {
   --c-muted: 138 168 158;
   --c-accent: 16 200 140;
   --c-accent-soft: 90 222 170;
+  --c-on-accent: 9 18 16;
   --c-grad-a: 16 200 140;
   --c-grad-b: 120 230 200;
   color-scheme: dark;
@@ -77,6 +101,7 @@ html[data-theme="rose"] {
   --c-muted: 184 152 170;
   --c-accent: 244 96 150;
   --c-accent-soft: 250 150 185;
+  --c-on-accent: 22 12 18;
   --c-grad-a: 244 96 150;
   --c-grad-b: 255 165 120;
   color-scheme: dark;
@@ -90,11 +115,61 @@ html[data-theme="sand"] {
   --c-bd: 228 222 210;
   --c-ink: 41 37 32;
   --c-muted: 120 112 100;
-  --c-accent: 200 130 40;
-  --c-accent-soft: 222 168 96;
+  /* Deep enough for white on-accent text (≥4.5:1) and accent text on the sand bg; the
+     brand gradient keeps the lighter golds. */
+  --c-accent: 160 96 18;
+  --c-accent-soft: 150 90 20;
   --c-grad-a: 217 146 53;
   --c-grad-b: 230 196 110;
   color-scheme: light;
+}
+
+/* Every dark base (dark, midnight, emerald, rose) shares these: brighter status hues
+   (today's -400 shades), a deeper scrim, and elevation drawn as a lit top rim plus a
+   dark outline, since a dark shadow barely reads on a dark canvas. */
+html.dark {
+  --c-success: 52 211 153;
+  --c-warning: 251 191 36;
+  --c-danger: 248 113 113;
+  --c-info: 56 189 248;
+  --scrim: 0 0 0;
+  --scrim-a: 0.55;
+  --elev-1: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --elev-2: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.35), 0 12px 32px -8px rgb(0 0 0 / 0.65);
+  --elev-3: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.45), 0 28px 64px -12px rgb(0 0 0 / 0.75);
+}
+
+/* ---- Materials (§12): translucency only on chrome that floats over content ----
+   backdrop-filter lives on these classes (and the admin graph's floating controls)
+   only — never on in-flow cards, and the blur radius is never animated. */
+.material-float {
+  background: rgb(var(--c-surface) / 0.78);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: var(--elev-2);
+}
+html.dark .material-float {
+  background: rgb(var(--c-surface-hover) / 0.72);
+}
+.material-popover {
+  background: rgb(var(--c-surface) / 0.92);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--elev-3);
+}
+html.dark .material-popover {
+  background: rgb(var(--c-surface-hover) / 0.94);
+}
+.material-bar {
+  background: rgb(var(--c-bg) / 0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+/* Modal dim: one recipe for every dialog and sheet. */
+.scrim {
+  background: rgb(var(--scrim) / var(--scrim-a));
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
 }
 
 /* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */
@@ -107,8 +182,8 @@ html[data-theme="sand"] {
 }
 /* Citation whose source text doesn't actually back the claim — flagged red + underlined. */
 .md-citation-weak {
-  color: rgb(248 113 113);
-  text-decoration: underline wavy rgb(248 113 113 / 0.6);
+  color: rgb(var(--c-danger));
+  text-decoration: underline wavy rgb(var(--c-danger) / 0.6);
 }
 
 html,
