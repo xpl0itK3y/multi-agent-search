@@ -20,7 +20,7 @@ vi.mock("@/lib/googleSignIn", async (importOriginal) => ({
   startGoogleSignIn,
 }));
 
-import { ApiError } from "@/lib/api";
+import { ApiError, PASSWORD_MIN_LENGTH } from "@/lib/api";
 import SetPasswordView from "./SetPasswordView.vue";
 
 const t = (key: string) => i18n.global.t(key);
@@ -99,5 +99,21 @@ describe("SetPasswordView", () => {
     await submit(wrapper);
     expect(wrapper.text()).not.toContain(t("auth.reauthConflict"));
     expect(wrapper.text()).toContain(t("errors.api.server"));
+  });
+
+  it("uses the server's minimum and states it under the field", async () => {
+    const { wrapper } = await mountView();
+    const password = wrapper.findAll('input[type="password"]')[0];
+    const hint = wrapper.find(`#${password.attributes("aria-describedby")}`);
+    expect(hint.text()).toBe(i18n.global.t("auth.passwordRule", { min: PASSWORD_MIN_LENGTH }));
+
+    await password.setValue("x".repeat(PASSWORD_MIN_LENGTH - 1));
+    await wrapper.findAll('input[type="password"]')[1].setValue("x".repeat(PASSWORD_MIN_LENGTH - 1));
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(setPassword).not.toHaveBeenCalled();
+    expect(hint.classes()).toContain("text-danger");
+    expect(wrapper.find('[role="alert"]').text()).toBe(t("setPassword.min6"));
   });
 });

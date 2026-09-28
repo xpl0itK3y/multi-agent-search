@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref, useId } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
-import { api, apiErrorMessage } from "@/lib/api";
+import { api, apiErrorMessage, PASSWORD_MIN_LENGTH } from "@/lib/api";
 import { startGoogleSignIn } from "@/lib/googleSignIn";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import SparkLogo from "@/components/SparkLogo.vue";
+import PasswordRuleHint from "@/components/PasswordRuleHint.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -19,6 +20,10 @@ const email = ref("");
 const password = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
+const passwordInput = ref<HTMLInputElement | null>(null);
+const pwHelpId = useId();
+// A sign-up refused locally for a too-short password (the rule line turns red).
+const passwordTried = ref(false);
 const googleEnabled = ref(false);
 // Whether a forgotten password can be reset by email here; null until the config is
 // known, so neither the link nor the "ask the administrator" hint shows before.
@@ -55,8 +60,23 @@ function googleLogin() {
   startGoogleSignIn(typeof redirect === "string" ? redirect : undefined);
 }
 
+// Switching between sign-in and sign-up starts clean: the other form's error isn't this one's.
+function toggleMode() {
+  mode.value = mode.value === "login" ? "register" : "login";
+  error.value = null;
+  oauthErrorKey.value = null;
+  passwordTried.value = false;
+}
+
 async function submit() {
   if (busy.value) return;
+  // The server's rule, checked here first: no round trip for a password it would refuse.
+  if (mode.value === "register" && password.value.length < PASSWORD_MIN_LENGTH) {
+    passwordTried.value = true;
+    await nextTick();
+    passwordInput.value?.focus();
+    return;
+  }
   busy.value = true;
   error.value = null;
   oauthErrorKey.value = null;
@@ -74,17 +94,20 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex h-full items-center justify-center overflow-y-auto px-6">
-    <div class="w-full max-w-sm">
+  <div class="flex h-full flex-col overflow-y-auto px-6 py-8">
+    <!-- Centred with an auto margin inside the scroller: taller content stays reachable. -->
+    <div class="my-auto w-full max-w-sm self-center">
       <!-- Language Switcher -->
       <div class="mb-4 flex justify-end">
-        <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono">
+        <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 font-mono text-xs">
+          <!-- The touch hit area grows up and down only, so it never covers a neighbour. -->
           <button
             v-for="loc in (['ru', 'en', 'es'] as const)"
             :key="loc"
             type="button"
-            class="rounded-lg px-2.5 py-1 text-[10.5px] font-bold uppercase transition"
-            :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+            class="press hit rounded-lg px-2.5 py-1 text-2xs font-semibold uppercase after:inset-x-0"
+            :class="ui.locale === loc ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
+            :aria-pressed="ui.locale === loc ? 'true' : 'false'"
             @click="ui.setLocale(loc)"
           >
             {{ loc }}
@@ -124,17 +147,27 @@ async function submit() {
         <input
           v-model="email"
           type="email"
+          required
           :placeholder="$t('auth.email')"
+          :aria-label="$t('auth.email')"
           autocomplete="email"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
         />
-        <input
-          v-model="password"
-          type="password"
-          :placeholder="$t('auth.password')"
-          :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
-        />
+        <div>
+          <input
+            ref="passwordInput"
+            v-model="password"
+            type="password"
+            :placeholder="$t('auth.password')"
+            :aria-label="$t('auth.password')"
+            :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+            :minlength="mode === 'register' ? PASSWORD_MIN_LENGTH : undefined"
+            :aria-describedby="mode === 'register' ? pwHelpId : undefined"
+            :aria-invalid="mode === 'register' && passwordTried && password.length < PASSWORD_MIN_LENGTH ? 'true' : undefined"
+            class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+          />
+          <PasswordRuleHint v-if="mode === 'register'" :id="pwHelpId" :password="password" :tried="passwordTried" />
+        </div>
         <template v-if="mode === 'login' && passwordReset !== null">
           <div v-if="passwordReset" class="text-right">
             <router-link to="/forgot-password" class="text-xs text-muted hover:text-ink">
@@ -143,14 +176,15 @@ async function submit() {
           </div>
           <p v-else class="text-xs text-muted">{{ $t("auth.forgotPasswordAskAdmin") }}</p>
         </template>
-        <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
-        <p v-else-if="oauthErrorKey" class="text-sm text-red-400">{{ $t(oauthErrorKey) }}</p>
+        <p v-if="error" role="alert" class="text-sm text-danger">{{ error }}</p>
+        <p v-else-if="oauthErrorKey" role="alert" class="text-sm text-danger">{{ $t(oauthErrorKey) }}</p>
         <button
           type="submit"
           :disabled="busy"
-          class="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:opacity-50"
+          class="press w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
-          {{ mode === "login" ? $t("auth.login") : $t("auth.register") }}
+          <template v-if="busy">{{ mode === "login" ? $t("auth.loggingIn") : $t("auth.registering") }}</template>
+          <template v-else>{{ mode === "login" ? $t("auth.login") : $t("auth.register") }}</template>
         </button>
       </form>
 
@@ -160,7 +194,7 @@ async function submit() {
         </div>
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-2 rounded-lg border border-bd bg-surface px-4 py-2 text-sm font-medium text-ink transition hover:border-accent/40"
+          class="press flex w-full items-center justify-center gap-2 rounded-lg border border-bd bg-surface px-4 py-2.5 text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
           @click="googleLogin"
         >
           <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
@@ -173,10 +207,7 @@ async function submit() {
         </button>
       </template>
 
-      <button
-        class="mt-4 w-full text-center text-sm text-muted hover:text-ink"
-        @click="mode = mode === 'login' ? 'register' : 'login'"
-      >
+      <button type="button" class="mt-4 w-full text-center text-sm text-muted hover:text-ink" @click="toggleMode">
         {{ mode === "login" ? $t("auth.toRegister") : $t("auth.toLogin") }}
       </button>
     </div>
