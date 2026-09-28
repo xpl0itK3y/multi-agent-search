@@ -328,3 +328,37 @@ describe("AgentActivityConsole in a narrow column", () => {
     wrapper.unmount();
   });
 });
+
+describe("AgentActivityConsole synthesis progress", () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("is an indeterminate progress bar named for the synthesis", () => {
+    const detail = "Drafting the comparison";
+    const wrapper = mount(AgentActivityConsole, {
+      props: { entries: [{ step: "analyze", phase: "synthesis", agent: "AnalyzerAgent", detail }], status: "analyzing", live: true },
+      global: { plugins: [i18n] },
+    });
+
+    const bar = wrapper.get('[role="progressbar"]');
+    expect(bar.attributes("aria-label")).toBe(i18n.global.t("console.synthesisTitle"));
+    expect(bar.attributes("aria-valuetext")).toBe(detail);
+    expect(bar.attributes("aria-valuenow")).toBeUndefined(); // no made-up percentage
+    wrapper.unmount();
+  });
+
+  it("turns into still stripes with reduced motion, never a full plain bar that looks finished", () => {
+    // jsdom applies no component CSS, so this reads the component's own style block.
+    const source = Object.values(
+      import.meta.glob<string>("./AgentActivityConsole.vue", { query: "?raw", import: "default", eager: true }),
+    )[0];
+    const style = source.slice(source.indexOf("<style"));
+    const reduced = style.slice(style.indexOf("@media (prefers-reduced-motion: reduce)"));
+    const rule = reduced.slice(reduced.indexOf(".animate-progress-indeterminate"), reduced.indexOf("}"));
+
+    expect(rule).toContain("animation: none");
+    expect(rule).toContain("transform: none");
+    expect(rule).toContain("repeating-linear-gradient(");
+  });
+});

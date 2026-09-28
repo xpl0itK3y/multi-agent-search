@@ -697,8 +697,15 @@ function formatTime(isoStr?: string): string {
             </div>
           </div>
 
-          <!-- Animated Progress Bar -->
-          <div class="mt-3 h-1.5 w-full rounded-full bg-surface/80 overflow-hidden relative">
+          <!-- Indeterminate progress: synthesis has no percentage to show. With reduced
+               motion the moving segment becomes a still, striped fill (see the style block),
+               never a plain full bar that would read as finished. -->
+          <div
+            role="progressbar"
+            :aria-label="t('console.synthesisTitle')"
+            :aria-valuetext="currentStatusDetail"
+            class="mt-3 h-1.5 w-full rounded-full bg-surface/80 overflow-hidden relative"
+          >
             <div class="h-full bg-gradient-to-r from-violet-500 via-accent to-emerald-400 rounded-full animate-progress-indeterminate" />
           </div>
         </div>
@@ -937,6 +944,20 @@ function formatTime(isoStr?: string): string {
 .animate-progress-indeterminate {
   animation: progress-indeterminate 2.2s infinite ease-in-out;
   transform-origin: 0% 50%;
+}
+/* Reduced motion stops the slide (§14, here and in style.css). On its own that would leave
+   the fill as a full, plain bar that looks finished while synthesis still runs. Still
+   stripes instead: the familiar "working" pattern, with no motion at all. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-progress-indeterminate {
+    animation: none;
+    transform: none;
+    background-image: repeating-linear-gradient(
+      -45deg,
+      rgb(var(--c-accent) / 0.75) 0 4px,
+      rgb(var(--c-accent) / 0.2) 4px 8px
+    );
+  }
 }
 
 /* The stepper's fades at its start, and at both ends (.edge-fade-x is the end-only one). */
