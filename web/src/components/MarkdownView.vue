@@ -309,17 +309,22 @@ watch(
 </template>
 
 <style scoped>
-/* Inline verification: confirm strong claims subtly, flag the problem ones loudly. */
-.md-claim-weak {
-  border-bottom: 1.5px dotted rgb(245 158 11 / 0.85);
+/* Inline verification: confirm strong claims subtly, flag the problem ones loudly.
+   The marks live in v-html, which never carries this component's data-v attribute, so
+   every rule goes through :deep(). Colours are the theme's status tokens, readable on
+   their own tint in light and dark. */
+:deep(.md-claim-weak) {
+  border-bottom: 1.5px dotted rgb(var(--c-warning) / 0.85);
 }
-.md-claim-contested {
-  text-decoration: underline wavy rgb(248 113 113 / 0.9);
+:deep(.md-claim-contested) {
+  text-decoration: underline wavy rgb(var(--c-danger) / 0.9);
   text-underline-offset: 3px;
 }
-.md-claim-badge {
+:deep(.md-claim-badge) {
   font-size: 0.62em;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
   line-height: 1;
   vertical-align: super;
   margin-left: 2px;
@@ -329,20 +334,20 @@ watch(
   user-select: none;
   cursor: help;
 }
-.md-claim-badge-strong {
-  color: rgb(16 185 129);
-  background: rgb(16 185 129 / 0.12);
+:deep(.md-claim-badge-strong) {
+  color: rgb(var(--c-success));
+  background: rgb(var(--c-success) / 0.12);
 }
-.md-claim-badge-medium {
+:deep(.md-claim-badge-medium) {
   color: rgb(var(--c-muted));
   background: rgb(var(--c-muted) / 0.12);
 }
-.md-claim-badge-weak {
-  color: rgb(245 158 11);
-  background: rgb(245 158 11 / 0.16);
+:deep(.md-claim-badge-weak) {
+  color: rgb(var(--c-warning));
+  background: rgb(var(--c-warning) / 0.16);
 }
-.md-claim-badge-contested {
-  color: rgb(248 113 113);
-  background: rgb(248 113 113 / 0.16);
+:deep(.md-claim-badge-contested) {
+  color: rgb(var(--c-danger));
+  background: rgb(var(--c-danger) / 0.16);
 }
 </style>

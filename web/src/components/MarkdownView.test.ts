@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
+import { compileStyle, parse } from "vue/compiler-sfc";
 
 import { i18n } from "@/i18n";
 import MarkdownView from "./MarkdownView.vue";
+import markdownViewSource from "./MarkdownView.vue?raw";
 import type { CitationGround, SourcePreview } from "@/lib/types";
 
 function render(
@@ -183,5 +185,48 @@ describe("MarkdownView citations", () => {
     ]);
 
     expect(citationHrefs(wrapper)).toEqual({ "[S1]": null, "[S2]": "https://ok.example/a%20b" });
+  });
+});
+
+describe("MarkdownView inline verification", () => {
+  const sources = [
+    { source_id: "S1", url: "https://one.example/a" },
+    { source_id: "S2", url: "https://two.example/b" },
+  ];
+
+  it("marks a claim backed by two independent sources as strong", () => {
+    const wrapper = render("Output doubled in 2024 [S1][S2].", sources, { verify: true });
+
+    const badge = wrapper.find(".md-claim-badge-strong");
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toBe("✓2");
+    expect(wrapper.find(".md-claim-strong").exists()).toBe(true);
+  });
+
+  it("leaves the text undecorated with verification off", () => {
+    const wrapper = render("Output doubled in 2024 [S1][S2].", sources);
+
+    expect(wrapper.find(".md-claim").exists()).toBe(false);
+    expect(wrapper.find(".md-claim-badge").exists()).toBe(false);
+  });
+
+  // The marks are emitted inside v-html, which never carries the component's data-v
+  // attribute: a plain scoped rule would match nothing.
+  it("styles the v-html claim marks through :deep()", () => {
+    const { descriptor } = parse(markdownViewSource);
+    const scoped = descriptor.styles.find((s) => s.scoped);
+    expect(scoped).toBeTruthy();
+    const { code, errors } = compileStyle({
+      source: scoped!.content,
+      id: "data-v-test",
+      scoped: true,
+      filename: "MarkdownView.vue",
+    });
+
+    expect(errors).toEqual([]);
+    for (const cls of ["md-claim-weak", "md-claim-contested", "md-claim-badge", "md-claim-badge-strong"]) {
+      expect(code).toContain(`[data-v-test] .${cls}`);
+      expect(code).not.toContain(`.${cls}[data-v-test]`);
+    }
   });
 });

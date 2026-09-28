@@ -623,13 +623,13 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <template v-if="verifyInline">
             <span class="text-muted">{{ $t("verify.legend") }}</span>
             <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-emerald-500" /> {{ $t("verify.strong") }}
+              <span class="h-2 w-2 rounded-full bg-success" /> {{ $t("verify.strong") }}
             </span>
             <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-amber-500" /> {{ $t("verify.weak") }}
+              <span class="h-2 w-2 rounded-full bg-warning" /> {{ $t("verify.weak") }}
             </span>
             <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-red-400" /> {{ $t("verify.contested") }}
+              <span class="h-2 w-2 rounded-full bg-danger" /> {{ $t("verify.contested") }}
             </span>
           </template>
         </div>
