@@ -61,6 +61,27 @@ def _check_address(address: str) -> str:
     return address
 
 
+# Providers that ignore dots in the local part, mapped to their canonical domain.
+_DOTLESS_LOCAL_PART_DOMAINS = {"gmail.com": "gmail.com", "googlemail.com": "gmail.com"}
+
+
+def mailbox_key(address: str | None) -> str:
+    """The inbox an address delivers to, for per-recipient mail budgets only; never stored
+    or shown. Lower-cased, a '+tag' sub-address folded into its base (Gmail, Outlook.com,
+    iCloud, Fastmail and Proton deliver it to the same inbox; on other domains folding only
+    makes the aliases share one budget, which is harmless), and Gmail's ignored dots dropped.
+    Without this, name+1@, name+2@ ... each got a budget of their own for one inbox."""
+    normalized = (address or "").strip().lower()
+    local, at, domain = normalized.rpartition("@")
+    if not at or not local:
+        return normalized
+    local = local.split("+", 1)[0] or local
+    domain = _DOTLESS_LOCAL_PART_DOMAINS.get(domain, domain)
+    if domain in _DOTLESS_LOCAL_PART_DOMAINS.values():
+        local = local.replace(".", "") or local
+    return f"{local}@{domain}"
+
+
 class DisabledMailSender:
     enabled = False
 

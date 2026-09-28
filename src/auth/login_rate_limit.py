@@ -23,6 +23,7 @@ from src.api.dependencies import get_current_user
 from src.api.schemas import AuthUser
 from src.auth.sliding_window import SlidingWindowLimiter
 from src.config import settings
+from src.notifications import mailbox_key
 from src.services.account_recovery_mixin import account_email_limiter
 
 
@@ -123,10 +124,10 @@ def enforce_forgot_password_ip_rate_limit(request: Request) -> None:
 
 
 def enforce_forgot_password_email_rate_limit(email: str) -> None:
-    """Per-address budget for reset links, keyed on the normalized email whether or not
-    an account has it: one address cannot be flooded with mail from many clients."""
-    key = (email or "").strip().lower()
-    _refuse_unless(_forgot_password_email_limiter.allow(key, FORGOT_PASSWORD_PER_EMAIL_PER_HOUR))
+    """Per-inbox budget for reset links, keyed on the mailbox (sub-addresses folded, see
+    mailbox_key) whether or not an account has it: one inbox cannot be flooded with mail
+    from many clients or through its aliases."""
+    _refuse_unless(_forgot_password_email_limiter.allow(mailbox_key(email), FORGOT_PASSWORD_PER_EMAIL_PER_HOUR))
 
 
 def enforce_password_reset_rate_limit(request: Request) -> None:

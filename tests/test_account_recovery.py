@@ -942,6 +942,38 @@ async def test_a_sign_up_and_delete_loop_from_many_clients_mails_an_address_at_m
 
 
 @pytest.mark.anyio
+async def test_sub_addresses_of_one_inbox_share_its_budget(recovery_app, monkeypatch):
+    """name+1@, name+2@ ... are separate accounts but one inbox: the budget follows the
+    inbox (mailbox_key), so a plain sign-up loop over aliases cannot flood it either."""
+    app, _service, sender = recovery_app
+    monkeypatch.setattr("src.auth.security._PBKDF2_ITERATIONS", 1_000)
+    base = _email("aliased")
+    local, domain = base.split("@")
+    aliases = [f"{local}+{n}@{domain}" for n in range(30)]
+    for n, ip in enumerate(("10.0.1.1", "10.0.1.2", "10.0.1.3")):
+        async with _client(app, ip) as client:
+            for alias in aliases[n * 10:(n + 1) * 10]:
+                await _register(client, alias)
+
+    delivered = [message for message in sender.sent if message.subject == CONFIRM]
+    assert len(delivered) == BUDGET
+    assert {message.to for message in delivered} <= set(aliases)  # each still goes to its own alias
+
+
+@pytest.mark.anyio
+async def test_forgot_password_counts_the_aliases_of_one_inbox_together(recovery_app):
+    app, _service, _sender = recovery_app
+    local, domain = _email("forgot-alias").split("@")
+    statuses = []
+    for n in range(7):
+        async with _client(app, f"10.0.2.{n + 1}") as client:  # a fresh client every time
+            response = await client.post("/v1/auth/password/forgot", json={"email": f"{local}+{n}@{domain}"})
+            statuses.append(response.status_code)
+
+    assert statuses == [202] * 5 + [429] * 2
+
+
+@pytest.mark.anyio
 async def test_an_unverified_account_changing_its_password_mails_its_address_at_most_its_budget(recovery, monkeypatch):
     client, _service, sender = recovery
     monkeypatch.setattr("src.auth.security._PBKDF2_ITERATIONS", 1_000)

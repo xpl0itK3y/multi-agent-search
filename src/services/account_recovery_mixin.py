@@ -45,6 +45,7 @@ from src.notifications import (
     MailSender,
     create_mail_sender,
     describe_send_failure,
+    mailbox_key,
     render_account_email,
 )
 
@@ -177,8 +178,7 @@ class AccountRecoveryMixin:
         password change from the owner. Logged by kind and account id, never the address."""
         if kind in ACCOUNT_NOTICES and user.email_verified_at is not None:
             return True
-        recipient = (user.email or "").strip().lower()
-        if account_email_limiter.allow(recipient, ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR):
+        if account_email_limiter.allow(mailbox_key(user.email), ACCOUNT_EMAIL_PER_RECIPIENT_PER_HOUR):
             return True
         logger.info("account_email_over_budget kind=%s user_id=%s", kind.value, user.id)
         return False

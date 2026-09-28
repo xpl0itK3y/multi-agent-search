@@ -15,6 +15,7 @@ from src.notifications import (
     describe_send_failure,
     email_config_errors,
     email_config_warnings,
+    mailbox_key,
     preferred_language,
     render_account_email,
 )
@@ -302,3 +303,22 @@ def test_link_lifetimes_read_naturally():
     assert render_account_email(AccountEmail.PASSWORD_RESET, "de", to="o@e.com", app_url="https://a").subject == (
         "Reset your Veris password"
     )
+
+
+@pytest.mark.parametrize(
+    ("address", "key"),
+    [
+        ("Someone@Example.com", "someone@example.com"),
+        ("  someone+news@example.com ", "someone@example.com"),
+        ("someone+a+b@example.com", "someone@example.com"),
+        ("Some.One+x@GMAIL.com", "someone@gmail.com"),
+        ("some.one@googlemail.com", "someone@gmail.com"),
+        ("some.one@example.com", "some.one@example.com"),  # dots matter outside Gmail
+        ("+tag@example.com", "+tag@example.com"),  # nothing before the tag: keep it whole
+        ("no-at-sign", "no-at-sign"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_mailbox_key_folds_the_aliases_of_one_inbox(address, key):
+    assert mailbox_key(address) == key
