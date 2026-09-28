@@ -254,6 +254,44 @@ describe("MarkdownView reading surface", () => {
     expect(cls).toContain("prose-h1:font-serif");
     expect(cls.some((c) => c.startsWith("prose-headings:font-"))).toBe(false);
   });
+
+  // A table wider than a narrow split-view column scrolled the whole panel sideways.
+  it("gives every table its own sideways scroller, faded while more of it waits", async () => {
+    const source = "Intro [S1].\n\n| Metric | Value |\n|---|---|\n| Revenue | $5B [S1] |\n\nAfter.";
+    const wrapper = render(source, [{ source_id: "S1", url: "https://one.example/a" }], { verify: true });
+    await nextTick();
+
+    const scrollers = wrapper.findAll(".md-table-scroll");
+    expect(scrollers).toHaveLength(1);
+    const el = scrollers[0].element as HTMLElement;
+    expect(el.children).toHaveLength(1);
+    expect(el.firstElementChild?.tagName).toBe("TABLE");
+    // The claims inside the table are still decorated cell by cell.
+    expect(el.querySelector("td .md-claim")).not.toBeNull();
+
+    // jsdom has no layout: a 300px box over a 600px table, scrolled by hand.
+    let left = 0;
+    Object.defineProperty(el, "clientWidth", { configurable: true, get: () => 300 });
+    Object.defineProperty(el, "scrollWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(el, "scrollLeft", { configurable: true, get: () => left });
+    el.dispatchEvent(new Event("scroll"));
+    expect(el.classList.contains("edge-fade-x")).toBe(true);
+    left = 300;
+    el.dispatchEvent(new Event("scroll"));
+    expect(el.classList.contains("edge-fade-x")).toBe(false);
+  });
+
+  it("lets the table scroller, not the report column, take the overflow", () => {
+    const { descriptor } = parse(markdownViewSource);
+    const { code } = compileStyle({
+      source: descriptor.styles.find((s) => s.scoped)!.content,
+      id: "data-v-test",
+      scoped: true,
+      filename: "MarkdownView.vue",
+    });
+
+    expect(code).toMatch(/\[data-v-test\] \.md-table-scroll \{[^}]*overflow-x: auto/);
+  });
 });
 
 describe("MarkdownView citation popover", () => {

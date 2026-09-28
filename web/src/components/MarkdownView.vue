@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
@@ -56,6 +56,20 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet("rel", "noopener noreferrer");
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
+
+// A table scrolls sideways inside its own box, so a table wider than the column never
+// widens the report: in a narrow split view the whole panel scrolled sideways instead.
+// The wrapper is real markup, so the claim rewrite below sees it as tags and skips it.
+const defaultTableOpen =
+  md.renderer.rules.table_open ||
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+const defaultTableClose =
+  md.renderer.rules.table_close ||
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.table_open = (tokens, idx, options, env, self) =>
+  `<div class="md-table-scroll">${defaultTableOpen(tokens, idx, options, env, self)}`;
+md.renderer.rules.table_close = (tokens, idx, options, env, self) =>
+  `${defaultTableClose(tokens, idx, options, env, self)}</div>`;
 
 // Map Sn -> url from the explicit API map, with the report's Sources section as
 // a backward-compatible fallback for older stored reports. The explicit map is
@@ -307,10 +321,30 @@ watch(
       } catch {
         /* ignore malformed math */
       }
+      // After the math: rendered formulas change a table's width.
+      updateTableFades();
     });
   },
   { immediate: true },
 );
+
+// A table wider than its scroller fades at the right edge while more of it waits there
+// (apple-design §12 scroll edge effect; the fade goes once the end is reached).
+function updateTableFades() {
+  for (const el of articleEl.value?.querySelectorAll<HTMLElement>(".md-table-scroll") ?? []) {
+    el.classList.toggle("edge-fade-x", el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }
+}
+// Scroll does not bubble: the root listens in the capture phase for its tables' scrolls.
+function onScrollCapture(e: Event) {
+  if (e.target instanceof HTMLElement && e.target.classList.contains("md-table-scroll")) updateTableFades();
+}
+let tableObserver: ResizeObserver | undefined;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined" || !articleEl.value) return;
+  tableObserver = new ResizeObserver(updateTableFades);
+  tableObserver.observe(articleEl.value);
+});
 
 // ── citation popover ──────────────────────────────────────────────────────────
 // The grounding quote for [Sn] used to live in a title tooltip: about a second of hover on
@@ -487,6 +521,7 @@ watch(popOpen, (open) => {
 // A re-render replaces every citation element: a popover would point at a stale one.
 watch(html, () => closePop());
 onBeforeUnmount(() => {
+  tableObserver?.disconnect();
   clearTimers();
   window.removeEventListener("scroll", onViewportChange, true);
   window.removeEventListener("resize", onViewportChange);
@@ -501,6 +536,7 @@ onBeforeUnmount(() => {
     @click="onClick"
     @focusin="onFocusIn"
     @focusout="onFocusOut"
+    @scroll.capture.passive="onScrollCapture"
   >
     <article
       ref="articleEl"
@@ -545,6 +581,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* A report table scrolls inside its own box (see table_open). A sideways swipe that
+   reaches the end stays in the table instead of turning into a back gesture. */
+:deep(.md-table-scroll) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
 /* Inline verification: confirm strong claims subtly, flag the problem ones loudly.
    The marks live in v-html, which never carries this component's data-v attribute, so
    every rule goes through :deep(). Colours are the theme's status tokens, readable on
