@@ -34,6 +34,7 @@ from src.services.export_mixin import ExportMixin
 from src.services.job_queue_mixin import JobQueueMixin
 from src.services.trust_report_mixin import TrustReportMixin
 from src.services.share_mixin import ShareMixin
+from src.services.search_lease import holding_search_lease, store_for_search
 from src.agents.catalog import AGENTS_CATALOG
 from src.domain import (
     AdminAuditLogItem,
@@ -69,6 +70,7 @@ from src.domain import (
     ResearchStatusSummary,
     ResearchStatus,
     ResearchFinalizeJob,
+    SearchJobLeaseLost,
     SearchJobStatus,
     SearchSourcePreview,
     SourceCriticSummary,
@@ -879,19 +881,20 @@ class ResearchService(
 
     def _retry_finalization(self, research_id: str) -> None:
         # The CAS is taken from PROCESSING (the admission state); pre-setting ANALYZING
-        # would make try_begin_finalization refuse and leave no job at all.
-        if not self.task_store.try_begin_finalization(research_id):
-            return  # cancelled between the admission and here
+        # would make begin_finalization refuse and leave no job at all. CAS and job are one
+        # transaction, so a failure leaves the research as it was, never ANALYZING without a job.
         try:
-            job = self._dispatch_finalize_job(research_id)
+            job = self.task_store.begin_finalization(research_id, max_attempts=settings.job_max_attempts)
         except Exception as exc:
-            # ANALYZING with no job would be stuck (stale recovery needs a RUNNING job and
-            # retry a FAILED research): hand it back as FAILED so it can be retried at once.
-            # A crash here instead is caught by the stalled-research sweep.
+            # Rolled back: still PROCESSING with nothing queued. Hand it back as FAILED so it
+            # can be retried at once rather than waiting for the stalled-research sweep.
             self.task_store.transition_research_status(
-                research_id, [ResearchStatus.ANALYZING], ResearchStatus.FAILED, self._failure_message(exc)
+                research_id, [ResearchStatus.PROCESSING], ResearchStatus.FAILED, self._failure_message(exc)
             )
             raise
+        if job is None:
+            return  # cancelled between the admission and here
+        self._push_finalize_job(job)
         logger.info("research_retry_finalization finalize_job_id=%s", job.id)
 
     def _redispatch_search_tasks(self, tasks: list[SearchTask], depth: SearchDepth) -> None:
@@ -2388,31 +2391,25 @@ class ResearchService(
         # requeue takes: one committed between the settled read above and this CAS left a
         # PENDING task and job, and finalizing then drained the requeued search. That job's
         # own settling calls back here once it is done.
-        if not self.task_store.try_begin_finalization(research_id, require_settled_searches=True):
+        # The CAS and the job are one store transaction: a crash between them used to leave
+        # the research ANALYZING with no job, for the stalled sweep to notice much later.
+        job = self.task_store.begin_finalization(
+            research_id, max_attempts=settings.job_max_attempts, require_settled_searches=True
+        )
+        if job is None:
             return research, None
 
         with bind_observability_context(research_id=research_id):
-            job = self._dispatch_finalize_job(research_id)
+            self._push_finalize_job(job)
             logger.info("research_finalize_enqueued finalize_job_id=%s", job.id)
             return self.task_store.get_research(research_id), job
 
-    def _dispatch_finalize_job(self, research_id: str) -> ResearchFinalizeJob:
-        """The finalize job for a research that just won the ANALYZING CAS: its latest job
-        while that is still queued or held by a runner (never a second one), the latest one
-        requeued when it stopped (DEAD_LETTER/FAILED: store-guarded, lease bumped), else a
-        fresh job. Reusing the stopped job keeps it from lingering in the dead-letter list
-        after a retry, where requeueing it would rewind the research."""
-        latest = self.task_store.get_latest_research_finalize_job(research_id)
-        job = None
-        if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
-            job = latest
-        elif latest is not None:
-            job = self.task_store.requeue_research_finalize_job(latest.id)  # None when COMPLETED
-        if job is None:
-            job = self.task_store.add_research_finalize_job(research_id, settings.job_max_attempts)
+    def _push_finalize_job(self, job: ResearchFinalizeJob) -> None:
+        """Hand the job begin_finalization chose to the workers. A RUNNING job (reused
+        because a runner still holds it) needs no push; a lost push is picked up by the
+        workers' claim_next fallback."""
         if self.broker and job.status == FinalizeJobStatus.PENDING:
             self.broker.push_finalize_job(job.id)
-        return job
 
     def process_finalize_job(self, job_id: str) -> ResearchFinalizeJob | None:
         job = self.task_store.get_research_finalize_job(job_id)
@@ -2778,7 +2775,8 @@ class ResearchService(
         with bind_observability_context(task_id=task_id):
             profile = get_depth_profile(depth)
             agent = SearchAgent(
-                task_store=self.task_store,
+                # Fenced by the claiming runner's lease when run from process_search_task_job.
+                task_store=store_for_search(self.task_store),
                 max_sources=profile["source_limit"],
                 search_results_per_query=profile["search_results_per_query"],
                 max_candidate_urls=profile["max_candidate_urls"],
@@ -2816,19 +2814,25 @@ class ResearchService(
         job = self.task_store.get_latest_search_task_job(task.id)
         return job is None or job.status not in self._ACTIVE_SEARCH_JOB_STATUSES
 
-    def process_search_task_job(self, job_id: str) -> SearchTaskJob | None:
+    def process_search_task_job(self, job_id: str, lease_epoch: int | None = None) -> SearchTaskJob | None:
         job = self.task_store.get_search_task_job(job_id)
         if job is None:
             return None
+        # The lease of the claim that handed this job over: the worker passes it, else it is
+        # read off the RUNNING job. Every job and task write below then lands only while the
+        # job is still RUNNING under it, so a runner that stale recovery or a requeue took
+        # the job from stops instead of racing its new runner. A job processed without a
+        # claim (still PENDING) runs unfenced, as before leases.
+        if lease_epoch is None and job.status == SearchJobStatus.RUNNING:
+            lease_epoch = job.lease_epoch
 
         task = self.task_store.get_task(job.task_id)
         if task is None:
             logger.error("search_job_task_missing job_id=%s task_id=%s", job_id, job.task_id)
-            return self.task_store.update_search_task_job(
-                job_id,
-                SearchJobStatus.FAILED,
-                "Task not found",
+            settled = self.task_store.update_search_task_job(
+                job_id, SearchJobStatus.FAILED, "Task not found", lease_epoch=lease_epoch
             )
+            return settled or self._search_job_superseded(job_id)
         task_id, research_id = task.id, task.research_id
 
         with bind_observability_context(job_id=job.id, task_id=task_id, research_id=research_id):
@@ -2842,49 +2846,65 @@ class ResearchService(
                 or research.status == ResearchStatus.ANALYZING
             ):
                 logger.info("search_job_skipped_terminal status=%s", research.status.value)
-                return self.task_store.update_search_task_job(
-                    job_id, SearchJobStatus.COMPLETED, "Research no longer active — search skipped"
+                settled = self.task_store.update_search_task_job(
+                    job_id,
+                    SearchJobStatus.COMPLETED,
+                    "Research no longer active — search skipped",
+                    lease_epoch=lease_epoch,
                 )
+                return settled or self._search_job_superseded(job_id)
             # Auto-finalize runs only after the retry decision (JOB-RETRY-ORDER): SearchAgent
             # records a failure as a FAILED task without raising, and finalizing on that
             # before the job is rescheduled would finish the research without the retry.
             # Nothing else triggers finalization, so every settled outcome below calls it.
             try:
                 logger.info("search_job_processing depth=%s", job.depth.value)
-                self.run_search_task(task_id, job.depth)
+                with holding_search_lease(job_id, lease_epoch):
+                    self.run_search_task(task_id, job.depth)
                 task = self.task_store.get_task(task_id)
                 if task is not None and task.status == TaskStatus.FAILED:
                     failed_job = self.task_store.record_search_task_job_failure(
                         job_id,
                         task.logs[-1] if task.logs else "Search task failed",
+                        lease_epoch=lease_epoch,
                     )
-                    logger.warning(
-                        "search_job_failed next_status=%s",
-                        failed_job.status.value if failed_job else "missing",
-                    )
-                    if failed_job and failed_job.status == SearchJobStatus.PENDING:
+                    if failed_job is None:
+                        return self._search_job_superseded(job_id)
+                    logger.warning("search_job_failed next_status=%s", failed_job.status.value)
+                    if failed_job.status == SearchJobStatus.PENDING:
                         self._schedule_search_retry(task_id, failed_job)
-                    if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
+                    if failed_job.status == SearchJobStatus.DEAD_LETTER:
                         logger.error("search_job_dead_letter")
                         # Out of retries: the FAILED task is settled and the research can
                         # finalize on what the other tasks found.
                         self._maybe_finalize_after_search(research_id)
                     return failed_job
 
-                completed_job = self.task_store.update_search_task_job(job_id, SearchJobStatus.COMPLETED)
+                completed_job = self.task_store.update_search_task_job(
+                    job_id, SearchJobStatus.COMPLETED, lease_epoch=lease_epoch
+                )
+                if completed_job is None:
+                    return self._search_job_superseded(job_id)
                 logger.info("search_job_completed")
                 self._maybe_finalize_after_search(research_id)
                 return completed_job
+            except SearchJobLeaseLost:
+                # A task write was refused mid-run: whoever holds the job now settles it.
+                return self._search_job_superseded(job_id)
             except Exception as exc:
-                failed_job = self.task_store.record_search_task_job_failure(job_id, str(exc))
+                failed_job = self.task_store.record_search_task_job_failure(
+                    job_id, str(exc), lease_epoch=lease_epoch
+                )
+                if failed_job is None:
+                    return self._search_job_superseded(job_id)
                 logger.warning(
                     "search_job_exception error=%s next_status=%s",
                     str(exc),
-                    failed_job.status.value if failed_job else "missing",
+                    failed_job.status.value,
                 )
-                if failed_job and failed_job.status == SearchJobStatus.PENDING:
+                if failed_job.status == SearchJobStatus.PENDING:
                     self._schedule_search_retry(task_id, failed_job)
-                if failed_job and failed_job.status == SearchJobStatus.DEAD_LETTER:
+                if failed_job.status == SearchJobStatus.DEAD_LETTER:
                     logger.error("search_job_dead_letter")
                     # The exception can leave the task RUNNING; settle it as FAILED first,
                     # or the research would wait on it in 'processing' forever.
@@ -2897,6 +2917,13 @@ class ResearchService(
                     )
                     self._maybe_finalize_after_search(research_id)
                 return failed_job
+
+    def _search_job_superseded(self, job_id: str) -> SearchTaskJob | None:
+        """This runner's write was refused: stale recovery or a requeue took the job (lease
+        bumped), or it was deleted. Nothing more is written or triggered from here: the
+        runner that holds it now settles it. The job as it stands (None if deleted)."""
+        logger.warning("search_job_lease_lost job_id=%s", job_id)
+        return self.task_store.get_search_task_job(job_id)
 
     def _schedule_search_retry(self, task_id: str, job: SearchTaskJob) -> None:
         self.task_store.update_task(

@@ -220,13 +220,13 @@ def test_a_sibling_finishing_before_the_retry_is_scheduled_does_not_finalize(fla
     record_failure = store.record_search_task_job_failure
     sibling_outcome = {}
 
-    def fail_a_once_then_let_b_finish_first(job_id, error):
+    def fail_a_once_then_let_b_finish_first(job_id, error, lease_epoch=None):
         # Called after run_search_task returned with task a FAILED and before a's retry
         # is scheduled: the window in which sibling b completes.
         if job_id == job_a.id and not sibling_outcome:
             _work(store, service, job_b.id)
             sibling_outcome["research"] = store.get_research(research.id).status
-        return record_failure(job_id, error)
+        return record_failure(job_id, error, lease_epoch=lease_epoch)
 
     monkeypatch.setattr(store, "record_search_task_job_failure", fail_a_once_then_let_b_finish_first)
     # a fails its first run and then succeeds; b succeeds at once.

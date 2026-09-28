@@ -962,6 +962,27 @@ class SQLAlchemyTaskStore:
             self._emit_change(research_id)
         return claimed
 
+    # A research already finalizing, or ended, never takes the ANALYZING CAS again.
+    _NOT_FINALIZABLE_STATUSES = (
+        ResearchStatus.ANALYZING.value,
+        ResearchStatus.COMPLETED.value,
+        ResearchStatus.FAILED.value,
+        ResearchStatus.CANCELLED.value,
+    )
+
+    def _unsettled_search_job(self, research_id: str):
+        """A PENDING or RUNNING search job of a task of the research that has not COMPLETED."""
+        return (
+            select(SearchTaskJobORM.id)
+            .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
+            .where(
+                SearchTaskORM.research_id == research_id,
+                SearchTaskORM.status != TaskStatus.COMPLETED.value,
+                SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
+            )
+            .limit(1)
+        )
+
     def try_begin_finalization(self, research_id: str, *, require_settled_searches: bool = False) -> bool:
         """Atomically flip into ANALYZING unless already terminal/finalizing. True if this caller
         won — prevents two replicas from enqueueing duplicate finalize jobs for one research.
@@ -969,31 +990,16 @@ class SQLAlchemyTaskStore:
         not COMPLETED has a PENDING or RUNNING search job, checked under the research row
         lock that requeue_search_task_job_of_active_research takes first: a requeue committed
         after the caller found every search settled then keeps the research searching."""
-        terminal = [
-            ResearchStatus.ANALYZING.value,
-            ResearchStatus.COMPLETED.value,
-            ResearchStatus.FAILED.value,
-            ResearchStatus.CANCELLED.value,
-        ]
+        terminal = self._NOT_FINALIZABLE_STATUSES
         with self.session_scope() as session:
             if require_settled_searches:
                 # FOR NO KEY UPDATE, the lock the bare UPDATE below takes: it waits for the
                 # requeue's FOR UPDATE but not for the key-share locks of FK inserts.
                 research = session.get(ResearchORM, research_id, with_for_update={"key_share": True})
-                unsettled = (
-                    select(SearchTaskJobORM.id)
-                    .join(SearchTaskORM, SearchTaskORM.id == SearchTaskJobORM.task_id)
-                    .where(
-                        SearchTaskORM.research_id == research_id,
-                        SearchTaskORM.status != TaskStatus.COMPLETED.value,
-                        SearchTaskJobORM.status.in_(self._ACTIVE_JOB_STATUSES),
-                    )
-                    .limit(1)
-                )
                 claimed = (
                     research is not None
                     and research.status not in terminal
-                    and session.execute(unsettled).first() is None
+                    and session.execute(self._unsettled_search_job(research_id)).first() is None
                 )
                 if claimed:
                     research.status = ResearchStatus.ANALYZING.value
@@ -1008,6 +1014,64 @@ class SQLAlchemyTaskStore:
         if claimed:
             self._emit_change(research_id)
         return claimed
+
+    def begin_finalization(
+        self, research_id: str, *, max_attempts: int = 3, require_settled_searches: bool = False
+    ) -> ResearchFinalizeJob | None:
+        """try_begin_finalization plus the research's finalize job, in one transaction: a crash
+        between the two used to leave the research ANALYZING with no job to run it."""
+        now = datetime.now(timezone.utc)
+        with self.session_scope() as session:
+            # The latest job row first, then the research: the lock order
+            # complete_research_finalize_job and requeue_failed_research_finalize_job use.
+            latest = session.execute(
+                select(ResearchFinalizeJobORM)
+                .where(ResearchFinalizeJobORM.research_id == research_id)
+                .order_by(
+                    ResearchFinalizeJobORM.created_at.desc(),
+                    ResearchFinalizeJobORM.updated_at.desc(),
+                    ResearchFinalizeJobORM.id.desc(),
+                )
+                .limit(1)
+                .with_for_update()
+            ).scalar_one_or_none()
+            # FOR NO KEY UPDATE, as in try_begin_finalization: the new job's FK insert below
+            # takes a key-share lock on this row, which this lock does not conflict with.
+            research = session.get(ResearchORM, research_id, with_for_update={"key_share": True})
+            if research is None or research.status in self._NOT_FINALIZABLE_STATUSES:
+                return None
+            if require_settled_searches and session.execute(self._unsettled_search_job(research_id)).first():
+                return None
+            research.status = ResearchStatus.ANALYZING.value
+            research.updated_at = now
+            if latest is not None and latest.status in (
+                FinalizeJobStatus.PENDING.value,
+                FinalizeJobStatus.RUNNING.value,
+            ):
+                job = latest  # still queued or held by a runner: never a second job
+            elif latest is not None and latest.status in self._REQUEUEABLE_JOB_STATUSES:
+                # Reused, so a stopped job does not linger in the dead-letter list after a
+                # retry, where requeueing it would rewind the research.
+                latest.status = FinalizeJobStatus.PENDING.value
+                latest.attempt_count = 0
+                latest.error = None
+                latest.lease_epoch = latest.lease_epoch + 1
+                latest.updated_at = now
+                job = latest
+            else:
+                job = ResearchFinalizeJobORM(
+                    id=str(uuid.uuid4()),
+                    research_id=research_id,
+                    attempt_count=0,
+                    max_attempts=max_attempts,
+                    status=FinalizeJobStatus.PENDING.value,
+                )
+                session.add(job)
+            session.flush()
+            session.refresh(job)
+            dispatched = research_finalize_job_orm_to_schema(job)
+        self._emit_change(research_id)
+        return dispatched
 
     def add_task(self, task_data: dict) -> SearchTask:
         task = SearchTaskORM(
@@ -1694,49 +1758,84 @@ class SQLAlchemyTaskStore:
             session.refresh(job)
             return search_task_job_orm_to_schema(job)
 
+    def _search_job_write(self, job_id: str, lease_epoch: int | None):
+        """An UPDATE of one search job, fenced by its runner's lease when lease_epoch is set."""
+        statement = update(SearchTaskJobORM).where(SearchTaskJobORM.id == job_id)
+        if lease_epoch is not None:
+            statement = statement.where(
+                SearchTaskJobORM.status == SearchJobStatus.RUNNING.value,
+                SearchTaskJobORM.lease_epoch == lease_epoch,
+            )
+        return statement
+
     def update_search_task_job(
         self,
         job_id: str,
         status: SearchJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None:
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id, with_for_update=True)
-            if job is None:
-                return None
-
-            job.status = status.value
-            job.error = error
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
-            return search_task_job_orm_to_schema(job)
+            job = session.execute(
+                self._search_job_write(job_id, lease_epoch)
+                .values(status=status.value, error=error, updated_at=datetime.now(timezone.utc))
+                .returning(SearchTaskJobORM)
+            ).scalar_one_or_none()
+            return search_task_job_orm_to_schema(job) if job is not None else None
 
     def record_search_task_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None:
+        # One UPDATE: the next status comes from attempt_count as the row stands when it is
+        # written, not from an earlier read.
         with self.session_scope() as session:
-            # Locked: the next status depends on attempt_count, which a concurrent claim
-            # or requeue may be changing.
-            job = session.get(SearchTaskJobORM, job_id, with_for_update=True)
+            job = session.execute(
+                self._search_job_write(job_id, lease_epoch)
+                .values(
+                    error=error,
+                    status=case(
+                        (
+                            SearchTaskJobORM.attempt_count >= SearchTaskJobORM.max_attempts,
+                            SearchJobStatus.DEAD_LETTER.value,
+                        ),
+                        else_=SearchJobStatus.PENDING.value,
+                    ),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                .returning(SearchTaskJobORM)
+            ).scalar_one_or_none()
+            return search_task_job_orm_to_schema(job) if job is not None else None
+
+    def update_task_under_search_lease(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        job_id: str,
+        lease_epoch: int,
+    ) -> SearchTask | None:
+        with self.session_scope() as session:
+            # The job row first, locked for the whole write: a stale recovery or requeue that
+            # bumps the epoch waits for this commit, and one committed first fences it here.
+            job = session.execute(
+                select(SearchTaskJobORM)
+                .where(
+                    SearchTaskJobORM.id == job_id,
+                    SearchTaskJobORM.task_id == task_id,
+                    SearchTaskJobORM.status == SearchJobStatus.RUNNING.value,
+                    SearchTaskJobORM.lease_epoch == lease_epoch,
+                )
+                .with_for_update()
+            ).scalar_one_or_none()
             if job is None:
                 return None
-
-            job.error = error
-            job.status = (
-                SearchJobStatus.DEAD_LETTER.value
-                if job.attempt_count >= job.max_attempts
-                else SearchJobStatus.PENDING.value
-            )
-            job.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            session.refresh(job)
-            return search_task_job_orm_to_schema(job)
+            return self._apply_task_update(session, task_id, update)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
-        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable."""
+        """Reset a dead-lettered/failed job to PENDING; None when it is not requeueable.
+        The lease epoch is bumped so a runner still holding the old lease is fenced."""
         with self.session_scope() as session:
             statement = (
                 update(SearchTaskJobORM)
@@ -1748,6 +1847,7 @@ class SQLAlchemyTaskStore:
                     status=SearchJobStatus.PENDING.value,
                     attempt_count=0,
                     error=None,
+                    lease_epoch=SearchTaskJobORM.lease_epoch + 1,
                     updated_at=datetime.now(timezone.utc),
                 )
                 .returning(SearchTaskJobORM)
@@ -1799,6 +1899,7 @@ class SQLAlchemyTaskStore:
             job.attempt_count = 0
             job.error = None
             job.updated_at = now
+            job.lease_epoch = job.lease_epoch + 1
             if research is not None:
                 research.updated_at = now
             session.flush()
@@ -1818,7 +1919,12 @@ class SQLAlchemyTaskStore:
                     SearchTaskJobORM.status == SearchJobStatus.RUNNING.value,
                     SearchTaskJobORM.updated_at < stale_before,
                 )
-                .values(status=SearchJobStatus.PENDING.value, error=None, updated_at=datetime.now(timezone.utc))
+                .values(
+                    status=SearchJobStatus.PENDING.value,
+                    error=None,
+                    lease_epoch=SearchTaskJobORM.lease_epoch + 1,
+                    updated_at=datetime.now(timezone.utc),
+                )
                 .returning(SearchTaskJobORM)
                 .execution_options(synchronize_session=False)
             ).scalars().all()
@@ -2036,35 +2142,39 @@ class SQLAlchemyTaskStore:
         user_id: str | None = None,
     ) -> SearchTask | None:
         with self.session_scope() as session:
-            statement = (
-                select(SearchTaskORM)
-                .options(selectinload(SearchTaskORM.results))
-                .where(SearchTaskORM.id == task_id)
-            )
-            if user_id is not None:
-                statement = statement.join(
-                    ResearchORM,
-                    SearchTaskORM.research_id == ResearchORM.id,
-                ).where(ResearchORM.user_id == user_id)
-            task = session.execute(statement).scalar_one_or_none()
-            if task is None:
-                return None
+            return self._apply_task_update(session, task_id, update, user_id)
 
-            if update.status is not None:
-                task.status = update.status.value
-            if update.result is not None:
-                task.results = search_result_dicts_to_orm(task_id, update.result)
-            if update.search_metrics is not None:
-                task.search_metrics = update.search_metrics.model_dump()
-            if update.log:
-                task.logs = [*task.logs, update.log]
+    @staticmethod
+    def _apply_task_update(session, task_id: str, update: TaskUpdate, user_id: str | None = None) -> SearchTask | None:
+        statement = (
+            select(SearchTaskORM)
+            .options(selectinload(SearchTaskORM.results))
+            .where(SearchTaskORM.id == task_id)
+        )
+        if user_id is not None:
+            statement = statement.join(
+                ResearchORM,
+                SearchTaskORM.research_id == ResearchORM.id,
+            ).where(ResearchORM.user_id == user_id)
+        task = session.execute(statement).scalar_one_or_none()
+        if task is None:
+            return None
 
-            task.updated_at = datetime.now(timezone.utc)
-            session.flush()
-            # Serialize the in-memory row directly: it was just loaded with its results and
-            # mutated here, so a refresh + second selectinload query (AUD-021) is redundant.
-            # update_task runs once per extraction log line, so that doubled every log write.
-            return search_task_orm_to_schema(task)
+        if update.status is not None:
+            task.status = update.status.value
+        if update.result is not None:
+            task.results = search_result_dicts_to_orm(task_id, update.result)
+        if update.search_metrics is not None:
+            task.search_metrics = update.search_metrics.model_dump()
+        if update.log:
+            task.logs = [*task.logs, update.log]
+
+        task.updated_at = datetime.now(timezone.utc)
+        session.flush()
+        # Serialize the in-memory row directly: it was just loaded with its results and
+        # mutated here, so a refresh + second selectinload query (AUD-021) is redundant.
+        # update_task runs once per extraction log line, so that doubled every log write.
+        return search_task_orm_to_schema(task)
 
     # ── admin & token tracking ────────────────────────────────────────────────
     def record_llm_usage(

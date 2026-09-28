@@ -153,8 +153,9 @@ def test_a_requeue_that_lands_after_the_sweep_listed_the_research_wins():
 
 def _requeue_just_before_the_finalize_cas(store, service, job_id):
     """The admin requeue commits after the finalizer found every search settled (the dead
-    task FAILED with a DEAD_LETTER job) and before its ANALYZING CAS."""
-    cas = store.try_begin_finalization
+    task FAILED with a DEAD_LETTER job) and before its ANALYZING CAS (begin_finalization,
+    which takes the CAS and queues the finalize job in one step)."""
+    cas = store.begin_finalization
     requeued = []
 
     def requeue_then_cas(research_id, **kwargs):
@@ -162,7 +163,7 @@ def _requeue_just_before_the_finalize_cas(store, service, job_id):
             requeued.append(service.requeue_search_task_job(job_id))
         return cas(research_id, **kwargs)
 
-    store.try_begin_finalization = requeue_then_cas
+    store.begin_finalization = requeue_then_cas
     return requeued
 
 

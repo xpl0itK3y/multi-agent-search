@@ -217,3 +217,41 @@ def test_000033_backfills_verified_emails_and_round_trips(database_at):
     migrate_throwaway_database(_DATABASE, "20260925_000033")
     with engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL")).scalar_one() == 2
+
+
+def test_000034_gives_existing_search_jobs_lease_epoch_zero_and_round_trips(database_at):
+    """Jobs queued before the upgrade start at epoch 0, like a fresh claim's."""
+    engine = database_at("20260925_000033")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO researches (id, prompt, language, depth, status, graph_state, graph_trail, task_ids, "
+                "created_at, updated_at) VALUES ('r-1', 'lease topic', 'en', 'easy', 'processing', '{}', '[]', "
+                "'[\"t-1\"]', now(), now())"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO search_tasks (id, research_id, description, queries, status, logs, search_metrics, "
+                "created_at, updated_at) VALUES ('t-1', 'r-1', 'd', '[]', 'running', '[]', '{}', now(), now())"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO search_task_jobs (id, task_id, depth, attempt_count, max_attempts, status, created_at, updated_at) "
+                "VALUES ('j-1', 't-1', 'easy', 1, 3, 'running', now(), now())"
+            )
+        )
+
+    migrate_throwaway_database(_DATABASE, "20260928_000034")
+
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT lease_epoch FROM search_task_jobs WHERE id = 'j-1'")).scalar_one() == 0
+
+    migrate_throwaway_database(_DATABASE, "20260925_000033", downgrade=True)
+    with engine.connect() as conn:
+        columns = conn.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = 'search_task_jobs'")
+        ).scalars().all()
+    assert "lease_epoch" not in columns
+    migrate_throwaway_database(_DATABASE, "20260928_000034")

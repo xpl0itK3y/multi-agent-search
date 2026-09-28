@@ -9,13 +9,18 @@ from src.services import ResearchService
 logger = logging.getLogger(__name__)
 
 
-def search_attempt_status(job: SearchTaskJob | None) -> str:
+def search_attempt_status(job: SearchTaskJob | None, claimed_lease_epoch: int | None = None) -> str:
     """The mas_worker_jobs_total status of one processed attempt. process_search_task_job
     returns instead of raising when an attempt fails: a FAILED task or an exception leaves
-    the job PENDING (retry scheduled) or DEAD_LETTER, a missing task leaves it FAILED, and
-    a job deleted mid-attempt comes back None. Only COMPLETED (searched, or skipped
-    because the research had ended) is a success."""
-    if job is not None and job.status == SearchJobStatus.COMPLETED:
+    the job PENDING (retry scheduled) or DEAD_LETTER, a missing task leaves it FAILED, a
+    job deleted mid-attempt comes back None, and a lost lease returns the job as its new
+    holder left it. Only COMPLETED (searched, or skipped because the research had ended)
+    under the lease this attempt claimed is a success, as for finalize attempts."""
+    if (
+        job is not None
+        and job.status == SearchJobStatus.COMPLETED
+        and (claimed_lease_epoch is None or job.lease_epoch == claimed_lease_epoch)
+    ):
         return "success"
     return "failure"
 
@@ -25,7 +30,8 @@ class SearchWorker:
         self.research_service = research_service
         self.worker_name = worker_name
 
-    def _process_job(self, job_id: str, processed: int) -> int:
+    def _process_job(self, claimed: SearchTaskJob, processed: int) -> int:
+        job_id = claimed.id
         with bind_observability_context(
             worker_name=self.worker_name,
             job_id=job_id,
@@ -40,12 +46,12 @@ class SearchWorker:
             )
             logger.info("search_job_claimed job_id=%s", job_id)
             try:
-                job = self.research_service.process_search_task_job(job_id)
+                job = self.research_service.process_search_task_job(job_id, lease_epoch=claimed.lease_epoch)
             except Exception:
                 observe_worker_job(self.worker_name, "search", "failure")
                 raise
             processed += 1
-            observe_worker_job(self.worker_name, "search", search_attempt_status(job))
+            observe_worker_job(self.worker_name, "search", search_attempt_status(job, claimed.lease_epoch))
             self.research_service.touch_worker_heartbeat(
                 self.worker_name,
                 processed,
@@ -75,13 +81,13 @@ class SearchWorker:
                 if job is None:
                     return 0
                 logger.info("search_job_claimed_without_push job_id=%s", job.id)
-            return self._process_job(job.id, processed)
+            return self._process_job(job, processed)
 
         # Postgres polling mode: drain all pending jobs in one pass.
         while True:
             job = self.research_service.task_store.claim_next_search_task_job()
             if job is None:
                 break
-            processed = self._process_job(job.id, processed)
+            processed = self._process_job(job, processed)
 
         return processed

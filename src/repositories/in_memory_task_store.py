@@ -763,6 +763,43 @@ class InMemoryTaskStore:
         self._emit_change(research_id)
         return True
 
+    def begin_finalization(
+        self, research_id: str, *, max_attempts: int = 3, require_settled_searches: bool = False
+    ) -> ResearchFinalizeJob | None:
+        """try_begin_finalization plus the research's finalize job, as one step under the lock:
+        nothing changes unless both happen."""
+        with self._state_lock:
+            research = self.researches.get(research_id)
+            if research is None or research.status in (
+                ResearchStatus.ANALYZING,
+                ResearchStatus.COMPLETED,
+                ResearchStatus.FAILED,
+                ResearchStatus.CANCELLED,
+            ):
+                return None
+            if require_settled_searches and self._has_unsettled_search(research_id):
+                return None
+            now = datetime.now(timezone.utc)
+            latest = self._latest_job(
+                [job for job in self.finalize_jobs.values() if job.research_id == research_id]
+            )
+            if latest is not None and latest.status in (FinalizeJobStatus.PENDING, FinalizeJobStatus.RUNNING):
+                job = latest
+            elif latest is not None and latest.status in self._REQUEUEABLE_FINALIZE_STATUSES:
+                latest.status = FinalizeJobStatus.PENDING
+                latest.attempt_count = 0
+                latest.error = None
+                latest.lease_epoch += 1
+                latest.updated_at = now
+                job = latest
+            else:
+                job = ResearchFinalizeJob(id=str(uuid.uuid4()), research_id=research_id, max_attempts=max_attempts)
+                self.finalize_jobs[job.id] = job
+            research.status = ResearchStatus.ANALYZING
+            research.updated_at = now
+        self._emit_change(research_id)
+        return job
+
     def _has_unsettled_search(self, research_id: str) -> bool:
         for job in self.search_jobs.values():
             if job.status not in self._ACTIVE_SEARCH_STATUSES:
@@ -1206,38 +1243,64 @@ class InMemoryTaskStore:
         job.updated_at = datetime.now(timezone.utc)
         return job
 
+    def _leased_search_job(self, job_id: str, lease_epoch: int | None) -> SearchTaskJob | None:
+        """The job a write may touch: any job without a lease, else only while it is RUNNING
+        under that epoch (as the SQL store's fenced UPDATE). Call under _state_lock."""
+        job = self.search_jobs.get(job_id)
+        if job is None or (
+            lease_epoch is not None
+            and (job.status != SearchJobStatus.RUNNING or job.lease_epoch != lease_epoch)
+        ):
+            return None
+        return job
+
     def update_search_task_job(
         self,
         job_id: str,
         status: SearchJobStatus,
         error: str | None = None,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None:
-        job = self.search_jobs.get(job_id)
-        if job is None:
-            return None
-
-        job.status = status
-        job.error = error
-        job.updated_at = datetime.now(timezone.utc)
-        return job
+        with self._state_lock:
+            job = self._leased_search_job(job_id, lease_epoch)
+            if job is None:
+                return None
+            job.status = status
+            job.error = error
+            job.updated_at = datetime.now(timezone.utc)
+            return job
 
     def record_search_task_job_failure(
         self,
         job_id: str,
         error: str,
+        lease_epoch: int | None = None,
     ) -> SearchTaskJob | None:
-        job = self.search_jobs.get(job_id)
-        if job is None:
-            return None
+        with self._state_lock:
+            job = self._leased_search_job(job_id, lease_epoch)
+            if job is None:
+                return None
+            job.error = error
+            job.status = (
+                SearchJobStatus.DEAD_LETTER
+                if job.attempt_count >= job.max_attempts
+                else SearchJobStatus.PENDING
+            )
+            job.updated_at = datetime.now(timezone.utc)
+            return job
 
-        job.error = error
-        job.status = (
-            SearchJobStatus.DEAD_LETTER
-            if job.attempt_count >= job.max_attempts
-            else SearchJobStatus.PENDING
-        )
-        job.updated_at = datetime.now(timezone.utc)
-        return job
+    def update_task_under_search_lease(
+        self,
+        task_id: str,
+        update: TaskUpdate,
+        job_id: str,
+        lease_epoch: int,
+    ) -> SearchTask | None:
+        with self._state_lock:
+            job = self._leased_search_job(job_id, lease_epoch)
+            if job is None or job.task_id != task_id:
+                return None
+            return self.update_task(task_id, update)
 
     def requeue_search_task_job(self, job_id: str) -> SearchTaskJob | None:
         job = self.search_jobs.get(job_id)
@@ -1247,6 +1310,7 @@ class InMemoryTaskStore:
         job.status = SearchJobStatus.PENDING
         job.attempt_count = 0
         job.error = None
+        job.lease_epoch += 1  # fence any runner still holding the old lease
         job.updated_at = datetime.now(timezone.utc)
         return job
 
@@ -1270,6 +1334,7 @@ class InMemoryTaskStore:
             task.status = TaskStatus.PENDING
             task.logs.append(task_log)
             task.updated_at = now
+            job.lease_epoch += 1
             job.status = SearchJobStatus.PENDING
             job.attempt_count = 0
             job.error = None
@@ -1283,13 +1348,15 @@ class InMemoryTaskStore:
         stale_before: datetime,
     ) -> list[SearchTaskJob]:
         recovered_jobs = []
-        for job in self.search_jobs.values():
-            if job.status == SearchJobStatus.RUNNING and job.updated_at < stale_before:
-                job.status = SearchJobStatus.PENDING
-                job.error = None
-                job.updated_at = datetime.now(timezone.utc)
-                recovered_jobs.append(job)
-        return recovered_jobs
+        with self._state_lock:  # against the fenced writes of the runner being replaced
+            for job in self.search_jobs.values():
+                if job.status == SearchJobStatus.RUNNING and job.updated_at < stale_before:
+                    job.status = SearchJobStatus.PENDING
+                    job.error = None
+                    job.lease_epoch += 1
+                    job.updated_at = datetime.now(timezone.utc)
+                    recovered_jobs.append(job)
+        return sorted(recovered_jobs, key=lambda item: item.created_at)
 
     def cleanup_old_search_task_jobs(
         self,

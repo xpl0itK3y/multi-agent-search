@@ -278,6 +278,10 @@ class SearchTaskJobORM(Base):
         index=True,
     )
     depth: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Fences a runner that stale recovery or a requeue took the job from (see the finalize twin).
+    lease_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")

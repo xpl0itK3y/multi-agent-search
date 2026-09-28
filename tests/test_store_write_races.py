@@ -8,7 +8,11 @@ Before the fixes these cases lost a write or failed:
   completed meanwhile went back to PENDING and ran twice;
 - the job cleanups picked ids, then deleted by id, so a job requeued meanwhile was deleted;
 - the search cache and the worker heartbeat checked for the row, then inserted, so the second
-  of two first writers failed on the primary key.
+  of two first writers failed on the primary key;
+- a search runner that recovery took its job from kept writing the task (SEARCH-LEASE);
+  its leased task write now waits for the recovery and is refused after it.
+
+begin_finalization is checked here too: its CAS and job insert commit or roll back together.
 
 Postgres-only: these are real row and index locks.
 """
@@ -18,9 +22,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import text, update
+from sqlalchemy import event, text, update
 
-from src.api.schemas import ResearchRequest, SearchDepth
+from src.api.schemas import ResearchRequest, ResearchStatus, SearchDepth, TaskUpdate
 from src.db.models import ResearchFinalizeJobORM, SearchCacheORM, SearchTaskJobORM, WorkerHeartbeatORM
 from src.domain import FinalizeJobStatus, SearchJobStatus
 from src.repositories.sqlalchemy_task_store import SQLAlchemyTaskStore
@@ -191,3 +195,48 @@ def test_a_first_heartbeat_racing_another_does_not_fail(store, postgres_session_
 
     assert (heartbeat.processed_jobs, heartbeat.status) == (5, "running")
     assert store.get_worker_heartbeat(name).processed_jobs == 5
+
+
+def test_a_leased_task_write_behind_a_stale_recovery_is_refused(store, postgres_session_factory):
+    _, job = _search_job(store)
+    claimed = store.claim_search_task_job_by_id(job.id)
+
+    def recovery_takes_the_job(session):
+        session.execute(
+            update(SearchTaskJobORM)
+            .where(SearchTaskJobORM.id == job.id)
+            .values(status=SearchJobStatus.PENDING.value, lease_epoch=SearchTaskJobORM.lease_epoch + 1)
+        )
+
+    written = _run_while_holding(
+        postgres_session_factory,
+        recovery_takes_the_job,
+        lambda: store.update_task_under_search_lease(
+            job.task_id, TaskUpdate(log="late results"), job.id, claimed.lease_epoch
+        ),
+    )
+
+    assert written is None
+    assert "late results" not in store.get_task(job.task_id).logs
+
+
+def test_begin_finalization_is_all_or_nothing(store, postgres_session_factory):
+    """The CAS and the job insert are one transaction: an insert that fails leaves the
+    research as it was, never ANALYZING without a job."""
+    research, _ = _search_job(store)
+    store.update_research_status(research.id, ResearchStatus.PROCESSING)
+
+    def fail_the_job_insert(session, flush_context, instances):
+        if any(isinstance(row, ResearchFinalizeJobORM) for row in session.new):
+            raise RuntimeError("connection dropped")
+
+    event.listen(postgres_session_factory, "before_flush", fail_the_job_insert)
+    try:
+        with pytest.raises(RuntimeError, match="connection dropped"):
+            store.begin_finalization(research.id)
+    finally:
+        event.remove(postgres_session_factory, "before_flush", fail_the_job_insert)
+
+    assert store.get_research(research.id).status == ResearchStatus.PROCESSING
+    assert store.get_latest_research_finalize_job(research.id) is None
+    assert store.begin_finalization(research.id) is not None  # nothing was left half-done

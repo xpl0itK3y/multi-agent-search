@@ -44,3 +44,14 @@ class UnprocessableError(ServiceError):
 
 class ServiceUnavailableError(ServiceError):
     status_code = 503
+
+
+class SearchJobLeaseLost(RuntimeError):
+    """A search runner's lease on its job was taken away: stale recovery or a requeue
+    bumped the job's lease epoch (or ended the job), so this runner's writes are refused.
+    Internal to the worker path, not an HTTP error: the runner stops without settling the
+    job, since whoever holds it now will."""
+
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        super().__init__(f"Search job {job_id} lease was lost")

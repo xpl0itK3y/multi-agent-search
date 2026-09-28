@@ -21,7 +21,8 @@ description: How the multi-agent deep-research pipeline in multi-agent-search wo
      - scores candidates (`rust_accel.score_search_candidates`);
      - extracts pages through the SSRF-safe fetcher;
      - enriches each result with `source_quality` and stores it in `task.result`.
-   - **Hand-off.** When every task has settled, `enqueue_research_finalization` moves the research to ANALYZING with a compare-and-set and queues a finalize job.
+   - **Hand-off.** When every task has settled, `enqueue_research_finalization` moves the research to ANALYZING and queues its finalize job in one store transaction (`begin_finalization`).
+   - **Leases.** Each search run holds its job's lease (see the `data-layer` skill): a runner that stale recovery took the job from stops at its next task write.
    - **Finalize.** `process_finalize_job` → `complete_research_finalization`, in order:
      1. reset the provider's usage counters;
      2. `FinalizeGraphRunner.run`;

@@ -844,6 +844,7 @@ class SearchTaskJob(BaseModel):
     task_id: str
     depth: SearchDepth
     status: SearchJobStatus = SearchJobStatus.PENDING
+    lease_epoch: int = 0
     attempt_count: int = 0
     max_attempts: int = 3
     error: Optional[str] = None

@@ -54,7 +54,7 @@ def test_search_worker_redis_mode_processes_job(mocker):
 
     assert processed_count == 1
     broker.pop_search_job.assert_called_once()
-    process_job.assert_called_once_with(job.id)
+    process_job.assert_called_once_with(job.id, lease_epoch=0)
 
 
 def test_search_worker_redis_mode_returns_zero_when_queue_empty(mocker):
@@ -137,7 +137,7 @@ def test_search_worker_redis_mode_claims_a_pending_job_whose_push_was_lost(mocke
     process_job = mocker.patch.object(service, "process_search_task_job")
 
     assert SearchWorker(service).run_once() == 1
-    process_job.assert_called_once_with(job.id)
+    process_job.assert_called_once_with(job.id, lease_epoch=0)
     assert task_store.get_search_task_job(job.id).status.value == "running"
 
 
@@ -153,7 +153,7 @@ def test_search_worker_redis_mode_falls_back_after_a_stale_pop(mocker):
     process_job = mocker.patch.object(service, "process_search_task_job")
 
     assert SearchWorker(service).run_once() == 1
-    process_job.assert_called_once_with(waiting.id)
+    process_job.assert_called_once_with(waiting.id, lease_epoch=0)
 
 
 def test_search_worker_fallback_never_processes_a_job_twice(mocker):
@@ -168,4 +168,4 @@ def test_search_worker_fallback_never_processes_a_job_twice(mocker):
 
     assert worker.run_once() == 1
     assert worker.run_once() == 0
-    process_job.assert_called_once_with(job.id)
+    process_job.assert_called_once_with(job.id, lease_epoch=0)
