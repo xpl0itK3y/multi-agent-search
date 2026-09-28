@@ -345,7 +345,7 @@ const ru = {
     current_task: "Текущее действие",
     to_latest: "К новым действиям",
   },
-  chat: { placeholder: "Спросить по исследованию…", searching: "Ищу источники…" },
+  chat: { placeholder: "Спросить по исследованию…", searching: "Ищу источники…", send: "Отправить вопрос" },
   thread: { empty: "В этом треде пока нет исследований.", needResearch: "Сначала запустите исследование, затем задавайте вопросы по нему.", toLatest: "К последнему" },
   setPassword: {
     title: "Задайте пароль",
@@ -721,6 +721,7 @@ const ru = {
     },
     agents: {
       title: "Граф взаимодействия агентов (n8n-style)",
+      fitView: "Показать весь граф",
       searchPlaceholder: "Поиск агента по названию или роли…",
       stagePlanning: "Этап 1: Планирование",
       stageSearch: "Этап 2: Поиск и сбор",
@@ -1196,6 +1197,7 @@ const ru = {
       cannotDeleteSelf: "Нельзя удалить собственный аккаунт администратора",
       userDeleted: "Пользователь успешно удален",
       dangerZone: "Опасная зона",
+      dangerZoneHint: "Удаление необратимо: вместе с пользователем удаляются его исследования, сессии и данные.",
       deleting: "Удаление...",
     },
   },
@@ -1572,7 +1574,7 @@ const en: typeof ru = {
     current_task: "Current Action",
     to_latest: "To latest",
   },
-  chat: { placeholder: "Ask about this research…", searching: "Searching for sources…" },
+  chat: { placeholder: "Ask about this research…", searching: "Searching for sources…", send: "Send question" },
   thread: { empty: "No researches in this thread yet.", needResearch: "Run a research first, then ask questions about it.", toLatest: "Jump to latest" },
   setPassword: {
     title: "Set a password",
@@ -1948,6 +1950,7 @@ const en: typeof ru = {
     },
     agents: {
       title: "Agent Flow Graph (n8n-style)",
+      fitView: "Fit to screen",
       searchPlaceholder: "Filter agents by name or role…",
       stagePlanning: "Stage 1: Planning",
       stageSearch: "Stage 2: Search & Ingest",
@@ -2423,6 +2426,7 @@ const en: typeof ru = {
       cannotDeleteSelf: "Cannot delete your own admin account",
       userDeleted: "User deleted successfully",
       dangerZone: "Danger zone",
+      dangerZoneHint: "This can't be undone: the user's research, sessions and data are deleted with them.",
       deleting: "Deleting...",
     },
   },
@@ -2799,7 +2803,7 @@ const es: typeof ru = {
     current_task: "Acción actual",
     to_latest: "A lo más reciente",
   },
-  chat: { placeholder: "Pregunta sobre esta investigación…", searching: "Buscando fuentes…" },
+  chat: { placeholder: "Pregunta sobre esta investigación…", searching: "Buscando fuentes…", send: "Enviar pregunta" },
   thread: { empty: "Aún no hay investigaciones en este hilo.", needResearch: "Primero ejecuta una investigación y luego haz preguntas sobre ella.", toLatest: "Ir a lo último" },
   setPassword: {
     title: "Establece una contraseña",
@@ -3175,6 +3179,7 @@ const es: typeof ru = {
     },
     agents: {
       title: "Grafo de agentes (estilo n8n)",
+      fitView: "Ajustar a la pantalla",
       searchPlaceholder: "Buscar agente por nombre o rol…",
       stagePlanning: "Etapa 1: Planificación",
       stageSearch: "Etapa 2: Búsqueda y extracción",
@@ -3650,6 +3655,7 @@ const es: typeof ru = {
       cannotDeleteSelf: "No puede eliminar su propia cuenta de administrador",
       userDeleted: "Usuario eliminado con éxito",
       dangerZone: "Zona de peligro",
+      dangerZoneHint: "No se puede deshacer: se eliminan también sus investigaciones, sesiones y datos.",
       deleting: "Eliminando...",
     },
   },
