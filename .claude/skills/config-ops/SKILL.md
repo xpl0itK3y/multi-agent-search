@@ -111,7 +111,7 @@ description: How to change configuration and operations in multi-agent-search â€
 | promtail | none | |
 
 - **Images.** Pulled images (redis, postgres, pgbouncer, prometheus, loki, promtail, grafana) are pinned by digest; the Dockerfile base images (`python:3.11-slim`, `node:22-alpine`, `nginx:1.27-alpine`) are tag-only. Copy digests by hand into CI (the Prometheus image, the Postgres service image) when you bump them.
-- **Rebuilds.** Only `./src` is mounted into api and workers; changes to `scripts/` or `alembic/` need an image rebuild. The `web` service bind-mounts `./web/dist`, so build the SPA first.
+- **Rebuilds.** Only `./src` is mounted into api and workers; changes to `scripts/` or `alembic/` need an image rebuild. The `web` image builds the SPA itself (`web/Dockerfile`), so a frontend change needs `docker compose up -d --build web`. **Never bind-mount a host `web/dist` over `/usr/share/nginx/html`:** it shadows the image's build with whatever was last built on the host. Such a mount once kept a weeks-old UI in service, including a public report that could not scroll, through every rebuild. `tests/test_compose_config.py` refuses it.
 - **Adding a worker replica** takes:
   - a unique `WORKER_NAME` and `WORKER_METRICS_PORT`;
   - its own `container_name` (a copied block clashes with the existing container);
