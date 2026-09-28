@@ -139,13 +139,16 @@ const drawerClass = computed(() => {
   <!-- Site-styled confirm modal (replaces window.confirm), available app-wide -->
   <ConfirmDialog />
 
+  <!-- Both frames: 100vh, then 100dvh where supported. With the two height utilities side by
+       side, the 100vh one came later in the built CSS and always won, so phones got the tallest
+       viewport and a page's end sat under the browser toolbar. -->
   <!-- Sign-in screens (login, password reset, email verification) and a signed-out
        reader's shared report: no app shell -->
-  <div v-if="bare" class="h-screen h-dvh w-screen overflow-hidden bg-bg text-ink">
+  <div v-if="bare" class="h-screen w-screen overflow-hidden bg-bg text-ink supports-[height:100dvh]:h-dvh">
     <router-view />
   </div>
 
-  <div v-else class="flex h-screen h-dvh w-screen overflow-hidden bg-bg text-ink">
+  <div v-else class="flex h-screen w-screen overflow-hidden bg-bg text-ink supports-[height:100dvh]:h-dvh">
     <!-- Sidebar: static on lg+, off-canvas drawer on mobile -->
     <div
       id="app-drawer"

@@ -46,6 +46,21 @@ describe("source guards", () => {
     expect(offendingLines(templates, /[А-Яа-яЁё]/)).toEqual([]);
   });
 
+  it("never pairs the 100vh and 100dvh heights on one element without a variant", () => {
+    // Both are single-class utilities and .h-screen comes later in the built CSS, so the pair
+    // side by side always computed to 100vh: the tallest viewport on phones, with the end of
+    // the page under the browser toolbar. 100dvh goes through supports-[height:100dvh]: instead.
+    const classAttr = /(?<![\w-]):?class="([^"]*)"/g; // one attribute, even over several lines
+    const bare = (value: string, utility: string) => new RegExp(`(?<![:\\w-])${utility}(?![\\w-])`).test(value);
+    const pairs = Object.entries(components).flatMap(([path, source]) =>
+      [...source.replace(/<!--[\s\S]*?-->/g, "").matchAll(classAttr)]
+        .map(([, value]) => value)
+        .filter((value) => bare(value, "h-screen") && bare(value, "h-dvh"))
+        .map((value) => `${path}: ${value.replace(/\s+/g, " ").trim()}`),
+    );
+    expect(pairs).toEqual([]);
+  });
+
   it("uses smooth scrolling only through lib/motion.ts (reduced motion)", () => {
     // smoothOrAuto() turns a smooth scroll into a jump for readers who asked for reduced
     // motion; a literal behavior: "smooth" elsewhere would ignore that setting.

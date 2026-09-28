@@ -505,6 +505,16 @@ input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible {
     outline: 2px solid CanvasText !important;
     outline-offset: 2px;
   }
+  /* A view's own scroller is focused from script so the keys scroll it (PublicReportView):
+     not a control, so no ring here either (this selector outranks :focus-visible). */
+  [data-scroll-root]:focus-visible {
+    outline: none !important;
+  }
+}
+/* The same scroller in every other mode: no ring, and no transparent outline (Tailwind's
+   outline-none) for a contrast theme to paint as a stray line under the header. */
+[data-scroll-root] {
+  outline: none;
 }
 
 /* ---- Reduced motion (§14): gentler equivalents, not a blanket `animation: none` ----
