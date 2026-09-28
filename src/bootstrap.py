@@ -21,7 +21,7 @@ from src.api.dependencies import LOCAL_USER
 from src.auth.admin_identity import admin_emails
 from src.brokers.redis_broker import RedisBroker
 from src.config import settings
-from src.notifications import email_backend_name, email_config_errors
+from src.notifications import email_backend_name, email_config_errors, email_config_warnings
 from src.observability import configure_logging
 from src.providers.deepseek import DeepSeekProvider
 from src.repositories import create_task_store
@@ -107,7 +107,9 @@ def _validate_email_config() -> None:
     """Fail fast on an unusable EMAIL_* / SMTP_* configuration (EMAIL_BACKEND=smtp without
     SMTP_HOST and SMTP_FROM, an unknown backend or SMTP_SECURITY): otherwise every reset
     and verification email would fail quietly in the background. EMAIL_BACKEND=console
-    starts with a warning, since it writes working reset links to the log."""
+    starts with a warning, since it writes working reset links to the log, and so do
+    cleartext SMTP to a non-loopback relay and a plain-http PUBLIC_APP_URL off localhost
+    (email_config_warnings), which put those links on the network unencrypted."""
     errors = email_config_errors()
     if errors:
         raise RuntimeError("Invalid email configuration: " + "; ".join(errors))
@@ -116,6 +118,8 @@ def _validate_email_config() -> None:
             "EMAIL_BACKEND=console writes every account email, working password reset and "
             "verification links included, to the application log: for development only"
         )
+    for warning in email_config_warnings():
+        logger.warning(warning)
 
 
 def create_research_service() -> ResearchService:

@@ -17,6 +17,7 @@ an SMTP error can echo the recipient or the server's reply.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import smtplib
 import ssl
@@ -24,6 +25,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from src.config import Settings, settings as default_settings
 
@@ -184,6 +186,46 @@ def email_config_errors(config: Settings | None = None) -> list[str]:
     ):
         errors.append("PUBLIC_APP_URL must be an http(s) URL: account email links are built from it")
     return errors
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """localhost or a loopback address (127.0.0.0/8, ::1): traffic that never leaves the
+    machine."""
+    host = (host or "").strip().lower().strip("[]")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def email_config_warnings(config: Settings | None = None) -> list[str]:
+    """What a usable EMAIL_* / SMTP_* configuration exposes on the network: the links in
+    account email are working credentials (a reset link sets the password). Warnings
+    only, since a trusted relay or a local-only deployment may be deliberate."""
+    config = config or default_settings
+    backend = email_backend_name(config)
+    if backend not in ("console", "smtp"):
+        return []
+    warnings: list[str] = []
+    security = (config.smtp_security or "").strip().lower()
+    if backend == "smtp" and security == "none" and not _is_loopback_host(config.smtp_host):
+        exposed = "account email, working password reset links included"
+        if (config.smtp_username or "").strip():
+            exposed += ", and the SMTP_USERNAME / SMTP_PASSWORD login"
+        warnings.append(
+            f"SMTP_SECURITY=none sends {exposed} to SMTP_HOST={config.smtp_host.strip()} unencrypted: "
+            "use starttls or ssl unless that relay sits on a trusted private network"
+        )
+    url = (config.public_app_url or "").strip()
+    if url.lower().startswith("http://") and not _is_loopback_host(urlsplit(url).hostname):
+        warnings.append(
+            f"PUBLIC_APP_URL={url} is plain http on a host other than localhost: the password reset "
+            "and verification links in account email, and the pages that redeem them, travel "
+            "unencrypted. Serve the app over HTTPS and set PUBLIC_APP_URL to its https:// address"
+        )
+    return warnings
 
 
 def describe_send_failure(exc: BaseException) -> str:

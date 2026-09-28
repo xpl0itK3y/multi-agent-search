@@ -14,6 +14,7 @@ from src.notifications import (
     create_mail_sender,
     describe_send_failure,
     email_config_errors,
+    email_config_warnings,
     preferred_language,
     render_account_email,
 )
@@ -188,6 +189,50 @@ def test_bootstrap_warns_that_the_console_backend_is_for_development(monkeypatch
     with caplog.at_level(logging.WARNING, logger="src.bootstrap"):
         _validate_email_config()
     assert any("development only" in record.getMessage() for record in caplog.records)
+
+
+def _warnings(**values) -> list[str]:
+    return email_config_warnings(Settings(_env_file=None, **values))
+
+
+SMTP = {"email_backend": "smtp", "smtp_host": "mail.example.com", "smtp_from": "no-reply@example.com"}
+
+
+def test_cleartext_smtp_to_a_relay_off_this_machine_is_warned_about():
+    """SEC-REC-5: SMTP_SECURITY=none puts working reset links (and the SMTP login) on the
+    network unencrypted; a loopback relay keeps them on the machine."""
+    assert _warnings(**SMTP) == []
+    assert _warnings(**SMTP, smtp_security="ssl") == []
+    [warning] = _warnings(**SMTP, smtp_security="none")
+    assert warning.startswith("SMTP_SECURITY=none sends account email")
+    assert "SMTP_HOST=mail.example.com" in warning and "SMTP_USERNAME" not in warning
+    [with_login] = _warnings(**SMTP, smtp_security="None", smtp_username="mailer", smtp_password="secret")
+    assert "SMTP_USERNAME / SMTP_PASSWORD login" in with_login and "secret" not in with_login
+    for local in ("localhost", "127.0.0.1", "127.0.0.2", "::1", "[::1]", " LOCALHOST "):
+        assert _warnings(**{**SMTP, "smtp_host": local}, smtp_security="none") == [], local
+    assert _warnings(**{**SMTP, "smtp_host": "127.example.com"}, smtp_security="none")
+
+
+def test_a_plain_http_public_app_url_off_localhost_is_warned_about():
+    for url in ("http://localhost:8502", "http://127.0.0.1", "http://[::1]:8080/", "https://veris.example"):
+        assert _warnings(email_backend="console", public_app_url=url) == [], url
+    [warning] = _warnings(email_backend="console", public_app_url="http://veris.example")
+    assert warning.startswith("PUBLIC_APP_URL=http://veris.example is plain http")
+    assert _warnings(**SMTP, public_app_url="HTTP://10.0.0.5:8502")
+    assert _warnings(**SMTP, public_app_url="http://localhost.veris.example")
+    # No links go out while email is disabled.
+    assert _warnings(public_app_url="http://veris.example", smtp_security="none") == []
+
+
+def test_bootstrap_starts_with_a_warning_for_cleartext_links(monkeypatch, caplog):
+    for name, value in {**SMTP, "smtp_security": "none", "public_app_url": "http://veris.example"}.items():
+        monkeypatch.setattr(settings, name, value, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="src.bootstrap"):
+        _validate_email_config()  # a warning, not an error
+
+    messages = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert [message.split("=", 1)[0] for message in messages] == ["SMTP_SECURITY", "PUBLIC_APP_URL"]
 
 
 @pytest.mark.anyio

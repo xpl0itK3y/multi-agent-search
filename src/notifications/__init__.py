@@ -11,6 +11,7 @@ from src.notifications.mail import (
     describe_send_failure,
     email_backend_name,
     email_config_errors,
+    email_config_warnings,
 )
 from src.notifications.messages import (
     SUPPORTED_LANGUAGES,
@@ -33,6 +34,7 @@ __all__ = [
     "describe_send_failure",
     "email_backend_name",
     "email_config_errors",
+    "email_config_warnings",
     "preferred_language",
     "render_account_email",
 ]
