@@ -20,7 +20,7 @@ const ui = useUiStore();
             v-for="loc in (['ru', 'en', 'es'] as const)"
             :key="loc"
             type="button"
-            class="press hit rounded-lg px-2.5 py-1 text-2xs font-semibold uppercase after:inset-x-0"
+            class="press hit rounded-lg px-2.5 py-1 text-2xs font-semibold uppercase [@media(pointer:coarse)]:after:inset-x-0"
             :class="ui.locale === loc ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
             :aria-pressed="ui.locale === loc ? 'true' : 'false'"
             @click="ui.setLocale(loc)"

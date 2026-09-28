@@ -80,7 +80,7 @@ function skip() {
             :placeholder="$t('setPassword.password')"
             :aria-label="$t('setPassword.password')"
             :aria-describedby="pwHelpId"
-            class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+            class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
           />
           <PasswordRuleHint :id="pwHelpId" :password="password" :tried="error === 'min6'" />
         </div>
@@ -90,7 +90,7 @@ function skip() {
           autocomplete="new-password"
           :placeholder="$t('setPassword.confirm')"
           :aria-label="$t('setPassword.confirm')"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
         />
         <p v-if="error === 'min6'" role="alert" class="text-sm text-danger">{{ $t("setPassword.min6") }}</p>
         <p v-else-if="error === 'mismatch'" role="alert" class="text-sm text-danger">{{ $t("setPassword.mismatch") }}</p>
@@ -105,7 +105,7 @@ function skip() {
         <button
           type="submit"
           :disabled="busy"
-          class="press w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
+          class="press w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
           {{ $t("setPassword.save") }}
         </button>

@@ -105,7 +105,7 @@ async function submit() {
             v-for="loc in (['ru', 'en', 'es'] as const)"
             :key="loc"
             type="button"
-            class="press hit rounded-lg px-2.5 py-1 text-2xs font-semibold uppercase after:inset-x-0"
+            class="press hit rounded-lg px-2.5 py-1 text-2xs font-semibold uppercase [@media(pointer:coarse)]:after:inset-x-0"
             :class="ui.locale === loc ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
             :aria-pressed="ui.locale === loc ? 'true' : 'false'"
             @click="ui.setLocale(loc)"
@@ -151,7 +151,7 @@ async function submit() {
           :placeholder="$t('auth.email')"
           :aria-label="$t('auth.email')"
           autocomplete="email"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
         />
         <div>
           <input
@@ -164,7 +164,7 @@ async function submit() {
             :minlength="mode === 'register' ? PASSWORD_MIN_LENGTH : undefined"
             :aria-describedby="mode === 'register' ? pwHelpId : undefined"
             :aria-invalid="mode === 'register' && passwordTried && password.length < PASSWORD_MIN_LENGTH ? 'true' : undefined"
-            class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+            class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
           />
           <PasswordRuleHint v-if="mode === 'register'" :id="pwHelpId" :password="password" :tried="passwordTried" />
         </div>
@@ -181,7 +181,7 @@ async function submit() {
         <button
           type="submit"
           :disabled="busy"
-          class="press w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
+          class="press w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
           <template v-if="busy">{{ mode === "login" ? $t("auth.loggingIn") : $t("auth.registering") }}</template>
           <template v-else>{{ mode === "login" ? $t("auth.login") : $t("auth.register") }}</template>
@@ -194,7 +194,7 @@ async function submit() {
         </div>
         <button
           type="button"
-          class="press flex w-full items-center justify-center gap-2 rounded-lg border border-bd bg-surface px-4 py-2.5 text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
+          class="press flex w-full items-center justify-center gap-2 rounded-lg border border-bd bg-surface px-4 py-3 text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
           @click="googleLogin"
         >
           <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">

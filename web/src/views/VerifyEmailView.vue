@@ -85,7 +85,7 @@ async function switchAccount() {
       <p role="status" class="text-center text-sm text-muted">{{ $t("verifyEmail.signInFirst") }}</p>
       <router-link
         :to="LOGIN_FIRST"
-        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.toLogin") }}
       </router-link>
@@ -96,7 +96,7 @@ async function switchAccount() {
       <p class="mt-2 text-center text-sm leading-relaxed text-muted">{{ $t("verifyEmail.confirmPrompt") }}</p>
       <button
         type="button"
-        class="press mt-4 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="confirm"
       >
         {{ $t("verifyEmail.confirm") }}
@@ -113,7 +113,7 @@ async function switchAccount() {
       </p>
       <router-link
         to="/"
-        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.continue") }}
       </router-link>
@@ -125,7 +125,7 @@ async function switchAccount() {
       </p>
       <router-link
         to="/settings"
-        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.toSettings") }}
       </router-link>
@@ -138,7 +138,7 @@ async function switchAccount() {
       <p class="mt-3 text-center text-sm text-muted">{{ $t("verifyEmail.signedInAs", { email: auth.user.email }) }}</p>
       <button
         type="button"
-        class="press mt-4 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="switchAccount"
       >
         {{ $t("verifyEmail.switchAccount") }}
@@ -158,7 +158,7 @@ async function switchAccount() {
         </p>
         <router-link
           to="/"
-          class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+          class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
         >
           {{ $t("verifyEmail.continue") }}
         </router-link>
@@ -169,7 +169,7 @@ async function switchAccount() {
         </p>
         <router-link
           to="/settings"
-          class="press mt-4 block w-full rounded-lg border border-bd px-4 py-2.5 text-center text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
+          class="press mt-4 block w-full rounded-lg border border-bd px-4 py-3 text-center text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
         >
           {{ $t("verifyEmail.toSettings") }}
         </router-link>
@@ -182,7 +182,7 @@ async function switchAccount() {
       </p>
       <button
         type="button"
-        class="press mt-4 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="confirm"
       >
         {{ $t("verifyEmail.retry") }}

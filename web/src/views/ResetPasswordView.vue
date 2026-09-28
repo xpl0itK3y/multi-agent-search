@@ -78,7 +78,7 @@ async function submit() {
       </p>
       <router-link
         to="/login"
-        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("resetPassword.toLogin") }}
       </router-link>
@@ -90,7 +90,7 @@ async function submit() {
       </p>
       <router-link
         to="/forgot-password"
-        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-2.5 text-center text-sm font-medium text-onAccent sm:py-2"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("resetPassword.requestNew") }}
       </router-link>
@@ -106,7 +106,7 @@ async function submit() {
       <!-- Secondary: a new link costs one of the hourly sends and retires the emailed one. -->
       <router-link
         to="/forgot-password"
-        class="press mt-4 block w-full rounded-lg border border-bd px-4 py-2.5 text-center text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
+        class="press mt-4 block w-full rounded-lg border border-bd px-4 py-3 text-center text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
       >
         {{ $t("resetPassword.requestNew") }}
       </router-link>
@@ -127,7 +127,7 @@ async function submit() {
             :placeholder="$t('resetPassword.password')"
             :aria-label="$t('resetPassword.password')"
             :aria-describedby="pwHelpId"
-            class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+            class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
           />
           <PasswordRuleHint :id="pwHelpId" :password="password" :tried="passwordTried" />
         </div>
@@ -137,13 +137,13 @@ async function submit() {
           autocomplete="new-password"
           :placeholder="$t('resetPassword.confirm')"
           :aria-label="$t('resetPassword.confirm')"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
         />
         <p v-if="error" role="alert" class="text-sm text-danger">{{ error }}</p>
         <button
           type="submit"
           :disabled="busy"
-          class="press w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
+          class="press w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
           {{ busy ? $t("resetPassword.saving") : $t("resetPassword.save") }}
         </button>

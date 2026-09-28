@@ -67,13 +67,13 @@ async function submit() {
           autocomplete="email"
           :placeholder="$t('auth.email')"
           :aria-label="$t('auth.email')"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-muted sm:py-2"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
         />
         <p v-if="error" role="alert" class="text-sm text-danger">{{ error }}</p>
         <button
           type="submit"
           :disabled="busy"
-          class="press w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
+          class="press w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
           {{ busy ? $t("forgotPassword.sending") : $t("forgotPassword.submit") }}
         </button>
