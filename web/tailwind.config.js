@@ -27,6 +27,12 @@ export default {
         danger: "rgb(var(--c-danger) / <alpha-value>)",
         info: "rgb(var(--c-info) / <alpha-value>)",
       },
+      // Accent text uses the text-safe shade, so a label on an accent tint (badges,
+      // selected rows) stays ≥4.5:1 in every theme. bg-/border-/ring-accent keep the
+      // brand accent.
+      textColor: {
+        accent: "rgb(var(--c-accent-soft) / <alpha-value>)",
+      },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
         serif: ["Lora", "Georgia", "Times New Roman", "serif"],

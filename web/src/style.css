@@ -13,8 +13,11 @@
   --c-ink: 23 25 38;
   --c-muted: 104 108 128;
   --c-accent: 91 84 232;
-  /* Accent as text on light surfaces (≥4.5:1 on an accent/15 tint over white). */
-  --c-accent-soft: 76 68 214;
+  /* Accent as text. Tailwind maps text-accent and text-accentSoft here, so accent
+     labels stay ≥4.5:1 on their own tints: any accent/5..30 wash, or /20 stacked on
+     /15, over bg, rail, surface or surface-hover (themeContrast.test.ts). Fills,
+     borders and focus rings keep --c-accent. */
+  --c-accent-soft: 67 60 187;
   /* Text/icons on a solid accent fill. */
   --c-on-accent: 255 255 255;
   /* Status colours, readable on their own 10% tint (light values; html.dark below). */
@@ -52,7 +55,7 @@ html[data-theme="dark"] {
   --c-ink: 233 234 246;
   --c-muted: 147 151 176;
   --c-accent: 139 124 255;
-  --c-accent-soft: 167 156 255;
+  --c-accent-soft: 180 171 255;
   --c-on-accent: 14 15 23;
   --c-grad-a: 139 124 255;
   --c-grad-b: 56 220 245;
@@ -68,7 +71,7 @@ html[data-theme="midnight"] {
   --c-ink: 224 232 247;
   --c-muted: 138 152 182;
   --c-accent: 56 160 255;
-  --c-accent-soft: 120 190 255;
+  --c-accent-soft: 127 194 255;
   --c-on-accent: 9 14 28;
   --c-grad-a: 56 160 255;
   --c-grad-b: 90 230 220;
@@ -100,7 +103,7 @@ html[data-theme="rose"] {
   --c-ink: 246 232 240;
   --c-muted: 184 152 170;
   --c-accent: 244 96 150;
-  --c-accent-soft: 250 150 185;
+  --c-accent-soft: 250 153 187;
   --c-on-accent: 22 12 18;
   --c-grad-a: 244 96 150;
   --c-grad-b: 255 165 120;
@@ -115,10 +118,10 @@ html[data-theme="sand"] {
   --c-bd: 228 222 210;
   --c-ink: 41 37 32;
   --c-muted: 120 112 100;
-  /* Deep enough for white on-accent text (≥4.5:1) and accent text on the sand bg; the
-     brand gradient keeps the lighter golds. */
+  /* Deep enough for white on-accent text (≥4.5:1); the brand gradient keeps the
+     lighter golds. Accent text is a deeper bronze so it holds on the gold tints. */
   --c-accent: 160 96 18;
-  --c-accent-soft: 150 90 20;
+  --c-accent-soft: 117 70 16;
   --c-grad-a: 217 146 53;
   --c-grad-b: 230 196 110;
   color-scheme: light;
@@ -174,7 +177,7 @@ html.dark .material-popover {
 
 /* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */
 .md-citation {
-  color: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-soft));
   font-weight: 600;
   font-size: 0.7em;
   padding: 0 0.15em;
