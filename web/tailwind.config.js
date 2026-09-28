@@ -4,6 +4,9 @@ import typography from "@tailwindcss/typography";
 export default {
   darkMode: "class",
   content: ["./index.html", "./src/**/*.{vue,ts}"],
+  // hover: variants apply only where a real hover exists, so a tap never leaves a
+  // control stuck in its hover state on touch screens.
+  future: { hoverOnlyWhenSupported: true },
   theme: {
     extend: {
       colors: {

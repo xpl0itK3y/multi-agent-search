@@ -302,8 +302,10 @@ body {
   transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), filter 0.45s ease;
   filter: drop-shadow(0 2px 7px rgb(var(--c-accent) / 0.4));
 }
-.veris-logo:hover {
-  transform: rotate(-6deg) scale(1.08);
+@media (hover: hover) and (pointer: fine) {
+  .veris-logo:hover {
+    transform: rotate(-6deg) scale(1.08);
+  }
 }
 
 /* ---- Interaction polish ---- */
@@ -313,7 +315,49 @@ a,
 input,
 textarea,
 select {
-  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+/* Press feedback (§1): the response lands on pointer-down, never on release.
+   No grey tap flash and no double-tap-zoom wait on touch. */
+:is(button, a[href], [role="button"], summary, label[for]) {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+/* Every control dims the instant it is pressed and fades back over 200 ms. */
+:is(button, a[href], [role="button"], summary):not(:disabled):not(.press):not(.press-none):active {
+  opacity: 0.72;
+  transition-duration: 0s;
+}
+/* Opt-in dip for compact filled controls. The individual `scale` property composes
+   with Tailwind's translate/transform utilities; :active never sets `transform`. */
+.press {
+  transition-property: color, background-color, border-color, box-shadow, opacity, filter, scale, transform;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-press);
+}
+.press:not(:disabled):active {
+  scale: 0.97;
+  transition-duration: 100ms;
+}
+/* Cards: a smaller dip, so a large surface doesn't lurch. */
+.press.press-lg:not(:disabled):active {
+  scale: 0.985;
+}
+
+/* Touch targets: an invisible hit area 8px wider on each side, on coarse pointers only.
+   In the components layer so utilities such as `absolute` still win. */
+@layer components {
+  @media (pointer: coarse) {
+    .hit {
+      position: relative;
+    }
+    .hit::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+    }
+  }
 }
 input:focus-visible,
 textarea:focus-visible {
