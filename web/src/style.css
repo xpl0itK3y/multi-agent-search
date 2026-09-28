@@ -198,7 +198,13 @@ body {
   color: rgb(var(--c-ink));
   font-family: theme("fontFamily.sans");
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+}
+
+/* Numbers in tables line up in columns (§15). */
+@layer base {
+  table {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 /* Thin, unobtrusive scrollbars */
@@ -213,6 +219,32 @@ body {
 *::-webkit-scrollbar-thumb {
   background: rgb(var(--c-muted) / 0.35);
   border-radius: 9999px;
+}
+/* Scrollers whose position is shown another way (tab strips, chip rows). */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Scroll edge effects (§12): content fades where it meets the scroller's edge instead
+   of being cut by a hard line. Use only on scrollers padded at least by the fade. */
+.edge-fade-y {
+  --edge: 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
+}
+.edge-fade-top {
+  --edge: 20px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--edge));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--edge));
+}
+.edge-fade-x {
+  --edge: 28px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--edge)), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--edge)), transparent);
 }
 
 /* ---- Motion: entrances + Vue transition classes ----
@@ -498,6 +530,16 @@ select {
   .press:not(:disabled):active {
     scale: none;
     opacity: 0.72;
+  }
+}
+
+/* Touch screens: text fields render at 16px or more, so iOS never zooms the page on
+   focus (§15 Dynamic Type: respect the user's size rather than fight it). */
+@media (pointer: coarse) {
+  input[class]:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea[class],
+  select[class] {
+    font-size: max(1rem, 16px);
   }
 }
 

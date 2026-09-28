@@ -31,8 +31,31 @@ export default {
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
         serif: ["Lora", "Georgia", "Times New Roman", "serif"],
       },
+      // Tracking is size-specific (§15): small labels open up slightly, headings
+      // tighten as they grow. An explicit tracking-* class still overrides these.
+      fontSize: {
+        "3xs": ["0.625rem", { lineHeight: "0.875rem", letterSpacing: "0.02em" }],
+        "2xs": ["0.6875rem", { lineHeight: "1rem", letterSpacing: "0.01em" }],
+        xl: ["1.25rem", { lineHeight: "1.75rem", letterSpacing: "-0.01em" }],
+        "2xl": ["1.5rem", { lineHeight: "2rem", letterSpacing: "-0.015em" }],
+        "3xl": ["1.875rem", { lineHeight: "2.25rem", letterSpacing: "-0.02em" }],
+        "4xl": ["2.25rem", { lineHeight: "2.5rem", letterSpacing: "-0.022em" }],
+      },
       borderRadius: { card: "16px" },
-      maxWidth: { composer: "768px" },
+      maxWidth: { composer: "48rem" },
+      // Report headings: real weights (Inter now loads up to 700), tight leading and
+      // tracking as they grow, balanced lines; tables use tabular figures.
+      typography: () => ({
+        DEFAULT: {
+          css: {
+            h1: { fontWeight: "600", lineHeight: "1.15", letterSpacing: "-0.015em", textWrap: "balance" },
+            h2: { fontWeight: "600", lineHeight: "1.25", letterSpacing: "-0.01em", textWrap: "balance" },
+            h3: { fontWeight: "600", lineHeight: "1.35", letterSpacing: "-0.005em" },
+            th: { fontWeight: "600" },
+            table: { fontVariantNumeric: "tabular-nums" },
+          },
+        },
+      }),
       // Elevation: soft shadows in light, a lit rim + outline in dark (style.css).
       boxShadow: { e1: "var(--elev-1)", e2: "var(--elev-2)", e3: "var(--elev-3)" },
       transitionTimingFunction: {
