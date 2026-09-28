@@ -324,4 +324,11 @@ describe("admin OverviewTab", () => {
     expect(wrapper.find('[data-test="overview-stream"]').text()).toBe(t("admin.overview.liveSse"));
     expect(wrapper.text()).toContain(t("admin.overview.systemDegradedTitle"));
   });
+
+  it("keeps the health dot round beside a heading that wraps on a phone", async () => {
+    adminApi.getOverview.mockResolvedValueOnce(snapshot("healthy"));
+    const wrapper = await mountOverview();
+    // jsdom has no layout: without shrink-0 the flex row squeezes the empty dot into an oval.
+    expect(wrapper.find('[data-test="overview-health-dot"]').classes()).toContain("shrink-0");
+  });
 });

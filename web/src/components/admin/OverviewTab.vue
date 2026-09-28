@@ -126,7 +126,8 @@ const isHealthy = computed(() => {
       <div class="flex items-center gap-2">
         <!-- Breathes only while the live stream is actually connected. -->
         <span
-          class="inline-block h-3 w-3 rounded-full"
+          class="inline-block h-3 w-3 shrink-0 rounded-full"
+          data-test="overview-health-dot"
           :class="[isHealthy ? 'bg-success' : 'bg-warning', isStreaming && !streamError ? 'live-dot' : '']"
           aria-hidden="true"
         />
