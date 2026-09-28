@@ -342,6 +342,11 @@ describe("SettingsView", () => {
     await wrapper.vm.$router.replace({ query: { tab: "appearance" } });
     await flushPromises();
     expect(wrapper.text()).toContain(t("settings.appearance.title"));
+
+    // The sidebar's plain /settings, while the view stays mounted: back to Profile.
+    await wrapper.vm.$router.push("/settings");
+    await flushPromises();
+    expect(wrapper.text()).toContain(t("settings.profile.title"));
   });
 
   it("goes home from Back when Settings was opened on its own", async () => {

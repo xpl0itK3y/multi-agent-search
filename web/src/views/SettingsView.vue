@@ -43,11 +43,12 @@ function selectTab(tab: TabId) {
   delete query[REAUTH_ERROR_PARAM];
   router.replace({ query });
 }
+// The view stays mounted across ?tab= changes (App keys views by path), so it follows the
+// address itself: Back, Forward, or the sidebar's plain /settings (Profile).
 watch(
   () => route.query.tab,
   (tab) => {
-    const id = tabFromQuery(tab);
-    if (id) activeTab.value = id;
+    activeTab.value = tabFromQuery(tab) ?? "profile";
   },
 );
 

@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { createMemoryHistory, createRouter } from "vue-router";
+import { defineComponent, onMounted, ref } from "vue";
+import { createMemoryHistory, createRouter, useRoute, useRouter } from "vue-router";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -15,6 +16,28 @@ import { useUiStore } from "@/stores/ui";
 import App from "./App.vue";
 
 const View = { template: "<div data-test='view'>view</div>" };
+
+// A view that keeps its open tab in the query, as Settings and Admin do; it counts its mounts.
+const mounts = { tabbed: 0, thread: 0 };
+const TabbedView = defineComponent({
+  setup() {
+    const route = useRoute();
+    const router = useRouter();
+    const draft = ref("");
+    onMounted(() => mounts.tabbed++);
+    const open = (tab: string) => router.replace({ query: { ...route.query, tab } });
+    return { route, draft, open };
+  },
+  template: `<div>
+    <input v-model="draft" data-test="draft" />
+    <button type="button" data-test="tab-b" @click="open('b')">b</button>
+    <p data-test="tab">{{ route.query.tab ?? "a" }}</p>
+  </div>`,
+});
+const ThreadStub = defineComponent({
+  setup: () => onMounted(() => mounts.thread++),
+  template: "<div data-test='thread'>thread</div>",
+});
 
 let wrapper: VueWrapper | null = null;
 
@@ -29,6 +52,8 @@ async function mountApp(url: string, { signedIn = true } = {}) {
       { path: "/other", name: "other", component: View },
       { path: "/login", name: "login", component: View, meta: { bare: true } },
       { path: "/r/:token", name: "public-report", component: View, meta: { public: true } },
+      { path: "/tabbed", name: "tabbed", component: TabbedView },
+      { path: "/thread/:threadId", name: "thread", component: ThreadStub },
     ],
   });
   await router.push(url);
@@ -120,6 +145,33 @@ describe("App shell", () => {
     await router.push("/other");
     await flushPromises();
     expect(ui.mobileOpen).toBe(false);
+  });
+
+  it("keeps the mounted view, its focus and its input across a query-only tab switch", async () => {
+    mounts.tabbed = 0;
+    const { wrapper, router } = await mountApp("/tabbed");
+    await wrapper.find("[data-test='draft']").setValue("unsaved");
+    const tab = wrapper.find<HTMLButtonElement>("[data-test='tab-b']");
+    tab.element.focus();
+
+    await tab.trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.fullPath).toBe("/tabbed?tab=b");
+    expect(wrapper.find("[data-test='tab']").text()).toBe("b");
+    expect(mounts.tabbed).toBe(1);
+    expect(tab.element.isConnected).toBe(true);
+    expect(document.activeElement).toBe(tab.element);
+    expect((wrapper.find("[data-test='draft']").element as HTMLInputElement).value).toBe("unsaved");
+  });
+
+  it("still mounts a new view for a new path, such as another thread", async () => {
+    mounts.thread = 0;
+    const { router } = await mountApp("/thread/a");
+    await router.push("/thread/b");
+    await flushPromises();
+
+    expect(mounts.thread).toBe(2);
   });
 });
 

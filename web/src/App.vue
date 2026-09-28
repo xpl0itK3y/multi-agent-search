@@ -66,6 +66,12 @@ function onDrawerLostCapture(e: PointerEvent) {
 // Close the mobile drawer on any navigation.
 watch(() => route.fullPath, () => ui.closeMobile());
 
+// One view instance per page: a new path (another page, thread or research) mounts a new
+// view and plays the view transition. A query-only change (Settings' and Admin's ?tab=)
+// stays in the mounted view, which follows the query itself, so its focus, scroll and
+// unsaved input survive a tab switch and nothing animates in again.
+const viewKey = computed(() => route.path);
+
 const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 function firstFocusable(root: HTMLElement): HTMLElement | null {
@@ -177,7 +183,7 @@ const drawerClass = computed(() => {
       <div class="relative min-h-0 flex-1">
         <router-view v-slot="{ Component }">
           <transition name="view" mode="out-in">
-            <component :is="Component" :key="route.fullPath" />
+            <component :is="Component" :key="viewKey" />
           </transition>
         </router-view>
       </div>
