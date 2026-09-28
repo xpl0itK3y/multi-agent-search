@@ -184,6 +184,10 @@ describe("admin UsersTab", () => {
     const deletes = drawer.findAll("button").filter((b) => b.text().includes(t("admin.users.deleteUser")));
     expect(deletes).toHaveLength(1);
     expect(zone.element.contains(deletes[0].element)).toBe(true);
+    // It says what a delete costs, and the button carries that into its description.
+    const hint = zone.find('[data-test="danger-zone-hint"]');
+    expect(hint.text()).toBe(t("admin.users.dangerZoneHint"));
+    expect(deletes[0].attributes("aria-describedby")).toBe(hint.attributes("id"));
 
     await deletes[0].trigger("click");
     await flushPromises();

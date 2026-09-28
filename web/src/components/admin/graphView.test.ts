@@ -416,6 +416,10 @@ describe("AgentsGraphTab wheel, zoom buttons and fit", () => {
     expect(60 * v.zoom + v.panX).toBeGreaterThanOrEqual(47.9);
     expect(6910 * v.zoom + v.panX).toBeLessThanOrEqual(W - 47.9);
     expect(wrapper!.find('[data-test="graph-fit"]').text()).toBe(`${Math.round(v.zoom * 100)}%`);
+    // Named for what it does, with the visible % in its spoken name.
+    const fit = wrapper!.find('[data-test="graph-fit"]');
+    expect(fit.attributes("title")).toBe(i18n.global.t("admin.agents.fitView"));
+    expect(fit.attributes("aria-label")).toBe(`${i18n.global.t("admin.agents.fitView")}, ${Math.round(v.zoom * 100)}%`);
   });
 
   it("zooms the + button around the viewport centre", async () => {

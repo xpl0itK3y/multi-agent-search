@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { adminApi, apiErrorMessage, type ApiFile } from "@/lib/api";
@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 
 const { t } = useI18n();
+const dangerHintId = useId();
 const auth = useAuthStore();
 const deletingUserId = ref<string | null>(null);
 
@@ -1450,8 +1451,11 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               data-test="danger-zone"
             >
               <h4 class="text-xs font-semibold text-danger">{{ t("admin.users.dangerZone") }}</h4>
+              <!-- What the action costs, said before it (and read out with the button). -->
+              <p :id="dangerHintId" class="mt-1 text-2xs text-muted text-pretty" data-test="danger-zone-hint">{{ t("admin.users.dangerZoneHint") }}</p>
               <button
                 type="button"
+                :aria-describedby="dangerHintId"
                 class="press mt-3 flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
                 :disabled="deletingUserId === activeUser.id"
                 @click="handleDeleteUser(activeUser)"

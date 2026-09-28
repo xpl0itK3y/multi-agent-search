@@ -1836,8 +1836,15 @@ function isNodeDimmed(nodeId: string): boolean {
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomIn')" @click="zoomIn">
             +
           </button>
-          <!-- Fit: the whole graph in view (the label keeps showing the live zoom). -->
-          <button class="min-w-[3.25rem] px-1.5 py-1 text-center text-[11px] tabular-nums hover:text-ink" :title="t('admin.agents.resetZoom')" data-test="graph-fit" @click="fitView()">
+          <!-- Fit: the whole graph in view (the label keeps showing the live zoom). Named
+               for what it does; the spoken name keeps the visible % in it (label in name). -->
+          <button
+            class="min-w-[3.25rem] px-1.5 py-1 text-center text-[11px] tabular-nums hover:text-ink"
+            :title="t('admin.agents.fitView')"
+            :aria-label="`${t('admin.agents.fitView')}, ${Math.round(zoom * 100)}%`"
+            data-test="graph-fit"
+            @click="fitView()"
+          >
             {{ Math.round(zoom * 100) }}%
           </button>
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomOut')" @click="zoomOut">
