@@ -1135,8 +1135,10 @@ def test_link_cleanup_deletes_expired_and_used_links_across_batches(store):
 
     assert store.cleanup_auth_action_tokens(_in(-60)) == 0  # nothing ended an hour ago
     assert store.cleanup_auth_action_tokens(_in(1)) == 5
+    # The stored row survived, unused (`live` is only the snapshot create returned).
+    stored = store.get_live_auth_action_token(_hash("live"), AuthActionPurpose.PASSWORD_RESET)
+    assert stored is not None and (stored.id, stored.used_at) == (live.id, None)
     assert store.reset_password_with_token(_hash("live"), "hash-2") is not None
-    assert live.used_at is None
 
 
 def test_a_password_write_retires_the_unused_reset_links(store):
