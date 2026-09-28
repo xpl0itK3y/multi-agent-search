@@ -67,22 +67,29 @@ function headerBlocks(): Block[] {
   return blocks;
 }
 
-// The regex keys of the `map $request_uri $spa_referrer_policy` block, as JS regexes.
-function referrerPolicyFor(uri: string): string {
-  const start = confLines.indexOf("map $request_uri $spa_referrer_policy {");
+// The value that a `map $request_uri $<variable>` block gives a request URI: its regex
+// keys run as JS regexes, in order, and the default applies when none matches.
+function mapValueFor(variable: string, uri: string): string {
+  const start = confLines.indexOf(`map $request_uri $${variable} {`);
   expect(start).toBeGreaterThanOrEqual(0);
-  let policy = "";
+  let value = "";
   for (const line of confLines.slice(start + 1)) {
     if (line === "}") break;
     const m = line.match(/^(\S+|"[^"]*")\s+"([^"]*)";$/);
     if (!m) continue;
     const key = m[1].replace(/^"|"$/g, "");
-    if (key === "default") policy ||= m[2];
+    if (key === "default") value ||= m[2];
     else if (key.startsWith("~") && new RegExp(key.replace(/^~\*?/, ""), key.startsWith("~*") ? "i" : "").test(uri))
       return m[2];
   }
-  return policy;
+  return value;
 }
+
+const referrerPolicyFor = (uri: string) => mapValueFor("spa_referrer_policy", uri);
+const cacheControlFor = (uri: string) => mapValueFor("spa_cache_control", uri);
+
+// The SPA routes that read a one-time account recovery token from the URL fragment.
+const RECOVERY_PAGES = ["/reset-password", "/verify-email"];
 
 describe("SPA security headers (web/nginx.conf)", () => {
   it("allows exactly index.html's inline scripts, by hash, for LF and CRLF checkouts", () => {
@@ -136,5 +143,32 @@ describe("SPA security headers (web/nginx.conf)", () => {
     expect(referrerPolicyFor("/")).toBe("strict-origin-when-cross-origin");
     expect(referrerPolicyFor("/research/r/1")).toBe("strict-origin-when-cross-origin");
     expect(referrerPolicyFor("/rx/1")).toBe("strict-origin-when-cross-origin");
+  });
+
+  it("sends no Referer from the account recovery pages", () => {
+    for (const page of RECOVERY_PAGES) {
+      expect(referrerPolicyFor(page)).toBe("no-referrer");
+      expect(referrerPolicyFor(`${page}/`)).toBe("no-referrer");
+      expect(referrerPolicyFor(`${page.toUpperCase()}?utm=1`)).toBe("no-referrer");
+      expect(referrerPolicyFor(`/${page}`)).toBe("no-referrer");
+      expect(referrerPolicyFor(`${page}x`)).toBe("strict-origin-when-cross-origin");
+      expect(referrerPolicyFor(`/settings${page}`)).toBe("strict-origin-when-cross-origin");
+    }
+    expect(referrerPolicyFor("/set-password")).toBe("strict-origin-when-cross-origin");
+  });
+
+  it("keeps the account recovery pages out of every cache and revalidates the rest", () => {
+    const index = headerBlocks().find((b) => b.header === "location = /index.html")!;
+    expect(index.headers.get("Cache-Control")).toBe("$spa_cache_control");
+    for (const page of RECOVERY_PAGES) {
+      expect(cacheControlFor(page)).toBe("no-store");
+      expect(cacheControlFor(`${page}/`)).toBe("no-store");
+      expect(cacheControlFor(`${page.toUpperCase()}?utm=1`)).toBe("no-store");
+      expect(cacheControlFor(`/${page}`)).toBe("no-store");
+      expect(cacheControlFor(`${page}x`)).toBe("no-cache");
+    }
+    expect(cacheControlFor("/")).toBe("no-cache");
+    expect(cacheControlFor("/index.html")).toBe("no-cache");
+    expect(cacheControlFor("/r/abc123")).toBe("no-cache");
   });
 });

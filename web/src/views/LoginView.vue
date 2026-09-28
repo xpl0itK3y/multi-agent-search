@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { api, apiErrorMessage } from "@/lib/api";
+import { startGoogleSignIn } from "@/lib/googleSignIn";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import SparkLogo from "@/components/SparkLogo.vue";
@@ -19,6 +20,9 @@ const password = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
 const googleEnabled = ref(false);
+// Whether a forgotten password can be reset by email here; null until the config is
+// known, so neither the link nor the "ask the administrator" hint shows before.
+const passwordReset = ref<boolean | null>(null);
 
 // A failed Google callback redirects here as /login?error=<code>. Keep the key
 // (not the text) so the message follows a language switch on this page.
@@ -30,7 +34,9 @@ const oauthErrorKey = ref<string | null>(OAUTH_ERRORS[String(route.query.error ?
 
 async function loadAuthConfig(retries = 2) {
   try {
-    googleEnabled.value = Boolean((await api.authConfig())?.google_oauth);
+    const config = await api.authConfig();
+    googleEnabled.value = Boolean(config?.google_oauth);
+    passwordReset.value = Boolean(config?.password_reset);
   } catch {
     if (retries > 0) {
       setTimeout(() => loadAuthConfig(retries - 1), 1000);
@@ -42,8 +48,11 @@ onMounted(() => {
   loadAuthConfig();
 });
 
+// The page that sent the user here (?redirect=) waits through Google's sign-in too: the
+// callback lands on its own page, and the router continues from there (googleSignIn.ts).
 function googleLogin() {
-  window.location.href = api.googleLoginUrl();
+  const redirect = route.query.redirect;
+  startGoogleSignIn(typeof redirect === "string" ? redirect : undefined);
 }
 
 async function submit() {
@@ -95,6 +104,15 @@ async function submit() {
         <p class="leading-relaxed text-accent/80">{{ $t("admin.authPasswordHint") }}</p>
       </div>
 
+      <!-- An emailed verification link, which confirms only the account it was sent to -->
+      <p
+        v-if="route.query.redirect === '/verify-email'"
+        role="status"
+        class="mb-5 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5 text-xs leading-relaxed text-accent"
+      >
+        {{ $t("verifyEmail.signInFirst") }}
+      </p>
+
       <div class="mb-6 flex items-center justify-center gap-3">
         <SparkLogo :size="28" />
         <h1 class="font-serif text-2xl text-ink">
@@ -117,6 +135,14 @@ async function submit() {
           :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
           class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
         />
+        <template v-if="mode === 'login' && passwordReset !== null">
+          <div v-if="passwordReset" class="text-right">
+            <router-link to="/forgot-password" class="text-xs text-muted hover:text-ink">
+              {{ $t("auth.forgotPassword") }}
+            </router-link>
+          </div>
+          <p v-else class="text-xs text-muted">{{ $t("auth.forgotPasswordAskAdmin") }}</p>
+        </template>
         <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
         <p v-else-if="oauthErrorKey" class="text-sm text-red-400">{{ $t(oauthErrorKey) }}</p>
         <button

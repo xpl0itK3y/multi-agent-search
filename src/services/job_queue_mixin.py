@@ -370,6 +370,7 @@ class JobQueueMixin:
         step("cleanup_search_cache", self.cleanup_search_cache, 0)
         step("cleanup_old_researches", self.cleanup_old_researches, [])
         step("cleanup_old_telemetry", self.cleanup_old_telemetry, {})
+        step("cleanup_auth_action_tokens", self.cleanup_expired_auth_action_tokens, 0)
         compacted_worker_names, compacted_research_ids = step(
             "compact_graph_operational_data", self.compact_graph_operational_data, ([], [])
         )

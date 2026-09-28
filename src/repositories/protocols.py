@@ -13,6 +13,8 @@ from src.domain import (
     AdminTokenResearchUsageItem,
     AdminUserDetailResponse,
     AdminUserListResponse,
+    AuthActionPurpose,
+    AuthActionTokenRecord,
     FinalizeJobStatus,
     QueueMetrics,
     ResearchFinalizeJob,
@@ -64,6 +66,8 @@ class TaskStore(Protocol):
     def delete_research(self, research_id: str) -> bool: ...
 
     # ── users (auth) ──────────────────────────────────────────────────────────
+    # An identity that arrives verified is stamped email_verified_at at creation: a
+    # google_subject (Google verified the address) or admin_provisioned (the operator).
     def create_user(
         self,
         user_id: str,
@@ -81,12 +85,26 @@ class TaskStore(Protocol):
     def get_user_by_google_subject(self, google_subject: str) -> UserRecord | None: ...
 
     # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
-    def delete_user(self, user_id: str) -> bool: ...
+    # expected_token_version makes it compare-and-set, as for update_user_password: False,
+    # and nothing deleted, once the account's token_version is another.
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool: ...
 
-    # Bumps token_version (revokes earlier sessions). admin_provisioned also stamps
-    # admin_provisioned_at in the same write: scripts/create_admin.py (admin_identity).
+    # Bumps token_version (revokes earlier sessions) and invalidates the account's unused
+    # password reset links, so a copied link cannot undo the new password. admin_provisioned
+    # also stamps admin_provisioned_at, and email_verified_at when unset, in the same
+    # write: scripts/create_admin.py (admin_identity).
+    # expected_token_version makes the write compare-and-set (SEC-REC2-1): it happens only
+    # while token_version still equals it, else None and nothing written. Set-password
+    # checks the current password on an earlier read; a Google link that removed the
+    # password, a reset or a sign-out everywhere committed since then bumped it, and must
+    # not be overwritten. None writes unconditionally (scripts/create_admin.py).
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None: ...
 
     # Revokes every session of the account (logout signs out everywhere): token_version + 1
@@ -95,6 +113,57 @@ class TaskStore(Protocol):
     def bump_user_token_version(self, user_id: str) -> UserRecord | None: ...
 
     def update_user_profile(self, user_id: str, name: str | None, avatar_url: str | None) -> UserRecord | None: ...
+
+    # Google sign-in linking (auth_mixin.get_or_create_oauth_user), one write: sets
+    # google_subject on an account that has none and marks its email verified (a first
+    # stamp is kept); clear_password also sets password_hash NULL, bumps token_version
+    # (revoking every session) and invalidates the unused password reset links. None when
+    # the account does not exist, already has a google_subject, or another account holds
+    # this one.
+    def link_user_google_subject(
+        self, user_id: str, google_subject: str, *, clear_password: bool
+    ) -> UserRecord | None: ...
+
+    # ── one-time links: password reset, email verification ────────────────────
+    # Every write to an account's tokens takes the account first: the SQL store locks the
+    # users row before any auth_action_tokens row (a redeem, an issue, a password write,
+    # delete_user's cascade), the in-memory store holds its one user lock throughout. So
+    # concurrent calls for one account queue instead of deadlocking.
+    # Stores a link token by its sha256 hex, for `email` (the address the link goes to),
+    # and in the same transaction invalidates (used_at = now) the user's other unused
+    # tokens of this purpose: only the newest link works. None when the user is gone.
+    def create_auth_action_token(
+        self,
+        user_id: str,
+        purpose: AuthActionPurpose,
+        token_hash: str,
+        email: str,
+        expires_at: datetime,
+        requested_ip: str | None = None,
+    ) -> AuthActionTokenRecord | None: ...
+
+    # Redeems a password reset token in one transaction: consumes it (single use: unused,
+    # unexpired, and the account's email still equals the address it was sent to), sets
+    # the password, bumps token_version (every session revoked), marks the email verified
+    # and invalidates the user's other unused reset tokens. None when it does not redeem.
+    def reset_password_with_token(self, token_hash: str, password_hash: str) -> UserRecord | None: ...
+
+    # The same for an email verification token, redeemed only for `user_id` (the signed-in
+    # account): consumes it, marks the email verified (a first stamp is kept) and
+    # invalidates the user's other unused verification tokens. None when it does not
+    # redeem; a live token of another account is then left unused.
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None: ...
+
+    # The token with this hash while it would redeem for `purpose` (unused, unexpired, its
+    # account's email still the address it was sent to), read without consuming it; None
+    # otherwise. Tells a link of another account apart from a dead one.
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None: ...
+
+    # Retention: deletes the tokens that expired or were used before `older_than`, in
+    # short batches; returns how many went.
+    def cleanup_auth_action_tokens(self, older_than: datetime) -> int: ...
 
     def get_user_token_analytics(self, user_id: str) -> dict: ...
 

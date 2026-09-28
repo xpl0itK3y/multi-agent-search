@@ -90,7 +90,8 @@ type Landing = Pick<RouteLocationNormalized, "name" | "fullPath" | "meta" | "que
  * sign-in started by startGoogleSignIn() asked to come back somewhere. Reads the
  * stored path once and drops it. A failed sign-in (/login?error=<code>) of a user who is
  * still signed in goes back there too, with ?reauth_error=<code> so that page can say
- * why. A brand-new account's /set-password landing and the public pages keep their own
+ * why. A brand-new account's /set-password landing, the public pages and the pages of an
+ * emailed link (a page load there is the link, never a Google landing) keep their own
  * page.
  */
 export function googleReturnRedirect(to: Landing, signedIn: boolean, now = Date.now()): string | null {
@@ -112,7 +113,7 @@ export function googleReturnRedirect(to: Landing, signedIn: boolean, now = Date.
   const age = typeof stored?.at === "number" ? now - stored.at : NaN;
   if (!(age >= 0 && age <= RETURN_TTL_MS)) return null;
   const path = safeReturnPath(stored.path);
-  if (!path || !signedIn || to.meta.public) return null;
+  if (!path || !signedIn || to.meta.public || to.meta.linkToken) return null;
   // A cancelled or refused Google step lands on /login?error=<code>, but the old session
   // cookie still signs the user in, so the router would send them on to Home with no word.
   const error = to.query.error;

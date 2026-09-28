@@ -64,6 +64,44 @@ async function saveProfile() {
   }
 }
 
+// ── Email verification (Profile tab) ──────────────────────────────────────────
+// Only where the server can send email (auth config). An address is verified by the
+// emailed link, a password reset or a Google sign-in.
+const emailVerificationEnabled = ref(false);
+const verificationBusy = ref(false);
+const verificationNotice = ref<"sent" | "already" | null>(null);
+const verificationError = ref<string | null>(null);
+
+async function loadAuthConfig() {
+  try {
+    emailVerificationEnabled.value = Boolean((await api.authConfig())?.email_verification);
+  } catch {
+    // Unknown: no verification section.
+  }
+}
+
+async function sendVerificationEmail() {
+  if (verificationBusy.value) return;
+  verificationBusy.value = true;
+  verificationNotice.value = null;
+  verificationError.value = null;
+  try {
+    const { status } = await api.requestEmailVerification();
+    if (status === "already_verified") {
+      // Verified meanwhile (the link opened in another tab, a Google sign-in).
+      verificationNotice.value = "already";
+      await auth.refreshUser();
+    } else {
+      verificationNotice.value = "sent";
+    }
+  } catch (e) {
+    // A 429 when links were asked for too often.
+    verificationError.value = apiErrorMessage(e, t);
+  } finally {
+    verificationBusy.value = false;
+  }
+}
+
 // ── Research Preferences State ────────────────────────────────────────────────
 const defaultDepth = ref<Depth>(
   (typeof localStorage !== "undefined" && (localStorage.getItem("research.default_depth") as Depth)) || "medium"
@@ -285,6 +323,7 @@ onMounted(() => {
     name.value = auth.user.name || "";
     avatarUrl.value = auth.user.avatar_url || "";
   }
+  loadAuthConfig();
   loadTokenStats();
   if (activeTab.value === "analytics") {
     startPolling();
@@ -468,6 +507,41 @@ onUnmounted(() => {
                 disabled
                 class="w-full rounded-lg border border-bd/60 bg-bg/30 px-3 py-2 text-xs text-muted cursor-not-allowed"
               />
+
+              <!-- Email verification -->
+              <div v-if="emailVerificationEnabled" class="space-y-2 pt-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    v-if="auth.user?.email_verified"
+                    class="rounded border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300"
+                  >
+                    ✓ {{ t("settings.profile.emailVerified") }}
+                  </span>
+                  <template v-else>
+                    <span class="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400">
+                      {{ t("settings.profile.emailNotVerified") }}
+                    </span>
+                    <button
+                      type="button"
+                      :disabled="verificationBusy"
+                      class="px-3 py-1 rounded-lg border border-bd text-[11px] font-medium text-ink hover:bg-surface transition disabled:opacity-50"
+                      @click="sendVerificationEmail"
+                    >
+                      {{ verificationBusy ? t("settings.profile.sendingVerification") : t("settings.profile.sendVerification") }}
+                    </button>
+                  </template>
+                </div>
+                <p v-if="!auth.user?.email_verified" class="text-[11px] text-muted">
+                  {{ t("settings.profile.emailNotVerifiedHint") }}
+                </p>
+                <p v-if="verificationNotice === 'sent'" role="status" class="text-xs text-emerald-300">
+                  {{ t("settings.profile.verificationSent", { email: auth.user?.email ?? "" }) }}
+                </p>
+                <p v-else-if="verificationNotice === 'already'" role="status" class="text-xs text-emerald-300">
+                  {{ t("settings.profile.alreadyVerified") }}
+                </p>
+                <p v-if="verificationError" class="text-xs text-red-400">{{ verificationError }}</p>
+              </div>
             </div>
 
             <!-- Alerts -->

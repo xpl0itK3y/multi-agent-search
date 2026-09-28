@@ -5,7 +5,31 @@ import { googleReturnRedirect } from "@/lib/googleSignIn";
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
+    // meta.bare: a sign-in screen, drawn without the app shell (App.vue).
+    { path: "/login", name: "login", component: () => import("@/views/LoginView.vue"), meta: { bare: true } },
+    {
+      path: "/forgot-password",
+      name: "forgot-password",
+      component: () => import("@/views/ForgotPasswordView.vue"),
+      meta: { public: true, bare: true },
+    },
+    // meta.linkToken: opened from an emailed link, whose one-time token lib/linkToken.ts
+    // takes out of the address before the router ever sees it (src/linkCapture.ts).
+    {
+      path: "/reset-password",
+      name: "reset-password",
+      component: () => import("@/views/ResetPasswordView.vue"),
+      meta: { public: true, bare: true, linkToken: true },
+    },
+    // Not public: the server confirms an address only for the signed-in account the link
+    // was sent to, so a signed-out visitor signs in first (/login?redirect=/verify-email)
+    // while the link waits in this tab (lib/linkToken.ts).
+    {
+      path: "/verify-email",
+      name: "verify-email",
+      component: () => import("@/views/VerifyEmailView.vue"),
+      meta: { bare: true, linkToken: true },
+    },
     { path: "/set-password", name: "set-password", component: () => import("@/views/SetPasswordView.vue") },
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
     {

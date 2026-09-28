@@ -40,6 +40,8 @@ from src.domain import (
     AdminUserListItem,
     AdminUserListResponse,
     AdminWorkerFleetItem,
+    AuthActionPurpose,
+    AuthActionTokenRecord,
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
@@ -64,6 +66,7 @@ from src.domain import (
 )
 from src.db.models import (
     AdminAuditLogORM,
+    AuthActionTokenORM,
     LLMUsageLogORM,
     ResearchFinalizeJobORM,
     ResearchORM,
@@ -98,11 +101,27 @@ def _user_record(user: UserORM) -> UserRecord:
         name=user.name,
         avatar_url=user.avatar_url,
         admin_provisioned_at=user.admin_provisioned_at,
+        email_verified_at=user.email_verified_at,
+    )
+
+
+def _auth_action_token_record(row: AuthActionTokenORM) -> AuthActionTokenRecord:
+    return AuthActionTokenRecord(
+        id=row.id,
+        user_id=row.user_id,
+        purpose=AuthActionPurpose(row.purpose),
+        email=row.email,
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+        used_at=row.used_at,
+        requested_ip=row.requested_ip,
     )
 
 
 # SQLSTATE foreign_key_violation.
 _FOREIGN_KEY_VIOLATION = "23503"
+# SQLSTATE unique_violation.
+_UNIQUE_VIOLATION = "23505"
 
 
 def _contains_pattern(term: str) -> str:
@@ -294,12 +313,14 @@ class SQLAlchemyTaskStore:
         *,
         admin_provisioned: bool = False,
     ) -> UserRecord:
+        now = datetime.now(timezone.utc)
         user = UserORM(
             id=user_id,
             email=email.strip().lower(),
             password_hash=password_hash,
             google_subject=google_subject,
-            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
+            admin_provisioned_at=now if admin_provisioned else None,
+            email_verified_at=now if google_subject or admin_provisioned else None,
         )
         with self.session_scope() as session:
             session.add(user)
@@ -330,32 +351,55 @@ class SQLAlchemyTaskStore:
                 return None
             return _user_record(user)
 
-    def delete_user(self, user_id: str) -> bool:
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool:
         """Delete a user; researches (and via FK cascades: tasks, results, jobs,
         share tokens inside graph_state) are removed with them (DATA-LIFECYCLE)."""
         with self.session_scope() as session:
-            user = session.get(UserORM, user_id)
+            if expected_token_version is None:
+                user = session.get(UserORM, user_id)
+            else:
+                # Locked from the compare to the delete: a write that bumped token_version
+                # first leaves nothing to match, one that comes later waits for the delete.
+                user = session.execute(
+                    select(UserORM)
+                    .where(UserORM.id == user_id, UserORM.token_version == expected_token_version)
+                    .with_for_update()
+                ).scalar_one_or_none()
             if user is None:
                 return False
             session.delete(user)
             return True
 
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
         values = {"password_hash": password_hash, "token_version": UserORM.token_version + 1}
         if admin_provisioned:
-            values["admin_provisioned_at"] = datetime.now(timezone.utc)
+            values["admin_provisioned_at"] = now
+            values["email_verified_at"] = func.coalesce(UserORM.email_verified_at, now)
+        conditions = [UserORM.id == user_id]
+        if expected_token_version is not None:
+            # A concurrent write holding the row makes this wait, then re-check the new
+            # token_version: once it bumped, the UPDATE matches nothing.
+            conditions.append(UserORM.token_version == expected_token_version)
         with self.session_scope() as session:
             statement = (
                 update(UserORM)
-                .where(UserORM.id == user_id)
+                .where(*conditions)
                 .values(**values)
                 .returning(UserORM)
             )
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
+            # After the users row (lock order): no reset link sent before survives it.
+            self._invalidate_auth_action_tokens(session, user_id, AuthActionPurpose.PASSWORD_RESET.value, now)
             return _user_record(user)
 
     def bump_user_token_version(self, user_id: str) -> UserRecord | None:
@@ -382,6 +426,190 @@ class SQLAlchemyTaskStore:
                 session.flush()
                 return _user_record(user)
             return None
+
+    def link_user_google_subject(
+        self, user_id: str, google_subject: str, *, clear_password: bool
+    ) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
+        values = {
+            "google_subject": google_subject,
+            "email_verified_at": func.coalesce(UserORM.email_verified_at, now),
+        }
+        if clear_password:
+            values.update(password_hash=None, token_version=UserORM.token_version + 1)
+        statement = (
+            update(UserORM)
+            .where(UserORM.id == user_id, UserORM.google_subject.is_(None))
+            .values(**values)
+            .returning(UserORM)
+        )
+        try:
+            with self.session_scope() as session:
+                user = session.execute(statement).scalar_one_or_none()
+                if user is None:
+                    return None
+                if clear_password:
+                    self._invalidate_auth_action_tokens(
+                        session, user_id, AuthActionPurpose.PASSWORD_RESET.value, now
+                    )
+                return _user_record(user)
+        except IntegrityError as exc:
+            # Another account took this google_subject (ix_users_google_subject is unique).
+            if getattr(exc.orig, "sqlstate", None) != _UNIQUE_VIOLATION:
+                raise
+            return None
+
+    # ── one-time links (auth_action_tokens) ───────────────────────────────────
+
+    @staticmethod
+    def _invalidate_auth_action_tokens(session: Session, user_id: str, purpose: str, now: datetime) -> None:
+        session.execute(
+            update(AuthActionTokenORM)
+            .where(
+                AuthActionTokenORM.user_id == user_id,
+                AuthActionTokenORM.purpose == purpose,
+                AuthActionTokenORM.used_at.is_(None),
+            )
+            .values(used_at=now)
+            .execution_options(synchronize_session=False)
+        )
+
+    def create_auth_action_token(
+        self,
+        user_id: str,
+        purpose: AuthActionPurpose,
+        token_hash: str,
+        email: str,
+        expires_at: datetime,
+        requested_ip: str | None = None,
+    ) -> AuthActionTokenRecord | None:
+        purpose_value = AuthActionPurpose(purpose).value
+        now = datetime.now(timezone.utc)
+        with self.session_scope() as session:
+            # The user row lock serializes two requests for the same account, so the
+            # second one's invalidation sees the first one's token. Every token write takes
+            # it before the tokens (lock order, see _redeem_auth_action_token).
+            owner = session.execute(
+                select(UserORM.id).where(UserORM.id == user_id).with_for_update()
+            ).scalar_one_or_none()
+            if owner is None:
+                return None
+            self._invalidate_auth_action_tokens(session, user_id, purpose_value, now)
+            row = AuthActionTokenORM(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                purpose=purpose_value,
+                token_hash=token_hash,
+                email=email.strip().lower(),
+                created_at=now,
+                expires_at=expires_at,
+                requested_ip=clip_text(requested_ip, TELEMETRY_IP_MAX_LENGTH),
+            )
+            session.add(row)
+            session.flush()
+            return _auth_action_token_record(row)
+
+    @staticmethod
+    def _live_auth_action_token(token_hash: str, purpose: AuthActionPurpose, now: datetime) -> tuple:
+        """WHERE clauses of a token that would redeem: this purpose, unused, unexpired, and
+        its account's email still the one it was sent to."""
+        return (
+            AuthActionTokenORM.token_hash == token_hash,
+            AuthActionTokenORM.purpose == purpose.value,
+            AuthActionTokenORM.used_at.is_(None),
+            AuthActionTokenORM.expires_at > now,
+            select(UserORM.id)
+            .where(UserORM.id == AuthActionTokenORM.user_id, UserORM.email == AuthActionTokenORM.email)
+            .exists(),
+        )
+
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None:
+        live = self._live_auth_action_token(token_hash, AuthActionPurpose(purpose), datetime.now(timezone.utc))
+        with self.session_scope() as session:
+            row = session.execute(select(AuthActionTokenORM).where(*live)).scalar_one_or_none()
+            return _auth_action_token_record(row) if row is not None else None
+
+    def _redeem_auth_action_token(
+        self,
+        token_hash: str,
+        purpose: AuthActionPurpose,
+        user_values: dict,
+        now: datetime,
+        user_id: str | None = None,
+    ) -> UserRecord | None:
+        """One transaction: lock the account, consume the token, apply ``user_values`` to
+        the account and invalidate its other unused tokens of the purpose.
+
+        The token redeems when it would (_live_auth_action_token), and only for the
+        account ``user_id`` when given: another account's token matches nothing and stays
+        unused. Consuming is one conditional UPDATE: of two concurrent redeems, the second
+        re-checks used_at once the first commits and matches nothing, so a link works once.
+
+        Lock order: the users row first, then its tokens, as create_auth_action_token,
+        update_user_password and delete_user (through the cascade) take them. Consuming
+        the token first and then waiting for the users row deadlocked against an issue or
+        a delete for the same account, which holds the users row and waits for the tokens."""
+        owner_id = (
+            user_id
+            if user_id is not None
+            else select(AuthActionTokenORM.user_id).where(AuthActionTokenORM.token_hash == token_hash).scalar_subquery()
+        )
+        with self.session_scope() as session:
+            owner = session.execute(
+                select(UserORM.id).where(UserORM.id == owner_id).with_for_update()
+            ).scalar_one_or_none()
+            if owner is None:
+                return None
+            consumed = session.execute(
+                update(AuthActionTokenORM)
+                .where(*self._live_auth_action_token(token_hash, purpose, now), AuthActionTokenORM.user_id == owner)
+                .values(used_at=now)
+                .returning(AuthActionTokenORM.email)
+                .execution_options(synchronize_session=False)
+            ).first()
+            if consumed is None:
+                return None
+            user = session.execute(
+                update(UserORM)
+                .where(UserORM.id == owner, UserORM.email == consumed.email)
+                .values(**user_values)
+                .returning(UserORM)
+            ).scalar_one_or_none()
+            if user is None:  # unreachable while the row lock holds the email; kept as a guard
+                return None
+            self._invalidate_auth_action_tokens(session, user.id, purpose.value, now)
+            return _user_record(user)
+
+    def reset_password_with_token(self, token_hash: str, password_hash: str) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
+        return self._redeem_auth_action_token(
+            token_hash,
+            AuthActionPurpose.PASSWORD_RESET,
+            {
+                "password_hash": password_hash,
+                "token_version": UserORM.token_version + 1,
+                "email_verified_at": func.coalesce(UserORM.email_verified_at, now),
+            },
+            now,
+        )
+
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
+        return self._redeem_auth_action_token(
+            token_hash,
+            AuthActionPurpose.EMAIL_VERIFICATION,
+            {"email_verified_at": func.coalesce(UserORM.email_verified_at, now)},
+            now,
+            user_id=user_id,
+        )
+
+    def cleanup_auth_action_tokens(self, older_than: datetime) -> int:
+        return self._delete_in_batches(
+            AuthActionTokenORM,
+            or_(AuthActionTokenORM.expires_at < older_than, AuthActionTokenORM.used_at < older_than),
+        )
 
     def get_cached_search(self, cache_key: str, max_age_seconds: int) -> list[dict] | None:
         with self.session_scope() as session:

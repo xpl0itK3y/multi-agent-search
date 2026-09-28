@@ -1415,12 +1415,14 @@ async def test_google_callback_hides_provider_error_text(client, mocker, caplog)
 
 
 @pytest.mark.anyio
-async def test_google_callback_redirects_conflict_for_unlinked_local_account(client, mocker):
+async def test_google_callback_redirects_conflict_for_an_account_of_another_google_identity(client, mocker):
+    """An unlinked local account is linked now (tests/test_account_recovery.py); only an
+    account that another Google identity holds still refuses the sign-in."""
     mocker.patch("src.api.dependencies.settings.auth_disabled", False)
     mocker.patch("src.config.settings.google_client_id", "cid")
     mocker.patch("src.config.settings.google_client_secret", "sec")
     service = client._transport.app.state.research_service
-    service.register_user("local-first@example.com", "localpass1")
+    service.get_or_create_oauth_user("local-first@example.com", google_subject="g-first")
     state = await _start_google_login(client)
     mocker.patch(
         "src.api.app.fetch_userinfo",

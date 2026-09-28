@@ -9,7 +9,8 @@ from starlette.requests import Request
 from src.api.schemas import AuthUser
 from src.auth import llm_rate_limit
 from src.auth.llm_rate_limit import enforce_llm_rate_limit
-from src.auth.login_rate_limit import DEFAULT_MAX_KEYS, SlidingWindowLimiter, enforce_auth_rate_limit
+from src.auth.login_rate_limit import enforce_auth_rate_limit
+from src.auth.sliding_window import DEFAULT_MAX_KEYS, SlidingWindowLimiter
 from src.config import settings
 
 
@@ -191,10 +192,10 @@ class _Clock:
 
 @pytest.fixture
 def clock(monkeypatch):
-    from src.auth import login_rate_limit
+    from src.auth import sliding_window
 
     fake = _Clock()
-    monkeypatch.setattr(login_rate_limit.time, "monotonic", fake)
+    monkeypatch.setattr(sliding_window.time, "monotonic", fake)
     return fake
 
 
@@ -295,6 +296,36 @@ def test_only_the_brute_force_limiters_refuse_new_keys_when_full_of_lockouts():
         )
     )
     assert not app_module._activity_touch_gate._protect_lockouts
+    assert not any(limiter._protect_lockouts for limiter in login_rate_limit._RECOVERY_LIMITERS)
+
+
+# The account-recovery throttles, each with the limit its route passes.
+RECOVERY_LIMITERS = [
+    ("_forgot_password_ip_limiter", "FORGOT_PASSWORD_PER_IP_PER_HOUR"),
+    ("_forgot_password_email_limiter", "FORGOT_PASSWORD_PER_EMAIL_PER_HOUR"),
+    ("_password_reset_ip_limiter", "LINK_REDEEM_PER_IP_PER_HOUR"),
+    ("_email_verify_ip_limiter", "LINK_REDEEM_PER_IP_PER_HOUR"),
+    ("_verification_email_limiter", "VERIFICATION_EMAIL_PER_USER_PER_HOUR"),
+]
+
+
+@pytest.mark.parametrize(("name", "limit_name"), RECOVERY_LIMITERS)
+def test_a_recovery_throttle_full_of_lockouts_still_admits_a_new_key(clock, monkeypatch, name, limit_name):
+    """SEC-REC-4: refusing new keys once every tracked one is at its limit turned password
+    recovery (or link redemption, or verification mail) off for everyone for the hour. What
+    these throttle is harmless to repeat, so the oldest lockout goes instead."""
+    from src.auth import login_rate_limit
+
+    limiter = getattr(login_rate_limit, name)
+    limit = getattr(login_rate_limit, limit_name)
+    monkeypatch.setattr(limiter, "_max_keys", 3)
+    for key in ("a", "b", "c"):
+        assert [limiter.allow(key, limit) for _ in range(limit + 1)] == [True] * limit + [False]
+        clock.now += 1
+
+    assert limiter.allow("fresh", limit)
+    assert len(limiter) == 3
+    assert limiter.allow("a", limit)  # "a", locked out longest, was the one forgotten
 
 
 def test_sliding_window_with_zero_limit_records_no_key(clock):
@@ -316,6 +347,7 @@ def test_every_process_limiter_is_bounded():
         login_rate_limit._account_limiter,
         login_rate_limit._password_check_limiter,
         telemetry_rate_limit._telemetry_limiter,
+        *login_rate_limit._RECOVERY_LIMITERS,
     ]
     assert all(isinstance(limiter, SlidingWindowLimiter) for limiter in limiters)
     assert all(0 < limiter._max_keys <= 10_000 for limiter in limiters)

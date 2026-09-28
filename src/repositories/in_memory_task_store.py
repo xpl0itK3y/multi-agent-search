@@ -22,6 +22,8 @@ from src.domain import (
     AdminUserListItem,
     AdminUserListResponse,
     AdminWorkerFleetItem,
+    AuthActionPurpose,
+    AuthActionTokenRecord,
     ExtractionMetrics,
     FinalizeJobStatus,
     GraphMetrics,
@@ -65,6 +67,8 @@ class InMemoryTaskStore:
         self.user_sessions: list[dict] = []
         self.user_events: list[dict] = []
         self.user_telemetry: dict[str, dict] = {}
+        # auth_action_tokens rows (one-time links), keyed by id.
+        self.auth_action_tokens: dict[str, dict] = {}
         self._admission_lock = threading.RLock()
         # Serializes graph_state merges, mirroring the SQL store's FOR UPDATE row lock.
         self._state_lock = threading.RLock()
@@ -249,15 +253,17 @@ class InMemoryTaskStore:
         *,
         admin_provisioned: bool = False,
     ) -> UserRecord:
+        now = datetime.now(timezone.utc)
         user = UserRecord(
             id=user_id,
             email=email,
             password_hash=password_hash,
             google_subject=google_subject,
-            admin_provisioned_at=datetime.now(timezone.utc) if admin_provisioned else None,
+            admin_provisioned_at=now if admin_provisioned else None,
+            email_verified_at=now if google_subject or admin_provisioned else None,
         )
         self.users[user_id] = user
-        self._user_created_at[user_id] = datetime.now(timezone.utc)
+        self._user_created_at[user_id] = now
         return user
 
     def get_user_by_email(self, email: str) -> UserRecord | None:
@@ -273,10 +279,18 @@ class InMemoryTaskStore:
             None,
         )
 
-    def delete_user(self, user_id: str) -> bool:
-        if user_id not in self.users:
-            return False
-        del self.users[user_id]
+    def delete_user(self, user_id: str, *, expected_token_version: int | None = None) -> bool:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None:
+                return False
+            if expected_token_version is not None and user.token_version != expected_token_version:
+                return False
+            del self.users[user_id]
+            # auth_action_tokens.user_id is ON DELETE CASCADE.
+            self.auth_action_tokens = {
+                token_id: row for token_id, row in self.auth_action_tokens.items() if row["user_id"] != user_id
+            }
         self._user_created_at.pop(user_id, None)
         # Mirror the SQL FK cascade: the user's researches (and their tasks) go too,
         # which also revokes every public share token they had minted.
@@ -294,17 +308,27 @@ class InMemoryTaskStore:
         return True
 
     def update_user_password(
-        self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
+        self,
+        user_id: str,
+        password_hash: str,
+        *,
+        admin_provisioned: bool = False,
+        expected_token_version: int | None = None,
     ) -> UserRecord | None:
         with self._user_lock:
             user = self.users.get(user_id)
             if user is None:
                 return None
+            if expected_token_version is not None and user.token_version != expected_token_version:
+                return None
+            now = datetime.now(timezone.utc)
             patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
             if admin_provisioned:
-                patch["admin_provisioned_at"] = datetime.now(timezone.utc)
+                patch["admin_provisioned_at"] = now
+                patch["email_verified_at"] = user.email_verified_at or now
             updated = user.model_copy(update=patch)
             self.users[user_id] = updated
+            self._invalidate_auth_action_tokens(user_id, AuthActionPurpose.PASSWORD_RESET, now)
             return updated
 
     def bump_user_token_version(self, user_id: str) -> UserRecord | None:
@@ -331,6 +355,135 @@ class InMemoryTaskStore:
                     return updated
                 return user
             return None
+
+    def link_user_google_subject(
+        self, user_id: str, google_subject: str, *, clear_password: bool
+    ) -> UserRecord | None:
+        with self._user_lock:
+            user = self.users.get(user_id)
+            if user is None or user.google_subject is not None:
+                return None
+            if any(other.google_subject == google_subject for other in self.users.values()):
+                return None  # the unique index on users.google_subject
+            now = datetime.now(timezone.utc)
+            patch = {"google_subject": google_subject, "email_verified_at": user.email_verified_at or now}
+            if clear_password:
+                patch.update(password_hash=None, token_version=user.token_version + 1)
+                self._invalidate_auth_action_tokens(user_id, AuthActionPurpose.PASSWORD_RESET, now)
+            updated = user.model_copy(update=patch)
+            self.users[user_id] = updated
+            return updated
+
+    # ── one-time links (auth_action_tokens) ───────────────────────────────────
+    # Rows as the SQL table holds them, keyed by id; _user_lock makes each redeem one
+    # atomic step, as the SQL store's single transaction does.
+
+    @staticmethod
+    def _auth_action_token_record(row: dict) -> AuthActionTokenRecord:
+        return AuthActionTokenRecord(**{key: value for key, value in row.items() if key != "token_hash"})
+
+    def _invalidate_auth_action_tokens(self, user_id: str, purpose: AuthActionPurpose, now: datetime) -> None:
+        for row in self.auth_action_tokens.values():
+            if row["user_id"] == user_id and row["purpose"] == purpose and row["used_at"] is None:
+                row["used_at"] = now
+
+    def create_auth_action_token(
+        self,
+        user_id: str,
+        purpose: AuthActionPurpose,
+        token_hash: str,
+        email: str,
+        expires_at: datetime,
+        requested_ip: str | None = None,
+    ) -> AuthActionTokenRecord | None:
+        purpose = AuthActionPurpose(purpose)
+        now = datetime.now(timezone.utc)
+        with self._user_lock:
+            if user_id not in self.users:
+                return None
+            if any(row["token_hash"] == token_hash for row in self.auth_action_tokens.values()):
+                raise ValueError("auth action token hash already stored")  # the unique index
+            self._invalidate_auth_action_tokens(user_id, purpose, now)
+            row = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "purpose": purpose,
+                "token_hash": token_hash,
+                "email": email.strip().lower(),
+                "created_at": now,
+                "expires_at": expires_at,
+                "used_at": None,
+                "requested_ip": clip_text(requested_ip, TELEMETRY_IP_MAX_LENGTH),
+            }
+            self.auth_action_tokens[row["id"]] = row
+            return self._auth_action_token_record(row)
+
+    def _live_auth_action_token(self, token_hash: str, purpose: AuthActionPurpose, now: datetime) -> dict | None:
+        """The token's row while it would redeem: the right purpose, unused, unexpired, and
+        the account's email is still the one it was sent to."""
+        row = next((row for row in self.auth_action_tokens.values() if row["token_hash"] == token_hash), None)
+        if row is None or row["purpose"] != purpose or row["used_at"] is not None or row["expires_at"] <= now:
+            return None
+        user = self.users.get(row["user_id"])
+        if user is None or user.email.strip().lower() != row["email"]:
+            return None
+        return row
+
+    def _consume_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose, now: datetime, user_id: str | None = None
+    ) -> UserRecord | None:
+        """Mark the token used and return its account, when it redeems (for ``user_id``
+        only, when given: another account's token is left unused)."""
+        row = self._live_auth_action_token(token_hash, purpose, now)
+        if row is None or (user_id is not None and row["user_id"] != user_id):
+            return None
+        row["used_at"] = now
+        return self.users[row["user_id"]]
+
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None:
+        with self._user_lock:
+            row = self._live_auth_action_token(token_hash, AuthActionPurpose(purpose), datetime.now(timezone.utc))
+            return self._auth_action_token_record(row) if row is not None else None
+
+    def reset_password_with_token(self, token_hash: str, password_hash: str) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
+        with self._user_lock:
+            user = self._consume_auth_action_token(token_hash, AuthActionPurpose.PASSWORD_RESET, now)
+            if user is None:
+                return None
+            updated = user.model_copy(
+                update={
+                    "password_hash": password_hash,
+                    "token_version": user.token_version + 1,
+                    "email_verified_at": user.email_verified_at or now,
+                }
+            )
+            self.users[user.id] = updated
+            self._invalidate_auth_action_tokens(user.id, AuthActionPurpose.PASSWORD_RESET, now)
+            return updated
+
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
+        with self._user_lock:
+            user = self._consume_auth_action_token(token_hash, AuthActionPurpose.EMAIL_VERIFICATION, now, user_id)
+            if user is None:
+                return None
+            updated = user.model_copy(update={"email_verified_at": user.email_verified_at or now})
+            self.users[user.id] = updated
+            self._invalidate_auth_action_tokens(user.id, AuthActionPurpose.EMAIL_VERIFICATION, now)
+            return updated
+
+    def cleanup_auth_action_tokens(self, older_than: datetime) -> int:
+        with self._user_lock:
+            kept = {
+                token_id: row
+                for token_id, row in self.auth_action_tokens.items()
+                if row["expires_at"] >= older_than and (row["used_at"] is None or row["used_at"] >= older_than)
+            }
+            deleted, self.auth_action_tokens = len(self.auth_action_tokens) - len(kept), kept
+            return deleted
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         return self.researches.get(research_id)

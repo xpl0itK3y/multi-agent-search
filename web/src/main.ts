@@ -1,3 +1,5 @@
+// First: an emailed link's token leaves the address before anything else runs.
+import "./linkCapture";
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";

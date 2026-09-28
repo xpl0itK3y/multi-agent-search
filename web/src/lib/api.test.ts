@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { i18n, LOCALES } from "@/i18n";
@@ -155,8 +156,27 @@ describe("api request error handling", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
-  it("on 401 on public routes (/r/…, /login): no redirect loop", async () => {
-    for (const pathname of ["/r/share-token", "/login"]) {
+  // The account pages a signed-out visitor opens, in the spellings vue-router matches.
+  const ACCOUNT_PAGES = ["/forgot-password", "/Forgot-Password/", "/reset-password"];
+
+  // It confirms the signed-in account's address: a session that ended there signs in
+  // again, and comes back to the link waiting in this tab.
+  it("on 401 on /verify-email: a stale session goes back through /login", async () => {
+    for (const pathname of ["/verify-email", "/Verify-Email/"]) {
+      const { assign } = stubEnv("stale-token", pathname);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+
+      const { api } = await import("./api");
+      await expect(api.verifyEmail("verify-tok")).rejects.toMatchObject({ status: 401 });
+      expect(assign).toHaveBeenCalledWith(`/login?redirect=${encodeURIComponent(pathname)}`);
+
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it("on 401 on public routes (/r/…, /login, account pages): no redirect loop", async () => {
+    for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
       const { assign } = stubEnv("stale-token", pathname);
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
 
@@ -169,7 +189,7 @@ describe("api request error handling", () => {
   });
 
   it("on 401 on public routes with a cookie-only session: no probe, no redirect", async () => {
-    for (const pathname of ["/r/share-token", "/login"]) {
+    for (const pathname of ["/r/share-token", "/login", ...ACCOUNT_PAGES]) {
       const { assign } = stubEnv(null, pathname);
       const fetchMock = fetchAnswering(200, 401);
 
@@ -239,6 +259,148 @@ describe("account endpoints", () => {
 
     expect(removeItem).toHaveBeenCalledWith("access_token");
     expect(assign).toHaveBeenCalledWith("/login?redirect=%2Fsettings");
+  });
+});
+
+describe("account recovery endpoints", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function answering(status: number, body: unknown) {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const sent = (fetchMock: ReturnType<typeof answering>, n = 0) => {
+    const [url, init] = fetchMock.mock.calls[n] as [string, RequestInit];
+    return { url, method: init.method, body: JSON.parse(init.body as string), headers: init.headers };
+  };
+
+  it("posts the forgotten password's email, the reset token and the verification token", async () => {
+    stubEnv(null, "/forgot-password");
+    const { api } = await import("./api");
+
+    let fetchMock = answering(202, { status: "accepted" });
+    expect(await api.forgotPassword("denis@example.com")).toEqual({ status: "accepted" });
+    expect(sent(fetchMock)).toMatchObject({
+      url: "/v1/auth/password/forgot",
+      method: "POST",
+      body: { email: "denis@example.com" },
+    });
+
+    fetchMock = answering(200, { status: "ok" });
+    await api.resetPassword("reset-tok", "new-password");
+    expect(sent(fetchMock)).toMatchObject({
+      url: "/v1/auth/password/reset",
+      method: "POST",
+      body: { token: "reset-tok", password: "new-password" },
+    });
+
+    fetchMock = answering(200, { status: "verified" });
+    await api.verifyEmail("verify-tok");
+    expect(sent(fetchMock)).toMatchObject({ url: "/v1/auth/email/verify", method: "POST", body: { token: "verify-tok" } });
+  });
+
+  it("sends the page's language, in which the server writes account emails", async () => {
+    stubEnv(null, "/forgot-password");
+    // <html lang>, which the ui store keeps on the language picked in the app.
+    const documentElement = { lang: "es" };
+    vi.stubGlobal("document", { cookie: "", documentElement });
+    const fetchMock = answering(202, { status: "accepted" });
+    const { api } = await import("./api");
+
+    for (const lang of ["es", "en", "ru"]) {
+      documentElement.lang = lang;
+      await api.forgotPassword("denis@example.com");
+      expect(sent(fetchMock, fetchMock.mock.calls.length - 1).headers).toMatchObject({ "Accept-Language": lang });
+    }
+
+    // No page language: the browser's own Accept-Language applies.
+    documentElement.lang = "";
+    await api.forgotPassword("denis@example.com");
+    expect(sent(fetchMock, fetchMock.mock.calls.length - 1).headers).not.toHaveProperty("Accept-Language");
+  });
+
+  it("asks for a verification email with the session and the csrf token", async () => {
+    stubEnv("access", "/settings", "", "csrf_token=tok");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "sent" }), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api } = await import("./api");
+    expect(await api.requestEmailVerification()).toEqual({ status: "sent" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/v1/auth/email/verification");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
+  });
+
+  it("confirms an address with the session and the csrf token of the signed-in account", async () => {
+    stubEnv("access", "/verify-email", "", "csrf_token=tok");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: "verified" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api } = await import("./api");
+    expect(await api.verifyEmail("verify-tok")).toEqual({ status: "verified" });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/v1/auth/email/verify");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ token: "verify-tok" });
+    expect(init.headers).toMatchObject({ Authorization: "Bearer access", "X-CSRF-Token": "tok" });
+  });
+
+  it("a password reset drops this page's session: the server revoked them all", async () => {
+    const { assign, removeItem } = stubEnv("access", "/reset-password");
+    const fetchMock = fetchAnswering(200, 200, 401);
+
+    const { api } = await import("./api");
+    await api.me();
+    await api.resetPassword("reset-tok", "new-password");
+    await expect(api.getReport("abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(removeItem).toHaveBeenCalledWith("access_token");
+    // Not a session that expired under the user: no /me probe, no bounce to /login.
+    expect(calledPaths(fetchMock)).toEqual(["/v1/auth/me", "/v1/auth/password/reset", "/v1/research/abc/report"]);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("a refused reset keeps the session", async () => {
+    const { removeItem } = stubEnv("access", "/reset-password");
+    answering(400, { detail: "reset_token_invalid: this password reset link is invalid or has expired" });
+
+    const { api, isResetTokenInvalid } = await import("./api");
+    const err = await api.resetPassword("dead-tok", "new-password").catch((e) => e);
+
+    expect(isResetTokenInvalid(err)).toBe(true);
+    expect(removeItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("PASSWORD_MIN_LENGTH", () => {
+  it("is the minimum of every password the server sets", async () => {
+    stubEnv(null, "/");
+    const { PASSWORD_MIN_LENGTH } = await import("./api");
+
+    // The `*password: str = Field(..., min_length=N)` fields of the request models, by
+    // class. A login checks a password, it does not set one, so it accepts any length.
+    const models = readFileSync(new URL("../../../src/domain/models.py", import.meta.url), "utf8");
+    const minimums = new Map<string, number>();
+    let model = "";
+    for (const line of models.split(/\r?\n/)) {
+      model = /^class (\w+)/.exec(line)?.[1] ?? model;
+      const field = /^\s+\w*password: str = Field\(.*\bmin_length=(\d+)/.exec(line);
+      if (field && model !== "LoginRequest") minimums.set(model, Number(field[1]));
+    }
+
+    expect([...minimums.keys()]).toEqual(expect.arrayContaining(["RegisterRequest", "SetPasswordRequest"]));
+    for (const [name, min] of minimums) expect(min, name).toBe(PASSWORD_MIN_LENGTH);
   });
 });
 
@@ -459,5 +621,42 @@ describe("apiErrorMessage", () => {
     expect(isReauthRequired(new ApiError(401, "reauth_required"))).toBe(false);
     expect(isReauthRequired(new ApiError(403, "Forbidden: reauth_required"))).toBe(false);
     expect(isReauthRequired(new Error("403 reauth_required"))).toBe(false);
+  });
+
+  it("explains a verification link of another account than the signed-in one", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage, isVerificationTokenInvalid, isVerificationWrongAccount } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+    const wrong = new ApiError(403, "verification_wrong_account: sign in to the account this link was sent to");
+
+    expect(apiErrorMessage(wrong, t)).toBe("[errors.api.verificationWrongAccount]");
+    for (const { value } of LOCALES) expect(i18n.global.te("errors.api.verificationWrongAccount", value)).toBe(true);
+    expect([isVerificationWrongAccount(wrong), isVerificationTokenInvalid(wrong)]).toEqual([true, false]);
+    // Only a 403 whose detail starts with the code; other 403s stay generic.
+    expect(isVerificationWrongAccount(new ApiError(400, wrong.detail))).toBe(false);
+    expect(isVerificationWrongAccount(new ApiError(403, `Forbidden: ${wrong.detail}`))).toBe(false);
+    expect(apiErrorMessage(new ApiError(403, "Admin privileges required"), t)).toBe("[errors.api.forbidden]");
+  });
+
+  it("names a dead password reset or verification link", async () => {
+    stubEnv(null, "/");
+    const { ApiError, apiErrorMessage, isResetTokenInvalid, isVerificationTokenInvalid } = await import("./api");
+    const t = (key: string) => `[${key}]`;
+    const reset = new ApiError(400, "reset_token_invalid: this password reset link is invalid or has expired");
+    const verify = new ApiError(400, "verification_token_invalid: this verification link is invalid or has expired");
+
+    expect(apiErrorMessage(reset, t)).toBe("[errors.api.resetTokenInvalid]");
+    expect(apiErrorMessage(verify, t)).toBe("[errors.api.verificationTokenInvalid]");
+    for (const key of ["resetTokenInvalid", "verificationTokenInvalid"]) {
+      for (const { value } of LOCALES) expect(i18n.global.te(`errors.api.${key}`, value), `${value}: ${key}`).toBe(true);
+    }
+    expect([isResetTokenInvalid(reset), isVerificationTokenInvalid(reset)]).toEqual([true, false]);
+    expect([isResetTokenInvalid(verify), isVerificationTokenInvalid(verify)]).toEqual([false, true]);
+
+    // Only a 400 whose detail starts with the code; other 400s keep the server's text.
+    expect(isResetTokenInvalid(new ApiError(422, reset.detail))).toBe(false);
+    expect(isVerificationTokenInvalid(new ApiError(400, `Bad request: ${verify.detail}`))).toBe(false);
+    expect(apiErrorMessage(new ApiError(422, reset.detail), t)).toBe("[errors.api.validation]");
+    expect(apiErrorMessage(new ApiError(400, "Bad request"), t)).toBe("Bad request");
   });
 });

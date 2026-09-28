@@ -41,6 +41,42 @@ class UserORM(Base):
     admin_provisioned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the address was proven: a verification or password reset link was opened, the
+    # account is linked to Google, or the operator provisioned it. NULL: unverified.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AuthActionTokenORM(Base):
+    """A one-time link sent to an account's address: a password reset or an email
+    verification. Only the sha256 hex of the random token is stored; the token is valid
+    while unused, unexpired and while the account's email still equals ``email``."""
+
+    __tablename__ = "auth_action_tokens"
+    __table_args__ = (
+        Index("ix_auth_action_tokens_user_purpose", "user_id", "purpose"),
+        CheckConstraint(
+            "purpose IN ('password_reset','email_verification')",
+            name="ck_auth_action_tokens_purpose",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requested_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ResearchORM(Base):

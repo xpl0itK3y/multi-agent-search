@@ -9,6 +9,7 @@ import type {
   AdminUserDetailResponse,
   AdminUserListResponse,
   AgentMetadataItem,
+  AuthConfig,
   AuthSession,
   AuthUser,
   UserTokenStats,
@@ -117,10 +118,15 @@ export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
   return new ApiError(res.status, await errorDetail(res));
 }
 
-// Routes that legitimately make unauthenticated calls — the public share page,
-// and /login itself (redirecting there from a failed sign-in would loop).
+// Routes that legitimately make unauthenticated calls — the public share page, /login
+// itself (redirecting there from a failed sign-in would loop) and the signed-out account
+// pages. Compared the way vue-router matches them: any case, trailing slashes aside.
+// /verify-email is not one: it confirms the signed-in account's address, so a session
+// that ended there goes back through /login like on any other page (the link waits in
+// lib/linkToken.ts).
+const PUBLIC_PAGES = new Set(["/login", "/forgot-password", "/reset-password"]);
 function isPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/r/");
+  return PUBLIC_PAGES.has(pathname.toLowerCase().replace(/\/+$/, "")) || pathname.startsWith("/r/");
 }
 
 // Whether this page signed a user in: set once /v1/auth/me, a login or a registration
@@ -155,6 +161,14 @@ async function recoverFromExpiredSession(hadToken: boolean, hadSession: boolean)
   window.location.assign(`/login?redirect=${encodeURIComponent(pathname + search)}`);
 }
 
+// The server writes account emails (verification, password reset, notices) in the
+// request's Accept-Language. Send the page's language, the one picked in the app (the ui
+// store keeps <html lang> on it), which may differ from the browser's.
+function languageHeaders(): Record<string, string> {
+  const lang = typeof document !== "undefined" ? document.documentElement?.lang : undefined;
+  return lang ? { "Accept-Language": lang } : {};
+}
+
 interface RequestOptions {
   // false: a 401 from this call means "wrong credential" (a mistyped current
   // password), not a stale session — keep the token and let the caller show it.
@@ -169,6 +183,7 @@ async function request<T>(
   const method = init?.method ?? "GET";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...languageHeaders(),
     ...((init?.headers as Record<string, string>) ?? {}),
     ...authHeaders(method),
   };
@@ -232,12 +247,21 @@ const API_STATUS_KEYS: Record<number, string> = {
 // server sends no error codes, so these match the English error texts raised in
 // src/services; any other detail gets the status's generic text, never the raw one.
 const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
+  400: [
+    // A password reset or email verification link that is unknown, expired or already
+    // used (see isResetTokenInvalid / isVerificationTokenInvalid).
+    [/^reset_token_invalid/, "resetTokenInvalid"],
+    [/^verification_token_invalid/, "verificationTokenInvalid"],
+  ],
   403: [
     // Sign-up with an ADMIN_EMAILS address (auth_mixin.register_user).
     [/^This email is reserved for an administrator\b/, "adminEmailReserved"],
     // An action that needs a fresh Google sign-in (see isReauthRequired). The text
     // speaks of passwords; the account deletion shows its own (SettingsView).
     [/^reauth_required/, "reauthRequired"],
+    // A verification link of another account than the signed-in one; the server left the
+    // link unused (see isVerificationWrongAccount).
+    [/^verification_wrong_account/, "verificationWrongAccount"],
   ],
   409: [
     [/^A research is already in progress\b/, "researchInProgress"],
@@ -260,6 +284,26 @@ const API_DETAIL_KEYS: Record<number, [RegExp, string][]> = {
 export function isReauthRequired(err: unknown): boolean {
   return err instanceof ApiError && err.status === 403 && err.detail.startsWith("reauth_required");
 }
+
+// The one-time token of an emailed link is unknown, expired or already used: the page
+// says so and offers a new link instead of trying it again.
+export function isResetTokenInvalid(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && err.detail.startsWith("reset_token_invalid");
+}
+
+export function isVerificationTokenInvalid(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && err.detail.startsWith("verification_token_invalid");
+}
+
+// A verification link redeems only for the account it was sent to, and someone else is
+// signed in here. The link is still good: the page offers to switch accounts.
+export function isVerificationWrongAccount(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && err.detail.startsWith("verification_wrong_account");
+}
+
+// The shortest password the server accepts on sign-up, set-password and password reset
+// (min_length in src/domain/models.py), checked here first for a translated message.
+export const PASSWORD_MIN_LENGTH = 6;
 
 // Localized, user-facing message for errors thrown by `api`/`fetch`. Mapped
 // statuses get a translated text (a specific one for known details); anything
@@ -315,7 +359,44 @@ export const api = {
     }
   },
 
-  authConfig: () => request<{ google_oauth: boolean }>("/v1/auth/config"),
+  authConfig: () => request<AuthConfig>("/v1/auth/config"),
+
+  // Always a 202 {"status": "accepted"}, whether or not an account has this email: the
+  // server never says. A 429 when this address or this client asked too often.
+  forgotPassword: (email: string) =>
+    request<{ status: string }>("/v1/auth/password/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  // Sets a new password with the one-time token of a reset link. The server then revokes
+  // every session of that account and signs nobody in, so this page drops the session it
+  // held as well (which account the link was for is not known here). A dead link is a
+  // 400 (isResetTokenInvalid).
+  resetPassword: async (token: string, password: string) => {
+    const res = await request<{ status: string }>("/v1/auth/password/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    });
+    setAuthToken(null);
+    sessionActive = false;
+    return res;
+  },
+
+  // Emails the signed-in user a new verification link, unless the address is already
+  // verified (then nothing is sent).
+  requestEmailVerification: () =>
+    request<{ status: "sent" | "already_verified" }>("/v1/auth/email/verification", { method: "POST" }),
+
+  // Confirms the signed-in account's address with the one-time token of a verification
+  // link: it needs the session (and the csrf token) of the account the link was sent to.
+  // Another account's session is a 403 that leaves the link unused
+  // (isVerificationWrongAccount); a dead link is a 400 (isVerificationTokenInvalid).
+  verifyEmail: (token: string) =>
+    request<{ status: string }>("/v1/auth/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
 
   updateProfile: async (payload: { name?: string; avatar_url?: string }) => {
     return await request<AuthUser>("/v1/auth/profile", {

@@ -27,6 +27,7 @@ from src.agents.search import SearchAgent
 from src.agents.source_critic import SourceCriticAgent
 from src.agents.trail_text import TRAIL_DETAILS, research_language, trail_detail
 from src.brokers.redis_broker import RedisBroker
+from src.services.account_recovery_mixin import AccountRecoveryMixin
 from src.services.auth_mixin import AuthMixin
 from src.services.operational_health_mixin import OperationalHealthMixin
 from src.services.export_mixin import ExportMixin
@@ -86,6 +87,7 @@ from src.model_catalog import resolve_model_id
 from src.graph.metrics import get_graph_metrics_snapshot, get_graph_step_events_snapshot
 from src.observability import bind_observability_context, set_queue_metrics
 from src.providers.search import get_extraction_metrics_snapshot
+from src.notifications import MailSender
 from src.repositories.protocols import TaskStore
 from src.search_depth_profiles import get_depth_profile
 
@@ -93,7 +95,13 @@ logger = logging.getLogger(__name__)
 
 
 class ResearchService(
-    AuthMixin, OperationalHealthMixin, ExportMixin, JobQueueMixin, TrustReportMixin, ShareMixin
+    AuthMixin,
+    AccountRecoveryMixin,
+    OperationalHealthMixin,
+    ExportMixin,
+    JobQueueMixin,
+    TrustReportMixin,
+    ShareMixin,
 ):
     TASK_SUMMARY_LOG_LIMIT = 6
     TASK_SUMMARY_SOURCE_LIMIT = 4
@@ -140,8 +148,12 @@ class ResearchService(
         cross_language_agent=None,
         broker: RedisBroker | None = None,
         llm_available: bool = True,
+        mail_sender: MailSender | None = None,
     ):
         self.task_store = task_store
+        # Account email (AccountRecoveryMixin). None: the EMAIL_BACKEND sender, looked up
+        # when a message is sent.
+        self.mail_sender = mail_sender
         self.optimizer = optimizer
         self.orchestrator = orchestrator
         self.analyzer = analyzer

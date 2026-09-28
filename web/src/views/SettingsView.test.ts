@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   setPassword: vi.fn(),
   deleteAccount: vi.fn(),
   logout: vi.fn(),
+  authConfig: vi.fn(),
+  requestEmailVerification: vi.fn(),
+  me: vi.fn(),
 }));
 const startGoogleSignIn = vi.hoisted(() => vi.fn());
 
@@ -30,10 +33,10 @@ import SettingsView from "./SettingsView.vue";
 
 const t = (key: string) => i18n.global.t(key);
 
-async function mountSettings(url = "/settings") {
+async function mountSettings(url = "/settings", { emailVerified = false } = {}) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useAuthStore().user = { id: "u1", email: "denis@example.com", name: "Denis" } as never;
+  useAuthStore().user = { id: "u1", email: "denis@example.com", name: "Denis", email_verified: emailVerified };
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -59,6 +62,7 @@ describe("SettingsView", () => {
       researches_count: 2, calls_count: 1, total_tokens: 10, prompt_tokens: 6, completion_tokens: 4,
       estimated_cost_usd: 0.01, by_model: [], recent: [],
     });
+    mocks.authConfig.mockResolvedValue({ google_oauth: true, password_reset: true, email_verification: true });
   });
 
   afterEach(() => {
@@ -245,6 +249,68 @@ describe("SettingsView", () => {
     expect(mocks.logout).toHaveBeenCalledOnce();
     expect(useAuthStore().user).toBeNull();
     expect(wrapper.vm.$router.currentRoute.value.fullPath).toBe("/login");
+  });
+
+  describe("email verification", () => {
+    const sendButton = (wrapper: Awaited<ReturnType<typeof mountSettings>>) =>
+      wrapper.findAll("button").find((b) => b.text() === t("settings.profile.sendVerification"));
+
+    it("shows an unverified address and sends a verification email", async () => {
+      mocks.requestEmailVerification.mockResolvedValue({ status: "sent" });
+      const wrapper = await mountSettings();
+
+      expect(wrapper.text()).toContain(t("settings.profile.emailNotVerified"));
+      await sendButton(wrapper)!.trigger("click");
+      await flushPromises();
+
+      expect(mocks.requestEmailVerification).toHaveBeenCalledOnce();
+      expect(wrapper.text()).toContain(
+        i18n.global.t("settings.profile.verificationSent", { email: "denis@example.com" }),
+      );
+    });
+
+    it("shows a verified address, with nothing to send", async () => {
+      const wrapper = await mountSettings("/settings", { emailVerified: true });
+
+      expect(wrapper.text()).toContain(t("settings.profile.emailVerified"));
+      expect(wrapper.text()).not.toContain(t("settings.profile.emailNotVerified"));
+      expect(sendButton(wrapper)).toBeUndefined();
+    });
+
+    it("an address verified meanwhile: says so and shows the new status", async () => {
+      mocks.requestEmailVerification.mockResolvedValue({ status: "already_verified" });
+      mocks.me.mockResolvedValue({ id: "u1", email: "denis@example.com", name: "Denis", email_verified: true });
+      const wrapper = await mountSettings();
+
+      await sendButton(wrapper)!.trigger("click");
+      await flushPromises();
+
+      expect(mocks.me).toHaveBeenCalledOnce();
+      expect(wrapper.text()).toContain(t("settings.profile.alreadyVerified"));
+      expect(wrapper.text()).toContain(t("settings.profile.emailVerified"));
+      expect(sendButton(wrapper)).toBeUndefined();
+    });
+
+    it("says to slow down when links were asked for too often", async () => {
+      mocks.requestEmailVerification.mockRejectedValue(new ApiError(429, "Too many attempts, please slow down"));
+      const wrapper = await mountSettings();
+
+      await sendButton(wrapper)!.trigger("click");
+      await flushPromises();
+
+      expect(wrapper.text()).toContain(t("errors.api.rateLimited"));
+      expect(wrapper.text()).not.toContain(i18n.global.t("settings.profile.verificationSent", { email: "denis@example.com" }));
+      // Still unverified: the button stays for a later try.
+      expect(sendButton(wrapper)).toBeDefined();
+    });
+
+    it("is not shown where the server cannot send email", async () => {
+      mocks.authConfig.mockResolvedValue({ google_oauth: true, password_reset: false, email_verification: false });
+      const wrapper = await mountSettings();
+
+      expect(wrapper.text()).not.toContain(t("settings.profile.emailNotVerified"));
+      expect(sendButton(wrapper)).toBeUndefined();
+    });
   });
 
   it("renders every tab without Russian text or raw keys in the English UI", async () => {

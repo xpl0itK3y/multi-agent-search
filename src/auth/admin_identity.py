@@ -6,9 +6,13 @@ account created before the operator added the address to ADMIN_EMAILS. An accoun
 admin rights only when its email is listed AND the address is verified:
 
 - it is linked to a Google identity (``google_subject`` is set: Google verified the email
-  when the account was created), or
+  when the account was created or linked to it), or
 - the operator provisioned it with scripts/create_admin.py (``admin_provisioned_at`` is
   set), which also replaced its password and revoked every earlier session.
+
+An opened verification link (``email_verified_at``) is not enough on its own: the owner
+of the address clicking a link in a mail they did not expect would otherwise make the
+password whoever registered the address chose an admin credential.
 """
 from __future__ import annotations
 
