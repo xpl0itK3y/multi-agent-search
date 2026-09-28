@@ -330,9 +330,9 @@ const numericHasIssues = computed(() => {
 const independenceScore = computed(() => independence.value?.independence_score ?? null);
 const independenceClass = computed(() => {
   const r = independenceScore.value ?? 1;
-  if (r >= 0.8) return "text-emerald-500";
-  if (r >= 0.5) return "text-amber-500";
-  return "text-red-400";
+  if (r >= 0.8) return "text-success";
+  if (r >= 0.5) return "text-warning";
+  return "text-danger";
 });
 const independenceBar = computed(() => {
   const r = independenceScore.value ?? 1;
@@ -341,14 +341,14 @@ const independenceBar = computed(() => {
   return "bg-red-400";
 });
 const clusterKindClass: Record<string, string> = {
-  syndicated: "border-red-400/40 text-red-400",
-  "single-domain": "border-amber-500/40 text-amber-500",
+  syndicated: "border-danger/40 text-danger",
+  "single-domain": "border-warning/40 text-warning",
 };
 const reputationClass: Record<string, string> = {
-  satire: "border-amber-500/40 text-amber-500",
-  fabricated: "border-red-400/40 text-red-400",
-  conspiracy: "border-red-400/40 text-red-400",
-  state_media: "border-amber-500/40 text-amber-500",
+  satire: "border-warning/40 text-warning",
+  fabricated: "border-danger/40 text-danger",
+  conspiracy: "border-danger/40 text-danger",
+  state_media: "border-warning/40 text-warning",
 };
 
 // ── stance / viewpoint balance ────────────────────────────────────────────────
@@ -370,9 +370,9 @@ const stanceOneSided = computed(() => {
 // ── confidence / honesty meter ────────────────────────────────────────────────
 const gradeClass = computed(() => {
   const g = confidence.value?.grade;
-  if (g === "high") return "text-emerald-500";
-  if (g === "medium") return "text-amber-500";
-  return "text-red-400";
+  if (g === "high") return "text-success";
+  if (g === "medium") return "text-warning";
+  return "text-danger";
 });
 function bandPct(n: number): number {
   const total = confidence.value?.total_claims || 0;
@@ -461,16 +461,16 @@ function shortUrl(u: string): string {
 }
 
 const verdictClass: Record<string, string> = {
-  refuted: "text-red-400 border-red-400/40",
-  contested: "text-amber-500 border-amber-500/40",
-  qualified: "text-sky-500 border-sky-500/40",
-  holds: "text-emerald-500 border-emerald-500/40",
+  refuted: "text-danger border-danger/40",
+  contested: "text-warning border-warning/40",
+  qualified: "text-info border-info/40",
+  holds: "text-success border-success/40",
 };
 
 const levelClass: Record<string, string> = {
-  strong: "text-emerald-500 border-emerald-500/40",
-  medium: "text-amber-500 border-amber-500/40",
-  weak: "text-red-400 border-red-400/40",
+  strong: "text-success border-success/40",
+  medium: "text-warning border-warning/40",
+  weak: "text-danger border-danger/40",
 };
 
 const exporting = ref<string | null>(null);
@@ -585,30 +585,30 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             class="material-popover absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] max-w-[calc(100vw-3rem)] origin-top-left overflow-y-auto overscroll-contain rounded-xl border border-bd p-1.5 text-sm"
             @keydown="onExportMenuKey"
           >
-            <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.docGroup") }}</div>
+            <div class="px-2 pb-0.5 pt-1 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.docGroup") }}</div>
             <div role="group" :aria-label="$t('artifact.docGroup')" class="grid grid-cols-2 gap-1">
               <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
-                <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
+                <span>📄 PDF</span><span class="text-3xs text-muted">.pdf</span>
               </button>
               <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
-                <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
+                <span>📝 Word</span><span class="text-3xs text-muted">.docx</span>
               </button>
               <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
-                <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
+                <span>⬇ Markdown</span><span class="text-3xs text-muted">.md</span>
               </button>
             </div>
 
-            <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.dataGroup") }}</div>
+            <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.dataGroup") }}</div>
             <div role="group" :aria-label="$t('artifact.dataGroup')" class="grid grid-cols-2 gap-1">
               <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
-                <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
+                <span>{ } JSON</span><span class="text-3xs text-muted">.json</span>
               </button>
               <button role="menuitem" class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
-                <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
+                <span>🧾 {{ $t("audit.trail") }}</span><span class="text-3xs text-muted">.md</span>
               </button>
             </div>
 
-            <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.webGroup") }}</div>
+            <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.webGroup") }}</div>
             <div role="group" :aria-label="$t('artifact.webGroup')" class="flex flex-wrap gap-1 px-1.5 pb-1">
               <button
                 v-for="th in siteThemes"
@@ -922,7 +922,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                       {{ cellFor(row, o)!.value }}
                       <span
                         v-if="cellFor(row, o)!.source_ids.length"
-                        class="ml-1 text-[10px] font-semibold text-accent"
+                        class="ml-1 text-3xs font-semibold text-accent"
                       >{{ cellFor(row, o)!.source_ids.map((s) => "[" + s + "]").join("") }}</span>
                     </template>
                     <span v-else class="text-muted">—</span>
@@ -947,7 +947,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="flex items-center gap-3">
-              <div class="text-2xl font-semibold leading-none" :class="independenceClass">
+              <div class="text-2xl font-semibold leading-none tabular-nums" :class="independenceClass">
                 {{ Math.round(independence.independence_score * 100) }}%
               </div>
               <div class="min-w-0">
@@ -960,7 +960,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             </div>
             <div class="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface">
               <div
-                class="h-full rounded-full transition-all"
+                class="h-full rounded-full transition-[width]"
                 :class="independenceBar"
                 :style="{ width: independence.independence_score * 100 + '%' }"
               />
@@ -969,7 +969,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             <ul v-if="independence.clusters.length" class="mt-3 space-y-2 border-t border-bd pt-3">
               <li v-for="(c, i) in independence.clusters" :key="i" class="flex items-start gap-2">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                   :class="clusterKindClass[c.kind] || 'border-bd text-muted'"
                 >
                   {{ $t("independence.kind." + c.kind) }}
@@ -983,24 +983,24 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 </div>
               </li>
             </ul>
-            <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-emerald-500">
+            <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-success">
               ✓ {{ $t("independence.allIndependent") }}
             </p>
           </div>
           <!-- Domain-credibility flags: satire / fabricated / conspiracy / state-controlled -->
           <div
             v-if="reputation && reputation.flagged_count"
-            class="mb-3 rounded-xl border border-red-400/40 bg-red-400/5 p-4"
+            class="mb-3 rounded-xl border border-danger/40 bg-danger/5 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
-              <span class="text-red-400">⚑</span>{{ $t("reputation.title") }}
-              <span class="text-red-400">· {{ reputation.flagged_count }}/{{ reputation.total_sources }}</span>
+              <span class="text-danger">⚑</span>{{ $t("reputation.title") }}
+              <span class="tabular-nums text-danger">· {{ reputation.flagged_count }}/{{ reputation.total_sources }}</span>
             </div>
             <p class="mb-3 text-xs text-muted">{{ $t("reputation.hint") }}</p>
             <ul class="space-y-2">
               <li v-for="(f, i) in reputation.flagged" :key="i" class="flex items-start gap-2 text-xs">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                   :class="reputationClass[f.category] || 'border-bd text-muted'"
                 >
                   {{ $t("reputation.category." + f.category) }}
@@ -1016,18 +1016,18 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Retraction check: cited DOIs flagged as retracted / under concern -->
           <div
             v-if="integrity && integrity.flagged.length"
-            class="mb-3 rounded-xl border border-red-500/50 bg-red-500/10 p-4"
+            class="mb-3 rounded-xl border border-danger/50 bg-danger/10 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
-              <span class="text-red-500">⛔</span>{{ $t("integrity.title") }}
-              <span class="text-red-500">· {{ integrity.retracted_count }}/{{ integrity.checked_dois }}</span>
+              <span class="text-danger">⛔</span>{{ $t("integrity.title") }}
+              <span class="tabular-nums text-danger">· {{ integrity.retracted_count }}/{{ integrity.checked_dois }}</span>
             </div>
             <p class="mb-3 text-xs text-muted">{{ $t("integrity.hint") }}</p>
             <ul class="space-y-2">
               <li v-for="(f, i) in integrity.flagged" :key="i" class="flex items-start gap-2 text-xs">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-                  :class="f.kind === 'retraction' ? 'border-red-500/50 text-red-500' : 'border-amber-500/40 text-amber-500'"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
+                  :class="f.kind === 'retraction' ? 'border-danger/50 text-danger' : 'border-warning/40 text-warning'"
                 >
                   {{ $t("integrity.kind." + f.kind) }}
                 </span>
@@ -1046,7 +1046,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           >
             <div class="mb-1 flex items-center gap-2 text-sm font-medium text-ink">
               {{ $t("stance.title") }}
-              <span v-if="stanceOneSided" class="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-500">
+              <span v-if="stanceOneSided" class="rounded border border-warning/40 px-1.5 py-0.5 text-3xs font-semibold uppercase text-warning">
                 ⚠ {{ $t("stance.oneSided") }}
               </span>
             </div>
@@ -1057,9 +1057,9 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               <div class="bg-muted/40" :style="{ width: stancePct(stance.neutral) + '%' }" />
             </div>
             <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-              <span><span class="font-semibold text-emerald-500">{{ stance.supports }}</span> {{ $t("stance.for") }}</span>
-              <span><span class="font-semibold text-red-400">{{ stance.opposes }}</span> {{ $t("stance.against") }}</span>
-              <span><span class="font-semibold">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
+              <span><span class="font-semibold tabular-nums text-success">{{ stance.supports }}</span> {{ $t("stance.for") }}</span>
+              <span><span class="font-semibold tabular-nums text-danger">{{ stance.opposes }}</span> {{ $t("stance.against") }}</span>
+              <span><span class="font-semibold tabular-nums">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
             </div>
             <p class="mt-2 text-xs text-muted">{{ $t("stance.hint") }}</p>
           </div>
@@ -1079,14 +1079,14 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 {{ l.lang }} · {{ l.count }}
               </span>
             </div>
-            <p v-if="crossLang.monolingual" class="text-xs text-amber-500">⚠ {{ $t("crosslang.bubbleHint") }}</p>
+            <p v-if="crossLang.monolingual" class="text-xs text-warning">⚠ {{ $t("crosslang.bubbleHint") }}</p>
             <template v-else>
               <p class="mb-2 text-xs text-muted">
                 {{ crossLang.foreign_source_count }} {{ $t("crosslang.foreignSources") }}
               </p>
               <ul v-if="crossLang.unique_findings.length" class="space-y-1.5 border-t border-bd pt-2">
                 <li v-for="(f, i) in crossLang.unique_findings" :key="i" class="flex items-start gap-2 text-xs">
-                  <span class="mt-0.5 shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-accent">{{ f.lang }}</span>
+                  <span class="mt-0.5 shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-3xs font-semibold uppercase text-accent">{{ f.lang }}</span>
                   <span class="text-ink">{{ f.finding }}</span>
                 </li>
               </ul>
@@ -1125,7 +1125,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Honesty meter: one calibrated confidence fused from all trust signals, with its inputs shown -->
           <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4">
             <div class="flex items-center gap-4">
-              <div class="text-3xl font-semibold leading-none" :class="gradeClass">
+              <div class="text-3xl font-semibold leading-none tabular-nums" :class="gradeClass">
                 {{ Math.round(confidence.overall * 100) }}%
               </div>
               <div>
@@ -1141,9 +1141,9 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 <div :class="bandClass.speculative" :style="{ width: bandPct(confidence.speculative) + '%' }" />
               </div>
               <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                <span><span class="font-semibold text-emerald-500">{{ bandPct(confidence.solid) }}%</span> {{ $t("confidence.band.solid") }}</span>
-                <span><span class="font-semibold text-amber-500">{{ bandPct(confidence.contested) }}%</span> {{ $t("confidence.band.contested") }}</span>
-                <span><span class="font-semibold text-red-400">{{ bandPct(confidence.speculative) }}%</span> {{ $t("confidence.band.speculative") }}</span>
+                <span><span class="font-semibold tabular-nums text-success">{{ bandPct(confidence.solid) }}%</span> {{ $t("confidence.band.solid") }}</span>
+                <span><span class="font-semibold tabular-nums text-warning">{{ bandPct(confidence.contested) }}%</span> {{ $t("confidence.band.contested") }}</span>
+                <span><span class="font-semibold tabular-nums text-danger">{{ bandPct(confidence.speculative) }}%</span> {{ $t("confidence.band.speculative") }}</span>
               </div>
             </template>
 
@@ -1152,9 +1152,9 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               <div v-for="c in confidence.components" :key="c.key" class="flex items-center gap-2 text-xs">
                 <span class="w-32 shrink-0 text-ink">{{ $t("confidence.component." + c.key) }}</span>
                 <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
-                  <div class="h-full rounded-full bg-accent transition-all" :style="{ width: c.score * 100 + '%' }" />
+                  <div class="h-full rounded-full bg-accent transition-[width]" :style="{ width: c.score * 100 + '%' }" />
                 </div>
-                <span class="w-9 shrink-0 text-right font-medium text-ink">{{ Math.round(c.score * 100) }}%</span>
+                <span class="w-9 shrink-0 text-right font-medium tabular-nums text-ink">{{ Math.round(c.score * 100) }}%</span>
                 <span class="hidden shrink-0 text-muted md:inline">{{ c.detail }}</span>
               </div>
             </div>
@@ -1163,7 +1163,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <div>
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="font-medium text-ink">{{ $t("artifact.planCoverage") }}</span>
-              <span class="text-muted">{{ Math.round(verification.coverage_ratio * 100) }}%</span>
+              <span class="tabular-nums text-muted">{{ Math.round(verification.coverage_ratio * 100) }}%</span>
             </div>
             <div class="h-1.5 w-full overflow-hidden rounded-full bg-surface">
               <div class="h-full rounded-full bg-accent" :style="{ width: verification.coverage_ratio * 100 + '%' }" />
@@ -1171,7 +1171,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             <ul v-if="verification.uncovered_questions.length" class="mt-3 space-y-1">
               <li class="text-xs font-medium text-muted">{{ $t("artifact.uncovered") }}</li>
               <li v-for="(q, i) in verification.uncovered_questions" :key="i" class="flex gap-2 text-sm text-muted">
-                <span class="mt-0.5 shrink-0 text-red-400">○</span><span class="line-clamp-2">{{ q }}</span>
+                <span class="mt-0.5 shrink-0 text-danger">○</span><span class="line-clamp-2">{{ q }}</span>
               </li>
             </ul>
           </div>
@@ -1186,7 +1186,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               >
                 <div class="mb-1 flex items-center gap-2">
                   <span
-                    class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                    class="rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                     :class="levelClass[f.support_level] || 'text-muted border-bd'"
                   >
                     {{ $t("confidence." + f.support_level) }}
@@ -1207,8 +1207,8 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       <template v-else-if="tab === 'redteam'">
         <template v-if="redTeam && redTeam.findings.length">
           <div class="mb-4 flex gap-4 text-xs text-muted">
-            <span><span class="font-semibold text-amber-500">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
-            <span><span class="font-semibold text-emerald-500">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
+            <span><span class="font-semibold tabular-nums text-warning">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
+            <span><span class="font-semibold tabular-nums text-success">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
           </div>
           <div class="space-y-3">
             <div
@@ -1217,7 +1217,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               class="rounded-lg border border-bd bg-surface/50 p-3"
             >
               <span
-                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                class="rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                 :class="verdictClass[f.verdict] || 'text-muted border-bd'"
               >
                 {{ $t("redteam." + f.verdict) }}
