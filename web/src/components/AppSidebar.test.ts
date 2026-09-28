@@ -307,6 +307,47 @@ describe("AppSidebar resize handle", () => {
     setItem.mockRestore();
   });
 
+  it("grabbed while settling back from the band, continues from the edge on screen", async () => {
+    vi.useFakeTimers();
+    const wrapper = mountWithAvatar(null, false);
+    const handle = wrapper.find("[role='separator']").element;
+    const aside = handle.closest("aside")!;
+    const ui = useUiStore();
+    const past = 300 + (SIDEBAR_MAX - SIDEBAR_DEFAULT) + 100;
+
+    handle.dispatchEvent(pointer("pointerdown", 300));
+    handle.dispatchEvent(pointer("pointermove", past));
+    vi.advanceTimersToNextFrame();
+    const banded = ui.sidebarWidth;
+    handle.dispatchEvent(pointer("pointerup", past));
+    expect(ui.sidebarWidth).toBe(SIDEBAR_MAX);
+    expect(aside.style.transition).toContain("width"); // settling back to the limit
+
+    // Mid-settle: the edge is on screen halfway back, and the finger comes down on it.
+    const shown = Math.round((banded + SIDEBAR_MAX) / 2);
+    const rect = vi.spyOn(aside, "getBoundingClientRect").mockReturnValue({ width: shown } as DOMRect);
+    handle.dispatchEvent(pointer("pointerdown", past));
+    expect(aside.style.transition).toBe("");
+    expect(ui.sidebarWidth).toBe(shown); // no jump to the limit
+
+    handle.dispatchEvent(pointer("pointermove", past + 1));
+    vi.advanceTimersToNextFrame();
+    // Still inside the band: a 1px move resists, and nothing jumps.
+    expect(ui.sidebarWidth).toBeGreaterThanOrEqual(shown);
+    expect(ui.sidebarWidth).toBeLessThanOrEqual(shown + 1);
+
+    handle.dispatchEvent(pointer("pointermove", past - 200));
+    vi.advanceTimersToNextFrame();
+    // Back inside the limits it tracks 1:1 again, from the drag width that showed as
+    // `shown` (the band's inverse: o = r·d / (k·(d − r)), d = 120, k = 0.55). Starting from
+    // the limit instead, the edge would sit (shown − max) + o px further left.
+    const r = shown - SIDEBAR_MAX;
+    const o = (r * 120) / (0.55 * (120 - r));
+    expect(Math.abs(ui.sidebarWidth - (SIDEBAR_MAX + o - 200))).toBeLessThanOrEqual(1);
+    handle.dispatchEvent(pointer("pointerup", past - 200));
+    rect.mockRestore();
+  });
+
   it("collapses to the rail when dragged far enough, keeping the width it had", async () => {
     vi.useFakeTimers();
     const wrapper = mountWithAvatar(null, false);

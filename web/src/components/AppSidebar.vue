@@ -208,6 +208,7 @@ const aside = ref<HTMLElement | null>(null);
 const resizing = ref(false);
 const COLLAPSE_BELOW = 180;
 const RUBBER_BAND_PX = 120;
+const RUBBER_BAND_K = 0.55; // lib/gesture's default constant, named here for the inverse
 const KEY_STEP_PX = 16;
 const SETTLE_MS = 200;
 let drag: { id: number; startX: number; startW: number; x: number } | null = null;
@@ -215,9 +216,21 @@ let dragFrame = 0;
 let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 function bandedWidth(raw: number): number {
-  if (raw > SIDEBAR_MAX) return SIDEBAR_MAX + rubberband(raw - SIDEBAR_MAX, RUBBER_BAND_PX);
-  if (raw < SIDEBAR_MIN) return SIDEBAR_MIN - rubberband(SIDEBAR_MIN - raw, RUBBER_BAND_PX);
+  if (raw > SIDEBAR_MAX) return SIDEBAR_MAX + rubberband(raw - SIDEBAR_MAX, RUBBER_BAND_PX, RUBBER_BAND_K);
+  if (raw < SIDEBAR_MIN) return SIDEBAR_MIN - rubberband(SIDEBAR_MIN - raw, RUBBER_BAND_PX, RUBBER_BAND_K);
   return raw;
+}
+// Its inverse: the drag width that shows as `shown`, so a drag that starts inside the
+// band keeps the edge where it is (r = o·d·k / (d + k·o)  ⇔  o = r·d / (k·(d − r))).
+function unbandedWidth(shown: number): number {
+  const unband = (r: number) => {
+    const d = RUBBER_BAND_PX;
+    const band = Math.min(r, d - 1); // the band never reaches d
+    return (band * d) / (RUBBER_BAND_K * (d - band));
+  };
+  if (shown > SIDEBAR_MAX) return SIDEBAR_MAX + unband(shown - SIDEBAR_MAX);
+  if (shown < SIDEBAR_MIN) return SIDEBAR_MIN - unband(SIDEBAR_MIN - shown);
+  return shown;
 }
 const rawWidth = (d: NonNullable<typeof drag>) => d.startW + (d.x - d.startX);
 
@@ -241,8 +254,20 @@ function onResizeDown(e: PointerEvent) {
     // the pointer is already gone
   }
   clearTimeout(settleTimer);
-  if (aside.value) aside.value.style.transition = "";
-  drag = { id: e.pointerId, startX: e.clientX, startW: ui.sidebarWidth, x: e.clientX };
+  // Grabbed while it settles back from the rubber band: the drag continues from the edge
+  // on screen, not from the limit it is heading to (§3: start from the presentation
+  // value). Read before the transition is dropped, which would jump it to its end.
+  let startW = ui.sidebarWidth;
+  const el = aside.value;
+  if (el?.style.transition) {
+    const live = el.getBoundingClientRect().width;
+    if (live > 0) {
+      ui.setSidebarWidth(live, { persist: false, clamp: false });
+      startW = unbandedWidth(ui.sidebarWidth); // still inside the band: undo its resistance
+    }
+  }
+  if (el) el.style.transition = "";
+  drag = { id: e.pointerId, startX: e.clientX, startW, x: e.clientX };
   resizing.value = true;
   document.documentElement.style.cursor = "col-resize";
   document.body.style.userSelect = "none";
