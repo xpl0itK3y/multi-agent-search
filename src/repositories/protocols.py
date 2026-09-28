@@ -397,7 +397,9 @@ class TaskStore(Protocol):
 
     # A search runner's task write, fenced by its job's lease in the same transaction: the
     # job row is locked, and the update applies only while that job is RUNNING under
-    # lease_epoch. None when the lease is gone (or the task or job is missing).
+    # lease_epoch. It also renews the lease (the job's updated_at, which stale recovery
+    # goes by), so a run that keeps writing progress is never recovered from under its
+    # runner. None when the lease is gone (or the task or job is missing); nothing renews then.
     def update_task_under_search_lease(
         self,
         task_id: str,
