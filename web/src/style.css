@@ -359,11 +359,32 @@ select {
     }
   }
 }
-input:focus-visible,
-textarea:focus-visible {
-  outline: none;
-  border-color: rgb(var(--c-accent) / 0.55);
-  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+/* Focus (§14): a brand-coloured ring for keyboard focus only (:focus-visible). */
+:is(button, a[href], summary, [role="button"], [role="tab"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 2px;
+}
+/* Fields: accent border plus a soft halo. The outline stays, transparent, so Windows
+   contrast themes (which drop box-shadow) still draw one. */
+:is(input, textarea, select):focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border-color: rgb(var(--c-accent));
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.22);
+}
+/* A borderless field inside a bordered box: the box (.field-host) shows the focus. */
+.field-bare:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+.field-host:has(.field-bare:focus) {
+  border-color: rgb(var(--c-accent) / 0.45);
+}
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 2px;
+  }
 }
 .lift {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
