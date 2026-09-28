@@ -1139,6 +1139,43 @@ def test_link_cleanup_deletes_expired_and_used_links_across_batches(store):
     assert live.used_at is None
 
 
+def test_a_password_write_retires_the_unused_reset_links(store):
+    """SEC-REC-2: a reset link copied during brief access to the mailbox must not undo the
+    password set after it (Settings and scripts/create_admin.py write update_user_password)
+    nor put one back on an account whose Google link removed it."""
+    tag = uuid.uuid4().hex[:8]
+    user = store.create_user(f"pw-{tag}", f"pw-{tag}@example.com", "hash-1")
+    for provisioned in (False, True):
+        _link(store, user, AuthActionPurpose.PASSWORD_RESET, f"reset-{provisioned}")
+        _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, f"verify-{provisioned}")
+
+        store.update_user_password(user.id, f"hash-{provisioned}", admin_provisioned=provisioned)
+
+        assert store.get_live_auth_action_token(_hash(f"reset-{provisioned}"), AuthActionPurpose.PASSWORD_RESET) is None
+        assert store.reset_password_with_token(_hash(f"reset-{provisioned}"), "hash-taken") is None
+        # Another purpose is left alone.
+        verification = store.get_live_auth_action_token(
+            _hash(f"verify-{provisioned}"), AuthActionPurpose.EMAIL_VERIFICATION
+        )
+        assert verification is not None
+    assert store.get_user_by_id(user.id).password_hash == "hash-True"
+    _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-after")  # a later link works
+    assert store.reset_password_with_token(_hash("reset-after"), "hash-2").password_hash == "hash-2"
+
+    cleared = store.create_user(f"pc-{tag}", f"pc-{tag}@example.com", "hash-c")
+    kept = store.create_user(f"pk-{tag}", f"pk-{tag}@example.com", "hash-k", admin_provisioned=True)
+    _link(store, cleared, AuthActionPurpose.PASSWORD_RESET, "reset-cleared")
+    _link(store, kept, AuthActionPurpose.PASSWORD_RESET, "reset-kept")
+
+    store.link_user_google_subject(cleared.id, f"sub-pc-{tag}", clear_password=True)
+    store.link_user_google_subject(kept.id, f"sub-pk-{tag}", clear_password=False)
+
+    assert store.reset_password_with_token(_hash("reset-cleared"), "hash-taken") is None
+    assert store.get_user_by_id(cleared.id).password_hash is None
+    # A link that keeps the password changes nothing a reset link could undo.
+    assert store.get_live_auth_action_token(_hash("reset-kept"), AuthActionPurpose.PASSWORD_RESET) is not None
+
+
 def test_deleting_a_user_deletes_their_links(store):
     tag = uuid.uuid4().hex[:8]
     user = store.create_user(f"d-{tag}", f"d-{tag}@example.com", "hash-1")

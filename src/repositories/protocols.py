@@ -87,9 +87,10 @@ class TaskStore(Protocol):
     # Account deletion (DATA-LIFECYCLE): removes the user; researches cascade via FK.
     def delete_user(self, user_id: str) -> bool: ...
 
-    # Bumps token_version (revokes earlier sessions). admin_provisioned also stamps
-    # admin_provisioned_at, and email_verified_at when unset, in the same write:
-    # scripts/create_admin.py (admin_identity).
+    # Bumps token_version (revokes earlier sessions) and invalidates the account's unused
+    # password reset links, so a copied link cannot undo the new password. admin_provisioned
+    # also stamps admin_provisioned_at, and email_verified_at when unset, in the same
+    # write: scripts/create_admin.py (admin_identity).
     def update_user_password(
         self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
     ) -> UserRecord | None: ...
@@ -103,18 +104,19 @@ class TaskStore(Protocol):
 
     # Google sign-in linking (auth_mixin.get_or_create_oauth_user), one write: sets
     # google_subject on an account that has none and marks its email verified (a first
-    # stamp is kept); clear_password also sets password_hash NULL and bumps token_version,
-    # revoking every session. None when the account does not exist, already has a
-    # google_subject, or another account holds this one.
+    # stamp is kept); clear_password also sets password_hash NULL, bumps token_version
+    # (revoking every session) and invalidates the unused password reset links. None when
+    # the account does not exist, already has a google_subject, or another account holds
+    # this one.
     def link_user_google_subject(
         self, user_id: str, google_subject: str, *, clear_password: bool
     ) -> UserRecord | None: ...
 
     # ── one-time links: password reset, email verification ────────────────────
     # Every write to an account's tokens takes the account first: the SQL store locks the
-    # users row before any auth_action_tokens row (a redeem, an issue, delete_user's
-    # cascade), the in-memory store holds its one user lock throughout. So concurrent
-    # calls for one account queue instead of deadlocking.
+    # users row before any auth_action_tokens row (a redeem, an issue, a password write,
+    # delete_user's cascade), the in-memory store holds its one user lock throughout. So
+    # concurrent calls for one account queue instead of deadlocking.
     # Stores a link token by its sha256 hex, for `email` (the address the link goes to),
     # and in the same transaction invalidates (used_at = now) the user's other unused
     # tokens of this purpose: only the newest link works. None when the user is gone.

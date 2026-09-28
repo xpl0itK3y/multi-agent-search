@@ -311,13 +311,14 @@ class InMemoryTaskStore:
             user = self.users.get(user_id)
             if user is None:
                 return None
+            now = datetime.now(timezone.utc)
             patch = {"password_hash": password_hash, "token_version": user.token_version + 1}
             if admin_provisioned:
-                now = datetime.now(timezone.utc)
                 patch["admin_provisioned_at"] = now
                 patch["email_verified_at"] = user.email_verified_at or now
             updated = user.model_copy(update=patch)
             self.users[user_id] = updated
+            self._invalidate_auth_action_tokens(user_id, AuthActionPurpose.PASSWORD_RESET, now)
             return updated
 
     def bump_user_token_version(self, user_id: str) -> UserRecord | None:
@@ -354,12 +355,11 @@ class InMemoryTaskStore:
                 return None
             if any(other.google_subject == google_subject for other in self.users.values()):
                 return None  # the unique index on users.google_subject
-            patch = {
-                "google_subject": google_subject,
-                "email_verified_at": user.email_verified_at or datetime.now(timezone.utc),
-            }
+            now = datetime.now(timezone.utc)
+            patch = {"google_subject": google_subject, "email_verified_at": user.email_verified_at or now}
             if clear_password:
                 patch.update(password_hash=None, token_version=user.token_version + 1)
+                self._invalidate_auth_action_tokens(user_id, AuthActionPurpose.PASSWORD_RESET, now)
             updated = user.model_copy(update=patch)
             self.users[user_id] = updated
             return updated

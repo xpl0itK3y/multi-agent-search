@@ -261,6 +261,45 @@ async def test_reset_is_throttled_per_client(recovery, monkeypatch):
     assert codes == [400] * 30 + [429]
 
 
+@pytest.mark.anyio
+async def test_a_new_password_retires_the_reset_links_sent_before_it(recovery, monkeypatch):
+    """SEC-REC-2: someone copied a reset link during brief access to the mailbox. The owner
+    then secures the account (Settings, the operator, or a Google sign-in that removes an
+    unverified sign-up's password): the copied link must not take it back."""
+    client, service, sender = recovery
+
+    email = _email()
+    session = await _register(client, email)
+    await client.post("/v1/auth/password/forgot", json={"email": email})
+    copied_before_settings = _links(sender, "/reset-password")[-1]
+    changed = await client.post(
+        "/v1/auth/set-password",
+        json={"password": "second-pass1", "current_password": "first-pass1"},
+        headers=_bearer(session),
+    )
+    assert changed.status_code == 200
+
+    monkeypatch.setattr(settings, "admin_emails", "ops@example.com", raising=False)
+    service.provision_admin_account("ops@example.com", "operator-pass1")
+    _user, link = service.issue_password_reset_link("ops@example.com")
+    copied_before_provisioning = link.rpartition("#token=")[2]
+    service.provision_admin_account("ops@example.com", "operator-pass2")
+
+    squatted = _email()
+    await _register(client, squatted, password="squatter-pass1")
+    _user, link = service.issue_password_reset_link(squatted)
+    copied_before_google = link.rpartition("#token=")[2]
+    await _google_callback(client, monkeypatch, squatted, "g-clears")
+    client.cookies.clear()
+
+    for token in (copied_before_settings, copied_before_provisioning, copied_before_google):
+        refused = await client.post("/v1/auth/password/reset", json={"token": token, "password": "taken-over1"})
+        assert (refused.status_code, refused.json()["detail"]) == (400, RESET_DETAIL)
+    assert service.authenticate_user(email, "second-pass1").email == email
+    assert service.authenticate_user("ops@example.com", "operator-pass2").is_admin is True
+    assert service.task_store.get_user_by_email(squatted).password_hash is None
+
+
 def test_a_reset_link_sent_before_an_email_change_does_not_redeem():
     """A token works only while the account's email is the address it was sent to."""
     store = InMemoryTaskStore()

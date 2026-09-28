@@ -364,9 +364,9 @@ class SQLAlchemyTaskStore:
     def update_user_password(
         self, user_id: str, password_hash: str, *, admin_provisioned: bool = False
     ) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
         values = {"password_hash": password_hash, "token_version": UserORM.token_version + 1}
         if admin_provisioned:
-            now = datetime.now(timezone.utc)
             values["admin_provisioned_at"] = now
             values["email_verified_at"] = func.coalesce(UserORM.email_verified_at, now)
         with self.session_scope() as session:
@@ -379,6 +379,8 @@ class SQLAlchemyTaskStore:
             user = session.execute(statement).scalar_one_or_none()
             if user is None:
                 return None
+            # After the users row (lock order): no reset link sent before survives it.
+            self._invalidate_auth_action_tokens(session, user_id, AuthActionPurpose.PASSWORD_RESET.value, now)
             return _user_record(user)
 
     def bump_user_token_version(self, user_id: str) -> UserRecord | None:
@@ -409,9 +411,10 @@ class SQLAlchemyTaskStore:
     def link_user_google_subject(
         self, user_id: str, google_subject: str, *, clear_password: bool
     ) -> UserRecord | None:
+        now = datetime.now(timezone.utc)
         values = {
             "google_subject": google_subject,
-            "email_verified_at": func.coalesce(UserORM.email_verified_at, datetime.now(timezone.utc)),
+            "email_verified_at": func.coalesce(UserORM.email_verified_at, now),
         }
         if clear_password:
             values.update(password_hash=None, token_version=UserORM.token_version + 1)
@@ -424,7 +427,13 @@ class SQLAlchemyTaskStore:
         try:
             with self.session_scope() as session:
                 user = session.execute(statement).scalar_one_or_none()
-                return _user_record(user) if user is not None else None
+                if user is None:
+                    return None
+                if clear_password:
+                    self._invalidate_auth_action_tokens(
+                        session, user_id, AuthActionPurpose.PASSWORD_RESET.value, now
+                    )
+                return _user_record(user)
         except IntegrityError as exc:
             # Another account took this google_subject (ix_users_google_subject is unique).
             if getattr(exc.orig, "sqlstate", None) != _UNIQUE_VIOLATION:
