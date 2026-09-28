@@ -9,7 +9,8 @@
       // Apply the saved theme before render to avoid a flash of the wrong palette.
       (function () {
         try {
-          var t = localStorage.getItem("theme") || "dark";
+          var t = localStorage.getItem("theme") || "system";
+          if (t === "system") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
           var dark = ["dark", "midnight", "emerald", "rose"].indexOf(t) >= 0;
           document.documentElement.setAttribute("data-theme", t);
           document.documentElement.classList.toggle("dark", dark);
