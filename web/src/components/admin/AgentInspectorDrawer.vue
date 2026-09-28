@@ -675,7 +675,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   {{ copiedInput ? t('admin.agents.copied') : t('admin.agents.copyInput') }}
                 </button>
               </div>
-              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-emerald-600 dark:text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-emerald-700 dark:text-emerald-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_input, null, 2) }}</pre>
             </div>
 
             <!-- Example Output Payload -->
@@ -691,7 +691,7 @@ function copyJson(data: any, targetRef: "input" | "output") {
                   {{ copiedOutput ? t('admin.agents.copied') : t('admin.agents.copyOutput') }}
                 </button>
               </div>
-              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-sky-600 dark:text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
+              <pre class="rounded-xl border border-bd bg-surface/70 p-3 font-mono text-[10.5px] leading-normal text-sky-700 dark:text-sky-400 overflow-x-auto select-text">{{ JSON.stringify(agent.example_output, null, 2) }}</pre>
             </div>
           </div>
 
