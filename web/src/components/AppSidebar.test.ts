@@ -172,6 +172,60 @@ describe("AppSidebar recents", () => {
     expect(mocks.renameResearch).not.toHaveBeenCalled();
   });
 
+  // One layer per Escape: the field's Escape is marked handled, so an enclosing drawer
+  // (App.vue closes it on an unhandled one) stays open; focus goes back, not to <body>.
+  const escape = () => new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+
+  it("Escape in a rename ends only the rename, and focus returns to its row", async () => {
+    const wrapper = mountWithHistory();
+    await flushPromises();
+    await buttonByLabel(wrapper, t("sidebar.rename"))[0].trigger("click");
+    const input = wrapper.find(`input[aria-label="${t("sidebar.rename")}"]`);
+
+    const e = escape();
+    input.element.dispatchEvent(e);
+    await flushPromises();
+
+    expect(e.defaultPrevented).toBe(true);
+    expect(wrapper.find(`input[aria-label="${t("sidebar.rename")}"]`).exists()).toBe(false);
+    expect(document.activeElement?.tagName).toBe("BUTTON");
+    expect(document.activeElement?.textContent).toContain("Compare vector databases");
+  });
+
+  it("Enter saves a rename and gives focus back to its row", async () => {
+    mocks.renameResearch.mockResolvedValue(undefined);
+    const wrapper = mountWithHistory();
+    await flushPromises();
+    await buttonByLabel(wrapper, t("sidebar.rename"))[0].trigger("click");
+    const input = wrapper.find(`input[aria-label="${t("sidebar.rename")}"]`);
+    await input.setValue("Vector DBs");
+
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(mocks.renameResearch).toHaveBeenCalledWith("r1", "Vector DBs");
+    expect(document.activeElement?.tagName).toBe("BUTTON");
+    expect(document.activeElement?.closest(".group")).not.toBeNull();
+  });
+
+  it("Escape in the search ends only the search, and focus returns to ⌕", async () => {
+    const wrapper = mountWithHistory();
+    await flushPromises();
+    const searchButton = buttonByLabel(wrapper, t("sidebar.search"))[0];
+    await searchButton.trigger("click");
+    await flushPromises();
+    await wrapper.find("input[type='search']").setValue("robo");
+
+    const e = escape();
+    wrapper.find("input[type='search']").element.dispatchEvent(e);
+    await flushPromises();
+
+    expect(e.defaultPrevented).toBe(true);
+    expect(wrapper.find("input[type='search']").exists()).toBe(false);
+    expect(document.activeElement).toBe(searchButton.element);
+    expect(wrapper.text()).toContain("Compare vector databases"); // the filter is cleared
+  });
+
   it("says nothing matches a search, rather than that there is no research", async () => {
     const wrapper = mountWithHistory();
     await flushPromises();

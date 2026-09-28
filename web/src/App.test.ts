@@ -147,6 +147,35 @@ describe("App shell", () => {
     expect(ui.mobileOpen).toBe(false);
   });
 
+  it("peels one layer per Escape: a rename or search in the drawer ends, the drawer stays", async () => {
+    const { wrapper, ui } = await mountApp("/");
+    const { useResearchStore } = await import("@/stores/research");
+    useResearchStore().history = [{ id: "r1", prompt: "Vector databases", depth: "easy", status: "completed" }];
+    await menuButton(wrapper).trigger("click");
+    await flushPromises();
+    const escape = (el: Element) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    const t = (key: string) => i18n.global.t(key);
+
+    await wrapper.find(`button[aria-label="${t("sidebar.rename")}"]`).trigger("click");
+    escape(wrapper.find(`input[aria-label="${t("sidebar.rename")}"]`).element);
+    await flushPromises();
+    expect(wrapper.find(`input[aria-label="${t("sidebar.rename")}"]`).exists()).toBe(false);
+    expect(ui.mobileOpen).toBe(true);
+    expect(drawer().contains(document.activeElement)).toBe(true);
+
+    await wrapper.find(`button[aria-label="${t("sidebar.search")}"]`).trigger("click");
+    await flushPromises();
+    escape(wrapper.find("input[type='search']").element);
+    await flushPromises();
+    expect(wrapper.find("input[type='search']").exists()).toBe(false);
+    expect(ui.mobileOpen).toBe(true);
+
+    // The next Escape is the drawer's.
+    escape(document.activeElement!);
+    await flushPromises();
+    expect(ui.mobileOpen).toBe(false);
+  });
+
   it("keeps the mounted view, its focus and its input across a query-only tab switch", async () => {
     mounts.tabbed = 0;
     const { wrapper, router } = await mountApp("/tabbed");

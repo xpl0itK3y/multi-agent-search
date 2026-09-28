@@ -52,6 +52,16 @@ async function toggleSearch() {
   }
 }
 
+// Escape peels one layer: in the search or rename field it ends only that, marked handled
+// so the mobile drawer around the sidebar stays open (App closes it on an unhandled
+// Escape), and focus goes back where the field came from instead of onto the page.
+const searchButton = ref<HTMLButtonElement | null>(null);
+function onSearchEscape(e: KeyboardEvent) {
+  e.preventDefault();
+  toggleSearch();
+  searchButton.value?.focus({ preventScroll: true });
+}
+
 function rawTitle(item: ResearchHistoryItem): string {
   return (item.title?.trim() || item.prompt || "").replace(/\s+/g, " ");
 }
@@ -85,6 +95,23 @@ function showRowError(id: string, e: unknown) {
 function startRename(item: ResearchHistoryItem) {
   editingId.value = item.id;
   editValue.value = rawTitle(item);
+}
+// A rename ended from the keyboard hands focus back to its row: the row's title, since
+// its ✎ shows only on hover or focus within the row. Called after the edit has ended, so
+// the tick it waits for is the one that draws the row's buttons again.
+function focusRow(row: HTMLElement | null | undefined) {
+  nextTick(() => row?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true }));
+}
+function onRenameEnter(item: ResearchHistoryItem, e: KeyboardEvent) {
+  const row = (e.currentTarget as HTMLElement).parentElement;
+  commitRename(item); // ends the edit before its first await
+  focusRow(row);
+}
+function onRenameEscape(e: KeyboardEvent) {
+  e.preventDefault();
+  const row = (e.currentTarget as HTMLElement).parentElement;
+  editingId.value = null;
+  focusRow(row);
 }
 async function commitRename(item: ResearchHistoryItem) {
   // Enter and Escape end the edit before the field's blur arrives: that blur is not a commit.
@@ -382,6 +409,7 @@ function openSettings() {
            no button covers its neighbour. -->
       <div class="flex items-center gap-1 text-muted">
         <button
+          ref="searchButton"
           type="button"
           class="icon-btn hit press [@media(pointer:coarse)]:after:-inset-x-0.5"
           :title="$t('sidebar.search')"
@@ -472,7 +500,7 @@ function openSettings() {
           :placeholder="$t('sidebar.searchPlaceholder')"
           :aria-label="$t('sidebar.search')"
           class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-1.5 text-sm text-ink placeholder:text-muted"
-          @keydown.esc="toggleSearch()"
+          @keydown.esc="onSearchEscape"
         />
       </div>
 
@@ -503,8 +531,8 @@ function openSettings() {
               v-model="editValue"
               :aria-label="$t('sidebar.rename')"
               class="min-w-0 flex-1 rounded bg-transparent px-3 py-2 text-ink focus:outline-none"
-              @keydown.enter="commitRename(item)"
-              @keydown.esc="editingId = null"
+              @keydown.enter="onRenameEnter(item, $event)"
+              @keydown.esc="onRenameEscape"
               @blur="commitRename(item)"
               v-focus
             />
