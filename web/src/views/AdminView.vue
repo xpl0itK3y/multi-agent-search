@@ -13,7 +13,7 @@ import AnalyticsTab from "@/components/admin/AnalyticsTab.vue";
 import AgentsGraphTab from "@/components/admin/AgentsGraphTab.vue";
 import OperationsTab from "@/components/admin/OperationsTab.vue";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
@@ -50,14 +50,55 @@ watch(
 // Tabs follow the WAI-ARIA pattern: arrows move between them, Home/End jump to the ends.
 function selectTab(tab: Tab, focus = false) {
   activeTab.value = tab;
-  nextTick(() => {
-    const btn = typeof document !== "undefined" ? document.getElementById(`admin-tab-${tab}`) : null;
-    if (!btn) return;
-    if (focus) btn.focus({ preventScroll: true });
-    // On a narrow screen the strip scrolls sideways: keep the chosen tab in view.
-    btn.scrollIntoView?.({ inline: "nearest", block: "nearest", behavior: smoothOrAuto() });
-  });
+  if (!focus) return;
+  nextTick(() => tabStrip.value?.querySelector<HTMLElement>(`#admin-tab-${tab}`)?.focus({ preventScroll: true }));
 }
+
+// On a phone the strip is one line that scrolls sideways. A fade at its right edge shows
+// while more tabs wait there, and the open tab is scrolled fully into view, clear of the
+// fade: on arrival (a link or a reload with ?tab=), on a click or an arrow key, and on
+// Back/Forward (§16 Wayfinding: where am I?). Sideways only, so the page never jumps.
+const tabStrip = ref<HTMLElement | null>(null);
+const canScrollRight = ref(false);
+const EDGE_FADE_PX = 28; // .edge-fade-x
+const STRIP_INSET_PX = 24; // the strip's px-6
+function updateOverflow() {
+  const el = tabStrip.value;
+  canScrollRight.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+function revealActiveTab(behavior: ScrollBehavior) {
+  const strip = tabStrip.value;
+  const btn = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!strip || !btn) return;
+  const s = strip.getBoundingClientRect();
+  if (!s.width) return; // not laid out
+  const b = btn.getBoundingClientRect();
+  const end = Math.max(STRIP_INSET_PX, canScrollRight.value ? EDGE_FADE_PX : 0);
+  const delta =
+    b.left < s.left + STRIP_INSET_PX - 1 ? b.left - s.left - STRIP_INSET_PX
+    : b.right > s.right - end + 1 ? b.right - s.right + end
+    : 0;
+  if (!delta) return;
+  if (typeof strip.scrollBy === "function") strip.scrollBy({ left: delta, behavior });
+  else strip.scrollLeft += delta;
+}
+// The strip renders only for an admin, so it is set up whenever it appears.
+watch(
+  tabStrip,
+  (el, _old, onCleanup) => {
+    if (!el) return;
+    updateOverflow();
+    revealActiveTab("auto"); // arriving: already in place, no scroll to watch
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(el);
+    onCleanup(() => observer.disconnect());
+  },
+  { flush: "post" },
+);
+watch(activeTab, () => nextTick(() => revealActiveTab(smoothOrAuto())));
+watch(locale, () => nextTick(updateOverflow));
+
 function onTabKey(e: KeyboardEvent) {
   const i = TABS.findIndex((tab) => tab.id === activeTab.value);
   const n = TABS.length;
@@ -247,32 +288,37 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Navigation Tabs: one line that scrolls sideways on a phone, and sticks under a
-           translucent bar while the page scrolls (the view root, p-6, is the scroller).
-           shrink-0: a scroller's automatic min-height is 0, so in the overflowing column
-           it would otherwise be squeezed down to its 1px border. -->
-      <div
-        class="sticky -top-6 z-20 -mx-6 mb-6 flex shrink-0 overflow-x-auto scrollbar-none border-b border-bd px-6 material-bar"
-        data-test="admin-tablist"
-        role="tablist"
-        :aria-label="t('admin.title')"
-        @keydown="onTabKey"
-      >
-        <button
-          v-for="tab in TABS"
-          :id="`admin-tab-${tab.id}`"
-          :key="tab.id"
-          type="button"
-          role="tab"
-          :aria-selected="activeTab === tab.id ? 'true' : 'false'"
-          aria-controls="admin-tabpanel"
-          :tabindex="activeTab === tab.id ? 0 : -1"
-          class="shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors focus-visible:!outline-offset-[-2px]"
-          :class="activeTab === tab.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="selectTab(tab.id)"
+      <!-- Navigation Tabs: a translucent bar that sticks while the page scrolls (the view
+           root, p-6, is the scroller), holding one line of tabs that scrolls sideways on a
+           phone. The bar keeps its material and border; only the line inside fades.
+           shrink-0: in the overflowing column the bar is never squeezed. -->
+      <div class="sticky -top-6 z-20 -mx-6 mb-6 shrink-0 border-b border-bd material-bar" data-test="admin-tabbar">
+        <div
+          ref="tabStrip"
+          class="flex overflow-x-auto scrollbar-none px-6"
+          :class="{ 'edge-fade-x': canScrollRight }"
+          role="tablist"
+          :aria-label="t('admin.title')"
+          @keydown="onTabKey"
+          @scroll.passive="updateOverflow"
         >
-          {{ t(tab.label) }}
-        </button>
+          <!-- The strip clips vertically too: the focus ring is drawn inside each tab. -->
+          <button
+            v-for="tab in TABS"
+            :id="`admin-tab-${tab.id}`"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id ? 'true' : 'false'"
+            aria-controls="admin-tabpanel"
+            :tabindex="activeTab === tab.id ? 0 : -1"
+            class="shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors focus-visible:!outline-offset-[-2px]"
+            :class="activeTab === tab.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
+            @click="selectTab(tab.id)"
+          >
+            {{ t(tab.label) }}
+          </button>
+        </div>
       </div>
 
       <!-- Every tab renders on its own; each one shows its own loading and errors. -->

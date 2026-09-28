@@ -149,11 +149,67 @@ describe("AdminView", () => {
   it("never lets the page squeeze the tab strip, and keeps the focus ring inside it", async () => {
     const wrapper = await mountAdmin();
     // The strip scrolls sideways: without shrink-0 its min-height is 0 in the flex column.
-    expect(wrapper.find('[data-test="admin-tablist"]').classes()).toContain("shrink-0");
+    expect(wrapper.find('[data-test="admin-tabbar"]').classes()).toContain("shrink-0");
     // The strip clips vertically too, so the ring is drawn inside each tab.
     for (const tab of wrapper.findAll('[role="tab"]')) {
       expect(tab.classes()).toContain("focus-visible:!outline-offset-[-2px]");
     }
+  });
+
+  describe("on a phone, where the strip scrolls sideways", () => {
+    // jsdom has no layout: a 390px strip whose five 160px tabs run to 848px.
+    const undo: (() => void)[] = [];
+    const scrollBy = vi.fn();
+    function define(proto: object, key: string, desc: PropertyDescriptor) {
+      const own = Object.getOwnPropertyDescriptor(proto, key);
+      Object.defineProperty(proto, key, { configurable: true, ...desc });
+      undo.push(() => (own ? Object.defineProperty(proto, key, own) : delete (proto as Record<string, unknown>)[key]));
+    }
+    const isStrip = (el: Element) => el.getAttribute("role") === "tablist";
+    beforeEach(() => {
+      const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 40, height: 40 }) as DOMRect;
+      define(Element.prototype, "getBoundingClientRect", {
+        value(this: Element) {
+          if (isStrip(this)) return rect(0, 390);
+          const i = this.getAttribute("role") === "tab" ? [...this.parentElement!.children].indexOf(this) : -1;
+          return i >= 0 ? rect(24 + i * 160, 160) : rect(0, 0);
+        },
+      });
+      define(HTMLElement.prototype, "scrollWidth", { get(this: Element) { return isStrip(this) ? 848 : 0; } });
+      define(HTMLElement.prototype, "clientWidth", { get(this: Element) { return isStrip(this) ? 390 : 0; } });
+      define(HTMLElement.prototype, "scrollBy", { value: scrollBy });
+    });
+    afterEach(() => {
+      while (undo.length) undo.pop()!();
+      scrollBy.mockReset();
+    });
+
+    it("shows a fade while more tabs wait, and brings a tab opened by the address into view", async () => {
+      adminApi.getOverview.mockResolvedValue(snapshot("healthy"));
+      const wrapper = await mountAdmin("/admin?tab=operations");
+
+      expect(wrapper.find('[role="tablist"]').classes()).toContain("edge-fade-x");
+      // Operations ends at 824px: moved clear of the 28px fade, at once on arrival.
+      expect(scrollBy).toHaveBeenCalledWith({ left: 824 - 390 + 28, behavior: "auto" });
+    });
+
+    it("follows Back and Forward to a tab off the strip's left edge", async () => {
+      adminApi.getOverview.mockResolvedValue(snapshot("healthy"));
+      await mountAdmin("/admin?tab=operations");
+      scrollBy.mockClear();
+      // As if the strip had been scrolled to its end: Users starts 300px left of it.
+      define(Element.prototype, "getBoundingClientRect", {
+        value(this: Element) {
+          if (isStrip(this)) return { left: 0, right: 390, width: 390 } as DOMRect;
+          return this.id === "admin-tab-users" ? ({ left: -300, right: -140, width: 160 } as DOMRect) : ({ left: 0, right: 0, width: 0 } as DOMRect);
+        },
+      });
+
+      await currentRouter!.replace({ query: { tab: "users" } });
+      await flushPromises();
+
+      expect(scrollBy).toHaveBeenCalledWith({ left: -324, behavior: "smooth" });
+    });
   });
 
   it("ignores an unknown tab in the address", async () => {

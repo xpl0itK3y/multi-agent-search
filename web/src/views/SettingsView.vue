@@ -8,6 +8,7 @@ import { useUiStore, THEMES, SIDEBAR_DEFAULT } from "@/stores/ui";
 import { api, ApiError, apiErrorMessage, isReauthRequired, PASSWORD_MIN_LENGTH } from "@/lib/api";
 import { saveFile } from "@/lib/download";
 import { avatarGlyph, isAvatarImage } from "@/lib/avatar";
+import { smoothOrAuto } from "@/lib/motion";
 import type { Depth, UserTokenStats } from "@/lib/types";
 import GoogleReauthNotice from "@/components/GoogleReauthNotice.vue";
 import PasswordRuleHint from "@/components/PasswordRuleHint.vue";
@@ -17,7 +18,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const ui = useUiStore();
-const { t, te } = useI18n();
+const { t, te, locale } = useI18n();
 
 // Password change and account deletion verify the current password: a 401 then
 // means it was wrong (api skips session recovery), a 400 that it is required.
@@ -51,6 +52,47 @@ watch(
     activeTab.value = tabFromQuery(tab) ?? "profile";
   },
 );
+
+// Below md the tabs are one row that scrolls sideways. A fade at its right edge shows
+// while more tabs wait there, and the open tab is scrolled fully into view, clear of the
+// fade: on arrival (a link or a reload with ?tab=), on a click, and on Back/Forward
+// (§16 Wayfinding: where am I?). Sideways only, so the page never jumps.
+const tabNav = ref<HTMLElement | null>(null);
+const canScrollRight = ref(false);
+const EDGE_FADE_PX = 28; // .edge-fade-x
+const NAV_INSET_PX = 6; // the row's p-1.5
+function updateTabOverflow() {
+  const el = tabNav.value;
+  canScrollRight.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+function revealActiveTab(behavior: ScrollBehavior) {
+  const nav = tabNav.value;
+  const btn = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+  if (!nav || !btn) return;
+  const s = nav.getBoundingClientRect();
+  if (!s.width) return; // not laid out
+  const b = btn.getBoundingClientRect();
+  const end = Math.max(NAV_INSET_PX, canScrollRight.value ? EDGE_FADE_PX : 0);
+  const delta =
+    b.left < s.left + NAV_INSET_PX - 1 ? b.left - s.left - NAV_INSET_PX
+    : b.right > s.right - end + 1 ? b.right - s.right + end
+    : 0;
+  if (!delta) return;
+  if (typeof nav.scrollBy === "function") nav.scrollBy({ left: delta, behavior });
+  else nav.scrollLeft += delta;
+}
+let tabNavObserver: ResizeObserver | undefined;
+onMounted(() => {
+  updateTabOverflow();
+  revealActiveTab("auto"); // arriving: already in place, no scroll to watch
+  if (typeof ResizeObserver !== "undefined" && tabNav.value) {
+    tabNavObserver = new ResizeObserver(updateTabOverflow);
+    tabNavObserver.observe(tabNav.value);
+  }
+});
+onUnmounted(() => tabNavObserver?.disconnect());
+watch(activeTab, () => nextTick(() => revealActiveTab(smoothOrAuto())));
+watch(locale, () => nextTick(updateTabOverflow));
 
 // Back to where the reader came from; Settings opened on its own (a new tab, a link) goes
 // home instead of leaving the app.
@@ -474,77 +516,86 @@ onUnmounted(() => {
 
       <!-- Settings Layout: Left Tabs + Right Content -->
       <div class="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
-        <!-- Sidebar Tabs -->
-        <nav class="flex flex-row md:flex-col gap-1 p-1.5 rounded-xl border border-bd bg-surface/40 overflow-x-auto scrollbar-none md:sticky md:top-0 md:z-10">
-          <button
-            type="button"
-            class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
-            :class="activeTab === 'profile' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
-            :aria-current="activeTab === 'profile' ? 'page' : undefined"
-            @click="selectTab('profile')"
+        <!-- Sidebar Tabs: the frame keeps its border and fill; only the row inside scrolls
+             and fades. min-w-0: the row's full width never widens the grid column. -->
+        <div class="min-w-0 overflow-hidden rounded-xl border border-bd bg-surface/40 md:sticky md:top-0 md:z-10">
+          <nav
+            ref="tabNav"
+            class="flex flex-row md:flex-col gap-1 p-1.5 overflow-x-auto scrollbar-none"
+            :class="{ 'edge-fade-x': canScrollRight }"
+            data-test="settings-tabs"
+            @scroll.passive="updateTabOverflow"
           >
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-            <span>{{ t("settings.tabs.profile") }}</span>
-          </button>
-
-          <button
-            type="button"
-            class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
-            :class="activeTab === 'research' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
-            :aria-current="activeTab === 'research' ? 'page' : undefined"
-            @click="selectTab('research')"
-          >
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
-            </svg>
-            <span>{{ t("settings.tabs.research") }}</span>
-          </button>
-
-          <button
-            type="button"
-            class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
-            :class="activeTab === 'appearance' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
-            :aria-current="activeTab === 'appearance' ? 'page' : undefined"
-            @click="selectTab('appearance')"
-          >
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 2a10 10 0 0 1 0 20v-2a8 8 0 0 0 0-16V2z" />
-            </svg>
-            <span>{{ t("settings.tabs.appearance") }}</span>
-          </button>
-
-          <button
-            type="button"
-            class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
-            :class="activeTab === 'analytics' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
-            :aria-current="activeTab === 'analytics' ? 'page' : undefined"
-            @click="selectTab('analytics')"
-          >
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="20" x2="18" y2="10" />
-              <line x1="12" y1="20" x2="12" y2="4" />
-              <line x1="6" y1="20" x2="6" y2="14" />
-            </svg>
-            <span>{{ t("settings.tabs.analytics") }}</span>
-          </button>
-
-          <button
-            type="button"
-            class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
-            :class="activeTab === 'security' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
-            :aria-current="activeTab === 'security' ? 'page' : undefined"
-            @click="selectTab('security')"
-          >
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-            <span>{{ t("settings.tabs.security") }}</span>
-          </button>
-        </nav>
+            <button
+              type="button"
+              class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
+              :class="activeTab === 'profile' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
+              :aria-current="activeTab === 'profile' ? 'page' : undefined"
+              @click="selectTab('profile')"
+            >
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+              <span>{{ t("settings.tabs.profile") }}</span>
+            </button>
+  
+            <button
+              type="button"
+              class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
+              :class="activeTab === 'research' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
+              :aria-current="activeTab === 'research' ? 'page' : undefined"
+              @click="selectTab('research')"
+            >
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
+              </svg>
+              <span>{{ t("settings.tabs.research") }}</span>
+            </button>
+  
+            <button
+              type="button"
+              class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
+              :class="activeTab === 'appearance' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
+              :aria-current="activeTab === 'appearance' ? 'page' : undefined"
+              @click="selectTab('appearance')"
+            >
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 2a10 10 0 0 1 0 20v-2a8 8 0 0 0 0-16V2z" />
+              </svg>
+              <span>{{ t("settings.tabs.appearance") }}</span>
+            </button>
+  
+            <button
+              type="button"
+              class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
+              :class="activeTab === 'analytics' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
+              :aria-current="activeTab === 'analytics' ? 'page' : undefined"
+              @click="selectTab('analytics')"
+            >
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+              <span>{{ t("settings.tabs.analytics") }}</span>
+            </button>
+  
+            <button
+              type="button"
+              class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition shrink-0 text-left"
+              :class="activeTab === 'security' ? 'bg-accent/15 text-accent border border-accent/30 shadow-e1' : 'text-muted hover:text-ink hover:bg-surface'"
+              :aria-current="activeTab === 'security' ? 'page' : undefined"
+              @click="selectTab('security')"
+            >
+              <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+              <span>{{ t("settings.tabs.security") }}</span>
+            </button>
+          </nav>
+        </div>
 
         <!-- Tab Content Area -->
         <main class="md:col-span-3 space-y-6">

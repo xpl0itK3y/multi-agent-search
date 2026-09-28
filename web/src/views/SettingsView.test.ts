@@ -244,6 +244,53 @@ describe("SettingsView", () => {
     expect(unknown.text()).not.toContain(t("settings.security.passwordTitle"));
   });
 
+  describe("on a phone, where the tabs are one sideways row", () => {
+    // jsdom has no layout: a 390px row whose five 120px tabs run to 636px.
+    const undo: (() => void)[] = [];
+    const scrollBy = vi.fn();
+    function define(proto: object, key: string, desc: PropertyDescriptor) {
+      const own = Object.getOwnPropertyDescriptor(proto, key);
+      Object.defineProperty(proto, key, { configurable: true, ...desc });
+      undo.push(() => (own ? Object.defineProperty(proto, key, own) : delete (proto as Record<string, unknown>)[key]));
+    }
+    const isRow = (el: Element) => el.getAttribute("data-test") === "settings-tabs";
+    beforeEach(() => {
+      const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 36, height: 36 }) as DOMRect;
+      define(Element.prototype, "getBoundingClientRect", {
+        value(this: Element) {
+          if (isRow(this)) return rect(0, 390);
+          const row = this.parentElement;
+          return row && isRow(row) ? rect(6 + [...row.children].indexOf(this) * 124, 120) : rect(0, 0);
+        },
+      });
+      define(HTMLElement.prototype, "scrollWidth", { get(this: Element) { return isRow(this) ? 636 : 0; } });
+      define(HTMLElement.prototype, "clientWidth", { get(this: Element) { return isRow(this) ? 390 : 0; } });
+      define(HTMLElement.prototype, "scrollBy", { value: scrollBy });
+    });
+    afterEach(() => {
+      while (undo.length) undo.pop()!();
+      scrollBy.mockReset();
+    });
+
+    it("fades the row's end while more tabs wait, and brings the tab from the address into view", async () => {
+      const wrapper = await mountSettings("/settings?tab=security");
+
+      expect(wrapper.find("[data-test='settings-tabs']").classes()).toContain("edge-fade-x");
+      // Security ends at 622px: moved clear of the 28px fade, at once on arrival.
+      expect(scrollBy).toHaveBeenCalledWith({ left: 622 - 390 + 28, behavior: "auto" });
+    });
+
+    it("scrolls a tab picked at the row's edge fully into view", async () => {
+      const wrapper = await mountSettings("/settings");
+      scrollBy.mockClear();
+
+      await openTab(wrapper, "settings.tabs.appearance"); // 254..374, under the fade
+      await flushPromises();
+
+      expect(scrollBy).toHaveBeenCalledWith({ left: 374 - 390 + 28, behavior: "smooth" });
+    });
+  });
+
   it("says that logging out signs out every device, and logs out", async () => {
     mocks.logout.mockResolvedValue({ status: "ok" });
     const wrapper = await mountSettings("/settings?tab=security");
