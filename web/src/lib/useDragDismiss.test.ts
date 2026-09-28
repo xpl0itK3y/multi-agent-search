@@ -186,10 +186,58 @@ describe("useDragDismiss", () => {
     expect(scrim.style.opacity).toBe("");
   });
 
-  it("springs back open after a slow, short drag", () => {
+  it("springs back open after a short drag released at rest", () => {
     const { panel, onDismiss, down, move, up } = setup();
     down(200);
     for (let i = 1; i <= 6; i++) move(200 - 5 * i, 100); // -30px over 600ms
+    vi.advanceTimersByTime(100); // held still before lifting
+    up();
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(panel.style.transform).toBe("");
+  });
+
+  it("closes a drag released at rest past half-way", () => {
+    const { onDismiss, down, move, up } = setup();
+    down(250);
+    move(235, 10);
+    move(35, 200); // -200px of 300
+    vi.advanceTimersByTime(100);
+    up();
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open after a slow push back toward open, even past half-way", () => {
+    const { panel, onDismiss, down, move, up, offset } = setup();
+    down(250);
+    move(235, 10);
+    move(35, 200); // -200px of 300…
+    for (let i = 1; i <= 7; i++) move(35 + 2.5 * i, 10); // …then back at 250 px/s
+    expect(offset()).toBe(-182.5); // still past half-way
+    up();
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(panel.style.transform).toBe("");
+  });
+
+  it("closes after a slow drag still moving toward closed, however short", () => {
+    const { onDismiss, down, move, up } = setup();
+    down(200);
+    move(185, 10);
+    for (let i = 1; i <= 6; i++) move(185 - 1.5 * i, 10); // -9px, at 150 px/s
+    up();
+    vi.advanceTimersByTime(1000);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open when let back slowly out of the rubber band", () => {
+    const { panel, onDismiss, down, move, up, offset } = setup();
+    down(100);
+    move(115, 10);
+    move(215, 150); // pulled out past the open edge…
+    for (let i = 1; i <= 6; i++) move(215 - 5 * i, 10); // …and let back, moving toward closed
+    expect(offset()).toBeGreaterThan(0);
     up();
     vi.advanceTimersByTime(1000);
     expect(onDismiss).not.toHaveBeenCalled();
@@ -226,9 +274,9 @@ describe("useDragDismiss", () => {
   });
 
   it("can be grabbed mid-settle and continues from where it is on screen", () => {
-    const { panel, down, move, up } = setup();
+    const { panel, onDismiss, down, move, up } = setup();
     down(200);
-    for (let i = 1; i <= 6; i++) move(200 - 20 * i, 100); // slow: it will spring back
+    for (let i = 1; i <= 6; i++) move(200 - 20 * i, 100); // still moving toward closed
     up();
     vi.advanceTimersByTime(50);
     const midway = panel.style.transform;
@@ -238,6 +286,7 @@ describe("useDragDismiss", () => {
     down(150);
     vi.advanceTimersByTime(100);
     expect(panel.style.transform).toBe(midway); // held under the finger, no jump
+    expect(onDismiss).not.toHaveBeenCalled(); // the closing sheet was caught
   });
 
   it("leaves a mostly vertical drag to the native scroll", () => {

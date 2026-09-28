@@ -2,8 +2,8 @@
 // (apple-design §2, §3, §5, §6, §9):
 // - the panel follows the finger 1:1 once the gesture is clearly horizontal, with a
 //   rubber band past the open edge;
-// - on release, a fast gesture's direction decides (the velocity sign, not the
-//   position); a slow one commits when its projected landing point is past half-way;
+// - on release while still moving, its direction decides (the velocity sign, not the
+//   position); released at rest, it commits when its landing point is past half-way;
 // - it settles on a critically damped spring that starts at the release velocity, so
 //   there is no seam between dragging and animating, and never overshoots the open
 //   edge (a gap would show);
@@ -29,7 +29,8 @@ export interface DragDismissOptions {
 
 const LOCK_PX = 10; // hysteresis before a direction is chosen (§10)
 const HORIZONTAL_BIAS = 1.2; // |dx| must beat |dy| by this much to claim the gesture
-const FLICK_PX_S = 300; // faster than this, the direction alone decides
+const FLICK_PX_S = 300; // a flick: its direction decides, even from the rubber band
+const MOVING_PX_S = 50; // slower than this at release, the panel counts as at rest
 const RESPONSE = 0.3; // Apple's drawer response, critically damped (no bounce)
 const OMEGA = (2 * Math.PI) / RESPONSE;
 const CLICK_GUARD_MS = 250;
@@ -126,6 +127,17 @@ export function useDragDismiss(opts: DragDismissOptions): void {
         if (opts.panel.value === el) clearInline();
       }),
     );
+  }
+
+  // Released still moving: the direction it was moving decides (the velocity sign, not
+  // the position), so a slow push back toward open stays open even past half-way.
+  // Released at rest: where it would come to rest (§6). A panel pulled out into the
+  // rubber band and let back hasn't started closing: only a flick closes it from there.
+  function releaseCloses(v: number, width: number): boolean {
+    if (Math.abs(v) > FLICK_PX_S) return v * s > 0;
+    if (offset * s <= 0) return false;
+    if (Math.abs(v) > MOVING_PX_S) return v * s > 0;
+    return (offset + project(v)) * s > width / 2;
   }
 
   function settle(close: boolean, velocity: number, width: number) {
@@ -226,10 +238,8 @@ export function useDragDismiss(opts: DragDismissOptions): void {
       gesture = null;
       if (!g.claimed) return;
       const v = tracker.velocity(performance.now()).vx;
-      // A flick: its direction decides. A slow release: where it would come to rest.
-      const close = Math.abs(v) > FLICK_PX_S ? v * s > 0 : (offset + project(v, 0.99)) * s > g.width / 2;
       swallowNextClick();
-      settle(close, v, g.width);
+      settle(releaseCloses(v, g.width), v, g.width);
     };
 
     // The browser took the pointer (a pan it owns, a pinch): nothing more will come.
