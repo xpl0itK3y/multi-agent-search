@@ -46,7 +46,7 @@ description: How to change persistence in multi-agent-search safely — SQLAlche
 7. **New table only:**
    - Add it to the TRUNCATE list in `tests/postgres_helpers.py`. Nothing enforces this, and a missing entry leaks rows between tests.
    - Add a `_SQL_ROWS` entry and an in-memory branch to `_backdate` in the conformance suite if tests need to age its rows.
-   - **The in-memory store copies FK cascades by hand.** For `ON DELETE CASCADE` or `SET NULL`, do the same in the in-memory `delete_user` / `delete_research`, and test the delete in the conformance suite (`delete_research` already leaves finalize and search jobs behind that SQL would cascade).
+   - **The in-memory store copies FK cascades by hand.** For `ON DELETE CASCADE` or `SET NULL`, do the same in the in-memory `delete_user` / `delete_research`, and test the delete in the conformance suite (`test_delete_research_cascades_its_jobs` is the model).
 8. **Migration step test** in `tests/test_migration_steps.py`, for any backfill, data migration or non-trivial index. The pattern: `database_at("<previous rev>")` → seed rows with raw SQL → `migrate_throwaway_database(_DATABASE, "<new rev>")` → assert → downgrade → upgrade again. Alembic does not compare CHECK constraints, so test them explicitly (`pg_constraint`, a failing insert), as the `000033` test does.
 9. **README.** Add operationally significant revisions (long builds, irreversible deletes) to "Database Migrations".
 
@@ -86,16 +86,11 @@ Then run `ci_local.sh pytest tests/test_task_store_conformance.py`, bring up a d
   - research row, then its search tasks and search jobs (`requeue_search_task_job_of_active_research`, `delete_research_tasks`);
   - users row, then `auth_action_tokens`.
 - **`FOR NO KEY UPDATE`** (`with_for_update(key_share=True)`) avoids blocking FK inserts, as in `try_begin_finalization`.
-- **Upserts:** `pg_insert(…).on_conflict_do_update(…)`, never check-then-insert. Branch on SQLSTATE 23505 / 23503 where needed.
-- **Retention deletes:** model new ones on `cleanup_old_researches`: batches of 1,000, one transaction each, with the predicate re-checked in the DELETE itself. The job and cache cleanups select ids and then delete by id with no re-check, so do not copy them.
+- **Upserts:** `pg_insert(…).on_conflict_do_update(…)` (`put_cached_search`, `record_user_session`), never check-then-insert. When the write merges with the stored row, insert-if-missing with `on_conflict_do_nothing()` and then lock it with `session.get(…, with_for_update=True)` (`upsert_worker_heartbeat`). Branch on SQLSTATE 23505 / 23503 where needed.
+- **Retention deletes:** use `_delete_in_batches(model, predicate)` (a count) or `_delete_ids_in_batches` (the ids): batches of 1,000, one transaction each, with the predicate repeated in the DELETE itself, so a row changed since its batch was picked (a job requeued, a session active again) is kept. `cleanup_old_researches` does the same by hand, because it also deletes prompt events in each batch.
 - **The unique index `uq_running_finalize_job_per_research`** (partial) is the database backstop against two RUNNING finalize jobs for one research.
 
-**Not models to copy.** A few existing SQL methods break these rules:
-- `update_search_task_job` and `record_search_task_job_failure` read without FOR UPDATE, then write;
-- `recover_stale_search_task_jobs` selects RUNNING rows unlocked;
-- `put_cached_search` and `upsert_worker_heartbeat` check, then insert.
-
-Copy the guarded methods named above instead.
+**Bulk state changes** are one guarded UPDATE … RETURNING, never a SELECT followed by writes by id: `recover_stale_search_task_jobs` and `recover_stale_research_finalize_jobs`. A row that changed while the statement waited for its lock is re-checked against the WHERE and kept. `tests/test_store_write_races.py` holds a row in a second transaction to pin each of these cases; add one there for a new writer of this kind.
 
 **Checklist for a new writer:**
 - one `session_scope`;
