@@ -742,6 +742,31 @@ The script will:
 - verify worker heartbeat
 - verify final state persisted in Postgres
 
+## Branch Protection
+
+`main` is protected by the repository ruleset in
+[`.github/rulesets/main.json`](./.github/rulesets/main.json):
+
+- changes land only through a pull request; the branch cannot be deleted or force-pushed;
+- all six CI jobs must pass on a branch that is up to date with `main`: `Backend unit tests`,
+  `Frontend typecheck and tests`, `Native Rust tests`, `Offline evaluation gate`,
+  `Prometheus alert rules` and `Postgres smoke` (pinned to GitHub Actions, so a manually
+  posted commit status cannot satisfy them);
+- review conversations must be resolved; an approving review is not required, so the author
+  can merge their own PR once CI is green;
+- there are no bypass actors: repository admins follow the same rules.
+
+A repository admin applies or updates it with the GitHub CLI:
+
+```bash
+gh auth login                       # an account with admin rights on the repository
+scripts/apply_branch_protection.sh  # or: scripts/apply_branch_protection.sh owner/repo
+```
+
+The same file can be imported in the UI: Settings → Rules → Rulesets → New ruleset →
+Import a ruleset. `tests/test_branch_protection_config.py` fails when a CI job is renamed or
+added without updating the ruleset, so the required checks never drift from the workflows.
+
 ## License
 
 Released under the [MIT License](./LICENSE).
