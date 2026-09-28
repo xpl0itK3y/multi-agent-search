@@ -68,6 +68,20 @@ describe("ThreadView states", () => {
     expect(shown.startsWith("Sodium-ion vs LFP batteries")).toBe(true);
   });
 
+  it("leaves the tab's name alone when the thread arrives after the reader moved on", async () => {
+    let resolve!: (list: { id: string; prompt: string }[]) => void;
+    mocks.api.getThread.mockReturnValue(new Promise((r) => (resolve = r)));
+    const wrapper = mountThread();
+    await flushPromises();
+
+    wrapper.unmount();
+    document.title = "Settings — Veris"; // the router's afterEach, for the new page
+    resolve([{ id: "r-1", prompt: "Old thread question" }]);
+    await flushPromises();
+
+    expect(document.title).toBe("Settings — Veris");
+  });
+
   it("shows a failed follow-up answer under its question and retries it there", async () => {
     mocks.api.getThread.mockResolvedValue([{ id: "r-1", prompt: "Topic" }]);
     mocks.streamChatAnswer.mockImplementation(async (_id: string, _q: string, h: ChatStreamHandlers) => {

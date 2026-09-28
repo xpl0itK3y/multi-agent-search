@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { streamChatAnswer } from "@/lib/stream";
@@ -97,6 +97,11 @@ function threadTitle(prompt: string): string {
 
 // Only the latest load may fill the view: switching threads mid-load drops the older one.
 let loadSeq = 0;
+// Leaving the view drops its load too: a thread that arrives after the reader moved on
+// (another thread, Home, Settings) must not rename the tab of the page they are on now.
+onBeforeUnmount(() => {
+  loadSeq++;
+});
 
 async function loadThread() {
   const seq = ++loadSeq;
