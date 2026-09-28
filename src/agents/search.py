@@ -21,56 +21,11 @@ class SearchAgent:
     # Unified across stages via domain_policy (AUD-006) — see that module for the eval check.
     LOW_VALUE_DOMAIN_EXACT_MATCHES = domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES
     LOW_VALUE_DOMAIN_SUBSTRINGS = domain_policy.LOW_VALUE_DOMAIN_SUBSTRINGS
-    LOW_SIGNAL_TITLE_TOKENS = (
-        "discover",
-        "gallery",
-        "pinterest",
-        "tiktok",
-        "forum",
-        "youth development forum",
-        "travel trends",
-        "fashion trends",
-        "aesthetic clinics",
-    )
-    LOW_SIGNAL_URL_TOKENS = (
-        "bing.com/aclick",
-        "news.google.com",
-        "amazon.com/s",
-        "amazon.",
-        "aliexpress.",
-        "ubuy.",
-        "login.aliexpress.com",
-        "yandex.",
-        "/shopping/",
-        "/discover/",
-        "/video/",
-        "/gallery/",
-        "/pin/",
-        "/dp/",
-        "/wholesale-",
-    )
-    LOW_SIGNAL_RESULT_TOKENS = (
-        "best",
-        "top 10",
-        "top ten",
-        "buying guide",
-        "rankings guide",
-        "most anticipated",
-        "predictions",
-        "upcoming",
-        "expected",
-    )
-    STRONG_RESULT_TOKENS = (
-        "review",
-        "reviews",
-        "benchmark",
-        "benchmarks",
-        "specs",
-        "comparison",
-        "tested",
-        "official",
-        "press release",
-    )
+    # Candidate token lists: one copy, shared with rust_accel's search config (AUD-006).
+    LOW_SIGNAL_TITLE_TOKENS = domain_policy.LOW_SIGNAL_TITLE_TOKENS
+    LOW_SIGNAL_URL_TOKENS = domain_policy.LOW_SIGNAL_URL_TOKENS
+    LOW_SIGNAL_RESULT_TOKENS = domain_policy.LOW_SIGNAL_RESULT_TOKENS
+    STRONG_RESULT_TOKENS = domain_policy.STRONG_RESULT_TOKENS
 
     def __init__(
         self,

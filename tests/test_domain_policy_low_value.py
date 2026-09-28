@@ -46,3 +46,25 @@ def test_drift_fix_youtube_now_blocked_in_search_config():
     assert "youtube.com" in domain_policy.LOW_VALUE_DOMAIN_EXACT_MATCHES
     assert "youtube.com" in rust_accel._search_config()["low_value_domain_exact_matches"]
     assert "passport.yandex.ru" in rust_accel._search_config()["low_value_domain_exact_matches"]
+
+
+def test_candidate_token_lists_are_one_copy_across_search_and_rust_config():
+    # Second AUD-006 pass: the rust search config had lost six shopping URL tokens.
+    config = rust_accel._search_config()
+    for name in ("LOW_SIGNAL_TITLE_TOKENS", "LOW_SIGNAL_URL_TOKENS", "LOW_SIGNAL_RESULT_TOKENS", "STRONG_RESULT_TOKENS"):
+        shared = getattr(domain_policy, name)
+        assert getattr(SearchAgent, name) is shared, name
+        assert config[name.lower()] == list(shared), name
+    assert "aliexpress." in config["low_signal_url_tokens"]
+
+
+def test_candidate_url_tokens_block_no_gold_cited_url():
+    urls = set()
+    for path in glob.glob("eval/fixtures/*.json"):
+        for src in json.load(open(path)).get("sources", []):
+            if src.get("url"):
+                urls.add(src["url"].lower())
+    assert urls, "no gold fixture URLs found — guard would be vacuous"
+
+    offenders = sorted(u for u in urls if any(t in u for t in domain_policy.LOW_SIGNAL_URL_TOKENS) or "/wall-" in u)
+    assert offenders == [], f"URL tokens would drop gold-cited sources: {offenders}"

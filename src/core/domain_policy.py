@@ -56,3 +56,62 @@ LOW_VALUE_DOMAIN_SUBSTRINGS = (
     "grokipedia",
     "outmaxshop",
 )
+
+# The search-candidate token lists (AUD-006, second pass). They had drifted the same way: the
+# rust_accel *search* config lacked six URL tokens (amazon./aliexpress./ubuy./… shopping pages)
+# that SearchAgent drops later anyway, so those candidates took scoring slots only to be
+# discarded. One copy here; both stages read it, and tests/test_domain_policy_low_value.py
+# checks that the union blocks no URL a gold-quality fixture report cites.
+LOW_SIGNAL_TITLE_TOKENS = (
+    "discover",
+    "gallery",
+    "pinterest",
+    "tiktok",
+    "forum",
+    "youth development forum",
+    "travel trends",
+    "fashion trends",
+    "aesthetic clinics",
+)
+
+LOW_SIGNAL_URL_TOKENS = (
+    "bing.com/aclick",
+    "news.google.com",
+    "amazon.com/s",
+    "amazon.",
+    "aliexpress.",
+    "ubuy.",
+    "login.aliexpress.com",
+    "yandex.",
+    "/shopping/",
+    "/discover/",
+    "/video/",
+    "/gallery/",
+    "/pin/",
+    "/dp/",
+    "/wholesale-",
+)
+
+LOW_SIGNAL_RESULT_TOKENS = (
+    "best",
+    "top 10",
+    "top ten",
+    "buying guide",
+    "rankings guide",
+    "most anticipated",
+    "predictions",
+    "upcoming",
+    "expected",
+)
+
+STRONG_RESULT_TOKENS = (
+    "review",
+    "reviews",
+    "benchmark",
+    "benchmarks",
+    "specs",
+    "comparison",
+    "tested",
+    "official",
+    "press release",
+)

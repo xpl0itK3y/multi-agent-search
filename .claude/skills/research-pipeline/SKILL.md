@@ -201,7 +201,7 @@ class FooAgent:
 - **Fallback.** `src/core/rust_accel.py` imports it once. Every function has a pure-Python fallback, and **the fallback is what production and the Python tests run**: the Dockerfile and CI never build the extension.
 - **Build.** `scripts/build_native_module.sh` (maturin; set `VENV_PYTHON`).
 - **CI.** The CI job only runs `cargo test`. Parity between the Rust and Python paths is barely tested (conflict reason strings in `test_report_postprocess.py`). Watch byte vs character lengths in Rust.
-- **Duplicated tokens.** `rust_accel._search_config` has its own copy of the low-signal tokens in `SearchAgent.LOW_SIGNAL_*`, and the two have **already drifted** (`amazon.`, `aliexpress.`, `/dp/` and others are only in SearchAgent). Change both, and reconcile them when you touch either. The config helpers are `lru_cache`d.
+- **One copy of the scoring lists.** The domain lists and the candidate token lists (`LOW_SIGNAL_*`, `STRONG_RESULT_TOKENS`) live in `src/core/domain_policy.py`. `SearchAgent` and the `rust_accel` search config read both; `AnalyzerAgent` and the analyzer config read the domain lists; and `tests/test_domain_policy_low_value.py` fails on a local copy or on a token that would drop a gold-cited source. Other lists in `rust_accel._search_config` (the docs tokens) are still local. The config helpers are `lru_cache`d, so a running process keeps the old values.
 
 ## Pitfalls
 
