@@ -70,7 +70,10 @@ function skip() {
         {{ $t("setPassword.subtitle", { email: auth.user?.email ?? "" }) }}
       </p>
 
-      <form class="space-y-3" @submit.prevent="submit">
+      <!-- novalidate: minlength stays a hint for password managers, while the translated
+           inline check (and the hint's red state) says what is wrong, not the browser's
+           own bubble in the browser's language. -->
+      <form class="space-y-3" novalidate @submit.prevent="submit">
         <div>
           <input
             v-model="password"

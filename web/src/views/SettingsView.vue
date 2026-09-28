@@ -1104,8 +1104,11 @@ onUnmounted(() => {
                 <p class="text-xs text-muted mt-1">{{ t("settings.security.passwordSubtitle") }}</p>
               </div>
 
-              <!-- A real form: Enter saves, and password managers see the account and the fields. -->
-              <form class="space-y-3 max-w-md" @submit.prevent="changePassword">
+              <!-- A real form: Enter saves, and password managers see the account and the fields.
+                   novalidate: minlength stays a hint for password managers, while the
+                   translated inline check (and the hint's red state) says what is wrong,
+                   not the browser's own bubble in the browser's language. -->
+              <form class="space-y-3 max-w-md" novalidate @submit.prevent="changePassword">
                 <input type="email" autocomplete="username" :value="auth.user?.email ?? ''" readonly hidden tabindex="-1" />
                 <div class="space-y-1">
                   <label :for="passwordFieldIds.current" class="text-xs font-medium text-ink block">{{ t("settings.security.currentPassword") }}</label>

@@ -449,6 +449,9 @@ describe("SettingsView", () => {
     expect(mocks.setPassword).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain(i18n.global.t("settings.errors.passwordTooShort", { min: PASSWORD_MIN_LENGTH }));
     expect(hint.classes()).toContain("text-danger");
+    // A browser would block that submit with its own bubble (minlength) before this
+    // message ever ran; jsdom has no tooShort, so the opt-out itself is pinned.
+    expect(inputs[1].element.closest("form")!.hasAttribute("novalidate")).toBe(true);
 
     const ok = "x".repeat(PASSWORD_MIN_LENGTH);
     await inputs[1].setValue(ok);

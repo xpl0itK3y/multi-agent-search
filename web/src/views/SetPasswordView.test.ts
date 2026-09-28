@@ -115,5 +115,9 @@ describe("SetPasswordView", () => {
     expect(setPassword).not.toHaveBeenCalled();
     expect(hint.classes()).toContain("text-danger");
     expect(wrapper.find('[role="alert"]').text()).toBe(t("setPassword.min6"));
+    // A browser would block that submit with its own bubble (minlength) before this
+    // message ever ran; jsdom has no tooShort, so the opt-out itself is pinned.
+    expect(password.attributes("minlength")).toBe(String(PASSWORD_MIN_LENGTH));
+    expect(wrapper.find("form").attributes("novalidate")).toBeDefined();
   });
 });
