@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, reactive, ref, useId, watch, type Ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
+import { confirm } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
+import { smoothOrAuto } from "@/lib/motion";
 import { safeHttpUrl } from "@/lib/url";
-import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, GraphTrailEntry, NumericCheck, RedTeamReport, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
+import { useDismiss } from "@/lib/useDismiss";
+import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, NumericCheck, RedTeamReport, ShareInfo, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
 import SourceCard from "./SourceCard.vue";
@@ -12,7 +15,96 @@ import ReportSkeletonCanvas from "./ReportSkeletonCanvas.vue";
 
 const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
-type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam" | "trail";
+// Declared before every watcher: the immediate isFinal watcher below reads `t` and the
+// share state, and a `const` read before its line throws (a TDZ ReferenceError).
+const { t, locale } = useI18n();
+// Unique per panel: a thread can show several reports, each with its own tabs.
+const uid = useId();
+
+// ── public share link ─────────────────────────────────────────────────────────
+// Private by default: opening the popover only shows the state. A link is created by
+// the explicit Create button, and revoking asks first, because it breaks the link for
+// everyone it was sent to. Share errors stay inside the popover, next to the action.
+const share = ref<ShareInfo | null>(null);
+const shareMenuOpen = ref(false);
+const shareCopied = ref(false);
+const shareBusy = ref(false);
+const shareError = ref<string | null>(null);
+const shareRevoked = ref(false);
+const shareUrl = computed(() => (share.value?.token ? `${window.location.origin}/r/${share.value.token}` : ""));
+let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(copiedTimer));
+
+async function ensureShare() {
+  if (share.value) return;
+  try {
+    share.value = await api.getShare(props.id);
+  } catch {
+    /* share state is optional — the popover still offers Create */
+  }
+}
+function toggleShareMenu() {
+  shareMenuOpen.value = !shareMenuOpen.value;
+  if (shareMenuOpen.value) {
+    exportMenuOpen.value = false;
+    shareError.value = null;
+    shareRevoked.value = false;
+  }
+}
+async function createShare() {
+  if (shareBusy.value) return;
+  shareBusy.value = true;
+  shareError.value = null;
+  shareRevoked.value = false;
+  try {
+    share.value = await api.createShare(props.id);
+  } catch (e) {
+    shareError.value = apiErrorMessage(e, t);
+  } finally {
+    shareBusy.value = false;
+  }
+}
+async function copyShare() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareCopied.value = true;
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (shareCopied.value = false), 1500);
+  } catch {
+    /* clipboard blocked — the field is selectable as a fallback */
+  }
+}
+async function revokeShare() {
+  if (shareBusy.value) return;
+  const ok = await confirm({
+    title: t("share.revoke"),
+    message: t("share.revokeConfirm"),
+    confirmText: t("share.revoke"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
+  if (!ok) return;
+  shareBusy.value = true;
+  shareError.value = null;
+  try {
+    share.value = await api.revokeShare(props.id);
+    shareCopied.value = false;
+    shareRevoked.value = true;
+  } catch (e) {
+    shareError.value = apiErrorMessage(e, t);
+  } finally {
+    shareBusy.value = false;
+  }
+}
+
+// Both menus grow from their trigger and close on an outside press or Escape, which
+// gives focus back to the trigger (apple-design §7, §16 "how do I get out?").
+const shareRoot = ref<HTMLElement | null>(null);
+const shareBtn = ref<HTMLElement | null>(null);
+useDismiss(shareRoot, shareMenuOpen, { trigger: shareBtn });
+
+type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam";
 const tab = ref<Tab>("report");
 
 const sources = ref<SourcePreview[] | null>(null);
@@ -27,8 +119,6 @@ const crossLang = ref<CrossLanguageReport | null>(null);
 const stance = ref<StanceBalance | null>(null);
 const confidence = ref<ConfidenceReport | null>(null);
 const numbers = ref<NumericCheck | null>(null);
-const showNumbers = ref(false);
-const showWeak = ref(false);
 
 // Inline verification: a persisted toggle plus the signals MarkdownView decorates with.
 const verifyInline = ref((typeof localStorage !== "undefined" ? localStorage.getItem("verify.inline") : null) !== "0");
@@ -44,145 +134,143 @@ const contradictionSentences = computed<string[]>(() =>
   (numbers.value?.contradictions || []).flatMap((c) => c.sentences || []),
 );
 const comparison = ref<ComparisonTable | null>(null);
-const trail = ref<GraphTrailEntry[] | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
 
-async function ensureSources() {
-  if (sources.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
+// ── per-tab loading ───────────────────────────────────────────────────────────
+// Each tab owns its request, its pending flag and its error, so switching tabs while one
+// request is in flight still starts the next one, and a failure shows (with Retry) only
+// on the tab it belongs to. A tab never claims "no findings" for data it never fetched.
+type TabDataKey = "sources" | "conflicts" | "verification" | "redteam";
+const pending = reactive(new Set<TabDataKey>());
+const errors = reactive<Partial<Record<TabDataKey, string | null>>>({});
+// A newer request for the same key (a refetch) wins over one still in flight.
+const requestSeq: Partial<Record<TabDataKey, number>> = {};
+
+async function load<T>(key: TabDataKey, target: Ref<T | null>, fetcher: () => Promise<T>, force = false) {
+  if (!force && (target.value !== null || pending.has(key))) return;
+  const seq = (requestSeq[key] = (requestSeq[key] ?? 0) + 1);
+  errors[key] = null;
+  pending.add(key);
   try {
-    sources.value = await api.getSources(props.id);
+    const value = await fetcher();
+    if (requestSeq[key] === seq) target.value = value;
   } catch (e) {
-    error.value = apiErrorMessage(e, t);
+    if (requestSeq[key] === seq) errors[key] = apiErrorMessage(e, t);
   } finally {
-    loading.value = false;
+    if (requestSeq[key] === seq) pending.delete(key);
   }
 }
 
-async function ensureTrail() {
-  if (trail.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    trail.value = (await api.getGraph(props.id)).graph_trail;
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+// What a tab shows: skeleton rows while its data is on the way, its own error, or data.
+function tabState(key: TabDataKey, value: unknown): "loading" | "error" | "ready" {
+  if (pending.has(key)) return "loading";
+  if (errors[key]) return "error";
+  return value === null ? "loading" : "ready";
 }
 
-async function ensureConflicts() {
-  if (conflicts.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    conflicts.value = await api.getConflicts(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+const ensureSources = (force = false) => load("sources", sources, () => api.getSources(props.id), force);
+const ensureConflicts = () => load("conflicts", conflicts, () => api.getConflicts(props.id));
+const ensureVerification = () => load("verification", verification, () => api.getVerification(props.id));
+const ensureRedTeam = () => load("redteam", redTeam, () => api.getRedTeam(props.id));
+
+const tabData: Record<TabDataKey, { target: Ref<unknown>; ensure: () => Promise<void> }> = {
+  sources: { target: sources, ensure: () => ensureSources() },
+  conflicts: { target: conflicts, ensure: ensureConflicts },
+  verification: { target: verification, ensure: ensureVerification },
+  redteam: { target: redTeam, ensure: ensureRedTeam },
+};
+function retry(key: TabDataKey) {
+  tabData[key].target.value = null;
+  tabData[key].ensure();
+}
+// The data tab on screen and its state; the report, dashboard and comparison tabs load
+// their own way.
+const TAB_DATA: Partial<Record<Tab, TabDataKey>> = {
+  sources: "sources",
+  conflicts: "conflicts",
+  confidence: "verification",
+  redteam: "redteam",
+};
+const activeData = computed(() => {
+  const key = TAB_DATA[tab.value];
+  return key ? { key, state: tabState(key, tabData[key].target.value) } : null;
+});
+
+// ── trust signals ─────────────────────────────────────────────────────────────
+// Optional analyses: each may be missing (only debate questions have a stance, only
+// academic sources have DOIs, …) and the report renders without it. A request already
+// in flight is shared, so the Sources tab opening during the final load never
+// duplicates it.
+const optionalInFlight = new Map<string, Promise<void>>();
+function loadOptional<T>(key: string, target: Ref<T | null>, fetcher: () => Promise<T>): Promise<void> {
+  if (target.value !== null) return Promise.resolve();
+  const running = optionalInFlight.get(key);
+  if (running) return running;
+  const request = fetcher()
+    .then(
+      (value) => {
+        target.value = value;
+      },
+      () => {
+        /* optional signal — its chip or card simply stays hidden */
+      },
+    )
+    .finally(() => optionalInFlight.delete(key));
+  optionalInFlight.set(key, request);
+  return request;
+}
+const ensureCitations = () => loadOptional("citations", citations, () => api.getCitations(props.id));
+const ensureIndependence = () => loadOptional("independence", independence, () => api.getSourceIndependence(props.id));
+const ensureReputation = () => loadOptional("reputation", reputation, () => api.getSourceReputation(props.id));
+const ensureStance = () => loadOptional("stance", stance, () => api.getStance(props.id));
+const ensureIntegrity = () => loadOptional("integrity", integrity, () => api.getSourceIntegrity(props.id));
+const ensureCrossLang = () => loadOptional("crossLang", crossLang, () => api.getCrossLanguage(props.id));
+const ensureConfidence = () => loadOptional("confidence", confidence, () => api.getConfidence(props.id));
+const ensureNumbers = () => loadOptional("numbers", numbers, () => api.getNumericCheck(props.id));
+
+// The trust row appears once, when every signal has answered (or after a cap, so one
+// hung request cannot hide the rest): one layout change above the report instead of up
+// to eight separate jumps while the reader has just started reading.
+const TRUST_REVEAL_CAP_MS = 6000;
+const trustReady = ref(false);
+let trustCapTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(trustCapTimer));
+function revealTrust() {
+  if (trustReady.value || trustCapTimer !== undefined) return;
+  trustCapTimer = setTimeout(() => (trustReady.value = true), TRUST_REVEAL_CAP_MS);
+  Promise.allSettled([
+    ensureCitations(),
+    ensureIndependence(),
+    ensureReputation(),
+    ensureStance(),
+    ensureIntegrity(),
+    ensureCrossLang(),
+    ensureConfidence(),
+    ensureNumbers(),
+  ]).then(() => {
+    clearTimeout(trustCapTimer);
+    trustReady.value = true;
+  });
 }
 
-async function ensureVerification() {
-  if (verification.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    verification.value = await api.getVerification(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+// Chips that expand a list below the row (the others open a tab).
+const openList = ref<"citations" | "numbers" | null>(null);
+function toggleList(list: "citations" | "numbers") {
+  openList.value = openList.value === list ? null : list;
 }
+const pct = (ratio: number) => Math.round(ratio * 100);
+const weakCount = computed(() => citations.value?.unsupported_claims.length ?? 0);
+const numericIssueCount = computed(() =>
+  numbers.value ? numbers.value.unsupported.length + numbers.value.contradictions.length : 0,
+);
+const echoCount = computed(() => independence.value?.clusters.length ?? 0);
 
-async function ensureRedTeam() {
-  if (redTeam.value || loading.value) return;
-  loading.value = true;
-  error.value = null;
-  try {
-    redTeam.value = await api.getRedTeam(props.id);
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  } finally {
-    loading.value = false;
-  }
+// A chip is tinted (border and value) only when it carries an issue.
+type Tone = "danger" | "warning" | null;
+function chipBorder(tone: Tone): string {
+  return tone === "danger" ? "border-danger/40" : tone === "warning" ? "border-warning/40" : "border-bd";
 }
-
-async function ensureCitations() {
-  if (citations.value) return;
-  try {
-    citations.value = await api.getCitations(props.id);
-  } catch {
-    /* grounding is optional — the report still renders without it */
-  }
-}
-
-async function ensureIndependence() {
-  if (independence.value) return;
-  try {
-    independence.value = await api.getSourceIndependence(props.id);
-  } catch {
-    /* independence analysis is optional — sources still render without it */
-  }
-}
-
-async function ensureReputation() {
-  if (reputation.value) return;
-  try {
-    reputation.value = await api.getSourceReputation(props.id);
-  } catch {
-    /* reputation flags are optional */
-  }
-}
-
-async function ensureStance() {
-  if (stance.value) return;
-  try {
-    stance.value = await api.getStance(props.id);
-  } catch {
-    /* stance balance is optional — only debate questions have one */
-  }
-}
-
-async function ensureIntegrity() {
-  if (integrity.value) return;
-  try {
-    integrity.value = await api.getSourceIntegrity(props.id);
-  } catch {
-    /* retraction check is optional — only academic sources have DOIs */
-  }
-}
-
-async function ensureCrossLang() {
-  if (crossLang.value) return;
-  try {
-    crossLang.value = await api.getCrossLanguage(props.id);
-  } catch {
-    /* cross-language is optional */
-  }
-}
-
-async function ensureConfidence() {
-  if (confidence.value) return;
-  try {
-    confidence.value = await api.getConfidence(props.id);
-  } catch {
-    /* honesty meter is optional — the report still renders without it */
-  }
-}
-
-async function ensureNumbers() {
-  if (numbers.value) return;
-  try {
-    numbers.value = await api.getNumericCheck(props.id);
-  } catch {
-    /* numeric check is optional — the report still renders without it */
-  }
+function chipValue(tone: Tone): string {
+  return tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-ink";
 }
 
 watch(tab, (t) => {
@@ -200,7 +288,6 @@ watch(tab, (t) => {
   }
   if (t === "conflicts") ensureConflicts();
   if (t === "redteam") ensureRedTeam();
-  if (t === "trail") ensureTrail();
 });
 
 async function ensureComparison() {
@@ -219,18 +306,11 @@ watch(
     if (final) {
       // While finalizing, /sources serves a fallback pool; the canonical [Sn] table lands with
       // the report, so a list fetched before completion is refetched once.
-      if (wasFinal === false && sources.value) {
+      if (wasFinal === false && (sources.value || pending.has("sources"))) {
         sources.value = null;
-        ensureSources();
+        ensureSources(true);
       }
-      ensureCitations();
-      ensureIndependence();
-      ensureReputation();
-      ensureStance();
-      ensureIntegrity();
-      ensureCrossLang();
-      ensureConfidence();
-      ensureNumbers();
+      revealTrust();
       ensureShare();
       ensureComparison();
     }
@@ -242,19 +322,6 @@ function cellFor(row: ComparisonRow, option: string) {
   return row.cells.find((c) => c.option === option) || null;
 }
 
-const integrityClass = computed(() => {
-  const r = citations.value?.integrity ?? 0;
-  if (r >= 0.8) return "text-emerald-500";
-  if (r >= 0.5) return "text-amber-500";
-  return "text-red-400";
-});
-
-const numericClass = computed(() => {
-  const r = numbers.value?.integrity ?? 1;
-  if (r >= 0.9) return "text-emerald-500";
-  if (r >= 0.6) return "text-amber-500";
-  return "text-red-400";
-});
 const numericHasIssues = computed(() => {
   const n = numbers.value;
   return !!n && (n.total > 0 || n.contradictions.length > 0);
@@ -263,9 +330,9 @@ const numericHasIssues = computed(() => {
 const independenceScore = computed(() => independence.value?.independence_score ?? null);
 const independenceClass = computed(() => {
   const r = independenceScore.value ?? 1;
-  if (r >= 0.8) return "text-emerald-500";
-  if (r >= 0.5) return "text-amber-500";
-  return "text-red-400";
+  if (r >= 0.8) return "text-success";
+  if (r >= 0.5) return "text-warning";
+  return "text-danger";
 });
 const independenceBar = computed(() => {
   const r = independenceScore.value ?? 1;
@@ -274,14 +341,14 @@ const independenceBar = computed(() => {
   return "bg-red-400";
 });
 const clusterKindClass: Record<string, string> = {
-  syndicated: "border-red-400/40 text-red-400",
-  "single-domain": "border-amber-500/40 text-amber-500",
+  syndicated: "border-danger/40 text-danger",
+  "single-domain": "border-warning/40 text-warning",
 };
 const reputationClass: Record<string, string> = {
-  satire: "border-amber-500/40 text-amber-500",
-  fabricated: "border-red-400/40 text-red-400",
-  conspiracy: "border-red-400/40 text-red-400",
-  state_media: "border-amber-500/40 text-amber-500",
+  satire: "border-warning/40 text-warning",
+  fabricated: "border-danger/40 text-danger",
+  conspiracy: "border-danger/40 text-danger",
+  state_media: "border-warning/40 text-warning",
 };
 
 // ── stance / viewpoint balance ────────────────────────────────────────────────
@@ -300,12 +367,64 @@ const stanceOneSided = computed(() => {
   return s.skew >= 0.7 && s.supports + s.opposes > s.neutral;
 });
 
+// ── trust chips ───────────────────────────────────────────────────────────────
+// The chips on show, each with its issue tone. Those with an issue come first, danger
+// before warning: on a phone the row scrolls sideways, and the chips that matter must be
+// the ones in view (§16 hierarchy). The order is in the DOM, so focus order matches.
+type ChipKey = "citations" | "independence" | "confidence" | "numbers" | "stance" | "crossLang";
+const trustChips = computed<{ key: ChipKey; tone: Tone }[]>(() => {
+  const chips: { key: ChipKey; tone: Tone }[] = [];
+  const c = citations.value;
+  if (c && (c.total || c.unverified)) chips.push({ key: "citations", tone: weakCount.value ? "danger" : null });
+  if (independence.value && independence.value.total_sources > 1)
+    chips.push({ key: "independence", tone: echoCount.value ? "warning" : null });
+  if (confidence.value?.components.length) chips.push({ key: "confidence", tone: null });
+  if (numbers.value && numericHasIssues.value)
+    chips.push({ key: "numbers", tone: numericIssueCount.value ? "danger" : null });
+  if (stance.value?.applicable) chips.push({ key: "stance", tone: stanceOneSided.value ? "warning" : null });
+  if (crossLang.value && crossLang.value.languages.length > 1)
+    chips.push({ key: "crossLang", tone: crossLang.value.monolingual ? "warning" : null });
+  const rank = (tone: Tone) => (tone === "danger" ? 0 : tone === "warning" ? 1 : 2);
+  return chips.sort((a, b) => rank(a.tone) - rank(b.tone)); // stable: same tone keeps its order
+});
+function chipClass(tone: Tone): string[] {
+  return [
+    "press rounded-full border bg-surface/40 px-2.5 py-1 text-xs text-muted hover:text-ink max-sm:shrink-0 max-sm:whitespace-nowrap",
+    chipBorder(tone),
+  ];
+}
+
+// The phone chip row fades at its right edge while more chips wait, like the tab strip.
+const chipRow = ref<HTMLElement | null>(null);
+const chipsCanScroll = ref(false);
+function updateChipOverflow() {
+  const el = chipRow.value;
+  chipsCanScroll.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+let chipObserver: ResizeObserver | undefined;
+watch(
+  chipRow,
+  (el) => {
+    chipObserver?.disconnect();
+    chipObserver = undefined;
+    if (el && typeof ResizeObserver !== "undefined") {
+      chipObserver = new ResizeObserver(updateChipOverflow);
+      chipObserver.observe(el);
+    }
+    updateChipOverflow();
+  },
+  { flush: "post" },
+);
+// A chip that appears late or a new locale changes the row's content, not its box.
+onUpdated(updateChipOverflow);
+onBeforeUnmount(() => chipObserver?.disconnect());
+
 // ── confidence / honesty meter ────────────────────────────────────────────────
 const gradeClass = computed(() => {
   const g = confidence.value?.grade;
-  if (g === "high") return "text-emerald-500";
-  if (g === "medium") return "text-amber-500";
-  return "text-red-400";
+  if (g === "high") return "text-success";
+  if (g === "medium") return "text-warning";
+  return "text-danger";
 });
 function bandPct(n: number): number {
   const total = confidence.value?.total_claims || 0;
@@ -317,55 +436,73 @@ const bandClass: Record<string, string> = {
   speculative: "bg-red-400",
 };
 
-
-// ── public share link ─────────────────────────────────────────────────────────
-const share = ref<import("@/lib/types").ShareInfo | null>(null);
-const shareMenuOpen = ref(false);
-const shareCopied = ref(false);
-const shareUrl = computed(() => (share.value?.token ? `${window.location.origin}/r/${share.value.token}` : ""));
-async function ensureShare() {
-  if (share.value) return;
-  try {
-    share.value = await api.getShare(props.id);
-  } catch {
-    /* share is optional */
-  }
-}
-async function toggleShareMenu() {
-  shareMenuOpen.value = !shareMenuOpen.value;
-  if (shareMenuOpen.value && !share.value?.shared) {
-    try {
-      share.value = await api.createShare(props.id);
-    } catch (e) {
-      error.value = apiErrorMessage(e, t);
-    }
-  }
-}
-async function copyShare() {
-  if (!shareUrl.value) return;
-  try {
-    await navigator.clipboard.writeText(shareUrl.value);
-    shareCopied.value = true;
-    setTimeout(() => (shareCopied.value = false), 1500);
-  } catch {
-    /* clipboard blocked — the field is selectable as a fallback */
-  }
-}
-async function revokeShare() {
-  try {
-    share.value = await api.revokeShare(props.id);
-    shareMenuOpen.value = false;
-  } catch (e) {
-    error.value = apiErrorMessage(e, t);
-  }
-}
-
 const tabKeys = computed<Tab[]>(() => {
-  const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam", "trail"];
+  const base: Tab[] = ["report", "dashboard", "sources", "confidence", "conflicts", "redteam"];
   // The comparison tab only appears when the query actually produced a table.
   if (comparison.value && comparison.value.options.length >= 2) base.splice(2, 0, "comparison");
   return base;
 });
+
+// ── tab strip ────────────────────────────────────────────────────────────────
+const tabStrip = ref<HTMLElement | null>(null);
+const canScrollRight = ref(false);
+const EDGE_FADE_PX = 28; // .edge-fade-x
+function updateOverflow() {
+  const el = tabStrip.value;
+  canScrollRight.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+// A vertical wheel scrolls the strip sideways while it can still move that way; at either
+// end the wheel is left to scroll the page.
+function onStripWheel(e: WheelEvent) {
+  const el = tabStrip.value;
+  if (!el || el.scrollWidth <= el.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1; // lines, pages
+  const delta = e.deltaY * unit;
+  const max = el.scrollWidth - el.clientWidth;
+  if ((delta > 0 && el.scrollLeft >= max - 1) || (delta < 0 && el.scrollLeft <= 0)) return;
+  e.preventDefault();
+  el.scrollLeft = Math.min(max, Math.max(0, el.scrollLeft + delta));
+}
+// The chosen tab scrolls fully into view, clear of the fade. Horizontal only, so the
+// thread around the panel never jumps.
+function revealActiveTab() {
+  const strip = tabStrip.value;
+  const btn = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!strip || !btn) return;
+  const s = strip.getBoundingClientRect();
+  const b = btn.getBoundingClientRect();
+  const fade = canScrollRight.value ? EDGE_FADE_PX : 0;
+  const delta = b.left < s.left ? b.left - s.left : b.right > s.right - fade ? b.right - s.right + fade : 0;
+  if (!delta) return;
+  if (typeof strip.scrollBy === "function") strip.scrollBy({ left: delta, behavior: smoothOrAuto() });
+  else strip.scrollLeft += delta;
+}
+// Tabs pattern: arrows, Home and End move the selection and focus along the strip.
+function onTabKey(e: KeyboardEvent) {
+  const keys = tabKeys.value;
+  const i = keys.indexOf(tab.value);
+  const next =
+    e.key === "ArrowRight" ? (i + 1) % keys.length
+    : e.key === "ArrowLeft" ? (i - 1 + keys.length) % keys.length
+    : e.key === "Home" ? 0
+    : e.key === "End" ? keys.length - 1
+    : -1;
+  if (next < 0) return;
+  e.preventDefault();
+  tab.value = keys[next];
+  nextTick(() => tabStrip.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
+}
+let stripObserver: ResizeObserver | undefined;
+onMounted(() => {
+  updateOverflow();
+  if (typeof ResizeObserver !== "undefined" && tabStrip.value) {
+    stripObserver = new ResizeObserver(updateOverflow);
+    stripObserver.observe(tabStrip.value);
+  }
+});
+onBeforeUnmount(() => stripObserver?.disconnect());
+watch([tabKeys, locale], () => nextTick(updateOverflow));
+watch(tab, () => nextTick(revealActiveTab));
 
 function shortUrl(u: string): string {
   try {
@@ -376,27 +513,46 @@ function shortUrl(u: string): string {
 }
 
 const verdictClass: Record<string, string> = {
-  refuted: "text-red-400 border-red-400/40",
-  contested: "text-amber-500 border-amber-500/40",
-  qualified: "text-sky-500 border-sky-500/40",
-  holds: "text-emerald-500 border-emerald-500/40",
+  refuted: "text-danger border-danger/40",
+  contested: "text-warning border-warning/40",
+  qualified: "text-info border-info/40",
+  holds: "text-success border-success/40",
 };
 
 const levelClass: Record<string, string> = {
-  strong: "text-emerald-500 border-emerald-500/40",
-  medium: "text-amber-500 border-amber-500/40",
-  weak: "text-red-400 border-red-400/40",
+  strong: "text-success border-success/40",
+  medium: "text-warning border-warning/40",
+  weak: "text-danger border-danger/40",
 };
-
-const { t, te } = useI18n();
-function stepLabel(step: string): string {
-  return te(`trace.${step}`) ? t(`trace.${step}`) : step;
-}
 
 const exporting = ref<string | null>(null);
 const exportError = ref<string | null>(null);
 const exportMenuOpen = ref(false);
-const siteMenuOpen = ref(false);
+const exportRoot = ref<HTMLElement | null>(null);
+const exportBtn = ref<HTMLElement | null>(null);
+useDismiss(exportRoot, exportMenuOpen, { trigger: exportBtn });
+function toggleExportMenu() {
+  exportMenuOpen.value = !exportMenuOpen.value;
+  if (exportMenuOpen.value) shareMenuOpen.value = false;
+}
+// Menu keys: the first item takes focus on open; arrows, Home and End move between items.
+function menuItems(): HTMLElement[] {
+  return Array.from(exportRoot.value?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+}
+watch(exportMenuOpen, (open) => {
+  if (open) nextTick(() => menuItems()[0]?.focus({ preventScroll: true }));
+});
+function onExportMenuKey(e: KeyboardEvent) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const items = menuItems();
+  if (!items.length) return;
+  e.preventDefault();
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  const last = items.length - 1;
+  const next =
+    e.key === "Home" ? 0 : e.key === "End" ? last : e.key === "ArrowDown" ? (i + 1) % items.length : i <= 0 ? last : i - 1;
+  items[next].focus();
+}
 const siteThemes = [
   "auto", "light", "dark", "midnight", "emerald", "rose", "sand",
 ] as const;
@@ -415,7 +571,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     exportError.value = apiErrorMessage(e, t);
   } finally {
     exporting.value = null;
-    siteMenuOpen.value = false;
   }
 }
 
@@ -423,290 +578,373 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 
 <template>
   <div class="flex h-full flex-col">
-    <!-- Tab bar (tabs scroll horizontally if needed, share menu stays pinned on the right) -->
-    <div class="flex items-center justify-between border-b border-bd px-3 sm:px-5 min-w-0">
-      <!-- Tabs list -->
-      <div class="flex items-center gap-1 overflow-x-auto min-w-0 scrollbar-none py-0.5">
+    <!-- Tab bar: a scrolling segmented control. The wheel scrolls it sideways, the chosen
+         tab scrolls into view, and a fade on the right shows only while more tabs wait.
+         Only the chosen tab has a border (its underline). Other tabs make up its 2px in
+         padding: a transparent border would be painted in forced colours, and then every
+         tab would look chosen. In forced colours the underline is Highlight. -->
+    <div class="flex min-w-0 items-center border-b border-bd px-3">
+      <div
+        ref="tabStrip"
+        role="tablist"
+        class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto scrollbar-none"
+        :class="{ 'edge-fade-x': canScrollRight }"
+        @scroll.passive="updateOverflow"
+        @wheel="onStripWheel"
+        @keydown="onTabKey"
+      >
         <button
           v-for="tb in tabKeys"
+          :id="`${uid}-tab-${tb}`"
           :key="tb"
-          class="border-b-2 px-3 py-3 text-xs sm:text-sm font-medium transition-colors shrink-0 whitespace-nowrap"
-          :class="tab === tb ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'"
+          role="tab"
+          :aria-selected="tab === tb"
+          :aria-controls="`${uid}-panel`"
+          :tabindex="tab === tb ? 0 : -1"
+          class="shrink-0 whitespace-nowrap rounded-t-md px-2.5 pt-3 text-[0.8125rem] font-medium transition-colors focus-visible:!outline-offset-[-2px] sm:px-3 sm:text-sm"
+          :class="tab === tb ? 'border-b-2 border-accent pb-3 text-ink forced-colors:border-[color:Highlight]' : 'pb-3.5 text-muted hover:text-ink'"
           @click="tab = tb"
         >
           {{ $t("artifact." + tb) }}
         </button>
       </div>
 
-      <!-- Actions on the right (Share / Generating) - ALWAYS pinned and visible -->
-      <div class="flex items-center gap-2 shrink-0 ml-3">
-        <!-- report is streaming in / being edited live -->
-        <span v-if="report && !isFinal" class="flex shrink-0 items-center gap-1.5 text-xs text-accent whitespace-nowrap">
-          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-          {{ $t("artifact.generating") }}
-        </span>
-
-        <div v-if="report && isFinal" class="relative shrink-0">
-          <button
-            class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition shrink-0 whitespace-nowrap"
-            :class="share && share.shared ? 'border-accent/50 text-accent bg-accent/5' : 'border-bd text-muted hover:text-ink hover:bg-surface/60'"
-            :title="$t('share.hint')"
-            @click="toggleShareMenu"
-          >
-            <span>🔗</span>
-            <span>{{ share && share.shared ? $t("share.shared") : $t("share.share") }}</span>
-          </button>
-
-          <div
-            v-if="shareMenuOpen"
-            class="absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-bd bg-surface p-3.5 text-xs shadow-xl backdrop-blur-md"
-          >
-            <div class="mb-1 font-semibold text-ink text-xs">{{ $t("share.title") }}</div>
-            <p class="mb-2 text-muted leading-relaxed text-[11px]">{{ $t("share.desc") }}</p>
-            <div class="flex items-center gap-1.5">
-              <input
-                :value="shareUrl"
-                readonly
-                class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1.5 text-ink text-xs focus:outline-none focus:border-accent font-mono select-all"
-                @focus="($event.target as HTMLInputElement).select()"
-              />
-              <button
-                class="shrink-0 rounded-md border border-bd px-2.5 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
-                @click="copyShare"
-              >
-                {{ shareCopied ? "✓" : $t("share.copy") }}
-              </button>
-            </div>
-            <div class="mt-2.5 pt-2 border-t border-bd/40 flex items-center justify-between">
-              <button class="text-xs text-red-400 hover:text-red-300 hover:underline transition" @click="revokeShare">
-                {{ $t("share.revoke") }}
-              </button>
-              <span v-if="shareCopied" class="text-[10px] text-emerald-400 font-medium">
-                {{ $t("share.copied") }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- The report is streaming in or being edited live. -->
+      <span v-if="report && !isFinal" class="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap pr-1 text-xs text-accent">
+        <span class="live-dot h-1.5 w-1.5 rounded-full bg-accent" />
+        {{ $t("artifact.generating") }}
+      </span>
     </div>
 
-    <!-- Always-visible download bar (outside the scroll area so the menu never clips). -->
-    <div
-      v-if="tab === 'report' && report && isFinal"
-      class="flex shrink-0 items-center gap-2 border-b border-bd px-6 py-2"
-    >
+    <!-- Actions for a finished report, on every tab (outside the scroller, so its menus
+         never clip): Download on the left, Share on the right. -->
+    <div v-if="report && isFinal" class="flex shrink-0 items-center gap-2 px-4 py-2 sm:px-6">
       <div class="relative">
         <button
-          class="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent transition hover:bg-accent/15 disabled:opacity-50"
+          ref="exportBtn"
+          class="press flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/15 disabled:opacity-50"
           :disabled="!!exporting"
-          @click="exportMenuOpen = !exportMenuOpen"
+          aria-haspopup="menu"
+          :aria-expanded="exportMenuOpen"
+          @click="toggleExportMenu"
         >
-          <span>⤓</span> {{ $t("artifact.download") }} <span class="text-xs">{{ exporting ? "…" : "▾" }}</span>
+          <span aria-hidden="true">⤓</span> {{ $t("artifact.download") }}
+          <span class="text-xs" aria-hidden="true">{{ exporting ? "…" : "▾" }}</span>
         </button>
-        <div
-          v-if="exportMenuOpen"
-          class="absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] overflow-y-auto overscroll-contain rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
-        >
-          <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.docGroup") }}</div>
-          <div class="grid grid-cols-2 gap-1">
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
-              <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
-              <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
-              <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-          </div>
+        <Transition name="pop">
+          <div
+            v-if="exportMenuOpen"
+            ref="exportRoot"
+            role="menu"
+            :aria-label="$t('artifact.download')"
+            class="material-popover absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] max-w-[calc(100vw-3rem)] origin-top-left overflow-y-auto overscroll-contain rounded-xl border border-bd p-1.5 text-sm"
+            @keydown="onExportMenuKey"
+          >
+            <div class="px-2 pb-0.5 pt-1 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.docGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.docGroup')" class="grid grid-cols-2 gap-1">
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
+                <span>📄 PDF</span><span class="text-3xs text-muted">.pdf</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
+                <span>📝 Word</span><span class="text-3xs text-muted">.docx</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
+                <span>⬇ Markdown</span><span class="text-3xs text-muted">.md</span>
+              </button>
+            </div>
 
-          <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.dataGroup") }}</div>
-          <div class="grid grid-cols-2 gap-1">
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
-              <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
-              <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-          </div>
+            <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.dataGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.dataGroup')" class="grid grid-cols-2 gap-1">
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
+                <span>{ } JSON</span><span class="text-3xs text-muted">.json</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
+                <span>🧾 {{ $t("audit.trail") }}</span><span class="text-3xs text-muted">.md</span>
+              </button>
+            </div>
 
-          <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.webGroup") }}</div>
-          <div class="flex flex-wrap gap-1 px-1.5 pb-1">
-            <button
-              v-for="th in siteThemes"
-              :key="th"
-              class="rounded-md border border-bd px-2 py-0.5 text-xs text-ink transition hover:bg-surfaceHover"
-              :disabled="!!exporting"
-              @click="exportReport('html', { theme: th }); exportMenuOpen = false"
-            >
-              {{ $t("site." + th) }}
-            </button>
+            <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-3xs uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.webGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.webGroup')" class="flex flex-wrap gap-1 px-1.5 pb-1">
+              <button
+                v-for="th in siteThemes"
+                :key="th"
+                role="menuitem"
+                class="rounded-md border border-bd px-2 py-0.5 text-xs text-ink hover:bg-surfaceHover"
+                :disabled="!!exporting"
+                @click="exportReport('html', { theme: th }); exportMenuOpen = false"
+              >
+                {{ $t("site." + th) }}
+              </button>
+            </div>
           </div>
-        </div>
+        </Transition>
       </div>
-      <span class="text-xs text-muted">{{ $t("artifact.docGroup") }} · {{ $t("artifact.dataGroup") }} · {{ $t("artifact.webGroup") }}</span>
-      <p v-if="exportError" class="ml-auto text-xs text-red-400">{{ exportError }}</p>
+      <p v-if="exportError" role="alert" class="min-w-0 text-xs text-danger">{{ exportError }}</p>
+
+      <div class="relative ml-auto shrink-0">
+        <button
+          ref="shareBtn"
+          class="press flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-sm font-medium"
+          :class="share && share.shared ? 'border-accent/50 bg-accent/5 text-accent' : 'border-bd text-muted hover:bg-surface/60 hover:text-ink'"
+          :title="$t('share.hint')"
+          aria-haspopup="dialog"
+          :aria-expanded="shareMenuOpen"
+          @click="toggleShareMenu"
+        >
+          <span aria-hidden="true">🔗</span>
+          <span>{{ share && share.shared ? $t("share.shared") : $t("share.share") }}</span>
+        </button>
+
+        <Transition name="pop">
+          <div
+            v-if="shareMenuOpen"
+            ref="shareRoot"
+            role="dialog"
+            :aria-label="$t('share.title')"
+            class="material-popover absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] origin-top-right rounded-xl border border-bd p-3.5 text-xs"
+          >
+            <div class="mb-1 font-semibold text-ink text-xs">{{ $t("share.title") }}</div>
+            <p class="mb-2 text-muted leading-relaxed text-2xs">{{ $t("share.desc") }}</p>
+            <template v-if="share && share.shared">
+              <div class="flex items-center gap-1.5">
+                <input
+                  :value="shareUrl"
+                  readonly
+                  :aria-label="$t('share.title')"
+                  class="min-w-0 flex-1 rounded-md border border-bd bg-surface/50 px-2 py-1.5 text-ink text-xs font-mono select-all"
+                  @focus="($event.target as HTMLInputElement).select()"
+                />
+                <button
+                  class="press shrink-0 rounded-md border border-bd px-2.5 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80"
+                  @click="copyShare"
+                >
+                  {{ shareCopied ? "✓" : $t("share.copy") }}
+                </button>
+              </div>
+              <div class="mt-2.5 pt-2 border-t border-bd/40 flex items-center justify-between">
+                <button
+                  class="text-xs text-danger hover:text-danger/80 hover:underline disabled:opacity-50"
+                  :disabled="shareBusy"
+                  @click="revokeShare"
+                >
+                  {{ $t("share.revoke") }}
+                </button>
+                <span v-if="shareCopied" role="status" class="text-2xs text-success font-medium">
+                  {{ $t("share.copied") }}
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <p v-if="shareRevoked" role="status" class="mb-2 text-2xs text-muted">{{ $t("share.revoked") }}</p>
+              <button
+                class="press rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-onAccent disabled:opacity-60"
+                :disabled="shareBusy"
+                :aria-busy="shareBusy"
+                @click="createShare"
+              >
+                {{ shareBusy ? "…" : $t("share.create") }}
+              </button>
+            </template>
+            <p v-if="shareError" role="alert" class="mt-2 text-2xs text-danger">{{ shareError }}</p>
+          </div>
+        </Transition>
+      </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-      <template v-if="tab === 'report'">
-        <div v-if="report && isFinal" class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
-          <button
-            class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition"
-            :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
-            @click="verifyInline = !verifyInline"
-          >
-            <span>{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
-          </button>
-          <template v-if="verifyInline">
-            <span class="text-muted">{{ $t("verify.legend") }}</span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-emerald-500" /> {{ $t("verify.strong") }}
-            </span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-amber-500" /> {{ $t("verify.weak") }}
-            </span>
-            <span class="inline-flex items-center gap-1 text-muted">
-              <span class="h-2 w-2 rounded-full bg-red-400" /> {{ $t("verify.contested") }}
-            </span>
-          </template>
-        </div>
-        <div v-if="citations && (citations.total || citations.unverified)" class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs">
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("citations.integrity") }}</span>
-            <span v-if="citations.total" class="font-semibold" :class="integrityClass">{{ Math.round(citations.integrity * 100) }}%</span>
-            <span v-if="citations.total" class="text-muted">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
-            <span v-if="citations.unverified" class="text-muted" :title="$t('citations.unverifiedHint')">
-              · {{ citations.unverified }} {{ $t("citations.unverified") }}
-            </span>
-            <button
-              v-if="citations.unsupported_claims.length"
-              class="ml-auto text-red-400 hover:underline"
-              @click="showWeak = !showWeak"
+    <div
+      :id="`${uid}-panel`"
+      role="tabpanel"
+      :aria-labelledby="`${uid}-tab-${tab}`"
+      class="edge-fade-y min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
+    >
+      <!-- A data tab whose request is on the way, or failed: its own skeleton or error. -->
+      <div v-if="activeData && activeData.state === 'loading'" class="space-y-2" aria-busy="true">
+        <span class="sr-only">{{ $t("common.loading") }}</span>
+        <div v-for="n in 3" :key="n" class="h-16 rounded-lg border border-bd bg-surface/50 animate-pulse" />
+      </div>
+      <div v-else-if="activeData && activeData.state === 'error'" role="alert" class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+        <span class="text-danger">{{ errors[activeData.key] }}</span>
+        <button class="press text-accent hover:underline" @click="retry(activeData.key)">{{ $t("common.retry") }}</button>
+      </div>
+
+      <template v-else-if="tab === 'report'">
+        <!-- Trust summary: one chip row that appears once, when the signals have answered.
+             Each chip opens its tab or its list; only a chip with an issue is tinted. -->
+        <Transition name="fade-quick" appear>
+          <div v-if="report && isFinal && trustReady" class="mb-5 space-y-2 text-xs">
+            <!-- On a phone the chips are one row that scrolls sideways, with a fade while
+                 more wait, rather than a stack of lines above the title. From sm up they
+                 wrap. trustChips puts the chips with an issue first. -->
+            <div
+              ref="chipRow"
+              class="flex items-center gap-1.5 scrollbar-none max-sm:-mx-4 max-sm:overflow-x-auto max-sm:overscroll-x-contain max-sm:px-4 max-sm:py-1 sm:flex-wrap"
+              :class="{ 'edge-fade-x': chipsCanScroll }"
+              @scroll.passive="updateChipOverflow"
             >
-              ⚠ {{ citations.unsupported_claims.length }} {{ $t("citations.weak") }}
-            </button>
-          </div>
-          <ul v-if="showWeak && citations.unsupported_claims.length" class="mt-2 space-y-1 border-t border-bd pt-2">
-            <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
-          </ul>
-        </div>
-        <div
-          v-if="independence && independence.total_sources > 1"
-          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
-        >
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("independence.title") }}</span>
-            <span class="font-semibold" :class="independenceClass">{{ Math.round(independence.independence_score * 100) }}%</span>
-            <span class="text-muted">{{ independence.independent_origins }}/{{ independence.total_sources }} {{ $t("independence.origins") }}</span>
+              <template v-for="chip in trustChips" :key="chip.key">
+                <button
+                  v-if="chip.key === 'citations' && citations"
+                  :class="chipClass(chip.tone)"
+                  :aria-expanded="openList === 'citations'"
+                  :title="citations.total ? `${citations.supported}/${citations.total} ${$t('citations.matched')}` : undefined"
+                  @click="toggleList('citations')"
+                >
+                  {{ $t("citations.integrity") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ citations.total ? pct(citations.integrity) + "%" : "—" }}</b>
+                  <span v-if="weakCount" class="tabular-nums text-danger"> · ⚠ {{ weakCount }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'independence' && independence"
+                  :class="chipClass(chip.tone)"
+                  :title="`${independence.independent_origins}/${independence.total_sources} ${$t('independence.origins')}` + (echoCount ? ` · ${echoCount} ${$t('independence.echoClusters')}` : '')"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("independence.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ pct(independence.independence_score) }}%</b>
+                  <span v-if="echoCount" class="tabular-nums text-warning"> · ⚠ {{ echoCount }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'confidence' && confidence"
+                  :class="chipClass(chip.tone)"
+                  :title="confidence.total_claims ? `${bandPct(confidence.solid)}% ${$t('confidence.band.solid')} · ${bandPct(confidence.contested)}% ${$t('confidence.band.contested')} · ${bandPct(confidence.speculative)}% ${$t('confidence.band.speculative')}` : undefined"
+                  @click="tab = 'confidence'"
+                >
+                  {{ $t("confidence.meter") }}
+                  <b class="font-semibold tabular-nums text-ink">{{ pct(confidence.overall) }}%</b>
+                  · {{ $t("confidence.grade." + confidence.grade) }}
+                </button>
+                <button
+                  v-else-if="chip.key === 'numbers' && numbers"
+                  :class="chipClass(chip.tone)"
+                  :aria-expanded="openList === 'numbers'"
+                  @click="toggleList('numbers')"
+                >
+                  {{ $t("numbers.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ numbers.total ? `${numbers.supported}/${numbers.total}` : "—" }}</b>
+                  <span v-if="numericIssueCount" class="tabular-nums text-danger"> · ⚠ {{ numericIssueCount }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'stance' && stance"
+                  :class="chipClass(chip.tone)"
+                  :title="`${stancePct(stance.neutral)}% ${$t('stance.neutral')}`"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("stance.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ stancePct(stance.supports) }}%</b> {{ $t("stance.for") }} ·
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ stancePct(stance.opposes) }}%</b> {{ $t("stance.against") }}
+                  <span v-if="stanceOneSided" class="text-warning"> · ⚠ {{ $t("stance.oneSided") }}</span>
+                </button>
+                <button
+                  v-else-if="chip.key === 'crossLang' && crossLang"
+                  :class="chipClass(chip.tone)"
+                  :title="crossLang.languages.slice(0, 5).map((l) => l.lang + '·' + l.count).join(' ')"
+                  @click="tab = 'sources'"
+                >
+                  {{ $t("crosslang.title") }}
+                  <b class="font-semibold tabular-nums" :class="chipValue(chip.tone)">{{ crossLang.languages.length }}</b>
+                  <span v-if="crossLang.monolingual" class="text-warning"> · ⚠ {{ $t("crosslang.bubble") }}</span>
+                  <span v-else-if="crossLang.unique_findings.length" class="text-accent"> · +{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
+                </button>
+              </template>
+            </div>
+
+            <!-- The in-text verification switch and its legend: a line of their own, the
+                 last before the report, closest to the text they change. -->
+            <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <button
+                class="press flex items-center gap-1.5 rounded-full border px-2.5 py-1"
+                :class="verifyInline ? 'border-accent/50 bg-accent/10 text-accent' : 'border-bd text-muted hover:text-ink'"
+                :aria-pressed="verifyInline"
+                @click="verifyInline = !verifyInline"
+              >
+                <span aria-hidden="true">{{ verifyInline ? "✓" : "○" }}</span> {{ $t("verify.on") }}
+              </button>
+              <!-- The legend shows the marks themselves: the ✓ of a strong claim's badge
+                   and the dotted lines under weak and contested words (MarkdownView). On a
+                   phone its caption is left to screen readers, beside a switch that says
+                   the same, so the line fits. -->
+              <template v-if="verifyInline">
+                <span class="text-muted max-sm:sr-only">{{ $t("verify.legend") }}</span>
+                <span class="text-muted">
+                  <span class="font-semibold text-success" aria-hidden="true">✓</span> {{ $t("verify.strong") }}
+                </span>
+                <span class="verify-sample verify-sample-weak text-muted">{{ $t("verify.weak") }}</span>
+                <span class="verify-sample verify-sample-contested text-muted">{{ $t("verify.contested") }}</span>
+              </template>
+            </div>
+
+            <!-- Citations chip: match counts and the claims the sources don't back. -->
+            <div v-if="openList === 'citations' && citations" class="rounded-lg border border-bd bg-surface/40 px-3 py-2">
+              <div class="flex flex-wrap gap-x-3 gap-y-1 text-muted">
+                <span v-if="citations.total" class="tabular-nums">{{ citations.supported }}/{{ citations.total }} {{ $t("citations.matched") }}</span>
+                <span v-if="citations.unverified" :title="$t('citations.unverifiedHint')">
+                  <span class="tabular-nums">{{ citations.unverified }}</span> {{ $t("citations.unverified") }}
+                </span>
+              </div>
+              <div v-if="citations.unsupported_claims.length" class="mt-2 border-t border-bd pt-2">
+                <div class="mb-1 font-medium text-danger">⚠ {{ citations.unsupported_claims.length }} {{ $t("citations.weak") }}</div>
+                <ul class="space-y-1">
+                  <li v-for="(c, i) in citations.unsupported_claims" :key="i" class="line-clamp-2 text-muted">○ {{ c }}</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Numbers chip: figures missing from their source and internal contradictions. -->
+            <div v-if="openList === 'numbers' && numbers" class="rounded-lg border border-bd bg-surface/40 px-3 py-2">
+              <div class="text-muted">
+                <template v-if="numbers.total">
+                  <span class="tabular-nums">{{ pct(numbers.integrity) }}%</span> ·
+                  <span class="tabular-nums">{{ numbers.supported }}/{{ numbers.total }}</span> {{ $t("numbers.matched") }}
+                </template>
+                <template v-else>{{ $t("numbers.none") }}</template>
+              </div>
+              <div v-if="numericIssueCount" class="mt-2 space-y-2 border-t border-bd pt-2">
+                <div v-if="numbers.unsupported.length">
+                  <div class="mb-1 font-medium text-muted">{{ $t("numbers.unsupported") }}</div>
+                  <ul class="space-y-1">
+                    <li v-for="(c, i) in numbers.unsupported" :key="'u' + i" class="flex gap-2 text-muted">
+                      <span class="shrink-0 font-semibold tabular-nums text-danger">{{ c.value }}</span>
+                      <span class="line-clamp-2">{{ c.sentence }} <span class="text-accent">[{{ c.source_id }}]</span></span>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="numbers.contradictions.length">
+                  <div class="mb-1 font-medium text-muted">{{ $t("numbers.contradictions") }}</div>
+                  <ul class="space-y-1">
+                    <li v-for="(c, i) in numbers.contradictions" :key="'c' + i" class="text-muted">
+                      <span class="font-semibold tabular-nums text-warning">{{ c.values.join(" ≠ ") }}</span>
+                      <span v-for="(s, j) in c.sentences" :key="j" class="ml-2 block line-clamp-1 pl-2 text-2xs">○ {{ s }}</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <!-- Full-width alerts only for the two findings that undermine a source. -->
             <button
-              v-if="independence.clusters.length"
-              class="ml-auto text-amber-500 hover:underline"
+              v-if="integrity && integrity.flagged.length"
+              class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-left"
               @click="tab = 'sources'"
             >
-              ⚠ {{ independence.clusters.length }} {{ $t("independence.echoClusters") }}
+              <span class="text-danger" aria-hidden="true">⛔</span>
+              <span class="font-medium text-ink">{{ $t("integrity.title") }}</span>
+              <span class="font-semibold tabular-nums text-danger">
+                {{ integrity.retracted_count }} {{ $t("integrity.retracted") }}
+              </span>
+              <span class="text-muted">{{ $t("integrity.hintShort") }}</span>
             </button>
-          </div>
-        </div>
-        <button
-          v-if="confidence && confidence.components.length"
-          class="mb-4 flex w-full items-center gap-3 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-left text-xs"
-          @click="tab = 'confidence'"
-        >
-          <span class="font-medium text-ink">{{ $t("confidence.meter") }}</span>
-          <span class="text-lg font-semibold leading-none" :class="gradeClass">{{ Math.round(confidence.overall * 100) }}%</span>
-          <span class="text-muted">{{ $t("confidence.grade." + confidence.grade) }}</span>
-          <span v-if="confidence.total_claims" class="ml-auto text-muted">
-            {{ bandPct(confidence.solid) }}% {{ $t("confidence.band.solid") }} ·
-            {{ bandPct(confidence.contested) }}% {{ $t("confidence.band.contested") }} ·
-            {{ bandPct(confidence.speculative) }}% {{ $t("confidence.band.speculative") }}
-          </span>
-        </button>
-        <div
-          v-if="numericHasIssues"
-          class="mb-4 rounded-lg border border-bd bg-surface/40 px-3 py-2 text-xs"
-        >
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-medium text-ink">{{ $t("numbers.title") }}</span>
-            <template v-if="numbers!.total">
-              <span class="font-semibold" :class="numericClass">{{ Math.round(numbers!.integrity * 100) }}%</span>
-              <span class="text-muted">{{ numbers!.supported }}/{{ numbers!.total }} {{ $t("numbers.matched") }}</span>
-            </template>
-            <span v-else class="text-muted">{{ $t("numbers.none") }}</span>
             <button
-              v-if="numbers!.unsupported.length || numbers!.contradictions.length"
-              class="ml-auto text-red-400 hover:underline"
-              @click="showNumbers = !showNumbers"
+              v-if="reputation && reputation.flagged_count"
+              class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-left"
+              @click="tab = 'sources'"
             >
-              ⚠ {{ numbers!.unsupported.length + numbers!.contradictions.length }} {{ $t("numbers.issues") }}
+              <span class="text-danger" aria-hidden="true">⚑</span>
+              <span class="font-medium text-ink">{{ $t("reputation.title") }}</span>
+              <span class="tabular-nums text-danger">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
+              <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
             </button>
           </div>
-          <div v-if="showNumbers" class="mt-2 space-y-2 border-t border-bd pt-2">
-            <div v-if="numbers!.unsupported.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("numbers.unsupported") }}</div>
-              <ul class="space-y-1">
-                <li v-for="(c, i) in numbers!.unsupported" :key="'u' + i" class="flex gap-2 text-muted">
-                  <span class="shrink-0 font-semibold text-red-400">{{ c.value }}</span>
-                  <span class="line-clamp-2">{{ c.sentence }} <span class="text-accent">[{{ c.source_id }}]</span></span>
-                </li>
-              </ul>
-            </div>
-            <div v-if="numbers!.contradictions.length">
-              <div class="mb-1 font-medium text-muted">{{ $t("numbers.contradictions") }}</div>
-              <ul class="space-y-1">
-                <li v-for="(c, i) in numbers!.contradictions" :key="'c' + i" class="text-muted">
-                  <span class="font-semibold text-amber-500">{{ c.values.join(" ≠ ") }}</span>
-                  <span v-for="(s, j) in c.sentences" :key="j" class="ml-2 block line-clamp-1 pl-2 text-[11px]">○ {{ s }}</span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-        <button
-          v-if="reputation && reputation.flagged_count"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-400/40 bg-red-400/5 px-3 py-2 text-left text-xs"
-          @click="tab = 'sources'"
-        >
-          <span class="text-red-400">⚑</span>
-          <span class="font-medium text-ink">{{ $t("reputation.title") }}</span>
-          <span class="text-red-400">{{ reputation.flagged_count }} {{ $t("reputation.flagged") }}</span>
-          <span class="text-muted">{{ reputation.categories.map((c) => $t("reputation.category." + c)).join(", ") }}</span>
-        </button>
-        <button
-          v-if="integrity && integrity.flagged.length"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 text-left text-xs"
-          @click="tab = 'sources'"
-        >
-          <span class="text-red-500">⛔</span>
-          <span class="font-medium text-ink">{{ $t("integrity.title") }}</span>
-          <span class="font-semibold text-red-500">
-            {{ integrity.retracted_count }} {{ $t("integrity.retracted") }}
-          </span>
-          <span class="text-muted">{{ $t("integrity.hintShort") }}</span>
-        </button>
-        <button
-          v-if="stance && stance.applicable"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
-          :class="stanceOneSided ? 'border-amber-500/40 bg-amber-500/5' : 'border-bd bg-surface/40'"
-          @click="tab = 'sources'"
-        >
-          <span class="font-medium text-ink">{{ $t("stance.title") }}</span>
-          <span class="text-emerald-500">{{ stancePct(stance.supports) }}% {{ $t("stance.for") }}</span>
-          <span class="text-red-400">{{ stancePct(stance.opposes) }}% {{ $t("stance.against") }}</span>
-          <span class="text-muted">{{ stancePct(stance.neutral) }}% {{ $t("stance.neutral") }}</span>
-          <span v-if="stanceOneSided" class="ml-auto text-amber-500">⚠ {{ $t("stance.oneSided") }}</span>
-        </button>
-        <button
-          v-if="crossLang && crossLang.languages.length > 1"
-          class="mb-4 flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-left text-xs"
-          :class="crossLang.monolingual ? 'border-bd bg-surface/40' : 'border-accent/40 bg-accent/5'"
-          @click="tab = 'sources'"
-        >
-          <span class="font-medium text-ink">🌐 {{ $t("crosslang.title") }}</span>
-          <span class="text-muted">{{ crossLang.languages.slice(0, 5).map((l) => l.lang + "·" + l.count).join(" ") }}</span>
-          <span v-if="crossLang.monolingual" class="ml-auto text-amber-500">⚠ {{ $t("crosslang.bubble") }}</span>
-          <span v-else-if="crossLang.unique_findings.length" class="ml-auto text-accent">+{{ crossLang.unique_findings.length }} {{ $t("crosslang.added") }}</span>
-        </button>
+        </Transition>
         <MarkdownView
           v-if="report"
           :source="report"
@@ -715,7 +953,8 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           :independence="independence"
           :weak-claims="weakClaims"
           :contradictions="contradictionSentences"
-          :verify="verifyInline && isFinal"
+          :verify="verifyInline && isFinal && trustReady"
+          class="transition-opacity duration-300"
           :class="{ 'opacity-80': !isFinal }"
         />
         <ReportSkeletonCanvas v-else :source-count="sources?.length" />
@@ -743,7 +982,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                       {{ cellFor(row, o)!.value }}
                       <span
                         v-if="cellFor(row, o)!.source_ids.length"
-                        class="ml-1 text-[10px] font-semibold text-accent"
+                        class="ml-1 text-3xs font-semibold text-accent"
                       >{{ cellFor(row, o)!.source_ids.map((s) => "[" + s + "]").join("") }}</span>
                     </template>
                     <span v-else class="text-muted">—</span>
@@ -760,17 +999,15 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'sources'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="sources && !sources.length" class="text-muted">{{ $t("artifact.sourcesEmpty") }}</p>
+        <p v-if="sources && !sources.length" class="text-muted">{{ $t("artifact.sourcesEmpty") }}</p>
         <div v-else class="space-y-2">
           <!-- Source-independence / echo-chamber summary: how many independent origins these sources really are -->
           <div
             v-if="independence && independence.total_sources > 1"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="flex items-center gap-3">
-              <div class="text-2xl font-semibold leading-none" :class="independenceClass">
+              <div class="text-2xl font-semibold leading-none tabular-nums" :class="independenceClass">
                 {{ Math.round(independence.independence_score * 100) }}%
               </div>
               <div class="min-w-0">
@@ -783,7 +1020,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             </div>
             <div class="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface">
               <div
-                class="h-full rounded-full transition-all"
+                class="h-full rounded-full transition-[width]"
                 :class="independenceBar"
                 :style="{ width: independence.independence_score * 100 + '%' }"
               />
@@ -792,7 +1029,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             <ul v-if="independence.clusters.length" class="mt-3 space-y-2 border-t border-bd pt-3">
               <li v-for="(c, i) in independence.clusters" :key="i" class="flex items-start gap-2">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                   :class="clusterKindClass[c.kind] || 'border-bd text-muted'"
                 >
                   {{ $t("independence.kind." + c.kind) }}
@@ -806,24 +1043,24 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 </div>
               </li>
             </ul>
-            <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-emerald-500">
+            <p v-else class="mt-3 border-t border-bd pt-3 text-xs text-success">
               ✓ {{ $t("independence.allIndependent") }}
             </p>
           </div>
           <!-- Domain-credibility flags: satire / fabricated / conspiracy / state-controlled -->
           <div
             v-if="reputation && reputation.flagged_count"
-            class="mb-3 rounded-xl border border-red-400/40 bg-red-400/5 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-danger/40 bg-danger/5 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
-              <span class="text-red-400">⚑</span>{{ $t("reputation.title") }}
-              <span class="text-red-400">· {{ reputation.flagged_count }}/{{ reputation.total_sources }}</span>
+              <span class="text-danger">⚑</span>{{ $t("reputation.title") }}
+              <span class="tabular-nums text-danger">· {{ reputation.flagged_count }}/{{ reputation.total_sources }}</span>
             </div>
             <p class="mb-3 text-xs text-muted">{{ $t("reputation.hint") }}</p>
             <ul class="space-y-2">
               <li v-for="(f, i) in reputation.flagged" :key="i" class="flex items-start gap-2 text-xs">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                   :class="reputationClass[f.category] || 'border-bd text-muted'"
                 >
                   {{ $t("reputation.category." + f.category) }}
@@ -839,18 +1076,18 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Retraction check: cited DOIs flagged as retracted / under concern -->
           <div
             v-if="integrity && integrity.flagged.length"
-            class="mb-3 rounded-xl border border-red-500/50 bg-red-500/10 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-danger/50 bg-danger/10 p-4"
           >
             <div class="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
-              <span class="text-red-500">⛔</span>{{ $t("integrity.title") }}
-              <span class="text-red-500">· {{ integrity.retracted_count }}/{{ integrity.checked_dois }}</span>
+              <span class="text-danger">⛔</span>{{ $t("integrity.title") }}
+              <span class="tabular-nums text-danger">· {{ integrity.retracted_count }}/{{ integrity.checked_dois }}</span>
             </div>
             <p class="mb-3 text-xs text-muted">{{ $t("integrity.hint") }}</p>
             <ul class="space-y-2">
               <li v-for="(f, i) in integrity.flagged" :key="i" class="flex items-start gap-2 text-xs">
                 <span
-                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
-                  :class="f.kind === 'retraction' ? 'border-red-500/50 text-red-500' : 'border-amber-500/40 text-amber-500'"
+                  class="mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
+                  :class="f.kind === 'retraction' ? 'border-danger/50 text-danger' : 'border-warning/40 text-warning'"
                 >
                   {{ $t("integrity.kind." + f.kind) }}
                 </span>
@@ -865,11 +1102,11 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <!-- Viewpoint balance: how the evidence splits for/against the central claim -->
           <div
             v-if="stance && stance.applicable"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="mb-1 flex items-center gap-2 text-sm font-medium text-ink">
               {{ $t("stance.title") }}
-              <span v-if="stanceOneSided" class="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-500">
+              <span v-if="stanceOneSided" class="rounded border border-warning/40 px-1.5 py-0.5 text-3xs font-semibold uppercase text-warning">
                 ⚠ {{ $t("stance.oneSided") }}
               </span>
             </div>
@@ -880,16 +1117,16 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               <div class="bg-muted/40" :style="{ width: stancePct(stance.neutral) + '%' }" />
             </div>
             <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-              <span><span class="font-semibold text-emerald-500">{{ stance.supports }}</span> {{ $t("stance.for") }}</span>
-              <span><span class="font-semibold text-red-400">{{ stance.opposes }}</span> {{ $t("stance.against") }}</span>
-              <span><span class="font-semibold">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
+              <span><span class="font-semibold tabular-nums text-success">{{ stance.supports }}</span> {{ $t("stance.for") }}</span>
+              <span><span class="font-semibold tabular-nums text-danger">{{ stance.opposes }}</span> {{ $t("stance.against") }}</span>
+              <span><span class="font-semibold tabular-nums">{{ stance.neutral }}</span> {{ $t("stance.neutral") }}</span>
             </div>
             <p class="mt-2 text-xs text-muted">{{ $t("stance.hint") }}</p>
           </div>
           <!-- Cross-language coverage: language spread + what non-query-language sources add -->
           <div
             v-if="crossLang && crossLang.languages.length > 1"
-            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4 animate-rise"
+            class="mb-3 rounded-xl border border-bd bg-surface/40 p-4"
           >
             <div class="mb-2 text-sm font-medium text-ink">🌐 {{ $t("crosslang.title") }}</div>
             <div class="mb-3 flex flex-wrap gap-1.5">
@@ -902,14 +1139,14 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 {{ l.lang }} · {{ l.count }}
               </span>
             </div>
-            <p v-if="crossLang.monolingual" class="text-xs text-amber-500">⚠ {{ $t("crosslang.bubbleHint") }}</p>
+            <p v-if="crossLang.monolingual" class="text-xs text-warning">⚠ {{ $t("crosslang.bubbleHint") }}</p>
             <template v-else>
               <p class="mb-2 text-xs text-muted">
                 {{ crossLang.foreign_source_count }} {{ $t("crosslang.foreignSources") }}
               </p>
               <ul v-if="crossLang.unique_findings.length" class="space-y-1.5 border-t border-bd pt-2">
                 <li v-for="(f, i) in crossLang.unique_findings" :key="i" class="flex items-start gap-2 text-xs">
-                  <span class="mt-0.5 shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-accent">{{ f.lang }}</span>
+                  <span class="mt-0.5 shrink-0 rounded border border-accent/40 px-1.5 py-0.5 text-3xs font-semibold uppercase text-accent">{{ f.lang }}</span>
                   <span class="text-ink">{{ f.finding }}</span>
                 </li>
               </ul>
@@ -920,9 +1157,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'conflicts'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="conflicts && !conflicts.length" class="text-muted">
+        <p v-if="conflicts && !conflicts.length" class="text-muted">
           {{ $t("artifact.conflictsEmpty") }}
         </p>
         <div v-else class="space-y-4">
@@ -946,13 +1181,11 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'confidence'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <div v-else-if="verification" class="space-y-6">
+        <div v-if="verification" class="space-y-6">
           <!-- Honesty meter: one calibrated confidence fused from all trust signals, with its inputs shown -->
-          <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4 animate-rise">
+          <div v-if="confidence && confidence.components.length" class="rounded-xl border border-bd bg-surface/40 p-4">
             <div class="flex items-center gap-4">
-              <div class="text-3xl font-semibold leading-none" :class="gradeClass">
+              <div class="text-3xl font-semibold leading-none tabular-nums" :class="gradeClass">
                 {{ Math.round(confidence.overall * 100) }}%
               </div>
               <div>
@@ -968,9 +1201,9 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
                 <div :class="bandClass.speculative" :style="{ width: bandPct(confidence.speculative) + '%' }" />
               </div>
               <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                <span><span class="font-semibold text-emerald-500">{{ bandPct(confidence.solid) }}%</span> {{ $t("confidence.band.solid") }}</span>
-                <span><span class="font-semibold text-amber-500">{{ bandPct(confidence.contested) }}%</span> {{ $t("confidence.band.contested") }}</span>
-                <span><span class="font-semibold text-red-400">{{ bandPct(confidence.speculative) }}%</span> {{ $t("confidence.band.speculative") }}</span>
+                <span><span class="font-semibold tabular-nums text-success">{{ bandPct(confidence.solid) }}%</span> {{ $t("confidence.band.solid") }}</span>
+                <span><span class="font-semibold tabular-nums text-warning">{{ bandPct(confidence.contested) }}%</span> {{ $t("confidence.band.contested") }}</span>
+                <span><span class="font-semibold tabular-nums text-danger">{{ bandPct(confidence.speculative) }}%</span> {{ $t("confidence.band.speculative") }}</span>
               </div>
             </template>
 
@@ -979,9 +1212,9 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               <div v-for="c in confidence.components" :key="c.key" class="flex items-center gap-2 text-xs">
                 <span class="w-32 shrink-0 text-ink">{{ $t("confidence.component." + c.key) }}</span>
                 <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
-                  <div class="h-full rounded-full bg-accent transition-all" :style="{ width: c.score * 100 + '%' }" />
+                  <div class="h-full rounded-full bg-accent transition-[width]" :style="{ width: c.score * 100 + '%' }" />
                 </div>
-                <span class="w-9 shrink-0 text-right font-medium text-ink">{{ Math.round(c.score * 100) }}%</span>
+                <span class="w-9 shrink-0 text-right font-medium tabular-nums text-ink">{{ Math.round(c.score * 100) }}%</span>
                 <span class="hidden shrink-0 text-muted md:inline">{{ c.detail }}</span>
               </div>
             </div>
@@ -990,7 +1223,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           <div>
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="font-medium text-ink">{{ $t("artifact.planCoverage") }}</span>
-              <span class="text-muted">{{ Math.round(verification.coverage_ratio * 100) }}%</span>
+              <span class="tabular-nums text-muted">{{ Math.round(verification.coverage_ratio * 100) }}%</span>
             </div>
             <div class="h-1.5 w-full overflow-hidden rounded-full bg-surface">
               <div class="h-full rounded-full bg-accent" :style="{ width: verification.coverage_ratio * 100 + '%' }" />
@@ -998,7 +1231,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             <ul v-if="verification.uncovered_questions.length" class="mt-3 space-y-1">
               <li class="text-xs font-medium text-muted">{{ $t("artifact.uncovered") }}</li>
               <li v-for="(q, i) in verification.uncovered_questions" :key="i" class="flex gap-2 text-sm text-muted">
-                <span class="mt-0.5 shrink-0 text-red-400">○</span><span class="line-clamp-2">{{ q }}</span>
+                <span class="mt-0.5 shrink-0 text-danger">○</span><span class="line-clamp-2">{{ q }}</span>
               </li>
             </ul>
           </div>
@@ -1013,7 +1246,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               >
                 <div class="mb-1 flex items-center gap-2">
                   <span
-                    class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                    class="rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                     :class="levelClass[f.support_level] || 'text-muted border-bd'"
                   >
                     {{ $t("confidence." + f.support_level) }}
@@ -1032,12 +1265,10 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
       </template>
 
       <template v-else-if="tab === 'redteam'">
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <template v-else-if="redTeam && redTeam.findings.length">
+        <template v-if="redTeam && redTeam.findings.length">
           <div class="mb-4 flex gap-4 text-xs text-muted">
-            <span><span class="font-semibold text-amber-500">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
-            <span><span class="font-semibold text-emerald-500">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
+            <span><span class="font-semibold tabular-nums text-warning">{{ redTeam.challenged }}</span> {{ $t("redteam.challenged") }}</span>
+            <span><span class="font-semibold tabular-nums text-success">{{ redTeam.held }}</span> {{ $t("redteam.held") }}</span>
           </div>
           <div class="space-y-3">
             <div
@@ -1046,7 +1277,7 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
               class="rounded-lg border border-bd bg-surface/50 p-3"
             >
               <span
-                class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                class="rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase"
                 :class="verdictClass[f.verdict] || 'text-muted border-bd'"
               >
                 {{ $t("redteam." + f.verdict) }}
@@ -1068,21 +1299,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
         </template>
         <p v-else class="text-muted">{{ $t("redteam.empty") }}</p>
       </template>
-
-      <template v-else>
-        <p v-if="loading" class="text-muted">{{ $t("common.loading") }}</p>
-        <p v-else-if="error" class="text-red-400">{{ error }}</p>
-        <p v-else-if="trail && !trail.length" class="text-muted">{{ $t("artifact.trailEmpty") }}</p>
-        <ol v-else class="space-y-3">
-          <li v-for="(e, i) in trail" :key="i" class="flex gap-3 text-sm">
-            <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accentSoft" />
-            <div class="min-w-0">
-              <div class="text-ink">{{ stepLabel(e.step || "") }}</div>
-              <div v-if="e.detail" class="text-muted">{{ e.detail }}</div>
-            </div>
-          </li>
-        </ol>
-      </template>
     </div>
   </div>
 </template>
@@ -1098,13 +1314,51 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
   padding: 0.375rem 0.5rem;
   text-align: left;
   color: rgb(var(--c-ink));
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, opacity 0.2s;
 }
-.export-item:hover {
-  background: rgb(var(--c-surface-hover));
+/* Hover only where a real hover exists, so a tap never leaves an item lit. */
+@media (hover: hover) and (pointer: fine) {
+  .export-item:hover {
+    background: rgb(var(--c-surface-hover));
+  }
 }
 .export-item:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Verification legend: the same dotted lines MarkdownView draws under weak and contested
+   claims (.md-claim-text), with its contrast and forced-colours forms, so the legend
+   reads like the text. Keep the two in step. */
+.verify-sample {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+  text-decoration-skip-ink: auto;
+}
+.verify-sample-weak {
+  text-decoration-color: rgb(var(--c-warning) / 0.9);
+}
+.verify-sample-contested {
+  text-decoration-color: rgb(var(--c-danger) / 0.9);
+  text-decoration-style: dashed; /* matches the report: style, not only hue */
+}
+@media (prefers-contrast: more) {
+  .verify-sample {
+    text-decoration-thickness: 2px;
+  }
+  .verify-sample-weak {
+    text-decoration-color: rgb(var(--c-warning));
+  }
+  .verify-sample-contested {
+    text-decoration-color: rgb(var(--c-danger));
+  }
+}
+@media (forced-colors: active) {
+  .verify-sample-contested {
+    text-decoration-style: dashed;
+    text-decoration-thickness: 2px;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AdminAuditLogItem, AdminDryRunResult } from "@/lib/types";
@@ -12,6 +12,22 @@ const loadingLogs = ref(false);
 const actionLoading = ref(false);
 const message = ref<{ type: "success" | "error"; text: string } | null>(null);
 
+// A success notice steps aside after 8 s; an error stays until dismissed or the next run,
+// so it can't vanish before it's read (apple-design §16: errors persist until addressed).
+const MESSAGE_MS = 8000;
+let messageTimer: ReturnType<typeof setTimeout> | null = null;
+function setMessage(next: { type: "success" | "error"; text: string } | null) {
+  message.value = next;
+  if (messageTimer) clearTimeout(messageTimer);
+  messageTimer = null;
+  if (next?.type === "success") {
+    messageTimer = setTimeout(() => {
+      message.value = null;
+      messageTimer = null;
+    }, MESSAGE_MS);
+  }
+}
+
 // Dry Run Modal state
 const modalOpen = ref(false);
 const previewResult = ref<AdminDryRunResult | null>(null);
@@ -20,6 +36,26 @@ const pendingAction = ref<{ action: string; params: Record<string, any> } | null
 // Single Requeue input
 const requeueJobId = ref("");
 const requeueJobType = ref<"finalize" | "search">("finalize");
+
+// The confirmation says in words what will happen (§16: direct, specific labels): the
+// card's own title instead of the raw action code, and a verb with the count.
+const ACTION_TITLE: Record<string, string> = {
+  recover_stale_finalize_jobs: "admin.operations.recoverStaleFinalizeTitle",
+  recover_stale_search_jobs: "admin.operations.recoverStaleSearchTitle",
+  cleanup_old_jobs: "admin.operations.cleanupOldTitle",
+  cleanup_search_cache: "admin.operations.cleanupCacheTitle",
+  requeue_finalize_job: "admin.operations.singleRequeueTitle",
+  requeue_search_job: "admin.operations.singleRequeueTitle",
+};
+
+const modalAction = computed(() => previewResult.value?.action ?? pendingAction.value?.action ?? "");
+const modalTitle = computed(() => {
+  const key = ACTION_TITLE[modalAction.value];
+  return key ? t(key) : t("admin.operations.dryRunModalTitle");
+});
+const isDeletion = computed(() => modalAction.value.startsWith("cleanup_"));
+const affectedCount = computed(() => previewResult.value?.affected_count ?? 0);
+const nothingToRun = computed(() => affectedCount.value === 0);
 
 function formatDate(iso: string): string {
   if (!iso) return "—";
@@ -50,37 +86,37 @@ onMounted(() => {
 async function triggerDryRun(action: string, params: Record<string, any> = {}) {
   try {
     actionLoading.value = true;
-    message.value = null;
+    setMessage(null);
     const res = await adminApi.previewOperation(action, params);
     previewResult.value = res;
     pendingAction.value = { action, params };
     modalOpen.value = true;
   } catch (err) {
-    message.value = { type: "error", text: apiErrorMessage(err, t) };
+    setMessage({ type: "error", text: apiErrorMessage(err, t) });
   } finally {
     actionLoading.value = false;
   }
 }
 
 async function confirmExecute() {
-  if (!pendingAction.value) return;
+  if (!pendingAction.value || nothingToRun.value) return;
   try {
     actionLoading.value = true;
-    modalOpen.value = false;
+    closeModal();
     const res = await adminApi.executeOperation(
       pendingAction.value.action,
       pendingAction.value.params
     );
-    message.value = {
+    setMessage({
       type: "success",
       text: res.summary || t("admin.operations.executed", { action: pendingAction.value.action }),
-    };
+    });
     pendingAction.value = null;
     previewResult.value = null;
     // Refresh audit logs
     await fetchAuditLogs();
   } catch (err) {
-    message.value = { type: "error", text: apiErrorMessage(err, t) };
+    setMessage({ type: "error", text: apiErrorMessage(err, t) });
   } finally {
     actionLoading.value = false;
   }
@@ -91,6 +127,71 @@ async function executeRequeue() {
   if (!jid) return;
   const action = requeueJobType.value === "finalize" ? "requeue_finalize_job" : "requeue_search_job";
   await triggerDryRun(action, { target_id: jid });
+}
+
+// ── The dry-run dialog: Escape and the backdrop close it, focus starts inside (on
+// Cancel for a deletion or when there is nothing to run) and goes back on close. ──
+const dialogId = useId();
+const panelRef = ref<HTMLElement | null>(null);
+const cancelRef = ref<HTMLButtonElement | null>(null);
+const confirmRef = ref<HTMLButtonElement | null>(null);
+let returnFocus: HTMLElement | null = null;
+
+function closeModal() {
+  modalOpen.value = false;
+}
+
+function onModalKey(e: KeyboardEvent) {
+  if (!modalOpen.value) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeModal();
+  } else if (e.key === "Tab" && panelRef.value) {
+    const items = [...panelRef.value.querySelectorAll<HTMLElement>("button:not([disabled])")];
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (e.shiftKey && at <= 0) {
+      e.preventDefault();
+      items[items.length - 1].focus();
+    } else if (!e.shiftKey && (at === -1 || at === items.length - 1)) {
+      e.preventDefault();
+      items[0].focus();
+    }
+  }
+}
+
+watch(modalOpen, async (open) => {
+  if (typeof document === "undefined") return;
+  if (open) {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.addEventListener("keydown", onModalKey);
+    await nextTick();
+    if (!modalOpen.value) return;
+    const start = isDeletion.value || nothingToRun.value ? cancelRef.value : confirmRef.value;
+    start?.focus({ preventScroll: true });
+  } else {
+    document.removeEventListener("keydown", onModalKey);
+    const back = returnFocus;
+    returnFocus = null;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+  }
+});
+
+onBeforeUnmount(() => {
+  if (typeof document !== "undefined") document.removeEventListener("keydown", onModalKey);
+  if (messageTimer) clearTimeout(messageTimer);
+});
+
+// The backdrop closes only when the press starts and ends on it, so a text selection
+// dragged out of the panel doesn't close the dialog.
+let pressedBackdrop = false;
+function onBackdropPointerDown(e: PointerEvent) {
+  pressedBackdrop = e.target === e.currentTarget;
+}
+function onBackdropClick(e: MouseEvent) {
+  const close = pressedBackdrop && e.target === e.currentTarget;
+  pressedBackdrop = false;
+  if (close) closeModal();
 }
 </script>
 
@@ -107,14 +208,25 @@ async function executeRequeue() {
     <!-- Alert / Status message -->
     <div
       v-if="message"
-      class="rounded-xl border p-4 text-xs font-medium"
+      class="flex items-start justify-between gap-3 rounded-xl border p-4 text-xs font-medium"
       :class="
         message.type === 'success'
-          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-          : 'border-red-500/30 bg-red-500/10 text-red-400'
+          ? 'border-success/30 bg-success/10 text-success'
+          : 'border-danger/30 bg-danger/10 text-danger'
       "
+      :role="message.type === 'success' ? 'status' : 'alert'"
+      data-test="op-message"
     >
-      {{ message.text }}
+      <span>{{ message.text }}</span>
+      <button
+        type="button"
+        class="press hit -m-1 shrink-0 rounded p-1 leading-none opacity-80 hover:opacity-100"
+        :aria-label="t('common.close')"
+        :title="t('common.close')"
+        @click="setMessage(null)"
+      >
+        ✕
+      </button>
     </div>
 
     <!-- Maintenance Operations Cards -->
@@ -163,8 +275,8 @@ async function executeRequeue() {
         </div>
       </div>
 
-      <!-- Cleanup Old Jobs -->
-      <div class="rounded-xl border border-bd bg-surface/30 p-5 flex flex-col justify-between">
+      <!-- Cleanup Old Jobs (a deletion: marked apart from the recoveries) -->
+      <div class="rounded-xl border border-danger/20 bg-surface/30 p-5 flex flex-col justify-between">
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>🧹</span>
@@ -180,13 +292,13 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('cleanup_old_jobs', { days: 7 })"
           >
-            {{ t("admin.operations.previewBtn") }}
+            {{ t("admin.operations.previewDelete") }}
           </button>
         </div>
       </div>
 
-      <!-- Cleanup Search Cache -->
-      <div class="rounded-xl border border-bd bg-surface/30 p-5 flex flex-col justify-between">
+      <!-- Cleanup Search Cache (a deletion) -->
+      <div class="rounded-xl border border-danger/20 bg-surface/30 p-5 flex flex-col justify-between">
         <div>
           <div class="flex items-center gap-2 font-semibold text-sm text-ink">
             <span>⚡</span>
@@ -202,7 +314,7 @@ async function executeRequeue() {
             :disabled="actionLoading"
             @click="triggerDryRun('cleanup_search_cache', { days: 3 })"
           >
-            {{ t("admin.operations.previewBtn") }}
+            {{ t("admin.operations.previewDelete") }}
           </button>
         </div>
       </div>
@@ -216,7 +328,7 @@ async function executeRequeue() {
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <select
           v-model="requeueJobType"
-          class="rounded-lg border border-bd bg-bg px-3 py-1.5 text-xs text-ink focus:outline-none"
+          class="rounded-lg border border-bd bg-bg px-3 py-1.5 text-xs text-ink"
         >
           <option value="finalize">{{ t("admin.operations.finalizeJobOpt") }}</option>
           <option value="search">{{ t("admin.operations.searchJobOpt") }}</option>
@@ -226,11 +338,11 @@ async function executeRequeue() {
           v-model="requeueJobId"
           type="text"
           :placeholder="t('admin.operations.jobIdPlaceholder')"
-          class="min-w-64 flex-1 rounded-lg border border-bd bg-bg px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+          class="min-w-64 flex-1 rounded-lg border border-bd bg-bg px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted"
         />
 
         <button
-          class="rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-accent/90 disabled:opacity-50"
+          class="press rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-onAccent hover:bg-accent/90 disabled:opacity-50"
           :disabled="!requeueJobId.trim() || actionLoading"
           @click="executeRequeue"
         >
@@ -243,7 +355,7 @@ async function executeRequeue() {
     <div class="space-y-3">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-xs font-bold uppercase tracking-wider text-muted">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-muted">
             {{ t("admin.operations.auditTitle") }}
           </h3>
           <p class="text-[11px] text-muted">{{ t("admin.operations.auditSubtitle") }}</p>
@@ -299,60 +411,90 @@ async function executeRequeue() {
       </div>
     </div>
 
-    <!-- Dry-Run Preview Modal -->
-    <div
-      v-if="modalOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-    >
-      <div class="w-full max-w-md rounded-2xl border border-bd bg-bg p-6 shadow-2xl space-y-4">
-        <div class="flex items-center justify-between border-b border-bd pb-3">
-          <div class="flex items-center gap-2">
-            <span class="text-lg">🛡️</span>
-            <h3 class="font-bold text-ink text-sm">{{ t("admin.operations.dryRunModalTitle") }}</h3>
-          </div>
-          <button class="text-muted hover:text-ink text-xs" @click="modalOpen = false">✕</button>
-        </div>
-
-        <div class="space-y-3 text-xs">
-          <div>
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunActionLabel") }}</span>
-            <span class="font-mono font-semibold text-accent text-sm">{{ previewResult?.action }}</span>
-          </div>
-
-          <div class="rounded-xl border border-bd bg-surface/50 p-3">
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunAffectedLabel") }}</span>
-            <div class="text-2xl font-black text-ink mt-1">
-              {{ previewResult?.affected_count ?? 0 }}
-            </div>
-            <p class="text-muted text-[11px] mt-1">{{ previewResult?.summary }}</p>
-          </div>
-
-          <div v-if="previewResult?.sample_affected_ids?.length" class="space-y-1">
-            <span class="text-muted block text-[10px] uppercase font-bold tracking-wider">{{ t("admin.operations.dryRunSampleIdsLabel") }}</span>
-            <div class="max-h-24 overflow-y-auto rounded-lg bg-bg p-2 font-mono text-[10px] text-muted space-y-0.5">
-              <div v-for="sid in previewResult.sample_affected_ids" :key="sid">
-                {{ sid }}
+    <!-- Dry-Run Preview Modal: the shared scrim and modal transition (§12, §7), teleported
+         so the fixed layer sits outside this tab's spaced column. -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div
+          v-if="modalOpen"
+          class="scrim fixed inset-0 z-50 flex items-center justify-center p-4"
+          data-test="op-modal"
+          @pointerdown="onBackdropPointerDown"
+          @click="onBackdropClick"
+        >
+          <div
+            ref="panelRef"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="`${dialogId}-title`"
+            class="modal-panel w-full max-w-md space-y-4 rounded-2xl border border-bd bg-surface p-5 text-ink shadow-e3"
+          >
+            <div class="flex items-start justify-between gap-3 border-b border-bd pb-3">
+              <div class="min-w-0">
+                <span class="block text-3xs font-semibold uppercase tracking-wider text-muted">{{ t("admin.operations.dryRunModalTitle") }}</span>
+                <h3 :id="`${dialogId}-title`" class="mt-1 text-sm font-semibold text-ink">{{ modalTitle }}</h3>
+                <span class="mt-0.5 block font-mono text-3xs text-muted">{{ modalAction }}</span>
               </div>
+              <button
+                type="button"
+                class="press hit -m-1 shrink-0 rounded-lg p-1.5 text-xs leading-none text-muted hover:text-ink"
+                :aria-label="t('common.close')"
+                :title="t('common.close')"
+                @click="closeModal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div class="space-y-3 text-xs">
+              <div class="rounded-xl border border-bd bg-bg/60 p-3">
+                <span class="block text-3xs font-semibold uppercase tracking-wider text-muted">{{ t("admin.operations.dryRunAffectedLabel") }}</span>
+                <div class="mt-1 text-2xl font-bold tabular-nums text-ink" data-test="op-affected">
+                  {{ affectedCount }}
+                </div>
+                <p v-if="previewResult?.summary" class="mt-1 text-[11px] text-muted">{{ previewResult.summary }}</p>
+              </div>
+
+              <div v-if="previewResult?.sample_affected_ids?.length" class="space-y-1">
+                <span class="block text-3xs font-semibold uppercase tracking-wider text-muted">{{ t("admin.operations.dryRunSampleIdsLabel") }}</span>
+                <div class="max-h-24 space-y-0.5 overflow-y-auto rounded-lg bg-bg p-2 font-mono text-[10px] text-muted">
+                  <div v-for="sid in previewResult.sample_affected_ids" :key="sid">
+                    {{ sid }}
+                  </div>
+                </div>
+              </div>
+
+              <p v-if="nothingToRun" class="text-xs text-muted" data-test="op-nothing">{{ t("admin.operations.nothingToRun") }}</p>
+            </div>
+
+            <div class="flex items-center justify-end gap-2 border-t border-bd pt-4">
+              <button
+                ref="cancelRef"
+                type="button"
+                class="press rounded-lg border border-bd px-3 py-1.5 text-xs font-medium text-muted hover:bg-surfaceHover hover:text-ink"
+                @click="closeModal"
+              >
+                {{ t("common.cancel") }}
+              </button>
+              <button
+                ref="confirmRef"
+                type="button"
+                data-test="confirm-op"
+                class="press rounded-lg px-4 py-1.5 text-xs font-semibold shadow-e1 disabled:opacity-50"
+                :class="isDeletion ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-accent text-onAccent hover:bg-accent/90'"
+                :disabled="actionLoading || nothingToRun"
+                @click="confirmExecute"
+              >
+                {{
+                  isDeletion
+                    ? t("admin.operations.confirmDeleteN", { n: affectedCount })
+                    : t("admin.operations.confirmRequeueN", { n: affectedCount })
+                }}
+              </button>
             </div>
           </div>
         </div>
-
-        <div class="flex items-center justify-end gap-2 border-t border-bd pt-4">
-          <button
-            class="rounded-lg border border-bd px-3 py-1.5 text-xs font-medium text-muted hover:bg-surface hover:text-ink"
-            @click="modalOpen = false"
-          >
-            {{ t("common.cancel") }}
-          </button>
-          <button
-            class="rounded-lg bg-accent px-4 py-1.5 text-xs font-bold text-white shadow transition hover:bg-accent/90 disabled:opacity-50"
-            :disabled="actionLoading"
-            @click="confirmExecute"
-          >
-            {{ t("admin.operations.confirmAndExecuteBtn") }}
-          </button>
-        </div>
-      </div>
-    </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

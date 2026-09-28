@@ -95,6 +95,11 @@ describe("ResetPasswordView", () => {
     expect(useAuthStore().user).toBeNull();
   });
 
+  it("checks the password itself: the form is novalidate, so no browser bubble pre-empts the rule", async () => {
+    const wrapper = await mountView("#token=reset-tok");
+    expect(wrapper.find("form").attributes("novalidate")).toBeDefined();
+  });
+
   it("asks for the server's minimum length and a matching confirmation first", async () => {
     const wrapper = await mountView("#token=reset-tok");
 

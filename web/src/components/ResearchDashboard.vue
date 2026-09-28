@@ -30,9 +30,9 @@ onMounted(async () => {
 });
 
 const levelClass: Record<string, string> = {
-  strong: "text-emerald-500 border-emerald-500/40",
-  medium: "text-amber-500 border-amber-500/40",
-  weak: "text-red-400 border-red-400/40",
+  strong: "text-success border-success/40",
+  medium: "text-warning border-warning/40",
+  weak: "text-danger border-danger/40",
 };
 
 const totalSources = computed(() => sources.value.length);
@@ -59,7 +59,7 @@ const coveragePct = computed(() =>
 );
 const integrityColor = computed(() => {
   const p = integrityPct.value ?? 0;
-  return p >= 80 ? "text-emerald-500" : p >= 50 ? "text-amber-500" : "text-red-400";
+  return p >= 80 ? "text-success" : p >= 50 ? "text-warning" : "text-danger";
 });
 function pct(n: number): string {
   return totalSources.value ? `${(n / totalSources.value) * 100}%` : "0%";
@@ -73,22 +73,22 @@ function pct(n: number): string {
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <div class="rounded-card border border-bd bg-surface/40 p-3">
         <div class="text-xs text-muted">{{ $t("dashboard.coverage") }}</div>
-        <div class="mt-1 text-2xl font-semibold text-ink">{{ coveragePct !== null ? coveragePct + "%" : "—" }}</div>
+        <div class="mt-1 text-2xl font-semibold tabular-nums text-ink">{{ coveragePct !== null ? coveragePct + "%" : "—" }}</div>
       </div>
       <div class="rounded-card border border-bd bg-surface/40 p-3">
         <div class="text-xs text-muted">{{ $t("dashboard.citations") }}</div>
-        <div class="mt-1 text-2xl font-semibold" :class="integrityColor">{{ integrityPct !== null ? integrityPct + "%" : "—" }}</div>
-        <div v-if="citations && citations.total" class="text-xs text-muted">{{ citations.supported }}/{{ citations.total }}</div>
+        <div class="mt-1 text-2xl font-semibold tabular-nums" :class="integrityColor">{{ integrityPct !== null ? integrityPct + "%" : "—" }}</div>
+        <div v-if="citations && citations.total" class="text-xs tabular-nums text-muted">{{ citations.supported }}/{{ citations.total }}</div>
       </div>
       <div class="rounded-card border border-bd bg-surface/40 p-3">
         <div class="text-xs text-muted">{{ $t("dashboard.sources") }}</div>
-        <div class="mt-1 text-2xl font-semibold text-ink">{{ totalSources }}</div>
+        <div class="mt-1 text-2xl font-semibold tabular-nums text-ink">{{ totalSources }}</div>
         <div v-if="quality.high" class="text-xs text-muted">{{ quality.high }} {{ $t("dashboard.highQuality") }}</div>
       </div>
       <div class="rounded-card border border-bd bg-surface/40 p-3">
         <div class="text-xs text-muted">{{ $t("dashboard.redteam") }}</div>
-        <div v-if="redTeam && (redTeam.challenged || redTeam.held)" class="mt-1 text-sm font-medium text-ink">
-          <span class="text-amber-500">{{ redTeam.challenged }}</span> / <span class="text-emerald-500">{{ redTeam.held }}</span>
+        <div v-if="redTeam && (redTeam.challenged || redTeam.held)" class="mt-1 text-sm font-medium tabular-nums text-ink">
+          <span class="text-warning">{{ redTeam.challenged }}</span> / <span class="text-success">{{ redTeam.held }}</span>
         </div>
         <div v-else class="mt-1 text-2xl font-semibold text-muted">—</div>
         <div v-if="redTeam && (redTeam.challenged || redTeam.held)" class="text-xs text-muted">{{ $t("dashboard.challengedHeld") }}</div>
@@ -97,10 +97,10 @@ function pct(n: number): string {
 
     <!-- Quick links to richer artifacts -->
     <div class="flex flex-wrap gap-2">
-      <button v-if="comparison && comparison.options.length >= 2" class="rounded-full border border-accent/40 bg-accent/5 px-3 py-1 text-xs text-ink hover:bg-accent/10" @click="emit('navigate', 'comparison')">
+      <button v-if="comparison && comparison.options.length >= 2" class="press rounded-full border border-accent/40 bg-accent/5 px-3 py-1 text-xs text-ink hover:bg-accent/10" @click="emit('navigate', 'comparison')">
         ⊞ {{ $t("dashboard.openComparison") }}
       </button>
-      <button v-if="redTeam && redTeam.findings.length" class="rounded-full border border-bd px-3 py-1 text-xs text-muted hover:text-ink" @click="emit('navigate', 'redteam')">
+      <button v-if="redTeam && redTeam.findings.length" class="press rounded-full border border-bd px-3 py-1 text-xs text-muted hover:text-ink" @click="emit('navigate', 'redteam')">
         ⚔ {{ $t("dashboard.openRedteam") }}
       </button>
     </div>
@@ -113,10 +113,10 @@ function pct(n: number): string {
         <div class="h-full bg-amber-500" :style="{ width: pct(quality.medium) }" />
         <div class="h-full bg-red-400/70" :style="{ width: pct(quality.low) }" />
       </div>
-      <div class="mt-1 flex gap-4 text-xs text-muted">
-        <span><span class="text-emerald-500">●</span> {{ quality.high }} {{ $t("dashboard.qHigh") }}</span>
-        <span><span class="text-amber-500">●</span> {{ quality.medium }} {{ $t("dashboard.qMedium") }}</span>
-        <span><span class="text-red-400">●</span> {{ quality.low }} {{ $t("dashboard.qLow") }}</span>
+      <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+        <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" /><span class="tabular-nums">{{ quality.high }}</span> {{ $t("dashboard.qHigh") }}</span>
+        <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" /><span class="tabular-nums">{{ quality.medium }}</span> {{ $t("dashboard.qMedium") }}</span>
+        <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-red-400/70" aria-hidden="true" /><span class="tabular-nums">{{ quality.low }}</span> {{ $t("dashboard.qLow") }}</span>
       </div>
     </div>
 
@@ -126,7 +126,7 @@ function pct(n: number): string {
       <div class="space-y-2">
         <div v-for="(f, i) in topFindings" :key="i" class="rounded-lg border border-bd bg-surface/40 p-3">
           <div class="mb-1 flex items-center gap-2">
-            <span class="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase" :class="levelClass[f.support_level] || 'text-muted border-bd'">
+            <span class="rounded border px-1.5 py-0.5 text-3xs font-semibold uppercase" :class="levelClass[f.support_level] || 'text-muted border-bd'">
               {{ $t("confidence." + f.support_level) }}
             </span>
             <span class="text-xs text-muted">{{ f.source_ids.map((s) => "[" + s + "]").join("") }}</span>

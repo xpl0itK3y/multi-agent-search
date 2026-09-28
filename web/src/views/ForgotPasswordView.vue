@@ -44,12 +44,12 @@ async function submit() {
 
 <template>
   <AuthScreen :title="$t('forgotPassword.title')">
-    <p v-if="available === false" role="alert" class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
+    <p v-if="available === false" role="alert" class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
       {{ $t("forgotPassword.unavailable") }}
     </p>
 
     <template v-else-if="sent">
-      <p role="status" class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm leading-relaxed text-emerald-300">
+      <p role="status" class="rounded-lg border border-success/30 bg-success/10 p-3 text-sm leading-relaxed text-success">
         {{ $t("forgotPassword.sent") }}
       </p>
       <button type="button" class="mt-3 w-full text-center text-sm text-muted hover:text-ink" @click="sent = false">
@@ -67,13 +67,13 @@ async function submit() {
           autocomplete="email"
           :placeholder="$t('auth.email')"
           :aria-label="$t('auth.email')"
-          class="w-full rounded-lg border border-bd bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent/40 focus:outline-none"
+          class="w-full rounded-lg border border-bd bg-surface px-3 py-3 text-sm text-ink placeholder:text-muted sm:py-2"
         />
-        <p v-if="error" role="alert" class="text-sm text-red-400">{{ error }}</p>
+        <p v-if="error" role="alert" class="text-sm text-danger">{{ error }}</p>
         <button
           type="submit"
           :disabled="busy"
-          class="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:opacity-50"
+          class="press w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent disabled:opacity-50 sm:py-2"
         >
           {{ busy ? $t("forgotPassword.sending") : $t("forgotPassword.submit") }}
         </button>

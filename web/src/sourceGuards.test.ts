@@ -46,6 +46,13 @@ describe("source guards", () => {
     expect(offendingLines(templates, /[А-Яа-яЁё]/)).toEqual([]);
   });
 
+  it("uses smooth scrolling only through lib/motion.ts (reduced motion)", () => {
+    // smoothOrAuto() turns a smooth scroll into a jump for readers who asked for reduced
+    // motion; a literal behavior: "smooth" elsewhere would ignore that setting.
+    const files = Object.fromEntries(Object.entries(sources).filter(([path]) => path !== "./lib/motion.ts"));
+    expect(offendingLines(files, /behavior:\s*['"]smooth['"]|scroll-behavior:\s*smooth/)).toEqual([]);
+  });
+
   it("references only i18n keys that exist", () => {
     // Literal keys only; dynamic ones (t(`status.${s}`)) are guarded by te() at the call site.
     const keyCall = /(?:\$t|\bt|\bte)\(\s*(["'])([A-Za-z0-9_.]+)\1\s*[,)]/g;

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import MarkdownIt from "markdown-it";
 import renderMathInElement from "katex/contrib/auto-render";
 import "katex/dist/katex.min.css";
 import type { CitationGround, SourceIndependence, SourcePreview } from "@/lib/types";
 import { safeHttpUrl } from "@/lib/url";
+import { useDismiss } from "@/lib/useDismiss";
 
 const props = defineProps<{
   source: string;
@@ -42,6 +43,8 @@ const OPEN = "\u0001";
 const MID = "\u0002";
 const END = "\u0003";
 const SENTINEL = /\u0001(\d+)([\u0002\u0003])/g;
+// In rendered text: a claim sentinel (idx, kind) or an inline citation [Sn] (n).
+const CLAIM_OR_CITATION = /\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g;
 
 // html:false — report text comes from LLM/web content, never render raw HTML (XSS-safe).
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -55,6 +58,20 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet("rel", "noopener noreferrer");
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
+
+// A table scrolls sideways inside its own box, so a table wider than the column never
+// widens the report: in a narrow split view the whole panel scrolled sideways instead.
+// The wrapper is real markup, so the claim rewrite below sees it as tags and skips it.
+const defaultTableOpen =
+  md.renderer.rules.table_open ||
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+const defaultTableClose =
+  md.renderer.rules.table_close ||
+  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+md.renderer.rules.table_open = (tokens, idx, options, env, self) =>
+  `<div class="md-table-scroll">${defaultTableOpen(tokens, idx, options, env, self)}`;
+md.renderer.rules.table_close = (tokens, idx, options, env, self) =>
+  `${defaultTableClose(tokens, idx, options, env, self)}</div>`;
 
 // Map Sn -> url from the explicit API map, with the report's Sources section as
 // a backward-compatible fallback for older stored reports. The explicit map is
@@ -80,6 +97,8 @@ function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Ma
 // app already computed: how many INDEPENDENT origins back it, whether the cited
 // sources actually support it, and whether it sits in a numeric contradiction.
 type Band = "strong" | "medium" | "weak" | "contested";
+// The bands that ask for a second look are underlined; strong and medium claims are not.
+const UNDERLINED_BANDS: ReadonlySet<Band> = new Set<Band>(["weak", "contested"]);
 interface Claim {
   band: Band;
   title: string;
@@ -169,18 +188,27 @@ function tableRowLines(source: string): Set<number> {
 // A cell separator as markdown-it's table rule sees it: any "|" not right after a "\".
 const CELL_PIPE = /(?<!\\)\|/;
 
-const html = computed(() => {
-  // Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
-  // collide with KaTeX's \[…\] delimiter / show as literal backslashes.
-  // Control characters that double as claim sentinels are dropped so report text can't forge one.
-  // Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
-  // numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
-  const source = (props.source || "")
+// Normalize escaped citation brackets (\[Sn\] -> [Sn]) so they render as citations and don't
+// collide with KaTeX's \[…\] delimiter / show as literal backslashes.
+// Control characters that double as claim sentinels are dropped so report text can't forge one.
+// Line breaks become "\n" the way markdown-it normalizes them, so the verify pass below
+// numbers lines as its parse does (a bare "\r" is a line break there, not for split("\n")).
+const normalizedSource = computed(() =>
+  (props.source || "")
     .replace(/\r\n?/g, "\n")
     .replace(/[\u0001-\u0003]/g, "")
-    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]");
-  const urls = sourceUrlMap(source, props.sources);
-  const ground = new Map((props.grounding || []).map((g) => [g.source_id, g]));
+    .replace(/\\\[(S\d+(?:[,\s]+S\d+)*)\\\]/g, "[$1]"),
+);
+const urlMap = computed(() => sourceUrlMap(normalizedSource.value, props.sources));
+const groundMap = computed(() => new Map((props.grounding || []).map((g) => [g.source_id, g])));
+
+// One popover per view, outside the v-html; citations point at it with aria-describedby.
+const popId = `cite-pop-${useId()}`;
+
+const html = computed(() => {
+  const source = normalizedSource.value;
+  const urls = urlMap.value;
+  const ground = groundMap.value;
 
   // 1. Wrap each cited sentence with control-char sentinels BEFORE markdown runs, so
   //    the wrapping survives rendering and never breaks tag nesting (sentences stay
@@ -253,25 +281,55 @@ const html = computed(() => {
   });
 
   //    Sentinels → a styled span + a trailing support badge; inline [Sn] → a link to the
-  //    source, whose hover shows the grounding quote and a weak-citation flag when the
-  //    source text doesn't actually back the claim.
-  const rewriteText = (text: string) =>
-    text.replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
-      if (n === undefined) {
-        const c = claims[Number(idx)];
-        if (!c || !opened.has(idx!) || !closed.has(idx!)) return "";
-        return kind === MID
-          ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`
-          : `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
-      }
-      const g = ground.get(`S${n}`);
-      const url = safeHref(g?.url || urls.get(n));
-      const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
-      const tip = g?.quote ? ` title="${escAttr((g.supported ? "✓ " : "⚠ ") + g.quote)}"` : "";
-      return url
-        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${tip}>[S${n}]</a>`
-        : `<sup class="${cls}"${tip}>[S${n}]</sup>`;
-    });
+  //    source. A citation with grounding carries data-cite instead of a title: the
+  //    citation popover shows its quote, and a weak-citation flag when the source text
+  //    doesn't actually back the claim. Without grounding it just links.
+  //    A citation never starts a line: the whitespace before each [Sn] (and between
+  //    consecutive ones) becomes a no-break space that glues it to the preceding word.
+  //
+  //    A flagged claim is underlined under its words only. A decoration set on the claim
+  //    span would spread to every inline child, and so run under the [Sn] chips, the
+  //    spaces that glue them and the badge. So each run of the claim's own text gets its
+  //    own .md-claim-text span, and chips, glue and badge stay outside it. The parts are
+  //    rewritten in order, and a claim can span inline tags (**bold**, a link), so the
+  //    open claim's state carries from one text part to the next.
+  let underlining = false;
+  const underline = (text: string) => {
+    // Glue and punctuation left between or after chips carry no words to mark.
+    if (!underlining || !/[\p{L}\p{N}]/u.test(text)) return text;
+    const m = text.match(/^([\s.,;:!?\u2026]*)([\s\S]*?)(\s*)$/)!;
+    return `${m[1]}<span class="md-claim-text">${m[2]}</span>${m[3]}`;
+  };
+  const claimMark = (idx: string, kind: string) => {
+    const c = claims[Number(idx)];
+    if (!c || !opened.has(idx) || !closed.has(idx)) return "";
+    if (kind === MID) {
+      underlining = UNDERLINED_BANDS.has(c.band);
+      return `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`;
+    }
+    underlining = false;
+    return `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
+  };
+  const citation = (n: string) => {
+    const g = ground.get(`S${n}`);
+    const url = safeHref(g?.url || urls.get(n));
+    const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
+    const cite = g ? ` data-cite="S${n}" aria-describedby="${escAttr(popId)}"` : "";
+    return url
+      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${cite}>[S${n}]</a>`
+      : `<sup class="${cls}"${cite}${g ? ' tabindex="0"' : ""}>[S${n}]</sup>`;
+  };
+  const rewriteText = (raw: string) => {
+    const text = raw.replace(/[ \t]+(?=\[S\d+\])/g, "\u00a0");
+    let out = "";
+    let last = 0;
+    for (const m of text.matchAll(CLAIM_OR_CITATION)) {
+      out += underline(text.slice(last, m.index));
+      last = m.index + m[0].length;
+      out += m[3] === undefined ? claimMark(m[1], m[2]) : citation(m[3]);
+    }
+    return out + underline(text.slice(last));
+  };
 
   return parts.map((part, i) => (i % 2 ? part.replace(SENTINEL, "") : rewriteText(part))).join("");
 });
@@ -294,55 +352,400 @@ watch(
       } catch {
         /* ignore malformed math */
       }
+      // After the math: rendered formulas change a table's width.
+      updateTableFades();
     });
   },
   { immediate: true },
 );
+
+// A table wider than its scroller fades at the right edge while more of it waits there
+// (apple-design §12 scroll edge effect; the fade goes once the end is reached).
+function updateTableFades() {
+  for (const el of articleEl.value?.querySelectorAll<HTMLElement>(".md-table-scroll") ?? []) {
+    el.classList.toggle("edge-fade-x", el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }
+}
+// Scroll does not bubble: the root listens in the capture phase for its tables' scrolls.
+function onScrollCapture(e: Event) {
+  if (e.target instanceof HTMLElement && e.target.classList.contains("md-table-scroll")) updateTableFades();
+}
+let tableObserver: ResizeObserver | undefined;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined" || !articleEl.value) return;
+  tableObserver = new ResizeObserver(updateTableFades);
+  tableObserver.observe(articleEl.value);
+});
+
+// ── citation popover ──────────────────────────────────────────────────────────
+// The grounding quote for [Sn] used to live in a title tooltip: about a second of hover on
+// a desktop, never on touch (the tap left for the source), unreliable for keyboards. Now
+// (apple-design §1 response, §7 anchored origin, §16 feedback) it opens:
+// - mouse or pen: after 150 ms of hover intent; it stays while the pointer moves onto it
+//   and closes 200 ms after the pointer has left both;
+// - keyboard: on focus;
+// - touch: the first tap opens it instead of navigating, a second tap follows the link.
+// It closes on an outside press or Escape (useDismiss), and on any scroll or resize.
+const HOVER_INTENT_MS = 150;
+const LEAVE_GRACE_MS = 200;
+const GAP = 6;
+const MARGIN = 8;
+
+const popEl = ref<HTMLElement | null>(null);
+const popOpen = ref(false);
+const popAnchor = ref<HTMLElement | null>(null);
+const popSid = ref("");
+const popStyle = ref<Record<string, string>>({});
+useDismiss(popEl, popOpen, { trigger: popAnchor });
+
+function hostOf(href: string | null): string {
+  if (!href) return "";
+  try {
+    return new URL(href).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+const popInfo = computed(() => {
+  const g = groundMap.value.get(popSid.value);
+  if (!g) return null;
+  const href = safeHttpUrl(g.url || urlMap.value.get(popSid.value.slice(1)));
+  return { supported: !!g.supported, quote: g.quote || "", domain: hostOf(href), href };
+});
+
+let openTimer: ReturnType<typeof setTimeout> | undefined;
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+function clearTimers() {
+  clearTimeout(openTimer);
+  clearTimeout(closeTimer);
+}
+function closePop() {
+  clearTimers();
+  popOpen.value = false;
+}
+function scheduleClose() {
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(closePop, LEAVE_GRACE_MS);
+}
+
+// Fixed position from the citation's box: below it when it fits, else above; kept inside
+// the viewport, and coming out of the citation (§7, §8). It grows from the edge next to
+// the citation (transform-origin top when below, bottom when above), and the pop
+// transition's small offset (--pop-dy, .cite-pop below) starts it on the citation's side
+// too, so it moves away from the citation, not towards it.
+async function place() {
+  const anchor = popAnchor.value;
+  if (!anchor) return;
+  const r = anchor.getBoundingClientRect();
+  popStyle.value = {
+    top: `${r.bottom + GAP}px`,
+    left: `${Math.max(MARGIN, r.left)}px`,
+    transformOrigin: "left top",
+    "--pop-dy": "-4px",
+  };
+  await nextTick();
+  const pop = popEl.value;
+  if (!pop || !popOpen.value || popAnchor.value !== anchor) return;
+  const w = pop.offsetWidth;
+  const h = pop.offsetHeight;
+  const center = r.left + r.width / 2;
+  const left = Math.min(Math.max(MARGIN, center - 16), Math.max(MARGIN, window.innerWidth - w - MARGIN));
+  const below = r.bottom + GAP + h <= window.innerHeight - MARGIN || r.top - GAP - h < MARGIN;
+  popStyle.value = {
+    top: `${below ? r.bottom + GAP : r.top - GAP - h}px`,
+    left: `${left}px`,
+    transformOrigin: `${Math.min(Math.max(0, center - left), w)}px ${below ? "0" : "100%"}`,
+    "--pop-dy": below ? "-4px" : "4px",
+  };
+}
+function openFor(el: HTMLElement) {
+  clearTimers();
+  const sid = el.dataset.cite || "";
+  if (!groundMap.value.has(sid)) return;
+  popAnchor.value = el;
+  popSid.value = sid;
+  popOpen.value = true;
+  place();
+}
+
+const citeOf = (target: EventTarget | null): HTMLElement | null =>
+  target instanceof Element ? target.closest<HTMLElement>("[data-cite]") : null;
+
+function onPointerOver(e: PointerEvent) {
+  if (e.pointerType === "touch") return;
+  const el = citeOf(e.target);
+  if (!el) return;
+  clearTimeout(closeTimer);
+  if (popOpen.value && popAnchor.value === el) return;
+  clearTimeout(openTimer);
+  // Moving from one open citation to the next shows the next at once.
+  if (popOpen.value) openFor(el);
+  else openTimer = setTimeout(() => openFor(el), HOVER_INTENT_MS);
+}
+function onPointerOut(e: PointerEvent) {
+  if (e.pointerType === "touch") return;
+  const el = citeOf(e.target);
+  if (!el || (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) return;
+  clearTimeout(openTimer);
+  if (popOpen.value) scheduleClose();
+}
+function onPopEnter(e: PointerEvent) {
+  if (e.pointerType !== "touch") clearTimeout(closeTimer);
+}
+function onPopLeave(e: PointerEvent) {
+  if (e.pointerType !== "touch" && popOpen.value) scheduleClose();
+}
+
+// A press on a citation: remembered so the focus it gives is not taken for keyboard focus,
+// and, on touch, so the click that follows opens the popover instead of navigating.
+let pressedCite: HTMLElement | null = null;
+let pressedAt = 0;
+let touchCite: HTMLElement | null = null;
+let touchWasOpen = false;
+function onPointerDown(e: PointerEvent) {
+  const el = citeOf(e.target);
+  pressedCite = el;
+  pressedAt = Date.now();
+  touchCite = el && e.pointerType === "touch" ? el : null;
+  touchWasOpen = !!touchCite && popOpen.value && popAnchor.value === touchCite;
+  if (el) clearTimeout(openTimer);
+}
+function onClick(e: MouseEvent) {
+  const el = citeOf(e.target);
+  const tapped = !!el && el === touchCite;
+  touchCite = null;
+  if (!tapped || touchWasOpen) return; // not a tap, or the second tap: follow the link
+  e.preventDefault();
+  openFor(el!);
+}
+// Escape hands focus back to the citation (useDismiss): that focus must not reopen it.
+let closedAnchor: HTMLElement | null = null;
+let closedAt = 0;
+watch(
+  popOpen,
+  (open) => {
+    if (open) return;
+    closedAnchor = popAnchor.value;
+    closedAt = Date.now();
+  },
+  { flush: "sync" },
+);
+function onFocusIn(e: FocusEvent) {
+  const el = citeOf(e.target);
+  if (!el || (el === pressedCite && Date.now() - pressedAt < 1000)) return;
+  if (el === closedAnchor && Date.now() - closedAt < 300) return;
+  openFor(el);
+}
+function onFocusOut(e: FocusEvent) {
+  const el = citeOf(e.target);
+  if (!el || popAnchor.value !== el || !popOpen.value) return;
+  const next = e.relatedTarget;
+  if (next instanceof Node && (popEl.value?.contains(next) || citeOf(next))) return;
+  // Keyboard focus moved on; a hovering pointer keeps the popover until it leaves.
+  if (Date.now() - pressedAt > 1000) closePop();
+}
+
+function onViewportChange() {
+  if (popOpen.value) closePop();
+}
+watch(popOpen, (open) => {
+  if (typeof window === "undefined") return;
+  if (open) {
+    window.addEventListener("scroll", onViewportChange, true);
+    window.addEventListener("resize", onViewportChange);
+  } else {
+    window.removeEventListener("scroll", onViewportChange, true);
+    window.removeEventListener("resize", onViewportChange);
+  }
+});
+// A re-render replaces every citation element: a popover would point at a stale one.
+watch(html, () => closePop());
+onBeforeUnmount(() => {
+  tableObserver?.disconnect();
+  clearTimers();
+  window.removeEventListener("scroll", onViewportChange, true);
+  window.removeEventListener("resize", onViewportChange);
+});
 </script>
 
 <template>
-  <article
-    ref="articleEl"
-    class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-headings:font-serif prose-headings:text-ink prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
-    v-html="html"
-  />
+  <div
+    @pointerover="onPointerOver"
+    @pointerout="onPointerOut"
+    @pointerdown="onPointerDown"
+    @click="onClick"
+    @focusin="onFocusIn"
+    @focusout="onFocusOut"
+    @scroll.capture.passive="onScrollCapture"
+  >
+    <article
+      ref="articleEl"
+      class="prose dark:prose-invert max-w-none prose-p:text-ink prose-li:text-ink prose-h1:font-serif prose-h2:font-serif prose-h3:font-serif prose-h4:font-serif prose-headings:text-ink prose-h1:text-[1.75rem] sm:prose-h1:text-[2.125rem] prose-h2:text-[1.3125rem] sm:prose-h2:text-2xl prose-p:text-pretty max-sm:prose-p:leading-[1.65] max-sm:prose-li:leading-[1.65] max-sm:hyphens-auto prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-strong:text-ink prose-li:marker:text-muted"
+      v-html="html"
+    />
+    <Teleport to="body">
+      <Transition name="pop">
+        <div
+          v-if="popOpen && popInfo"
+          :id="popId"
+          ref="popEl"
+          class="cite-pop material-popover fixed z-50 w-max max-w-[min(20rem,calc(100vw-1rem))] rounded-xl border border-bd p-3 text-xs"
+          :style="popStyle"
+          @pointerenter="onPopEnter"
+          @pointerleave="onPopLeave"
+        >
+          <div class="flex items-start gap-1.5 font-medium" :class="popInfo.supported ? 'text-success' : 'text-danger'">
+            <span aria-hidden="true">{{ popInfo.supported ? "✓" : "⚠" }}</span>
+            <span>{{ popInfo.supported ? $t("citation.supported") : $t("citation.weak") }}</span>
+          </div>
+          <p v-if="popInfo.quote" class="mt-1.5 line-clamp-6 border-l-2 border-bd pl-2 leading-relaxed text-ink">
+            {{ popInfo.quote }}
+          </p>
+          <div v-if="popInfo.domain || popInfo.href" class="mt-2 flex items-center gap-3">
+            <span v-if="popInfo.domain" class="min-w-0 truncate text-muted">{{ popInfo.domain }}</span>
+            <a
+              v-if="popInfo.href"
+              :href="popInfo.href"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="press ml-auto shrink-0 font-medium text-accent hover:underline"
+              @click="closePop"
+            >
+              {{ $t("citation.openSource") }} ↗
+            </a>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+  </div>
 </template>
 
 <style scoped>
-/* Inline verification: confirm strong claims subtly, flag the problem ones loudly. */
-.md-claim-weak {
-  border-bottom: 1.5px dotted rgb(245 158 11 / 0.85);
+/* A report table scrolls inside its own box (see table_open). A sideways swipe that
+   reaches the end stays in the table instead of turning into a back gesture. */
+:deep(.md-table-scroll) {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  /* A scroll box does not let its child's margins collapse through it, so the prose
+     table spacing (2em at the table's 0.875em) moves to the box itself. */
+  margin-block: 1.75em;
 }
-.md-claim-contested {
-  text-decoration: underline wavy rgb(248 113 113 / 0.9);
-  text-underline-offset: 3px;
+:deep(.md-table-scroll > table) {
+  margin-block: 0;
 }
-.md-claim-badge {
+:deep(:is(h2, h3, h4, hr) + .md-table-scroll) {
+  margin-top: 0;
+}
+
+/* The shared pop transition always starts 4px higher. A citation popover placed above
+   its citation must start 4px lower instead, so it rises out of the citation while it
+   grows from its bottom edge (place() sets --pop-dy; §7, §8). Reduced motion keeps its
+   global `transform: none !important`. */
+.cite-pop.pop-enter-from,
+.cite-pop.pop-leave-to {
+  transform: translateY(var(--pop-dy, -4px)) scale(0.96);
+}
+
+/* Inline verification, calm by default. It is on for every report, so it must not read
+   like a spell checker (§16 restraint: every mark earns its place). At rest only the
+   claims that need a second look are marked: a thin dotted underline in the status
+   token, warning for a weak claim and danger for a contested one. Nothing is wavy. The
+   line sits under the claim's words (.md-claim-text), never under its [Sn] chips. Each
+   claim's support badge (✓2, 1, ⚠, ✕) waits for hover, or for focus inside the claim.
+   The marks live in v-html, which never carries this component's data-v attribute, so
+   every rule goes through :deep(). ArtifactPanel's legend mirrors these marks. */
+:deep(.md-claim) {
+  /* The badge's containing block: it scrolls and clips with the report, not the page. */
+  position: relative;
+}
+:deep(.md-claim-text) {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+  text-decoration-skip-ink: auto;
+}
+:deep(.md-claim-weak .md-claim-text) {
+  text-decoration-color: rgb(var(--c-warning) / 0.9);
+}
+:deep(.md-claim-contested .md-claim-text) {
+  text-decoration-color: rgb(var(--c-danger) / 0.9);
+  /* Line style, not only hue, tells contested from weak: warning and danger are close
+     in lightness, and a colour-blind reader would see two identical dotted lines. */
+  text-decoration-style: dashed;
+}
+/* A citation whose source text does not back the claim carries the same quiet dotted
+   mark on itself (the global rule draws a wavy one). */
+:deep(.md-citation-weak) {
+  text-decoration: underline dotted rgb(var(--c-danger) / 0.85);
+  text-decoration-thickness: max(1px, 0.08em);
+  text-underline-offset: 0.22em;
+}
+/* Out of flow, at the spot where it would sit (the claim's end), lifted above the line
+   and pulled back over the claim. So showing it never reflows the text or widens a
+   table cell under the pointer, and it never covers the words that follow. It only
+   fades, and nothing about it moves (reduced motion needs no other form). */
+:deep(.md-claim-badge) {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-100%, -60%);
   font-size: 0.62em;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
   line-height: 1;
-  vertical-align: super;
-  margin-left: 2px;
   padding: 1px 4px;
+  /* Transparent here; forced colours paint it, so the pill keeps its shape there. */
+  border: 1px solid transparent;
   border-radius: 999px;
+  background-color: rgb(var(--c-surface));
+  box-shadow: var(--elev-1);
   white-space: nowrap;
   user-select: none;
-  cursor: help;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
 }
-.md-claim-badge-strong {
-  color: rgb(16 185 129);
-  background: rgb(16 185 129 / 0.12);
+:deep(.md-claim:hover > .md-claim-badge),
+:deep(.md-claim:focus-within > .md-claim-badge) {
+  opacity: 1;
 }
-.md-claim-badge-medium {
+/* The tint is a layer over the opaque surface: the pill sits on top of text. */
+:deep(.md-claim-badge-strong) {
+  color: rgb(var(--c-success));
+  background-image: linear-gradient(rgb(var(--c-success) / 0.12), rgb(var(--c-success) / 0.12));
+}
+:deep(.md-claim-badge-medium) {
   color: rgb(var(--c-muted));
-  background: rgb(var(--c-muted) / 0.12);
+  background-image: linear-gradient(rgb(var(--c-muted) / 0.12), rgb(var(--c-muted) / 0.12));
 }
-.md-claim-badge-weak {
-  color: rgb(245 158 11);
-  background: rgb(245 158 11 / 0.16);
+:deep(.md-claim-badge-weak) {
+  color: rgb(var(--c-warning));
+  background-image: linear-gradient(rgb(var(--c-warning) / 0.16), rgb(var(--c-warning) / 0.16));
 }
-.md-claim-badge-contested {
-  color: rgb(248 113 113);
-  background: rgb(248 113 113 / 0.16);
+:deep(.md-claim-badge-contested) {
+  color: rgb(var(--c-danger));
+  background-image: linear-gradient(rgb(var(--c-danger) / 0.16), rgb(var(--c-danger) / 0.16));
+}
+@media (prefers-contrast: more) {
+  :deep(.md-claim-text),
+  :deep(.md-citation-weak) {
+    text-decoration-thickness: 2px;
+  }
+  :deep(.md-claim-weak .md-claim-text) {
+    text-decoration-color: rgb(var(--c-warning));
+  }
+  :deep(.md-claim-contested .md-claim-text) {
+    text-decoration-color: rgb(var(--c-danger));
+  }
+}
+/* Forced colours turn every underline into the text colour, so colour cannot tell the
+   bands apart: a contested claim's line becomes dashed and heavier (the legend does
+   the same). The badges' ⚠ and ✕ still name the band on hover or focus. */
+@media (forced-colors: active) {
+  :deep(.md-claim-contested .md-claim-text) {
+    text-decoration-style: dashed;
+    text-decoration-thickness: 2px;
+  }
 }
 </style>

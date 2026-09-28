@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 
@@ -28,10 +28,13 @@ vi.mock("@/lib/googleSignIn", async (importOriginal) => ({
   startGoogleSignIn,
 }));
 
-import { ApiError } from "@/lib/api";
+import { ApiError, PASSWORD_MIN_LENGTH } from "@/lib/api";
 import SettingsView from "./SettingsView.vue";
 
 const t = (key: string) => i18n.global.t(key);
+
+// Attached: a submit button submits its form only in a connected document (as in a browser).
+const mounted: VueWrapper[] = [];
 
 async function mountSettings(url = "/settings", { emailVerified = false } = {}) {
   const pinia = createPinia();
@@ -40,12 +43,14 @@ async function mountSettings(url = "/settings", { emailVerified = false } = {}) 
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
+      { path: "/", component: { render: () => null } },
       { path: "/settings", component: SettingsView },
       { path: "/login", component: { render: () => null } },
     ],
   });
   await router.push(url);
-  const wrapper = mount(SettingsView, { global: { plugins: [pinia, router, i18n] } });
+  const wrapper = mount(SettingsView, { attachTo: document.body, global: { plugins: [pinia, router, i18n] } });
+  mounted.push(wrapper);
   await flushPromises();
   return wrapper;
 }
@@ -66,6 +71,7 @@ describe("SettingsView", () => {
   });
 
   afterEach(() => {
+    while (mounted.length) mounted.pop()!.unmount();
     vi.clearAllMocks();
   });
 
@@ -238,6 +244,81 @@ describe("SettingsView", () => {
     expect(unknown.text()).not.toContain(t("settings.security.passwordTitle"));
   });
 
+  it("beside the sticky tabs, opens the next tab at its start after scrolling far down one", async () => {
+    const wrapper = await mountSettings("/settings?tab=analytics");
+    const root = wrapper.element as HTMLElement;
+    let top = 1200;
+    Object.defineProperty(root, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = v) });
+    // md+: the tabs are stuck 32px down the view; the panel started 700px above it.
+    let panelTop = -700;
+    const frame = wrapper.find("[data-test='settings-tabs']").element.parentElement!;
+    const panel = wrapper.find("main").element;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this === frame) return { top: 32, bottom: 300 } as DOMRect;
+      if (this === panel) return { top: panelTop, bottom: panelTop + 500 } as DOMRect;
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0 } as DOMRect;
+    });
+    try {
+      await openTab(wrapper, "settings.tabs.profile");
+      await flushPromises();
+      expect(top).toBe(1200 - (700 + 32));
+
+      panelTop = 32; // lined up already
+      await openTab(wrapper, "settings.tabs.research");
+      await flushPromises();
+      expect(top).toBe(1200 - (700 + 32));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  describe("on a phone, where the tabs are one sideways row", () => {
+    // jsdom has no layout: a 390px row whose five 120px tabs run to 636px.
+    const undo: (() => void)[] = [];
+    const scrollBy = vi.fn();
+    function define(proto: object, key: string, desc: PropertyDescriptor) {
+      const own = Object.getOwnPropertyDescriptor(proto, key);
+      Object.defineProperty(proto, key, { configurable: true, ...desc });
+      undo.push(() => (own ? Object.defineProperty(proto, key, own) : delete (proto as Record<string, unknown>)[key]));
+    }
+    const isRow = (el: Element) => el.getAttribute("data-test") === "settings-tabs";
+    beforeEach(() => {
+      const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 36, height: 36 }) as DOMRect;
+      define(Element.prototype, "getBoundingClientRect", {
+        value(this: Element) {
+          if (isRow(this)) return rect(0, 390);
+          const row = this.parentElement;
+          return row && isRow(row) ? rect(6 + [...row.children].indexOf(this) * 124, 120) : rect(0, 0);
+        },
+      });
+      define(HTMLElement.prototype, "scrollWidth", { get(this: Element) { return isRow(this) ? 636 : 0; } });
+      define(HTMLElement.prototype, "clientWidth", { get(this: Element) { return isRow(this) ? 390 : 0; } });
+      define(HTMLElement.prototype, "scrollBy", { value: scrollBy });
+    });
+    afterEach(() => {
+      while (undo.length) undo.pop()!();
+      scrollBy.mockReset();
+    });
+
+    it("fades the row's end while more tabs wait, and brings the tab from the address into view", async () => {
+      const wrapper = await mountSettings("/settings?tab=security");
+
+      expect(wrapper.find("[data-test='settings-tabs']").classes()).toContain("edge-fade-x");
+      // Security ends at 622px: moved clear of the 28px fade, at once on arrival.
+      expect(scrollBy).toHaveBeenCalledWith({ left: 622 - 390 + 28, behavior: "auto" });
+    });
+
+    it("scrolls a tab picked at the row's edge fully into view", async () => {
+      const wrapper = await mountSettings("/settings");
+      scrollBy.mockClear();
+
+      await openTab(wrapper, "settings.tabs.appearance"); // 254..374, under the fade
+      await flushPromises();
+
+      expect(scrollBy).toHaveBeenCalledWith({ left: 374 - 390 + 28, behavior: "smooth" });
+    });
+  });
+
   it("says that logging out signs out every device, and logs out", async () => {
     mocks.logout.mockResolvedValue({ status: "ok" });
     const wrapper = await mountSettings("/settings?tab=security");
@@ -323,5 +404,128 @@ describe("SettingsView", () => {
       expect(text, tab).not.toMatch(/[А-Яа-яЁё]/);
       expect(text, tab).not.toMatch(/settings\.\w+/);
     }
+  });
+
+  it("keeps the open tab in the address, so a reload or Back keeps it", async () => {
+    const wrapper = await mountSettings("/settings?tab=security&reauth_error=oauth_failed");
+    await openTab(wrapper, "settings.tabs.analytics");
+    await flushPromises();
+
+    expect(wrapper.vm.$router.currentRoute.value.query).toEqual({ tab: "analytics" });
+    expect(wrapper.text()).toContain(t("settings.analytics.title"));
+
+    await wrapper.vm.$router.replace({ query: { tab: "appearance" } });
+    await flushPromises();
+    expect(wrapper.text()).toContain(t("settings.appearance.title"));
+
+    // The sidebar's plain /settings, while the view stays mounted: back to Profile.
+    await wrapper.vm.$router.push("/settings");
+    await flushPromises();
+    expect(wrapper.text()).toContain(t("settings.profile.title"));
+  });
+
+  it("goes home from Back when Settings was opened on its own", async () => {
+    const wrapper = await mountSettings();
+    await wrapper.findAll("button").find((b) => b.text().includes(t("settings.back")))!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.vm.$router.currentRoute.value.fullPath).toBe("/");
+  });
+
+  it("checks the new password against the server's minimum and states it under the field", async () => {
+    mocks.setPassword.mockResolvedValue({ access_token: "t", token_type: "bearer", user: {} });
+    const wrapper = await mountSettings("/settings?tab=security");
+    const inputs = wrapper.findAll('input[type="password"]');
+    const hint = wrapper.find(`#${inputs[1].attributes("aria-describedby")}`);
+    expect(hint.text()).toBe(i18n.global.t("auth.passwordRule", { min: PASSWORD_MIN_LENGTH }));
+    // Said once: the field's placeholder doesn't repeat the rule under it.
+    expect(inputs[1].attributes("placeholder")).toBeUndefined();
+
+    const short = "x".repeat(PASSWORD_MIN_LENGTH - 1);
+    await inputs[1].setValue(short);
+    await inputs[2].setValue(short);
+    await buttonByText(wrapper, "settings.security.updatePassword").trigger("click");
+    await flushPromises();
+    expect(mocks.setPassword).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain(i18n.global.t("settings.errors.passwordTooShort", { min: PASSWORD_MIN_LENGTH }));
+    expect(hint.classes()).toContain("text-danger");
+    // A browser would block that submit with its own bubble (minlength) before this
+    // message ever ran; jsdom has no tooShort, so the opt-out itself is pinned.
+    expect(inputs[1].element.closest("form")!.hasAttribute("novalidate")).toBe(true);
+
+    const ok = "x".repeat(PASSWORD_MIN_LENGTH);
+    await inputs[1].setValue(ok);
+    await inputs[2].setValue(ok);
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    expect(mocks.setPassword).toHaveBeenCalledWith(ok, undefined);
+  });
+
+  describe("delete dialog", () => {
+    it("is a labelled modal dialog that takes focus and gives it back", async () => {
+      const wrapper = await mountSettings("/settings?tab=security");
+      const opener = buttonByText(wrapper, "settings.security.deleteAccount");
+      (opener.element as HTMLElement).focus();
+      await opener.trigger("click");
+      await flushPromises();
+
+      const dialog = wrapper.find("[role='dialog']");
+      expect(dialog.attributes("aria-modal")).toBe("true");
+      expect(document.getElementById(dialog.attributes("aria-labelledby")!)!.textContent).toContain(t("settings.security.deleteTitle"));
+      expect(document.activeElement).toBe(wrapper.findAll('input[type="password"]').at(-1)!.element);
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flushPromises();
+      expect(wrapper.find("[role='dialog']").exists()).toBe(false);
+      expect(document.activeElement).toBe(opener.element);
+    });
+
+    it("submits with Enter (a form), even with an empty password", async () => {
+      mocks.deleteAccount.mockRejectedValue(new ApiError(403, "reauth_required"));
+      const wrapper = await mountSettings("/settings?tab=security");
+      await buttonByText(wrapper, "settings.security.deleteAccount").trigger("click");
+
+      await wrapper.find("[role='dialog'] form").trigger("submit");
+      await flushPromises();
+      expect(mocks.deleteAccount).toHaveBeenCalledWith(undefined);
+    });
+
+    it("closes on a backdrop press, but not when a drag started inside it", async () => {
+      const wrapper = await mountSettings("/settings?tab=security");
+      await buttonByText(wrapper, "settings.security.deleteAccount").trigger("click");
+
+      await wrapper.find("[data-test='delete-panel']").trigger("pointerdown");
+      await wrapper.find("[data-test='delete-backdrop']").trigger("click");
+      expect(wrapper.find("[role='dialog']").exists()).toBe(true);
+
+      await wrapper.find("[data-test='delete-backdrop']").trigger("pointerdown");
+      await wrapper.find("[data-test='delete-backdrop']").trigger("click");
+      expect(wrapper.find("[role='dialog']").exists()).toBe(false);
+    });
+  });
+
+  it("describes the System theme as following the device, and the others by their base", async () => {
+    const wrapper = await mountSettings("/settings?tab=appearance");
+    expect(wrapper.text()).toContain(t("themes.systemHint"));
+    expect(wrapper.text()).toContain(t("settings.appearance.baseDark"));
+    expect(wrapper.text()).toContain(t("settings.appearance.baseLight"));
+  });
+
+  it("colours a failed or cancelled research differently from a finished one", async () => {
+    mocks.getTokenStats.mockResolvedValue({
+      researches_count: 3, calls_count: 1, total_tokens: 10, prompt_tokens: 6, completion_tokens: 4,
+      estimated_cost_usd: 0.01, by_model: [],
+      recent: [
+        { id: "a", prompt: "done", depth: "easy", status: "completed", total_tokens: 1, estimated_cost_usd: 0 },
+        { id: "b", prompt: "broke", depth: "easy", status: "failed", total_tokens: 1, estimated_cost_usd: 0 },
+        { id: "c", prompt: "stopped", depth: "easy", status: "cancelled", total_tokens: 1, estimated_cost_usd: 0 },
+      ],
+    });
+    const wrapper = await mountSettings("/settings?tab=analytics");
+    const pill = (prompt: string) => wrapper.findAll("tr").find((r) => r.text().includes(prompt))!.find("span");
+
+    expect(pill("done").classes()).toContain("text-success");
+    expect(pill("broke").classes()).toContain("text-danger");
+    expect(pill("stopped").classes()).toContain("text-muted");
   });
 });

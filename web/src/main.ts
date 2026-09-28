@@ -8,6 +8,10 @@ import { i18n } from "./i18n";
 import { useAuthStore } from "./stores/auth";
 import "./style.css";
 
+// iOS Safari applies :active (the instant press feedback in style.css) only when the
+// document has a touchstart listener. Passive, so it never delays scrolling.
+document.addEventListener("touchstart", () => {}, { passive: true });
+
 const app = createApp(App);
 const pinia = createPinia();
 app.use(pinia).use(i18n);

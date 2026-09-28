@@ -85,7 +85,7 @@ async function switchAccount() {
       <p role="status" class="text-center text-sm text-muted">{{ $t("verifyEmail.signInFirst") }}</p>
       <router-link
         :to="LOGIN_FIRST"
-        class="mt-4 block w-full rounded-lg bg-accent px-4 py-2 text-center text-sm font-medium text-bg transition"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.toLogin") }}
       </router-link>
@@ -96,7 +96,7 @@ async function switchAccount() {
       <p class="mt-2 text-center text-sm leading-relaxed text-muted">{{ $t("verifyEmail.confirmPrompt") }}</p>
       <button
         type="button"
-        class="mt-4 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="confirm"
       >
         {{ $t("verifyEmail.confirm") }}
@@ -108,42 +108,42 @@ async function switchAccount() {
     </p>
 
     <template v-else-if="state === 'verified'">
-      <p role="status" class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm leading-relaxed text-emerald-300">
+      <p role="status" class="rounded-lg border border-success/30 bg-success/10 p-3 text-sm leading-relaxed text-success">
         {{ $t("verifyEmail.verified") }}
       </p>
       <router-link
         to="/"
-        class="mt-4 block w-full rounded-lg bg-accent px-4 py-2 text-center text-sm font-medium text-bg transition"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.continue") }}
       </router-link>
     </template>
 
     <template v-else-if="state === 'invalid'">
-      <p role="alert" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm leading-relaxed text-red-400">
+      <p role="alert" class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm leading-relaxed text-danger">
         {{ $t("errors.api.verificationTokenInvalid") }}
       </p>
       <router-link
         to="/settings"
-        class="mt-4 block w-full rounded-lg bg-accent px-4 py-2 text-center text-sm font-medium text-bg transition"
+        class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
       >
         {{ $t("verifyEmail.toSettings") }}
       </router-link>
     </template>
 
     <template v-else-if="state === 'wrongAccount'">
-      <p role="alert" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm leading-relaxed text-red-400">
+      <p role="alert" class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm leading-relaxed text-danger">
         {{ $t("errors.api.verificationWrongAccount") }}
       </p>
       <p class="mt-3 text-center text-sm text-muted">{{ $t("verifyEmail.signedInAs", { email: auth.user.email }) }}</p>
       <button
         type="button"
-        class="mt-4 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="switchAccount"
       >
         {{ $t("verifyEmail.switchAccount") }}
       </button>
-      <p class="mt-2 text-center text-[11px] text-muted">{{ $t("auth.logoutEverywhereHint") }}</p>
+      <p class="mt-2 text-center text-2xs text-muted">{{ $t("auth.logoutEverywhereHint") }}</p>
       <router-link to="/" class="mt-4 block text-center text-sm text-muted hover:text-ink">
         {{ $t("verifyEmail.continue") }}
       </router-link>
@@ -153,12 +153,12 @@ async function switchAccount() {
       <!-- Nothing is known about the link here (a reload after it was used, Back, a link
            copied without its fragment, or one that waited too long): no verdict on it. -->
       <template v-if="auth.user.email_verified">
-        <p role="status" class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm leading-relaxed text-emerald-300">
+        <p role="status" class="rounded-lg border border-success/30 bg-success/10 p-3 text-sm leading-relaxed text-success">
           {{ $t("verifyEmail.alreadyVerified") }}
         </p>
         <router-link
           to="/"
-          class="mt-4 block w-full rounded-lg bg-accent px-4 py-2 text-center text-sm font-medium text-bg transition"
+          class="press mt-4 block w-full rounded-lg bg-accent px-4 py-3 text-center text-sm font-medium text-onAccent sm:py-2"
         >
           {{ $t("verifyEmail.continue") }}
         </router-link>
@@ -169,7 +169,7 @@ async function switchAccount() {
         </p>
         <router-link
           to="/settings"
-          class="mt-4 block w-full rounded-lg border border-bd px-4 py-2 text-center text-sm font-medium text-ink transition hover:border-accent/40"
+          class="press mt-4 block w-full rounded-lg border border-bd px-4 py-3 text-center text-sm font-medium text-ink hover:border-accent/40 sm:py-2"
         >
           {{ $t("verifyEmail.toSettings") }}
         </router-link>
@@ -177,12 +177,12 @@ async function switchAccount() {
     </template>
 
     <template v-else>
-      <p role="alert" class="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm leading-relaxed text-red-400">
+      <p role="alert" class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm leading-relaxed text-danger">
         {{ error }}
       </p>
       <button
         type="button"
-        class="mt-4 w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition"
+        class="press mt-4 w-full rounded-lg bg-accent px-4 py-3 text-sm font-medium text-onAccent sm:py-2"
         @click="confirm"
       >
         {{ $t("verifyEmail.retry") }}

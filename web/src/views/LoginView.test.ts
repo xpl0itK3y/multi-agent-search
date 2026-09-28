@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -8,9 +8,11 @@ import { i18n } from "@/i18n";
 
 const authConfig = vi.hoisted(() => vi.fn());
 const startGoogleSignIn = vi.hoisted(() => vi.fn());
+const register = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({
-  api: { authConfig, googleLoginUrl: () => "/g" },
+  api: { authConfig, register, googleLoginUrl: () => "/g" },
   apiErrorMessage: () => "error",
+  PASSWORD_MIN_LENGTH: 6,
 }));
 vi.mock("@/lib/googleSignIn", () => ({ startGoogleSignIn }));
 
@@ -25,17 +27,41 @@ async function mountAt(url: string) {
     ],
   });
   await router.push(url);
-  const wrapper = mount(LoginView, { global: { plugins: [createPinia(), router, i18n] } });
+  const wrapper = mount(LoginView, { attachTo: document.body, global: { plugins: [createPinia(), router, i18n] } });
+  mounted.push(wrapper);
   await flushPromises();
   return wrapper;
 }
 
 const t = (key: string) => i18n.global.t(key);
+const mounted: { unmount(): void }[] = [];
+const byText = (w: Awaited<ReturnType<typeof mountAt>>, key: string) =>
+  w.findAll("button").find((b) => b.text() === t(key))!;
 
 describe("LoginView", () => {
   beforeEach(() => {
     authConfig.mockResolvedValue({ google_oauth: true });
     startGoogleSignIn.mockClear();
+    register.mockReset();
+  });
+  afterEach(() => {
+    while (mounted.length) mounted.pop()!.unmount();
+  });
+
+  it("keeps the browser's bubbles out: novalidate, and an empty field is focused, not sent", async () => {
+    const wrapper = await mountAt("/login");
+    const form = wrapper.find("form");
+    expect(form.attributes("novalidate")).toBeDefined();
+
+    await form.trigger("submit");
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.find('input[type="email"]').element);
+
+    await wrapper.find('input[type="email"]').setValue("user@example.com");
+    await form.trigger("submit");
+    await flushPromises();
+    expect(document.activeElement).toBe(wrapper.find('input[type="password"]').element);
+    expect(register).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -51,7 +77,7 @@ describe("LoginView", () => {
   it("ignores unknown error codes instead of echoing them", async () => {
     const wrapper = await mountAt("/login?error=<script>");
 
-    expect(wrapper.find("p.text-red-400").exists()).toBe(false);
+    expect(wrapper.find("p.text-danger").exists()).toBe(false);
   });
 
   it("explains oauth_conflict as an account linked to another Google identity", () => {
@@ -118,5 +144,58 @@ describe("LoginView", () => {
     const loading = await mountAt("/login");
     expect(loading.find('a[href="/forgot-password"]').exists()).toBe(false);
     expect(loading.text()).not.toContain(t("auth.forgotPasswordAskAdmin"));
+  });
+
+  it("states the password rule on sign-up and refuses a short one without asking the server", async () => {
+    const wrapper = await mountAt("/login");
+    await byText(wrapper, "auth.toRegister").trigger("click");
+
+    const password = wrapper.find('input[type="password"]');
+    const hint = wrapper.find(`#${password.attributes("aria-describedby")}`);
+    expect(hint.text()).toBe(i18n.global.t("auth.passwordRule", { min: 6 }));
+    expect(password.attributes("minlength")).toBe("6");
+
+    await wrapper.find('input[type="email"]').setValue("new@example.com");
+    await password.setValue("abc");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(hint.classes()).toContain("text-danger");
+    expect(document.activeElement).toBe(password.element);
+
+    await password.setValue("abcdef");
+    expect(hint.text()).toContain(t("auth.passwordOk"));
+    expect(hint.classes()).toContain("text-success");
+  });
+
+  it("says what it is doing while it signs up", async () => {
+    register.mockReturnValue(new Promise(() => {}));
+    const wrapper = await mountAt("/login");
+    await byText(wrapper, "auth.toRegister").trigger("click");
+    await wrapper.find('input[type="email"]').setValue("new@example.com");
+    await wrapper.find('input[type="password"]').setValue("long-enough");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(register).toHaveBeenCalledWith("new@example.com", "long-enough");
+    expect(wrapper.find('button[type="submit"]').text()).toBe(t("auth.registering"));
+  });
+
+  it("switching between sign-in and sign-up clears the other form's error", async () => {
+    const wrapper = await mountAt("/login?error=oauth_failed");
+    expect(wrapper.text()).toContain(t("auth.oauthFailed"));
+
+    await byText(wrapper, "auth.toRegister").trigger("click");
+    expect(wrapper.text()).not.toContain(t("auth.oauthFailed"));
+    expect(wrapper.find("p.text-danger").exists()).toBe(false);
+  });
+
+  it("never states the sign-up rule on the sign-in form", async () => {
+    const wrapper = await mountAt("/login");
+    const password = wrapper.find('input[type="password"]');
+    expect(password.attributes("aria-describedby")).toBeUndefined();
+    expect(password.attributes("minlength")).toBeUndefined();
+    expect(wrapper.text()).not.toContain(i18n.global.t("auth.passwordRule", { min: 6 }));
   });
 });

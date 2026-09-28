@@ -13,10 +13,34 @@
   --c-ink: 23 25 38;
   --c-muted: 104 108 128;
   --c-accent: 91 84 232;
-  --c-accent-soft: 139 132 244;
+  /* Accent as text. Tailwind maps text-accent and text-accentSoft here, so accent
+     labels stay ≥4.5:1 on their own tints: any accent/5..30 wash, or /20 stacked on
+     /15, over bg, rail, surface or surface-hover (themeContrast.test.ts). Fills,
+     borders and focus rings keep --c-accent. */
+  --c-accent-soft: 67 60 187;
+  /* Text/icons on a solid accent fill. */
+  --c-on-accent: 255 255 255;
+  /* Status colours, readable on their own 10% tint (light values; html.dark below). */
+  --c-success: 4 108 78;
+  --c-warning: 154 72 8;
+  --c-danger: 185 28 28;
+  --c-info: 3 105 161;
   /* Brand gradient (logo, highlights) — violet → cyan */
   --c-grad-a: 109 94 240;
   --c-grad-b: 34 211 238;
+
+  /* Motion curves: emphasized settle, sheet slide, press dip. */
+  --ease-emph: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-press: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Modal dim and elevation. Light: soft ink shadows that grow with the surface. */
+  --scrim: 15 17 26;
+  --scrim-a: 0.32;
+  --shadow: 23 25 38;
+  --elev-1: 0 1px 2px rgb(var(--shadow) / 0.06);
+  --elev-2: 0 1px 2px rgb(var(--shadow) / 0.06), 0 10px 28px -10px rgb(var(--shadow) / 0.22);
+  --elev-3: 0 2px 8px rgb(var(--shadow) / 0.08), 0 28px 56px -16px rgb(var(--shadow) / 0.32);
   color-scheme: light;
 }
 
@@ -31,7 +55,8 @@ html[data-theme="dark"] {
   --c-ink: 233 234 246;
   --c-muted: 147 151 176;
   --c-accent: 139 124 255;
-  --c-accent-soft: 167 156 255;
+  --c-accent-soft: 180 171 255;
+  --c-on-accent: 14 15 23;
   --c-grad-a: 139 124 255;
   --c-grad-b: 56 220 245;
   color-scheme: dark;
@@ -46,7 +71,8 @@ html[data-theme="midnight"] {
   --c-ink: 224 232 247;
   --c-muted: 138 152 182;
   --c-accent: 56 160 255;
-  --c-accent-soft: 120 190 255;
+  --c-accent-soft: 127 194 255;
+  --c-on-accent: 9 14 28;
   --c-grad-a: 56 160 255;
   --c-grad-b: 90 230 220;
   color-scheme: dark;
@@ -62,6 +88,7 @@ html[data-theme="emerald"] {
   --c-muted: 138 168 158;
   --c-accent: 16 200 140;
   --c-accent-soft: 90 222 170;
+  --c-on-accent: 9 18 16;
   --c-grad-a: 16 200 140;
   --c-grad-b: 120 230 200;
   color-scheme: dark;
@@ -76,7 +103,8 @@ html[data-theme="rose"] {
   --c-ink: 246 232 240;
   --c-muted: 184 152 170;
   --c-accent: 244 96 150;
-  --c-accent-soft: 250 150 185;
+  --c-accent-soft: 250 153 187;
+  --c-on-accent: 22 12 18;
   --c-grad-a: 244 96 150;
   --c-grad-b: 255 165 120;
   color-scheme: dark;
@@ -90,16 +118,66 @@ html[data-theme="sand"] {
   --c-bd: 228 222 210;
   --c-ink: 41 37 32;
   --c-muted: 120 112 100;
-  --c-accent: 200 130 40;
-  --c-accent-soft: 222 168 96;
+  /* Deep enough for white on-accent text (≥4.5:1); the brand gradient keeps the
+     lighter golds. Accent text is a deeper bronze so it holds on the gold tints. */
+  --c-accent: 160 96 18;
+  --c-accent-soft: 117 70 16;
   --c-grad-a: 217 146 53;
   --c-grad-b: 230 196 110;
   color-scheme: light;
 }
 
+/* Every dark base (dark, midnight, emerald, rose) shares these: brighter status hues
+   (today's -400 shades), a deeper scrim, and elevation drawn as a lit top rim plus a
+   dark outline, since a dark shadow barely reads on a dark canvas. */
+html.dark {
+  --c-success: 52 211 153;
+  --c-warning: 251 191 36;
+  --c-danger: 248 113 113;
+  --c-info: 56 189 248;
+  --scrim: 0 0 0;
+  --scrim-a: 0.55;
+  --elev-1: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --elev-2: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.35), 0 12px 32px -8px rgb(0 0 0 / 0.65);
+  --elev-3: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.45), 0 28px 64px -12px rgb(0 0 0 / 0.75);
+}
+
+/* ---- Materials (§12): translucency only on chrome that floats over content ----
+   backdrop-filter lives on these classes (and the admin graph's floating controls)
+   only — never on in-flow cards, and the blur radius is never animated. */
+.material-float {
+  background: rgb(var(--c-surface) / 0.78);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: var(--elev-2);
+}
+html.dark .material-float {
+  background: rgb(var(--c-surface-hover) / 0.72);
+}
+.material-popover {
+  background: rgb(var(--c-surface) / 0.92);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--elev-3);
+}
+html.dark .material-popover {
+  background: rgb(var(--c-surface-hover) / 0.94);
+}
+.material-bar {
+  background: rgb(var(--c-bg) / 0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+/* Modal dim: one recipe for every dialog and sheet. */
+.scrim {
+  background: rgb(var(--scrim) / var(--scrim-a));
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
 /* Inline source citations [S1] rendered by MarkdownView (content is v-html, so style globally). */
 .md-citation {
-  color: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-soft));
   font-weight: 600;
   font-size: 0.7em;
   padding: 0 0.15em;
@@ -107,8 +185,8 @@ html[data-theme="sand"] {
 }
 /* Citation whose source text doesn't actually back the claim — flagged red + underlined. */
 .md-citation-weak {
-  color: rgb(248 113 113);
-  text-decoration: underline wavy rgb(248 113 113 / 0.6);
+  color: rgb(var(--c-danger));
+  text-decoration: underline wavy rgb(var(--c-danger) / 0.6);
 }
 
 html,
@@ -123,7 +201,13 @@ body {
   color: rgb(var(--c-ink));
   font-family: theme("fontFamily.sans");
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+}
+
+/* Numbers in tables line up in columns (§15). */
+@layer base {
+  table {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 /* Thin, unobtrusive scrollbars */
@@ -139,8 +223,37 @@ body {
   background: rgb(var(--c-muted) / 0.35);
   border-radius: 9999px;
 }
+/* Scrollers whose position is shown another way (tab strips, chip rows). */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
 
-/* ---- Motion: entrances + Vue transition classes ---- */
+/* Scroll edge effects (§12): content fades where it meets the scroller's edge instead
+   of being cut by a hard line. Use only on scrollers padded at least by the fade. */
+.edge-fade-y {
+  --edge: 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
+}
+.edge-fade-top {
+  --edge: 20px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--edge));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--edge));
+}
+.edge-fade-x {
+  --edge: 28px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--edge)), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--edge)), transparent);
+}
+
+/* ---- Motion: entrances + Vue transition classes ----
+   Button-driven motion is a CSS transition that never bounces: a retoggled transition
+   restarts from the current on-screen value, which keeps it interruptible (§3).
+   Springs, decay and rubber-banding exist only after a drag (lib/gesture.ts). */
 @keyframes fade-slide-in {
   from {
     opacity: 0;
@@ -163,26 +276,22 @@ body {
   animation: fade-in 0.35s ease both;
 }
 .animate-rise {
-  animation: fade-slide-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fade-slide-in 0.32s var(--ease-emph) both;
 }
 
-/* <transition-group name="trace"> — new steps slide in, removals fade, rest glide */
-.trace-enter-active {
-  transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+/* The one looping "live" signal (besides spinners, progress bars and skeletons): a
+   slow opacity breath, no scaling. */
+@keyframes live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
-.trace-leave-active {
-  transition: opacity 0.2s ease;
-  position: absolute;
-}
-.trace-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-.trace-leave-to {
-  opacity: 0;
-}
-.trace-move {
-  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+.live-dot {
+  animation: live-breathe 1.6s ease-in-out infinite;
 }
 
 /* <transition name="fade"> generic crossfade */
@@ -195,11 +304,77 @@ body {
   opacity: 0;
 }
 
-/* slide-up entrance (route views) */
-@keyframes rise-in {
+/* <transition name="fade-quick">: small status chips and pills. */
+.fade-quick-enter-active,
+.fade-quick-leave-active {
+  transition: opacity 160ms ease;
+}
+.fade-quick-enter-from,
+.fade-quick-leave-to {
+  opacity: 0;
+}
+
+/* <transition name="swap">: keyed children sharing one grid cell cross-fade, so the
+   slot is never blank between two values. */
+.swap-enter-active,
+.swap-leave-active {
+  transition: opacity 160ms ease;
+}
+.swap-enter-from,
+.swap-leave-to {
+  opacity: 0;
+}
+
+/* <transition name="pop">: menus and popovers grow from their trigger (callers add
+   origin-top-left / origin-top-right). The leave is quick and lets clicks through. */
+.pop-enter-active {
+  transition: opacity 140ms ease-out, transform 180ms var(--ease-emph);
+}
+.pop-leave-active {
+  transition: opacity 90ms ease-in, transform 90ms ease-in;
+  pointer-events: none;
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+}
+
+/* <transition name="modal">: the scrim fades, the inner .modal-panel rises slightly.
+   Leaving is faster and never blocks the page underneath. */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 240ms var(--ease-emph);
+}
+.modal-leave-active {
+  transition-duration: 160ms;
+  transition-timing-function: ease-in;
+  pointer-events: none;
+}
+.modal-enter-active .modal-panel,
+.modal-leave-active .modal-panel {
+  transition: transform 240ms var(--ease-emph), opacity 240ms var(--ease-emph);
+}
+.modal-leave-active .modal-panel {
+  transition-duration: 160ms;
+  transition-timing-function: ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+.modal-enter-from .modal-panel,
+.modal-leave-to .modal-panel {
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+}
+
+/* Route views: a short rise on enter only. There is no leave animation, so the next
+   view (and its requests) starts on the next frame instead of after a fade-out. */
+@keyframes view-in {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -207,13 +382,20 @@ body {
   }
 }
 .view-enter-active {
-  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: view-in 200ms var(--ease-emph) both;
 }
-.view-leave-active {
-  transition: opacity 0.15s ease;
+
+/* Theme switch: one cross-fade of the whole page (a view transition) instead of every
+   element easing its colours on its own schedule. */
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
 }
-.view-leave-to {
-  opacity: 0;
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ---- Brand ---- */
@@ -227,8 +409,10 @@ body {
   transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), filter 0.45s ease;
   filter: drop-shadow(0 2px 7px rgb(var(--c-accent) / 0.4));
 }
-.veris-logo:hover {
-  transform: rotate(-6deg) scale(1.08);
+@media (hover: hover) and (pointer: fine) {
+  .veris-logo:hover {
+    transform: rotate(-6deg) scale(1.08);
+  }
 }
 
 /* ---- Interaction polish ---- */
@@ -238,44 +422,206 @@ a,
 input,
 textarea,
 select {
-  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
-input:focus-visible,
-textarea:focus-visible {
-  outline: none;
-  border-color: rgb(var(--c-accent) / 0.55);
-  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+
+/* Press feedback (§1): the response lands on pointer-down, never on release.
+   No grey tap flash and no double-tap-zoom wait on touch. */
+:is(button, a[href], [role="button"], summary, label[for]) {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-.lift {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+/* Every control dims the instant it is pressed and fades back over 200 ms. */
+:is(button, a[href], [role="button"], summary):not(:disabled):not(.press):not(.press-none):active {
+  opacity: 0.72;
+  transition-duration: 0s;
 }
-.lift:hover {
-  transform: translateY(-2px);
+/* Opt-in dip for compact filled controls. The individual `scale` property composes
+   with Tailwind's translate/transform utilities; :active never sets `transform`. */
+.press {
+  transition-property: color, background-color, border-color, box-shadow, opacity, filter, scale, transform;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-press);
 }
-/* gentle attention pulse for the live status dot */
-@keyframes soft-pulse {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
+.press:not(:disabled):active {
+  scale: 0.97;
+  transition-duration: 100ms;
+}
+/* Cards: a smaller dip, so a large surface doesn't lurch. */
+.press.press-lg:not(:disabled):active {
+  scale: 0.985;
+}
+
+/* Touch targets: an invisible hit area 8px wider on each side, on coarse pointers only.
+   In the components layer so utilities such as `absolute` still win. */
+@layer components {
+  @media (pointer: coarse) {
+    .hit {
+      position: relative;
+    }
+    .hit::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+    }
   }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.82);
+}
+/* Focus (§14): a brand-coloured ring for keyboard focus only (:focus-visible). */
+:is(button, a[href], summary, [role="button"], [role="tab"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 2px;
+}
+/* Fields: accent border plus a soft halo. The outline stays, transparent, so Windows
+   contrast themes (which drop box-shadow) still draw one. */
+:is(input, textarea, select):focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border-color: rgb(var(--c-accent));
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.22);
+}
+/* Checkboxes, radios and sliders have no border to recolour, so they take the button
+   ring: solid accent, ≥3:1 on every surface. */
+input:is([type="checkbox"], [type="radio"], [type="range"]):focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 2px;
+  box-shadow: none;
+}
+/* A borderless field inside a bordered box: the box (.field-host) shows the focus.
+   Accent/.85 is ≥3:1 on bg and surface in every theme, and with the halo it reads
+   clearly apart from a hover border (accent/40). The halo keeps any elevation. */
+.field-bare:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+.field-host:has(.field-bare:focus) {
+  border-color: rgb(var(--c-accent) / 0.85);
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18), var(--tw-shadow, 0 0 #0000);
+}
+.material-float.field-host:has(.field-bare:focus) {
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18), var(--elev-2);
+}
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 2px;
   }
 }
 
+/* ---- Reduced motion (§14): gentler equivalents, not a blanket `animation: none` ----
+   Slides, rises, scales and bounces become short cross-fades or static states; opacity
+   and colour changes that aid comprehension (fades, pulses, spinners) stay. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-fade-in,
-  .animate-rise,
-  .trace-enter-active,
-  .trace-leave-active,
-  .trace-move,
-  .fade-enter-active,
-  .fade-leave-active,
-  .view-enter-active,
-  .veris-logo,
-  .lift {
+  html {
+    scroll-behavior: auto !important;
+  }
+  .animate-ping,
+  .animate-bounce,
+  .animate-progress-indeterminate,
+  .animate-n8n-wire {
     animation: none !important;
+  }
+  .animate-rise,
+  .view-enter-active {
+    animation: fade-in 150ms ease-out both !important;
+  }
+  .feed-item-enter-from,
+  .plan-item-enter-from,
+  .plan-item-leave-to,
+  .pop-enter-from,
+  .pop-leave-to,
+  .modal-enter-from .modal-panel,
+  .modal-leave-to .modal-panel {
+    transform: none !important;
+  }
+  .feed-item-move,
+  .plan-item-move {
     transition: none !important;
+  }
+  .veris-logo {
+    transition: none !important;
+  }
+  .veris-logo:hover {
+    transform: none !important;
+  }
+  .press:not(:disabled):active {
+    scale: none;
+    opacity: 0.72;
+  }
+}
+
+/* Touch screens: text fields render at 16px or more, so iOS never zooms the page on
+   focus (§15 Dynamic Type: respect the user's size rather than fight it). */
+@media (pointer: coarse) {
+  input[class]:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea[class],
+  select[class] {
+    font-size: max(1rem, 16px);
+  }
+}
+
+/* ---- Accessibility media (§14): reduced transparency, more contrast, forced colours ----
+   Kept last. The html.dark variants are repeated because `html.dark .material-float`
+   (0,2,1) would otherwise win over the plain class. */
+@media (prefers-reduced-transparency: reduce) {
+  .material-float,
+  html.dark .material-float,
+  .material-popover,
+  html.dark .material-popover,
+  .material-bar {
+    background: rgb(var(--c-surface));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  html:not(.dark) {
+    --c-bd: 120 125 145;
+    --c-muted: 72 76 96;
+  }
+  html.dark {
+    --c-bd: 110 115 145;
+    --c-muted: 190 193 214;
+  }
+  .material-float,
+  html.dark .material-float,
+  .material-popover,
+  html.dark .material-popover,
+  .material-bar {
+    background: rgb(var(--c-surface));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border: 1px solid rgb(var(--c-ink) / 0.6);
+  }
+  .prose a,
+  .md-citation {
+    text-decoration: underline;
+  }
+}
+@media (forced-colors: active) {
+  .material-float,
+  .material-popover,
+  .material-bar {
+    border: 1px solid CanvasText;
+  }
+  /* A transparent border only reserves space (tab underlines, swatch rings). Forced
+     colours would paint it, and every tab would look selected, so it stays hidden... */
+  .border-transparent,
+  [role="tab"]:not([aria-selected="true"]) {
+    border-color: Canvas;
+  }
+  /* ...and the selected tab keeps its underline in the system highlight colour. */
+  [role="tab"][aria-selected="true"] {
+    border-color: Highlight;
+  }
+  /* Colour-only status dots (row status, legends, live dots) would be flattened to
+     the canvas and vanish: keep their own colour and ring them in the text colour. */
+  .rounded-full:empty:is(.live-dot, .h-1\.5, .h-2, .h-2\.5) {
+    forced-color-adjust: none;
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
   }
 }

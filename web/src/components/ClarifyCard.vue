@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, useId, watch } from "vue";
 
 const props = defineProps<{ prompt: string; questions: string[]; busy?: boolean }>();
 const emit = defineEmits<{ submit: [string[]]; cancel: [] }>();
 
 const answers = ref<string[]>([]);
+const inputs: (HTMLInputElement | null)[] = [];
+const uid = useId();
 
 watch(
   () => props.questions,
@@ -15,11 +17,24 @@ watch(
 );
 
 function submit() {
+  if (props.busy) return;
   emit("submit", [...answers.value]);
 }
 
 function skip() {
   emit("submit", []);
+}
+
+// Enter answers one question and moves on to the next, like a form; only Enter in
+// the last answer sends them all.
+function onEnter(e: KeyboardEvent, i: number) {
+  if (e.isComposing) return; // an IME is confirming a word, not the answer
+  if (i < props.questions.length - 1) {
+    e.preventDefault();
+    inputs[i + 1]?.focus();
+    return;
+  }
+  submit();
 }
 </script>
 
@@ -35,18 +50,21 @@ function skip() {
 
     <div class="space-y-4">
       <div v-for="(question, i) in questions" :key="i">
-        <label class="mb-1.5 block text-sm text-ink">{{ question }}</label>
+        <label :for="`${uid}-${i}`" class="mb-1.5 block text-sm text-ink">{{ question }}</label>
         <input
+          :id="`${uid}-${i}`"
+          :ref="(el) => (inputs[i] = el as HTMLInputElement | null)"
           v-model="answers[i]"
           :placeholder="$t('clarify.answer')"
-          class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-2 text-sm text-ink placeholder:text-muted focus:outline-none focus:border-accent/40"
-          @keydown.enter="submit"
+          :enterkeyhint="i < questions.length - 1 ? 'next' : 'send'"
+          class="w-full rounded-lg border border-bd bg-surface/50 px-3 py-2 text-sm text-ink placeholder:text-muted"
+          @keydown.enter="onEnter($event, i)"
         />
       </div>
     </div>
 
     <div class="mt-6 flex items-center justify-between gap-3">
-      <button class="text-sm text-muted transition hover:text-red-400" :disabled="busy" @click="emit('cancel')">
+      <button class="text-sm text-muted transition hover:text-danger" :disabled="busy" @click="emit('cancel')">
         {{ $t("research.cancel") }}
       </button>
       <div class="flex items-center gap-3">
@@ -54,7 +72,7 @@ function skip() {
           {{ $t("clarify.skip") }}
         </button>
         <button
-          class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg transition disabled:cursor-not-allowed disabled:opacity-40"
+          class="press rounded-lg bg-accent px-4 py-2 text-sm font-medium text-onAccent transition disabled:cursor-not-allowed disabled:opacity-40"
           :disabled="busy"
           @click="submit"
         >

@@ -11,8 +11,11 @@ const mocks = vi.hoisted(() => ({
     getGraph: vi.fn(),
     getReport: vi.fn(),
     retryResearch: vi.fn(),
+    cancelResearch: vi.fn(),
+    getPlan: vi.fn(),
   },
   openResearchStream: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 // The real ApiError (ResearchTurn tells a deleted research from a transient failure by it).
@@ -22,6 +25,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   apiErrorMessage: () => "error",
 }));
 vi.mock("@/lib/stream", () => ({ openResearchStream: mocks.openResearchStream }));
+vi.mock("@/lib/confirm", () => ({ confirm: mocks.confirm }));
 
 import { ApiError } from "@/lib/api";
 import ResearchTurn from "./ResearchTurn.vue";
@@ -90,6 +94,15 @@ describe("ResearchTurn live stream", () => {
     expect(mocks.openResearchStream).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mocks.openResearchStream).toHaveBeenCalledTimes(3);
+  });
+
+  it("leaves the live breath to the console while it runs: the status dot holds still", async () => {
+    const wrapper = await mountRunning();
+
+    const dot = wrapper.get("[data-status-dot]");
+    expect(dot.classes()).toContain("bg-accent");
+    expect(dot.classes()).not.toContain("live-dot");
+    expect(wrapper.findComponent({ name: "AgentActivityConsole" }).props("live")).toBe(true);
   });
 
   it("clears the trace and reasoning when the run is retried", async () => {
@@ -216,5 +229,105 @@ describe("ResearchTurn live stream", () => {
 
       expect(mocks.api.getStatus).toHaveBeenCalledTimes(2); // mount + one poll
     });
+  });
+});
+
+describe("ResearchTurn cancel", () => {
+  const cancelButton = (wrapper: Awaited<ReturnType<typeof mountRunning>>) =>
+    wrapper.findAll("button").find((b) => b.text() === i18n.global.t("research.cancel"))!;
+
+  beforeEach(() => {
+    mocks.api.getGraph.mockResolvedValue({ graph_trail: [] });
+    mocks.api.cancelResearch.mockResolvedValue({});
+    mocks.openResearchStream.mockImplementation(() => vi.fn());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asks before stopping a running research, and Keep leaves it running", async () => {
+    mocks.api.getStatus.mockResolvedValue({ status: "processing", prompt: "Topic", llm_token_usage: null });
+    const wrapper = await mountRunning();
+
+    mocks.confirm.mockResolvedValueOnce(false); // «Keep researching»
+    await cancelButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(mocks.confirm.mock.calls[0][0]).toMatchObject({ danger: true, cancelText: i18n.global.t("research.cancelConfirmKeep") });
+    expect(mocks.api.cancelResearch).not.toHaveBeenCalled();
+    expect(wrapper.emitted("done")).toBeUndefined();
+
+    mocks.confirm.mockResolvedValueOnce(true); // «Stop»
+    await cancelButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(mocks.api.cancelResearch).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted("done")).toEqual([["cancelled"]]);
+  });
+
+  it("cancels a plan under review at once: nothing is lost yet", async () => {
+    mocks.api.getStatus.mockResolvedValue({ status: "plan_review", prompt: "Topic", llm_token_usage: null });
+    mocks.api.getPlan.mockResolvedValue({ items: [{ id: "p1", description: "Q", queries: ["q"] }] });
+    const wrapper = await mountRunning();
+
+    wrapper.findComponent({ name: "PlanCard" }).vm.$emit("cancel");
+    await flushPromises();
+
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.api.cancelResearch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ResearchTurn notifications", () => {
+  let NotificationMock: ReturnType<typeof vi.fn> & { permission: NotificationPermission; requestPermission: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    mocks.api.getStatus.mockResolvedValue({ status: "processing", prompt: "Topic", llm_token_usage: null });
+    mocks.api.getGraph.mockResolvedValue({ graph_trail: [] });
+    mocks.openResearchStream.mockImplementation(() => vi.fn());
+    NotificationMock = Object.assign(vi.fn(), {
+      permission: "default" as NotificationPermission,
+      requestPermission: vi.fn(async () => {
+        NotificationMock.permission = "granted";
+        return "granted" as NotificationPermission;
+      }),
+    });
+    vi.stubGlobal("Notification", NotificationMock);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (document as unknown as Record<string, unknown>).visibilityState;
+    vi.clearAllMocks();
+  });
+
+  const notifyButton = (wrapper: Awaited<ReturnType<typeof mountRunning>>) =>
+    wrapper.findAll("button").find((b) => b.text().includes(i18n.global.t("research.notifyMe")));
+
+  it("never prompts for permission on its own when a run finishes", async () => {
+    const wrapper = await mountRunning();
+    mocks.api.getStatus.mockResolvedValue({ status: "completed", prompt: "Topic", llm_token_usage: null });
+
+    await handlers(0).onDone?.("completed");
+    await flushPromises();
+
+    expect(NotificationMock.requestPermission).not.toHaveBeenCalled();
+    expect(NotificationMock).not.toHaveBeenCalled();
+    expect(notifyButton(wrapper)).toBeUndefined(); // the run is over
+  });
+
+  it("asks from the reader's click and notifies a hidden tab when the report is ready", async () => {
+    const wrapper = await mountRunning();
+
+    await notifyButton(wrapper)!.trigger("click");
+    await flushPromises();
+    expect(NotificationMock.requestPermission).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain(i18n.global.t("research.notifyOn"));
+    expect(notifyButton(wrapper)).toBeUndefined();
+
+    mocks.api.getStatus.mockResolvedValue({ status: "completed", prompt: "Topic", llm_token_usage: null });
+    await handlers(0).onDone?.("completed");
+    expect(NotificationMock).toHaveBeenCalledTimes(1);
   });
 });

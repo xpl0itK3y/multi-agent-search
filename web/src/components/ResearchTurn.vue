@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, ApiError, apiErrorMessage } from "@/lib/api";
+import { confirm } from "@/lib/confirm";
 import { openResearchStream } from "@/lib/stream";
 import { createTraceDeduper, reconnectDelayMs, traceFromGraph } from "@/lib/trace";
 import type { Clarification, PlanItem, ResearchPlan } from "@/lib/types";
@@ -64,15 +65,50 @@ async function onCancel() {
   }
 }
 
+// Stopping a research that is already searching or writing throws away its sources and
+// draft, and it can't be resumed: the one cancel worth a confirmation (apple-design §16
+// Agency). Cancelling while queued, clarifying or reviewing the plan loses nothing and
+// stays one click.
+async function onCancelClick() {
+  if (status.value === "processing" || status.value === "analyzing") {
+    const ok = await confirm({
+      title: t("research.cancelConfirmTitle"),
+      message: t("research.cancelConfirmBody"),
+      confirmText: t("research.cancelConfirmOk"),
+      cancelText: t("research.cancelConfirmKeep"),
+      danger: true,
+    });
+    // The run may have finished while the dialog was open.
+    if (!ok || done.value) return;
+  }
+  await onCancel();
+}
+
+// Browser notifications are asked for in context, from the reader's own click on
+// "notify me" while a run is going (§16 Responsibility: ask at the right moment), never
+// as a surprise prompt when a run ends. A finished run notifies only a hidden tab.
+const hasNotifications = typeof Notification !== "undefined";
+const notifyPermission = ref<NotificationPermission | null>(hasNotifications ? Notification.permission : null);
+const notifyAsked = ref(false);
+
+async function askNotify() {
+  if (!hasNotifications) return;
+  notifyAsked.value = true;
+  try {
+    // Old Safari only takes a callback and returns nothing.
+    notifyPermission.value = (await Notification.requestPermission()) ?? Notification.permission;
+  } catch {
+    notifyPermission.value = Notification.permission;
+  }
+}
+
 let notified = false;
 function notifyDone(s: string) {
-  if (notified || s !== "completed" || typeof Notification === "undefined") return;
+  if (notified || s !== "completed" || !hasNotifications) return;
   notified = true;
   // Only notify if the tab isn't focused (the user stepped away).
   if (typeof document !== "undefined" && document.visibilityState === "visible") return;
-  const fire = () => new Notification("Veris", { body: t("research.notifyReady"), icon: "/favicon.svg" });
-  if (Notification.permission === "granted") fire();
-  else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && fire());
+  if (Notification.permission === "granted") new Notification("Veris", { body: t("research.notifyReady"), icon: "/favicon.svg" });
 }
 let close: (() => void) | undefined;
 let queuePoll: number | undefined;
@@ -421,40 +457,59 @@ onBeforeUnmount(() => {
 
     <!-- result -->
     <template v-else>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <!-- One breathing signal per turn: while the console below is live it carries it,
+             so this dot holds still (a running thread keeps to four loops, §13 Utility). -->
         <span
+          data-status-dot
           class="h-2 w-2 rounded-full"
           :class="{
-            'bg-emerald-400': status === 'completed',
-            'bg-red-400': status === 'failed' || status === 'timeout',
+            'bg-success': status === 'completed',
+            'bg-danger': status === 'failed' || status === 'timeout',
             'bg-muted': status === 'cancelled' || status === 'not_found',
-            'bg-accent animate-pulse': !DONE.has(status),
+            'bg-accent': !DONE.has(status),
+            'live-dot': !DONE.has(status) && done,
           }"
         />
         <span class="text-sm text-muted">{{ statusLabel(status) }}<template v-if="status === 'queued' && queuePos"> · #{{ queuePos }}</template></span>
         <button
           v-if="!DONE.has(status)"
-          class="rounded-md border border-bd px-2 py-0.5 text-xs text-muted transition hover:border-red-400/50 hover:text-red-400 disabled:opacity-50"
+          class="press rounded-md border border-bd px-2 py-0.5 text-xs text-muted transition hover:border-danger/50 hover:text-danger disabled:opacity-50"
           :disabled="cancelling"
-          @click="onCancel"
+          @click="onCancelClick"
         >
           {{ cancelling ? $t("research.cancelling") : $t("research.cancel") }}
         </button>
-        <span v-if="costLabel" class="ml-auto text-xs text-muted cursor-help" :title="costTooltip">{{ costLabel }}</span>
+        <button
+          v-if="!done && notifyPermission === 'default'"
+          type="button"
+          class="press text-xs text-muted hover:text-ink"
+          @click="askNotify"
+        >
+          <span aria-hidden="true">🔔</span> {{ $t("research.notifyMe") }}
+        </button>
+        <span v-else-if="!done && notifyAsked && notifyPermission === 'granted'" class="text-xs text-muted">
+          {{ $t("research.notifyOn") }}
+        </span>
+        <span v-if="costLabel" class="ml-auto text-xs text-muted tabular-nums cursor-help" :title="costTooltip">{{ costLabel }}</span>
       </div>
 
       <!-- live "what's happening now" commentary (visible even when the trace is collapsed) -->
-      <transition name="fade" mode="out-in">
-        <p v-if="!done && currentActivity" :key="currentActivity" class="line-clamp-1 pl-4 text-xs text-muted/80">
-          {{ currentActivity }}
-        </p>
-      </transition>
+      <!-- The old and the new step cross-fade in one grid cell: the line is never blank
+           and its height never changes between steps. -->
+      <div v-if="!done && currentActivity" class="grid pl-4 text-xs text-muted/80">
+        <transition name="swap">
+          <p :key="currentActivity" class="col-start-1 row-start-1 line-clamp-1">
+            {{ currentActivity }}
+          </p>
+        </transition>
+      </div>
 
-      <div v-if="errorMsg" class="flex flex-wrap items-center gap-2 text-sm text-red-400">
+      <div v-if="errorMsg" class="flex flex-wrap items-center gap-2 text-sm text-danger">
         <span>{{ errorMsg }}</span>
         <button
           v-if="streamLost && !done"
-          class="rounded-md border border-accent/50 px-2.5 py-0.5 text-xs text-accent transition hover:bg-accent/10"
+          class="press rounded-md border border-accent/50 px-2.5 py-0.5 text-xs text-accent transition hover:bg-accent/10"
           @click="resume"
         >
           {{ $t("research.resume") }}
@@ -462,7 +517,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- UNIFIED RESEARCH & AGENT CONTAINER -->
-      <div class="rounded-xl border border-bd/80 bg-surface/80 backdrop-blur-md shadow-sm overflow-hidden transition-all duration-300">
+      <div class="rounded-xl border border-bd/80 bg-surface shadow-sm overflow-hidden">
         <!-- Agent Activity Console (embedded inside unified container) -->
         <AgentActivityConsole
           v-if="!done || trace.length"
@@ -476,22 +531,22 @@ onBeforeUnmount(() => {
         <!-- Error Card (when status === 'failed' or 'timeout' and no report exists) -->
         <div
           v-if="(status === 'failed' || status === 'timeout') && !report"
-          class="border-t border-red-500/30 bg-red-500/10 p-5"
+          class="border-t border-danger/30 bg-danger/10 p-5"
         >
           <div class="flex items-start gap-3">
             <span class="text-2xl shrink-0">⚠️</span>
             <div class="min-w-0 flex-1">
-              <h4 class="font-semibold text-red-400 text-sm">
+              <h4 class="font-semibold text-danger text-sm">
                 {{ $t("research.failedTitle") }}
               </h4>
-              <p class="mt-1 text-xs text-red-300/90 leading-relaxed break-words">
+              <p class="mt-1 text-xs text-ink/80 leading-relaxed break-words">
                 {{ errorMsg || $t("research.failedMessage") }}
               </p>
               <div class="mt-3 flex items-center gap-2">
                 <button
                   type="button"
                   :disabled="retrying"
-                  class="rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
+                  class="press rounded-lg border border-danger/40 bg-danger/10 text-danger hover:bg-danger/15 px-3.5 py-1.5 text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
                   @click="retry"
                 >
                   <span :class="{ 'animate-spin': retrying }">↻</span>
@@ -505,7 +560,7 @@ onBeforeUnmount(() => {
         <!-- Artifact Panel (Report, Dashboard, Sources, etc.) -->
         <div
           v-else-if="report"
-          class="border-t border-bd/80 h-[68vh] min-h-[380px] overflow-hidden bg-surface/30"
+          class="border-t border-bd/80 h-[68vh] min-h-[380px] overflow-hidden"
         >
           <ArtifactPanel
             :id="props.id"

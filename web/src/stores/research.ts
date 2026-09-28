@@ -10,7 +10,10 @@ export const useResearchStore = defineStore("research", () => {
   const models = ref<ModelOption[]>([]);
   const history = ref<ResearchHistoryItem[]>([]);
   const loadingHistory = ref(false);
+  // The model list's failure (non-fatal) and the history's, kept apart: the sidebar says
+  // only why its own list is missing, and a retry clears only its own error.
   const error = ref<string | null>(null);
+  const historyError = ref<string | null>(null);
 
   const defaultModelId = computed(
     () => models.value.find((m) => m.default)?.id ?? models.value[0]?.id ?? "",
@@ -27,10 +30,11 @@ export const useResearchStore = defineStore("research", () => {
 
   async function fetchHistory() {
     loadingHistory.value = true;
+    historyError.value = null;
     try {
       history.value = await api.listResearch(30);
     } catch (e) {
-      error.value = apiErrorMessage(e, t);
+      historyError.value = apiErrorMessage(e, t);
     } finally {
       loadingHistory.value = false;
     }
@@ -78,6 +82,7 @@ export const useResearchStore = defineStore("research", () => {
     threads,
     loadingHistory,
     error,
+    historyError,
     defaultModelId,
     fetchModels,
     fetchHistory,

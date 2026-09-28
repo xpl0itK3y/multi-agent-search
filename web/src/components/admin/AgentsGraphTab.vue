@@ -1,9 +1,32 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminApi, apiErrorMessage } from "@/lib/api";
+import { createVelocityTracker, decay, springTo, type Animation, type VelocityTracker } from "@/lib/gesture";
+import { useReducedMotion } from "@/lib/motion";
 import type { AgentMetadataItem } from "@/lib/types";
 import AgentInspectorDrawer from "./AgentInspectorDrawer.vue";
+import {
+  boundsOf,
+  clampPan,
+  clampPanSoft,
+  fitBounds,
+  limitPan,
+  panRange,
+  pinch,
+  wheelUnit,
+  wheelZoomFactor,
+  zoomAt,
+  STAGE_TEXT,
+  STAGE_TONE,
+  ZOOM_LIMITS,
+  type BBox,
+  type PanRange,
+  type Point,
+  type Size,
+  type View,
+  unclampPanSoft,
+} from "./graphView";
 
 const { t, te } = useI18n();
 
@@ -32,72 +55,560 @@ const zoom = ref(0.55);
 const panX = ref(40);
 const panY = ref(60);
 const isPanning = ref(false);
-const isZooming = ref(false);
-let zoomTimeout: any = null;
-const startPan = ref({ x: 0, y: 0 });
+// True while wheel events keep arriving (a trackpad swipe or pinch in progress).
+const isWheeling = ref(false);
 const canvasViewportRef = ref<HTMLElement | null>(null);
 
-function onMouseDown(e: MouseEvent) {
-  if (e.button !== 0) return;
-  const target = e.target as HTMLElement;
-  if (
-    target.closest(".interactive-node") ||
-    target.closest("button") ||
-    target.closest("input")
-  ) {
+// ── Gestures on Pointer Events (apple-design §2, §3, §10) ─────────────────────
+// One set of listeners on the viewport serves mouse, pen and touch. The canvas and a
+// dragged node follow the pointer 1:1 from where they were grabbed (deltas from the
+// start point, never snapped to a centre); moves are applied once per animation frame;
+// two fingers pinch around their midpoint. pointercancel, a lost capture, a mouse
+// released outside the window or leaving the window all end the gesture, so the canvas
+// can never be left "stuck" panning.
+type Gesture =
+  | {
+      kind: "pan";
+      pointerId: number;
+      pointerType: string;
+      start: Point;
+      // The raw (finger) pan at the start; what's shown is its soft-clamped value.
+      pan0: Point;
+      range: PanRange | null;
+      size: Size;
+      tracker: VelocityTracker;
+    }
+  | {
+      kind: "node";
+      pointerId: number;
+      pointerType: string;
+      nodeId: string;
+      start: Point;
+      node0: Point;
+      dragging: boolean;
+    }
+  | { kind: "pinch"; ids: [number, number]; view0: View; a0: Point; b0: Point };
+
+// Presses on real controls inside the canvas are theirs, not a pan.
+const INTERACTIVE_SELECTOR = "button, input, a, select, textarea";
+// A press becomes a node drag only past this many screen px (hysteresis, §10): enough
+// for a hand's jitter on a click, and a fingertip's on a tap.
+const DRAG_THRESHOLD_MOUSE = 4;
+const DRAG_THRESHOLD_TOUCH = 10;
+
+const pointers = new Map<number, Point>();
+let gesture: Gesture | null = null;
+let viewportRect: DOMRect | null = null;
+let frameId = 0;
+// Set when a press turned into a real drag, so the click that may follow it doesn't
+// open the inspector; read by the click, and cleared by the next press.
+let suppressClick = false;
+const pressedNodeId = ref<string | null>(null);
+const pinching = ref(false);
+
+function localPoint(e: PointerEvent): Point {
+  const r = viewportRect ?? canvasViewportRef.value?.getBoundingClientRect();
+  return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+}
+
+function capturePointer(id: number) {
+  try {
+    canvasViewportRef.value?.setPointerCapture?.(id);
+  } catch {
+    // The pointer is already gone (released between the event and this call).
+  }
+}
+
+const requestFrame = (cb: () => void): number =>
+  typeof requestAnimationFrame === "function" ? requestAnimationFrame(cb) : (setTimeout(cb, 16) as unknown as number);
+const cancelFrame = (id: number) =>
+  typeof cancelAnimationFrame === "function" ? cancelAnimationFrame(id) : clearTimeout(id);
+
+function scheduleFrame() {
+  if (!frameId) frameId = requestFrame(applyFrame);
+}
+
+function flushFrame() {
+  if (!frameId) return;
+  cancelFrame(frameId);
+  applyFrame();
+}
+
+function applyFrame() {
+  frameId = 0;
+  // A glide's latest values: both axes land in one write, one render per frame.
+  if (glideTarget.x !== null) panX.value = glideTarget.x;
+  if (glideTarget.y !== null) panY.value = glideTarget.y;
+  glideTarget.x = glideTarget.y = null;
+  const g = gesture;
+  if (!g) return;
+  if (g.kind === "pinch") {
+    const a = pointers.get(g.ids[0]);
+    const b = pointers.get(g.ids[1]);
+    if (!a || !b) return;
+    const v = pinch(g.view0, g.a0, g.b0, a, b);
+    zoom.value = v.zoom;
+    panX.value = v.panX;
+    panY.value = v.panY;
     return;
   }
+  const p = pointers.get(g.pointerId);
+  if (!p) return;
+  if (g.kind === "node") {
+    if (!g.dragging) return;
+    // In place, so a drag frame is one small reactive write, not a new positions map.
+    const pos = nodePositions.value[g.nodeId];
+    pos.x = Math.max(10, Math.min(7200, Math.round(g.node0.x + (p.x - g.start.x) / zoom.value)));
+    pos.y = Math.max(10, Math.min(850, Math.round(g.node0.y + (p.y - g.start.y) / zoom.value)));
+    return;
+  }
+  // Past the soft limits the canvas follows less and less (§9), never a hard stop.
+  const rawX = g.pan0.x + (p.x - g.start.x);
+  const rawY = g.pan0.y + (p.y - g.start.y);
+  panX.value = g.range ? clampPanSoft(rawX, g.range.minX, g.range.maxX, g.size.w) : rawX;
+  panY.value = g.range ? clampPanSoft(rawY, g.range.minY, g.range.maxY, g.size.h) : rawY;
+}
+
+// ── Release: settle, or glide (§5, §6, §9) ─────────────────────────────────────
+// Letting go of a canvas pulled past its limits brings it back; a touch flick glides on
+// with the finger's velocity and slows like a scroll, and if the glide runs into a
+// limit it springs back to it (critically damped, taking the glide's velocity). A new
+// press stops any of this where it is on screen, and the drag carries on from there.
+const FLICK_PX_S = 300;
+const DECAY_RATE = 0.998;
+const SETTLE_RESPONSE = 0.4;
+const reducedMotion = useReducedMotion();
+const glideTarget: { x: number | null; y: number | null } = { x: null, y: null };
+const glides: { x: Animation | null; y: Animation | null } = { x: null, y: null };
+const isGliding = ref(false);
+
+function stopGlides() {
+  glides.x?.stop();
+  glides.y?.stop();
+  glides.x = glides.y = null;
+  // What is on screen is the presentation value; a value not yet drawn is dropped.
+  glideTarget.x = glideTarget.y = null;
+  isGliding.value = false;
+}
+
+function glideDone(axis: "x" | "y") {
+  glides[axis] = null;
+  if (!glides.x && !glides.y) isGliding.value = false;
+}
+
+function writeAxis(axis: "x" | "y", value: number) {
+  glideTarget[axis] = value;
+  scheduleFrame();
+}
+
+function springAxis(axis: "x" | "y", from: number, to: number, velocity: number) {
+  glides[axis] = springTo({
+    from,
+    to,
+    velocity,
+    response: SETTLE_RESPONSE,
+    onUpdate: (v) => writeAxis(axis, v),
+    onComplete: () => glideDone(axis),
+  });
+}
+
+// One axis of a released pan: shown value, finger velocity (px/s), limits, viewport size.
+function releaseAxis(axis: "x" | "y", shown: number, velocity: number, min: number, max: number, dim: number, flick: boolean) {
+  const raw = unclampPanSoft(shown, min, max, dim);
+  if (raw < min || raw > max) {
+    // Out in the band: back to the limit. Inside the band the canvas moves at the
+    // band's slope (0.55), so that is the velocity it hands on.
+    springAxis(axis, shown, clampPan(raw, min, max), flick ? velocity * 0.55 : 0);
+    return;
+  }
+  if (!flick) return;
+  let last = raw;
+  let lastT = performance.now();
+  let rawVelocity = velocity;
+  const anim = decay({
+    from: raw,
+    velocity,
+    rate: DECAY_RATE,
+    onUpdate: (x) => {
+      const now = performance.now();
+      if (now > lastT) rawVelocity = ((x - last) / (now - lastT)) * 1000;
+      last = x;
+      lastT = now;
+      if (x < min || x > max) {
+        // The glide ran into a limit: stop it and settle there with its velocity.
+        anim.stop();
+        const edge = clampPan(x, min, max);
+        springAxis(axis, clampPanSoft(x, min, max, dim), edge, rawVelocity * 0.55);
+        return;
+      }
+      writeAxis(axis, x);
+    },
+    onComplete: () => {
+      if (glides[axis] === anim) glideDone(axis);
+    },
+  });
+  glides[axis] = anim;
+}
+
+function releasePan(g: Extract<Gesture, { kind: "pan" }>, released: boolean) {
+  const range = g.range;
+  if (!range) return;
+  const { vx, vy } = released ? g.tracker.velocity(performance.now()) : { vx: 0, vy: 0 };
+  const flick = released && g.pointerType !== "mouse" && Math.hypot(vx, vy) > FLICK_PX_S && !reducedMotion.value;
+  if (!flick) {
+    settleIntoRange();
+    return;
+  }
+  isGliding.value = true;
+  releaseAxis("x", panX.value, vx, range.minX, range.maxX, g.size.w, true);
+  releaseAxis("y", panY.value, vy, range.minY, range.maxY, g.size.h, true);
+  if (!glides.x && !glides.y) isGliding.value = false;
+}
+
+// A mouse release, a slow touch or a pinch that ended out of bounds: the canvas eases
+// back inside (the 200 ms view transition; instant under reduced motion).
+function settleIntoRange() {
+  const range = currentPanRange();
+  if (!range) return;
+  const x = clampPan(panX.value, range.minX, range.maxX);
+  const y = clampPan(panY.value, range.minY, range.maxY);
+  if (x === panX.value && y === panY.value) return;
+  animateView({ zoom: zoom.value, panX: x, panY: y });
+}
+
+function startPinch() {
+  const ids = [...pointers.keys()].slice(-2) as [number, number];
+  const a0 = pointers.get(ids[0])!;
+  const b0 = pointers.get(ids[1])!;
+  // A second finger turns whatever the first one was doing into a pinch. Ending a pan
+  // may start its settle; the pinch takes over from where the canvas is on screen.
+  if (gesture) endGesture();
+  stopGlides();
+  settleView();
+  ids.forEach(capturePointer);
+  gesture = { kind: "pinch", ids, view0: { zoom: zoom.value, panX: panX.value, panY: panY.value }, a0, b0 };
+  pinching.value = true;
+}
+
+function onPointerDown(e: PointerEvent) {
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target || target.closest(INTERACTIVE_SELECTOR)) return;
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (!canvasViewportRef.value) return;
+  suppressClick = false;
+  stopGlides();
+  settleView();
+  if (!pointers.size) viewportRect = canvasViewportRef.value.getBoundingClientRect();
+  pointers.set(e.pointerId, localPoint(e));
+
+  if (pointers.size >= 2) {
+    startPinch();
+    return;
+  }
+
+  const nodeEl = target.closest<HTMLElement>(".interactive-node");
+  const nodeId = nodeEl?.dataset.nodeId;
+  if (nodeId) {
+    const pos = nodePositions.value[nodeId] ?? defaultNodePositions[nodeId] ?? { x: 0, y: 0 };
+    // Not a drag yet: the pointer isn't captured, so a plain click still reaches the node.
+    gesture = {
+      kind: "node",
+      pointerId: e.pointerId,
+      pointerType: e.pointerType,
+      nodeId,
+      start: pointers.get(e.pointerId)!,
+      node0: { x: pos.x, y: pos.y },
+      dragging: false,
+    };
+    pressedNodeId.value = nodeId;
+    return;
+  }
+
+  const range = currentPanRange();
+  const size = viewportSize();
+  // Grabbed mid-band: continue from the raw pan that shows what is on screen now.
+  const pan0 = range
+    ? {
+        x: unclampPanSoft(panX.value, range.minX, range.maxX, size.w),
+        y: unclampPanSoft(panY.value, range.minY, range.maxY, size.h),
+      }
+    : { x: panX.value, y: panY.value };
+  const tracker = createVelocityTracker();
+  const start = pointers.get(e.pointerId)!;
+  tracker.add(start.x, start.y, performance.now());
+  gesture = { kind: "pan", pointerId: e.pointerId, pointerType: e.pointerType, start, pan0, range, size, tracker };
+  capturePointer(e.pointerId);
   isPanning.value = true;
-  startPan.value = { x: e.clientX - panX.value, y: e.clientY - panY.value };
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!pointers.has(e.pointerId)) return;
+  // A mouse released outside the window never sends pointerup.
+  if (e.pointerType === "mouse" && e.buttons === 0) {
+    onPointerUp(e);
+    return;
+  }
+  const p = localPoint(e);
+  pointers.set(e.pointerId, p);
+  const g = gesture;
+  if (g?.kind === "pan" && g.pointerId === e.pointerId) g.tracker.add(p.x, p.y, performance.now());
+  if (g?.kind === "node" && !g.dragging) {
+    if (g.pointerId !== e.pointerId) return;
+    const threshold = g.pointerType === "mouse" ? DRAG_THRESHOLD_MOUSE : DRAG_THRESHOLD_TOUCH;
+    if (Math.hypot(p.x - g.start.x, p.y - g.start.y) <= threshold) return;
+    // Past the threshold: a drag. Tracking continues from the original start point, so
+    // the grab offset is kept (the node catches up by the threshold, under the pointer).
+    g.dragging = true;
+    capturePointer(e.pointerId);
+    pressedNodeId.value = null;
+    draggingNodeId.value = g.nodeId;
+    // A fresh entry: the drag never writes into the shared default positions.
+    nodePositions.value[g.nodeId] = { x: g.node0.x, y: g.node0.y };
+  }
+  scheduleFrame();
+}
+
+// released: a real lift of the pointer (pointerup), which may throw the canvas; any
+// other end (cancel, lost capture, blur, a second finger) only settles it.
+function endGesture(released = false) {
+  flushFrame();
+  const g = gesture;
+  gesture = null;
+  if (!g) return;
+  if (g.kind === "pinch") {
+    pinching.value = false;
+    settleIntoRange();
+  } else if (g.kind === "node") {
+    if (g.dragging) {
+      savePositions();
+      suppressClick = true;
+    }
+    pressedNodeId.value = null;
+    draggingNodeId.value = null;
+  } else {
+    isPanning.value = false;
+    releasePan(g, released);
+  }
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!pointers.has(e.pointerId)) return;
+  // A cancel (or lost capture) carries no meaningful position; keep the last move's.
+  if (e.type === "pointerup") pointers.set(e.pointerId, localPoint(e));
+  const g = gesture;
+  if (g?.kind === "pinch") {
+    // Down to one finger: the pinch ends (its last frame applied while both fingers
+    // still count), and the remaining finger doesn't start a pan.
+    if (g.ids.includes(e.pointerId)) endGesture();
+    pointers.delete(e.pointerId);
+    return;
+  }
+  if (g && g.pointerId === e.pointerId) endGesture(e.type === "pointerup");
+  pointers.delete(e.pointerId);
+  if (!pointers.size) viewportRect = null;
+}
+
+// Capture taken away (the element went away, another capture, a system gesture).
+// Only the viewport's own capture counts: a finger's implicit capture on a node is
+// handed over to the viewport when its drag starts, and that must not end the drag.
+function onLostPointerCapture(e: PointerEvent) {
+  if (e.target !== e.currentTarget || !pointers.has(e.pointerId)) return;
+  onPointerUp(e);
+}
+
+function cancelAllGestures() {
+  if (gesture) endGesture();
+  pointers.clear();
+  viewportRect = null;
+}
+
+// ── Wheel, trackpad and the zoom buttons (§1, §3, §7) ──────────────────────────
+// Canvas conventions: the wheel and two-finger swipes pan both axes; Ctrl/⌘ + wheel
+// (which is also how a trackpad pinch arrives) zooms around the cursor. Units are
+// normalised, so a Firefox line-mode wheel moves like Chrome's pixel one. A wheel pan
+// that starts with the canvas already at its vertical limit is left to the page, so
+// scrolling the admin page past the inline canvas never gets trapped; the choice holds
+// for the whole wheel sequence, as native nested scrollers do.
+const WHEEL_SEQUENCE_MS = 200;
+let wheelOwner: "canvas" | "page" | null = null;
+let wheelTimer: ReturnType<typeof setTimeout> | null = null;
+
+function viewportSize(): Size {
+  const el = canvasViewportRef.value;
+  return { w: el?.clientWidth ?? 0, h: el?.clientHeight ?? 0 };
+}
+
+function currentView(): View {
+  return { zoom: zoom.value, panX: panX.value, panY: panY.value };
+}
+
+function setView(v: View) {
+  zoom.value = v.zoom;
+  panX.value = v.panX;
+  panY.value = v.panY;
 }
 
 function onWheel(e: WheelEvent) {
-  e.preventDefault();
-  if (!canvasViewportRef.value) return;
+  const el = canvasViewportRef.value;
+  if (!el) return;
+  stopGlides();
+  settleView();
+  const unit = wheelUnit(e.deltaMode, el.clientHeight);
 
-  const rect = canvasViewportRef.value.getBoundingClientRect();
-  const mouseX = e.clientX - rect.left;
-  const mouseY = e.clientY - rect.top;
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault(); // otherwise the browser zooms the whole page
+    const rect = el.getBoundingClientRect();
+    setView(zoomAt(currentView(), wheelZoomFactor(e.deltaY, unit), { x: e.clientX - rect.left, y: e.clientY - rect.top }));
+  } else {
+    let dx: number;
+    let dy: number;
+    if (e.shiftKey) {
+      // Shift + a vertical wheel pans sideways (some systems already send it as deltaX).
+      dx = (e.deltaY || e.deltaX) * unit;
+      dy = 0;
+    } else {
+      dx = e.deltaX * unit;
+      dy = e.deltaY * unit;
+    }
+    const range = currentPanRange();
+    const nextX = range ? limitPan(panX.value, panX.value - dx, range.minX, range.maxX) : panX.value - dx;
+    const nextY = range ? limitPan(panY.value, panY.value - dy, range.minY, range.maxY) : panY.value - dy;
+    if (wheelOwner === null) {
+      const vertical = Math.abs(dy) > Math.abs(dx);
+      const stuck = nextX === panX.value && nextY === panY.value;
+      wheelOwner = vertical && stuck && !isFullscreen.value ? "page" : "canvas";
+    }
+    if (wheelOwner === "page") {
+      restartWheelSequence();
+      return; // the page scrolls on
+    }
+    e.preventDefault();
+    panX.value = nextX;
+    panY.value = nextY;
+  }
 
-  // World coordinates under cursor before zoom
-  const worldX = (mouseX - panX.value) / zoom.value;
-  const worldY = (mouseY - panY.value) / zoom.value;
-
-  // Soft, smooth sensitivity: damp large trackpad & wheel impulses
-  const sensitivity = 0.0009;
-  const factor = Math.exp(-e.deltaY * sensitivity);
-  // Cap single-event scaling to max ±4% change so it never jumps abruptly
-  const clampedFactor = Math.max(0.96, Math.min(1.04, factor));
-
-  const newZoom = Math.max(0.3, Math.min(1.5, zoom.value * clampedFactor));
-
-  // Anchor zoom around cursor position
-  panX.value = Math.round(mouseX - worldX * newZoom);
-  panY.value = Math.round(mouseY - worldY * newZoom);
-  zoom.value = Math.round(newZoom * 1000) / 1000;
-
-  isZooming.value = true;
-  if (zoomTimeout) clearTimeout(zoomTimeout);
-  zoomTimeout = setTimeout(() => {
-    isZooming.value = false;
-  }, 120);
+  isWheeling.value = true;
+  restartWheelSequence();
 }
 
-function resetView() {
-  zoom.value = 0.55;
-  panX.value = 40;
-  panY.value = 60;
+function restartWheelSequence() {
+  if (wheelTimer) clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => {
+    wheelTimer = null;
+    wheelOwner = null;
+    isWheeling.value = false;
+  }, WHEEL_SEQUENCE_MS);
+}
+
+// A compositor layer for the world only while it moves: a permanent one would be
+// rasterised once and scaled, blurring the node text after a zoom (§11).
+const isMoving = computed(
+  () => isPanning.value || pinching.value || draggingNodeId.value !== null || isWheeling.value || isGliding.value,
+);
+
+// Button-driven changes glide for 200 ms on the emphasized curve (no bounce: a button
+// carries no momentum). Wheel, drag and pinch stay 1:1, with no transition at all.
+const VIEW_ANIMATION_MS = 200;
+const isAnimatingView = ref(false);
+const worldRef = ref<HTMLElement | null>(null);
+let viewAnimationTimer: ReturnType<typeof setTimeout> | null = null;
+
+function animateView(v: View) {
+  if (reducedMotion.value) {
+    setView(v);
+    return;
+  }
+  isAnimatingView.value = true;
+  setView(v);
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
+  viewAnimationTimer = setTimeout(() => {
+    viewAnimationTimer = null;
+    isAnimatingView.value = false;
+  }, VIEW_ANIMATION_MS + 20);
+}
+
+// A new gesture during a button glide starts from where the canvas is on screen (the
+// presentation value), not from the glide's target, so it never jumps (§3).
+function settleView() {
+  if (!isAnimatingView.value) return;
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
+  viewAnimationTimer = null;
+  const el = worldRef.value;
+  const shown = el && typeof getComputedStyle === "function" ? getComputedStyle(el).transform : "";
+  const m = /^matrix\(([^)]+)\)$/.exec(shown ?? "");
+  if (m) {
+    const [a, , , , e, f] = m[1].split(",").map(Number);
+    if ([a, e, f].every(Number.isFinite) && a > 0) setView({ zoom: a, panX: e, panY: f });
+  }
+  isAnimatingView.value = false;
+}
+
+// Quick repeated presses compound from the target (1.2 × 1.2 …); the CSS transition
+// itself retargets from wherever the canvas is on screen.
+function zoomBy(factor: number) {
+  stopGlides();
+  const { w, h } = viewportSize();
+  animateView(zoomAt(currentView(), factor, { x: w / 2, y: h / 2 }));
 }
 
 function zoomIn() {
-  const newZoom = Math.min(1.5, Math.round((zoom.value + 0.05) * 100) / 100);
-  zoom.value = newZoom;
+  zoomBy(1.2);
 }
 
 function zoomOut() {
-  const newZoom = Math.max(0.3, Math.round((zoom.value - 0.05) * 100) / 100);
-  zoom.value = newZoom;
+  zoomBy(1 / 1.2);
 }
+
+// The whole graph in view, centred, never past 100% (the % button).
+function fitView(animate = true, pad = 48) {
+  const size = viewportSize();
+  const bbox = contentBounds.value;
+  if (!bbox || size.w <= 0 || size.h <= 0) return;
+  stopGlides();
+  const v = fitBounds(bbox, size, pad, ZOOM_LIMITS, 1);
+  if (animate) animateView(v);
+  else setView(v);
+}
+
+// The first view: the fit when it leaves the cards readable; otherwise (the long
+// pipeline on a laptop fits only at ~15%, where no name can be read) the readable
+// default zoom, starting at the trigger and centred vertically. The % button still
+// gives the whole-graph overview.
+const READABLE_ZOOM = 0.45;
+const START_ZOOM = 0.55;
+function showInitialView(pad = 48) {
+  const size = viewportSize();
+  const bbox = contentBounds.value;
+  if (!bbox || size.w <= 0 || size.h <= 0) return;
+  const fit = fitBounds(bbox, size, pad, ZOOM_LIMITS, 1);
+  if (fit.zoom >= READABLE_ZOOM) {
+    setView(fit);
+    return;
+  }
+  const z = START_ZOOM;
+  setView({ zoom: z, panX: pad - bbox.minX * z, panY: (size.h - (bbox.maxY - bbox.minY) * z) / 2 - bbox.minY * z });
+}
+
+function currentPanRange(): PanRange | null {
+  const bbox = contentBounds.value;
+  const size = viewportSize();
+  if (!bbox || size.w <= 0 || size.h <= 0) return null;
+  return panRange(bbox, zoom.value, size);
+}
+
+// The dot grid is drawn in world space: it pans and scales with the content, so the
+// surface under the pointer moves with it. Below 50% the step doubles to stay legible.
+const gridStyle = computed(() => {
+  const g = 20 * zoom.value * (zoom.value < 0.5 ? 2 : 1);
+  return {
+    backgroundImage: "radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px)",
+    backgroundSize: `${g}px ${g}px`,
+    backgroundPosition: `${panX.value}px ${panY.value}px`,
+    transition: isAnimatingView.value
+      ? `background-size ${VIEW_ANIMATION_MS}ms var(--ease-emph), background-position ${VIEW_ANIMATION_MS}ms var(--ease-emph)`
+      : "none",
+  };
+});
 
 // ── Fixed n8n Grid Coordinates for all Agents (Screenshot 2 Style) ────────────
 interface VisualNode {
@@ -128,7 +639,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "trigger",
     icon: "⚡",
     iconBg: "bg-orange-500/15 border-orange-500/30",
-    iconColor: "text-orange-400",
+    iconColor: STAGE_TEXT.trigger,
     x: 60,
     y: 300,
     width: 230,
@@ -143,7 +654,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "💬",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 420,
     y: 300,
     width: NODE_WIDTH,
@@ -158,7 +669,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "✨",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 790,
     y: 300,
     width: NODE_WIDTH,
@@ -173,7 +684,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "🧭",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 1160,
     y: 300,
     width: NODE_WIDTH,
@@ -188,7 +699,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "🌐",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 1490,
     y: 450,
     width: NODE_WIDTH,
@@ -203,7 +714,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🔎",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 1850,
     y: 300,
     width: NODE_WIDTH,
@@ -217,7 +728,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🛡️",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2220,
     y: 300,
     width: NODE_WIDTH,
@@ -231,7 +742,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "⭐",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2590,
     y: 300,
     width: NODE_WIDTH,
@@ -245,7 +756,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🔗",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2960,
     y: 300,
     width: NODE_WIDTH,
@@ -259,7 +770,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "📑",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 3330,
     y: 300,
     width: NODE_WIDTH,
@@ -273,7 +784,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🔁",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 3700,
     y: 300,
     width: NODE_WIDTH,
@@ -288,7 +799,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🧠",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4070,
     y: 300,
     width: NODE_WIDTH,
@@ -303,7 +814,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🔢",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4440,
     y: 300,
     width: NODE_WIDTH,
@@ -317,7 +828,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "✓",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4810,
     y: 300,
     width: NODE_WIDTH,
@@ -332,7 +843,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📌",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5180,
     y: 160,
     width: NODE_WIDTH,
@@ -346,7 +857,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "⚠️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5550,
     y: 160,
     width: NODE_WIDTH,
@@ -360,7 +871,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🎯",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5180,
     y: 440,
     width: NODE_WIDTH,
@@ -375,7 +886,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "⚖️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5550,
     y: 440,
     width: NODE_WIDTH,
@@ -390,7 +901,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📝",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5920,
     y: 300,
     width: NODE_WIDTH,
@@ -405,7 +916,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📊",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 6290,
     y: 300,
     width: NODE_WIDTH,
@@ -419,7 +930,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "delivery",
     icon: "💬",
     iconBg: "bg-amber-500/15 border-amber-500/30",
-    iconColor: "text-amber-400",
+    iconColor: STAGE_TEXT.delivery,
     x: 6660,
     y: 300,
     width: NODE_WIDTH,
@@ -437,6 +948,11 @@ const defaultNodePositions: Record<string, { x: number; y: number }> = Object.fr
   Object.entries(VISUAL_NODES_CONFIG).map(([id, conf]) => [id, { x: conf.x, y: conf.y }])
 );
 
+// Copies, never the default objects themselves: a drag writes positions in place.
+function freshDefaultPositions(): Record<string, { x: number; y: number }> {
+  return Object.fromEntries(Object.entries(defaultNodePositions).map(([id, p]) => [id, { x: p.x, y: p.y }]));
+}
+
 function loadSavedPositions(): Record<string, { x: number; y: number }> {
   try {
     // Clear legacy keys with cramped coordinates
@@ -447,13 +963,13 @@ function loadSavedPositions(): Record<string, { x: number; y: number }> {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
-        return { ...defaultNodePositions, ...parsed };
+        return { ...freshDefaultPositions(), ...parsed };
       }
     }
   } catch {
     // Ignore localStorage errors
   }
-  return { ...defaultNodePositions };
+  return freshDefaultPositions();
 }
 
 const nodePositions = ref<Record<string, { x: number; y: number }>>(loadSavedPositions());
@@ -467,7 +983,7 @@ function savePositions() {
 }
 
 function resetNodePositions() {
-  nodePositions.value = { ...defaultNodePositions };
+  nodePositions.value = freshDefaultPositions();
   try {
     localStorage.removeItem(LOCAL_STORAGE_POSITIONS_KEY);
     localStorage.removeItem("multi-agent-search:admin-nodes-pos");
@@ -489,73 +1005,38 @@ const visualNodes = computed<VisualNode[]>(() => {
   });
 });
 
-// ── Node Dragging State ───────────────────────────────────────────────────────
+// ── Node press, drag and click ────────────────────────────────────────────────
+// The drag itself runs in the pointer handlers above; these are its visible states:
+// pressed (down, not moved past the threshold) and dragging (lifted).
 const draggingNodeId = ref<string | null>(null);
-const dragStartMouse = ref({ x: 0, y: 0 });
-const dragStartNodePos = ref({ x: 0, y: 0 });
-const hasDraggedNode = ref(false);
 
-function onNodeMouseDown(e: MouseEvent, nodeId: string) {
-  if (e.button !== 0) return;
-  e.stopPropagation();
-
-  draggingNodeId.value = nodeId;
-  dragStartMouse.value = { x: e.clientX, y: e.clientY };
-  const currentPos = nodePositions.value[nodeId] || {
-    x: VISUAL_NODES_CONFIG[nodeId]?.x ?? 0,
-    y: VISUAL_NODES_CONFIG[nodeId]?.y ?? 0,
-  };
-  dragStartNodePos.value = { x: currentPos.x, y: currentPos.y };
-  hasDraggedNode.value = false;
-}
-
-function onGlobalMouseMove(e: MouseEvent) {
-  // 1. If dragging a single node
-  if (draggingNodeId.value) {
-    const dx = (e.clientX - dragStartMouse.value.x) / zoom.value;
-    const dy = (e.clientY - dragStartMouse.value.y) / zoom.value;
-
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      hasDraggedNode.value = true;
-    }
-
-    if (hasDraggedNode.value) {
-      const newX = Math.round(dragStartNodePos.value.x + dx);
-      const newY = Math.round(dragStartNodePos.value.y + dy);
-
-      nodePositions.value = {
-        ...nodePositions.value,
-        [draggingNodeId.value]: {
-          x: Math.max(10, Math.min(7200, newX)),
-          y: Math.max(10, Math.min(850, newY)),
-        },
-      };
-    }
-    return;
+// Exactly one visual state per card, so only one scale and one ring apply at a time.
+// Pressed dips at once (100 ms); lifted rises over 150 ms; letting go eases back over
+// 200 ms. The lift appears only once a press has become a drag (§1, §10).
+function nodeCardState(nodeId: string): string {
+  if (draggingNodeId.value === nodeId) {
+    return "scale-[1.03] border-accent bg-surface shadow-e3 ring-2 ring-accent/50 duration-150 ease-out";
   }
-
-  // 2. If panning canvas
-  if (isPanning.value) {
-    panX.value = e.clientX - startPan.value.x;
-    panY.value = e.clientY - startPan.value.y;
+  if (pressedNodeId.value === nodeId) {
+    return "scale-[0.985] border-accent/60 bg-surface duration-100 ease-out";
   }
-}
-
-function onGlobalMouseUp() {
-  if (draggingNodeId.value) {
-    if (hasDraggedNode.value) {
-      savePositions();
-    }
-    setTimeout(() => {
-      draggingNodeId.value = null;
-      hasDraggedNode.value = false;
-    }, 50);
+  if (drawerOpen.value && selectedAgent.value?.id === nodeId) {
+    return "scale-[1.02] border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 duration-200 ease-out";
   }
-  isPanning.value = false;
+  if (isNodeHighlighted(nodeId)) {
+    return "scale-[1.01] border-indigo-400/80 bg-surface ring-2 ring-indigo-400/40 duration-200 ease-out";
+  }
+  const sim = getAgentSimStatus(nodeId);
+  if (sim === "active") {
+    return "scale-[1.03] border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 duration-200 ease-out";
+  }
+  if (sim === "completed") return "border-success/60 bg-surface duration-200 ease-out";
+  return "border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg duration-200 ease-out";
 }
 
 function handleNodeClick(nodeId: string) {
-  if (hasDraggedNode.value) {
+  if (suppressClick) {
+    suppressClick = false;
     return;
   }
   openInspector(nodeId);
@@ -885,6 +1366,22 @@ const renderedEdges = computed<RenderedEdge[]>(() => {
   return [...forwardEdges, ...returnEdges];
 });
 
+// What Fit shows and the pan limits keep on screen: the nodes, plus the return loops'
+// arcs and their labels below them when those are shown.
+const contentBounds = computed<BBox | null>(() => {
+  const box = boundsOf(visualNodes.value);
+  if (!box || !showReturnLoops.value) return box;
+  const byId = new Map(visualNodes.value.map((n) => [n.id, n]));
+  for (const conn of RETURN_CONNECTIONS) {
+    const src = byId.get(conn.from);
+    const tgt = byId.get(conn.to);
+    if (!src || !tgt) continue;
+    const arcY = Math.max(conn.arcY, Math.max(src.y + src.height, tgt.y + tgt.height) + 45);
+    box.maxY = Math.max(box.maxY, arcY + 12);
+  }
+  return box;
+});
+
 // ── Simulation Walkthrough Steps ("How they work") ───────────────────────────
 interface SimulationStep {
   stepNumber: number;
@@ -907,7 +1404,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 1,
     stageName: "Planning",
-    stageColor: "text-orange-400 border-orange-500/30 bg-orange-500/10",
+    stageColor: STAGE_TONE.trigger,
     agentIds: ["trigger_start", "clarifier"],
     activeEdges: ["trigger_start->clarifier"],
     payloadInfo: "user_query ➔ clarification_needed, suggested_followups",
@@ -915,7 +1412,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 2,
     stageName: "Planning",
-    stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
+    stageColor: STAGE_TONE.planning,
     agentIds: ["optimizer"],
     activeEdges: ["clarifier->optimizer"],
     payloadInfo: "clarified_intent ➔ optimized_prompt, angles, hypotheses",
@@ -923,7 +1420,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 3,
     stageName: "Planning",
-    stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
+    stageColor: STAGE_TONE.planning,
     agentIds: ["orchestrator", "cross_language"],
     activeEdges: ["optimizer->orchestrator", "orchestrator->cross_language"],
     payloadInfo: "optimized_prompt ➔ subtasks, translated_queries",
@@ -931,7 +1428,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 4,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["search"],
     activeEdges: ["orchestrator->search", "cross_language->search"],
     payloadInfo: "primary_queries + translated_queries ➔ scraped_pages, raw_snippets",
@@ -939,7 +1436,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 5,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["source_critic", "source_reputation", "source_independence"],
     activeEdges: [
       "search->source_critic",
@@ -952,7 +1449,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 6,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["evidence_mapper"],
     activeEdges: ["source_independence->evidence_mapper"],
     payloadInfo: "canonical_sources ➔ evidence_blocks, coverage_matrix",
@@ -960,7 +1457,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 7,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["replan", "search"],
     activeEdges: ["evidence_mapper->replan", "replan->search"],
     payloadInfo: "evidence_blocks ➔ gap_detected, ↩ gap_queries ➔ SearchAgent",
@@ -968,7 +1465,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 8,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["analyzer"],
     activeEdges: ["replan->analyzer"],
     payloadInfo: "verified_evidence ➔ draft_report, reasoning_steps, key_findings",
@@ -976,7 +1473,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 9,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["numeric_check", "claim_verifier"],
     activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier", "claim_verifier->analyzer"],
     payloadInfo: "draft_report ➔ verified_numbers, verified_claims / ↩ fact_fix",
@@ -984,7 +1481,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 10,
     stageName: "Synthesis & Verification",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["citation_audit", "retraction", "red_team", "stance"],
     activeEdges: [
       "claim_verifier->citation_audit",
@@ -997,7 +1494,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 11,
     stageName: "Synthesis & Polish",
-    stageColor: "text-rose-400 border-rose-500/30 bg-rose-500/10",
+    stageColor: STAGE_TONE.return,
     agentIds: ["report_critic", "analyzer", "replan"],
     activeEdges: [
       "stance->report_critic",
@@ -1010,7 +1507,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 12,
     stageName: "Synthesis & Polish",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["report_critic", "confidence"],
     activeEdges: [
       "report_critic->confidence",
@@ -1020,7 +1517,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 13,
     stageName: "Delivery & Follow-Up",
-    stageColor: "text-amber-400 border-amber-500/30 bg-amber-500/10",
+    stageColor: STAGE_TONE.delivery,
     agentIds: ["chat"],
     activeEdges: ["confidence->chat"],
     payloadInfo: "final_report + trust_badge ➔ grounded_interactive_answers",
@@ -1112,6 +1609,16 @@ async function fetchAgents() {
   }
 }
 
+// The first time the canvas appears, frame the graph (no glide: nothing to follow yet).
+let fittedOnce = false;
+watch(loading, async (isLoading) => {
+  if (isLoading || fittedOnce) return;
+  await nextTick();
+  if (!canvasViewportRef.value) return;
+  fittedOnce = true;
+  showInitialView();
+});
+
 // ── Fullscreen Viewport Mode ──────────────────────────────────────────────────
 const isFullscreen = ref(false);
 
@@ -1119,33 +1626,34 @@ function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value;
 }
 
+// Escape peels one layer at a time: the inspector (SlideOver closes it and marks the
+// key handled) first, fullscreen on the next press.
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    if (drawerOpen.value) {
-      drawerOpen.value = false;
-      return;
-    }
-    if (isFullscreen.value) {
-      isFullscreen.value = false;
-    }
+  if (e.key !== "Escape" || e.defaultPrevented || drawerOpen.value) return;
+  if (isFullscreen.value) {
+    isFullscreen.value = false;
   }
 }
 
 onMounted(() => {
   fetchAgents();
-  window.addEventListener("mousemove", onGlobalMouseMove);
-  window.addEventListener("mouseup", onGlobalMouseUp);
   window.addEventListener("keydown", onKeyDown);
+  // Alt-Tab mid-drag: the release happens elsewhere, so end the gesture here.
+  window.addEventListener("blur", cancelAllGestures);
 });
 
 onBeforeUnmount(() => {
   if (simTimer) clearTimeout(simTimer);
-  if (zoomTimeout) clearTimeout(zoomTimeout);
-  window.removeEventListener("mousemove", onGlobalMouseMove);
-  window.removeEventListener("mouseup", onGlobalMouseUp);
+  if (wheelTimer) clearTimeout(wheelTimer);
+  if (viewAnimationTimer) clearTimeout(viewAnimationTimer);
+  if (frameId) cancelFrame(frameId);
+  stopGlides();
   window.removeEventListener("keydown", onKeyDown);
+  window.removeEventListener("blur", cancelAllGestures);
 });
 
+// Opening another node while the inspector is open swaps its content in place: the
+// panel is non-modal, so comparing agents needs no close-and-reopen.
 function openInspector(nodeId: string) {
   if (nodeId === "trigger_start") return;
   const target = agents.value.find((a) => a.id === nodeId);
@@ -1179,7 +1687,7 @@ function isNodeHighlighted(nodeId: string): boolean {
   if (hoveredAgentId.value && nodeId === hoveredAgentId.value) {
     return true;
   }
-  if (selectedAgent.value && nodeId === selectedAgent.value.id) {
+  if (drawerOpen.value && selectedAgent.value && nodeId === selectedAgent.value.id) {
     return true;
   }
   return false;
@@ -1215,7 +1723,7 @@ function isNodeDimmed(nodeId: string): boolean {
           v-model="searchQuery"
           type="text"
           :placeholder="t('admin.agents.searchPlaceholder')"
-          class="w-full rounded-xl border border-bd bg-surface/60 py-1.5 pl-8 pr-3 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          class="w-full rounded-xl border border-bd bg-surface/60 py-1.5 pl-8 pr-3 text-xs text-ink placeholder:text-muted"
         />
         <button
           v-if="searchQuery"
@@ -1228,34 +1736,38 @@ function isNodeDimmed(nodeId: string): boolean {
 
       <!-- Quick Stage Legend Indicators -->
       <div class="hidden lg:flex items-center gap-2 text-[11px] font-mono">
-        <div class="flex items-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-orange-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.trigger">
           <span>⚡</span>
           <span>{{ t("admin.agents.legendTrigger") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.planning">
           <span>🟣</span>
           <span>{{ t("admin.agents.legendPlanning") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.search">
           <span>🟢</span>
           <span>{{ t("admin.agents.legendSearch") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-purple-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.synthesis">
           <span>🟠</span>
           <span>{{ t("admin.agents.legendSynthesis") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.delivery">
           <span>🔵</span>
           <span>{{ t("admin.agents.legendDelivery") }}</span>
         </div>
-        <div
-          class="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-400 cursor-pointer hover:bg-rose-500/20 transition"
+        <!-- A real toggle (keyboard, state announced), not a clickable div. -->
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 hover:bg-rose-500/20"
+          :class="STAGE_TONE.return"
           :title="t('admin.agents.toggleReturnLoopsTooltip')"
+          :aria-pressed="showReturnLoops ? 'true' : 'false'"
           @click="showReturnLoops = !showReturnLoops"
         >
-          <span>↩</span>
+          <span aria-hidden="true">↩</span>
           <span>{{ t("admin.agents.legendReturn") }}</span>
-        </div>
+        </button>
       </div>
 
       <!-- Right Action Group: Simulation Controls, Zoom, Language & Layout -->
@@ -1265,7 +1777,7 @@ function isNodeDimmed(nodeId: string): boolean {
           class="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition shadow-sm"
           :class="[
             showReturnLoops
-              ? 'border-rose-500/60 bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40'
+              ? 'border-rose-500/60 bg-rose-500/15 text-rose-700 dark:text-rose-300'
               : 'border-bd bg-surface/70 text-muted hover:text-ink hover:border-rose-500/40'
           ]"
           :title="t('admin.agents.toggleReturnLoopsTooltip')"
@@ -1274,8 +1786,8 @@ function isNodeDimmed(nodeId: string): boolean {
           <span class="text-sm">↩</span>
           <span class="hidden sm:inline">{{ t("admin.agents.showReturnLoops") }}</span>
           <span
-            class="rounded-full px-1.5 py-0.2 text-[9.5px] font-mono font-bold"
-            :class="showReturnLoops ? 'bg-rose-500/30 text-rose-200' : 'bg-surface text-muted'"
+            class="rounded-full px-1.5 py-px text-3xs font-semibold tabular-nums"
+            :class="showReturnLoops ? 'bg-rose-500/20 text-rose-700 dark:text-rose-200' : 'bg-surface text-muted'"
           >
             {{ RETURN_CONNECTIONS.length }}
           </span>
@@ -1294,7 +1806,7 @@ function isNodeDimmed(nodeId: string): boolean {
           </button>
           <button
             v-else
-            class="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-xs font-semibold text-amber-400 hover:bg-amber-500/30 transition"
+            class="flex items-center gap-1.5 rounded-lg bg-warning/15 border border-warning/40 px-3 py-1 text-xs font-semibold text-warning hover:bg-warning/25 transition"
             :title="t('admin.agents.pauseSim')"
             @click="pauseSimulation"
           >
@@ -1312,7 +1824,7 @@ function isNodeDimmed(nodeId: string): boolean {
           </button>
 
           <button
-            class="rounded px-2 py-1 font-mono text-[10px] font-semibold text-muted hover:text-ink"
+            class="rounded px-2 py-1 text-[10px] font-semibold tabular-nums text-muted hover:text-ink"
             @click="simSpeed = simSpeed === 1 ? 2 : 1"
           >
             {{ simSpeed }}x
@@ -1324,7 +1836,15 @@ function isNodeDimmed(nodeId: string): boolean {
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomIn')" @click="zoomIn">
             +
           </button>
-          <button class="px-1.5 py-1 font-mono text-[11px] hover:text-ink" :title="t('admin.agents.resetZoom')" @click="resetView">
+          <!-- Fit: the whole graph in view (the label keeps showing the live zoom). Named
+               for what it does; the spoken name keeps the visible % in it (label in name). -->
+          <button
+            class="min-w-[3.25rem] px-1.5 py-1 text-center text-[11px] tabular-nums hover:text-ink"
+            :title="t('admin.agents.fitView')"
+            :aria-label="`${t('admin.agents.fitView')}, ${Math.round(zoom * 100)}%`"
+            data-test="graph-fit"
+            @click="fitView()"
+          >
             {{ Math.round(zoom * 100) }}%
           </button>
           <button class="rounded px-2 py-1 hover:bg-surface hover:text-ink" :title="t('admin.agents.zoomOut')" @click="zoomOut">
@@ -1362,7 +1882,7 @@ function isNodeDimmed(nodeId: string): boolean {
     </div>
 
     <!-- Error State -->
-    <div v-if="error" class="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+    <div v-if="error" class="rounded-lg border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
       {{ error }}
     </div>
 
@@ -1375,10 +1895,18 @@ function isNodeDimmed(nodeId: string): boolean {
     <div
       v-else
       ref="canvasViewportRef"
-      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner cursor-grab active:cursor-grabbing"
-      :class="isFullscreen ? 'min-h-[calc(100vh-140px)]' : 'min-h-[640px]'"
-      style="background-image: radial-gradient(circle, rgb(var(--c-muted) / 0.22) 1.2px, transparent 1.2px); background-size: 20px 20px;"
-      @mousedown="onMouseDown"
+      class="relative flex-1 overflow-hidden select-none rounded-2xl border border-bd bg-bg/95 shadow-inner"
+      :class="[
+        isFullscreen ? 'min-h-[calc(100vh-140px)] touch-none' : 'h-[min(640px,calc(100dvh-260px))] min-h-[360px] touch-pan-y',
+        isPanning ? 'cursor-grabbing' : 'cursor-grab',
+      ]"
+      :style="gridStyle"
+      data-test="graph-viewport"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerUp"
+      @lostpointercapture="onLostPointerCapture"
       @wheel="onWheel"
     >
       <!-- Quick Floating Fullscreen Button on Canvas -->
@@ -1395,8 +1923,12 @@ function isNodeDimmed(nodeId: string): boolean {
       </div>
       <!-- Scalable & Pannable Canvas World -->
       <div
+        ref="worldRef"
         class="absolute origin-top-left"
-        :class="isZooming || isPanning || draggingNodeId ? 'transition-none' : 'transition-transform duration-100 ease-out'"
+        :class="[
+          isAnimatingView ? 'transition-transform duration-200 ease-emphasized' : 'transition-none',
+          { 'will-change-transform': isMoving },
+        ]"
         :style="{ transform: `translate(${panX}px, ${panY}px) scale(${zoom})`, width: '7400px', height: '850px' }"
       >
         <!-- SVG Connections Layer (n8n Smooth Bezier Curves) -->
@@ -1511,7 +2043,7 @@ function isNodeDimmed(nodeId: string): boolean {
               :stroke-dasharray="edge.isReturn ? (edge.isActive ? '5,4' : '6,4') : (edge.isActive ? '7,7' : 'none')"
               :class="[
                 draggingNodeId !== null ? 'transition-none' : 'transition-[stroke,stroke-width] duration-150',
-                { 'animate-n8n-wire': edge.isActive }
+                { 'animate-n8n-wire': edge.isActive && !reducedMotion }
               ]"
               :marker-end="!edge.isReturn ? `url(#${
                 edge.isActive
@@ -1526,8 +2058,9 @@ function isNodeDimmed(nodeId: string): boolean {
             />
 
             <!-- Animated Traveling Particle along active simulation wires -->
+            <!-- SMIL: CSS can't stop it, so under reduced motion it isn't rendered at all. -->
             <circle
-              v-if="edge.isActive"
+              v-if="edge.isActive && !reducedMotion"
               r="4.5"
               :fill="edge.isReturn ? '#fda4af' : '#38bdf8'"
               filter="url(#n8n-glow)"
@@ -1577,12 +2110,12 @@ function isNodeDimmed(nodeId: string): boolean {
                   :class="[
                     edge.isReturn
                       ? edge.isActive || edge.isHighlighted
-                        ? 'fill-rose-400'
-                        : 'fill-rose-500'
+                        ? 'fill-rose-700 dark:fill-rose-300'
+                        : 'fill-rose-700 dark:fill-rose-400'
                       : edge.isActive
-                      ? 'fill-sky-500'
+                      ? 'fill-sky-700 dark:fill-sky-400'
                       : edge.isHighlighted
-                      ? 'fill-indigo-500'
+                      ? 'fill-indigo-700 dark:fill-indigo-400'
                       : 'fill-muted',
                   ]"
                 >
@@ -1597,7 +2130,7 @@ function isNodeDimmed(nodeId: string): boolean {
         <div
           v-for="node in visualNodes"
           :key="node.id"
-          class="interactive-node absolute group select-none transition-none"
+          class="interactive-node press-none absolute group select-none rounded-2xl transition-none"
           :class="[
             draggingNodeId === node.id
               ? 'z-30 cursor-grabbing'
@@ -1608,31 +2141,21 @@ function isNodeDimmed(nodeId: string): boolean {
             width: `${node.width}px`,
             height: `${node.height}px`,
           }"
-          @mousedown="onNodeMouseDown($event, node.id)"
+          :data-node-id="node.id"
+          :role="node.isTrigger ? undefined : 'button'"
+          :tabindex="node.isTrigger ? undefined : 0"
+          :aria-label="getNodeName(node.id, node.name)"
           @click="handleNodeClick(node.id)"
+          @keydown.enter.prevent="openInspector(node.id)"
+          @keydown.space.prevent="openInspector(node.id)"
           @mouseenter="onNodeHover(node.id)"
           @mouseleave="onNodeHover(null)"
         >
-          <!-- Node Card Container -->
+          <!-- Node Card Container: the wrapper above carries the position and never
+               animates; this card shows press (a dip), lift (while dragged) and state. -->
           <div
-            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-md backdrop-blur transition-all"
-            :class="[
-              draggingNodeId === node.id
-                ? 'transition-none border-accent bg-surface ring-4 ring-accent/60 shadow-2xl scale-[1.03]'
-                : 'duration-150',
-              isNodeDimmed(node.id)
-                ? 'opacity-30'
-                : 'opacity-100',
-              selectedAgent?.id === node.id
-                ? 'border-accent bg-surface ring-2 ring-accent/60 shadow-accent/20 scale-[1.02]'
-                : isNodeHighlighted(node.id)
-                ? 'border-indigo-400/80 bg-surface ring-2 ring-indigo-400/40 scale-[1.01]'
-                : getAgentSimStatus(node.id) === 'active'
-                ? 'border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 scale-[1.03]'
-                : getAgentSimStatus(node.id) === 'completed'
-                ? 'border-emerald-500/60 bg-surface'
-                : 'border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg',
-            ]"
+            class="relative flex h-full items-center gap-3 rounded-2xl border p-3 shadow-e2 transition-[border-color,box-shadow,opacity,transform]"
+            :class="[isNodeDimmed(node.id) ? 'opacity-30' : 'opacity-100', nodeCardState(node.id)]"
           >
             <!-- Left Input Port (Handle) -->
             <div
@@ -1671,7 +2194,8 @@ function isNodeDimmed(nodeId: string): boolean {
                   {{ getNodeName(node.id, node.name) }}
                 </span>
               </div>
-              <p class="truncate text-[10px] text-muted mt-0.5 font-sans">
+              <!-- Too small to read below 45%: the name alone carries the node. -->
+              <p v-if="zoom >= 0.45" class="truncate text-[10px] text-muted mt-0.5 font-sans">
                 {{ getNodeSubtitle(node.id, node.subtitle) }}
               </p>
             </div>
@@ -1679,7 +2203,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Return Capability Badge (Critics / Loop Nodes) -->
             <div
               v-if="hasReturnCapability(node.id)"
-              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-400 shadow backdrop-blur transition-transform hover:scale-105 cursor-help"
+              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-700 dark:text-rose-300 shadow transition-transform hover:scale-105 cursor-help"
               :title="getReturnCapabilityTooltip(node.id)"
             >
               <span class="text-[9px]">↩</span>
@@ -1688,12 +2212,12 @@ function isNodeDimmed(nodeId: string): boolean {
 
             <!-- Active / Done Simulation Status Badges -->
             <div v-if="getAgentSimStatus(node.id) === 'active'" class="absolute -top-2 right-2">
-              <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-sky-400 animate-pulse shadow">
+              <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-info animate-pulse shadow">
                 ● {{ t("admin.agents.activeBadge") }}
               </span>
             </div>
             <div v-else-if="getAgentSimStatus(node.id) === 'completed'" class="absolute -top-2 right-2">
-              <span class="flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-400 shadow">
+              <span class="flex items-center gap-1 rounded-full bg-success/15 border border-success/30 px-2 py-0.5 text-[9px] font-bold text-success shadow">
                 ✓ {{ t("admin.agents.doneBadge") }}
               </span>
             </div>
@@ -1719,8 +2243,8 @@ function isNodeDimmed(nodeId: string): boolean {
 
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div
-              v-if="node.llmModel"
-              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm backdrop-blur"
+              v-if="node.llmModel && zoom >= 0.45"
+              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-px font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm"
             >
               <span class="text-accent text-[7px]">◆</span>
               <span>{{ node.llmModel }}</span>
@@ -1741,12 +2265,12 @@ function isNodeDimmed(nodeId: string): boolean {
     <!-- Floating Simulation Walkthrough Banner ("How they work") -->
     <div
       v-if="isSimulating || currentStepIndex > 0"
-      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-2xl backdrop-blur transition-all duration-300"
+      class="rounded-2xl border border-accent/40 bg-surface/95 p-4 shadow-e2"
     >
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd/60 pb-3">
         <div class="flex items-center gap-2">
           <span
-            class="rounded-lg border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider"
+            class="rounded-lg border px-2 py-0.5 text-3xs font-semibold uppercase tracking-wider"
             :class="currentStep.stageColor"
           >
             {{ currentStep.stageName }}
@@ -1780,7 +2304,7 @@ function isNodeDimmed(nodeId: string): boolean {
           >
             ◀ {{ t("admin.agents.prevStep") }}
           </button>
-          <span class="font-mono text-xs text-muted">
+          <span class="text-xs tabular-nums text-muted">
             {{ currentStep.stepNumber }} / {{ SIMULATION_STEPS.length }}
           </span>
           <button

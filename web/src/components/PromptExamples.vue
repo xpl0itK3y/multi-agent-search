@@ -41,13 +41,13 @@ const examples = computed(() =>
         v-for="item in examples"
         :key="item.id"
         type="button"
-        class="group flex flex-col justify-between rounded-xl border border-bd/70 bg-surface/50 p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:bg-surface hover:shadow-md"
+        class="press press-lg group flex flex-col justify-between rounded-xl border border-bd/70 bg-surface/50 p-3.5 text-left hover:border-accent/40 hover:bg-surface hover:shadow-md motion-safe:hover:-translate-y-0.5"
         @click="emit('pick', item.prompt)"
       >
         <div>
           <div class="mb-1.5 flex items-center justify-between">
             <span class="inline-flex items-center gap-1.5 text-xs font-medium text-accentSoft">
-              <span>{{ item.icon }}</span>
+              <span aria-hidden="true">{{ item.icon }}</span>
               <span>{{ item.tag }}</span>
             </span>
             <span class="opacity-0 transition-opacity duration-200 group-hover:opacity-100 text-muted group-hover:text-ink text-xs flex items-center gap-1">

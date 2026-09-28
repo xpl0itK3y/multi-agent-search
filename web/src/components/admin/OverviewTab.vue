@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { adminApi } from "@/lib/api";
+import { adminApi, apiErrorMessage } from "@/lib/api";
 import type { AdminOverviewResponse } from "@/lib/types";
 
 const { t } = useI18n();
@@ -9,12 +9,30 @@ const { t } = useI18n();
 const props = defineProps<{
   initialOverview?: AdminOverviewResponse | null;
 }>();
+// Every fresh snapshot (a load or a stream event) goes up, so the admin header reports
+// the same health as this tab.
+const emit = defineEmits<{ (e: "update", data: AdminOverviewResponse): void }>();
 
 const overview = ref<AdminOverviewResponse | null>(props.initialOverview || null);
-const loading = ref(!props.initialOverview);
+const loading = ref(false);
+const loadError = ref<string | null>(null);
 const isStreaming = ref(false);
 const streamError = ref(false);
 let closeStream: (() => void) | null = null;
+
+function setOverview(data: AdminOverviewResponse) {
+  overview.value = data;
+  loadError.value = null;
+  emit("update", data);
+}
+
+// A snapshot the header fetched after this tab mounted.
+watch(
+  () => props.initialOverview,
+  (data) => {
+    if (data && !overview.value) overview.value = data;
+  },
+);
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -35,12 +53,15 @@ function timeAgo(isoString: string): string {
   return t("admin.overview.hoursAgo", { n: diffHours });
 }
 
+// A failed load is said out loud (apple-design §16: error feedback), with a retry.
 async function loadData() {
+  if (loading.value) return;
+  loading.value = true;
+  loadError.value = null;
   try {
-    loading.value = true;
-    overview.value = await adminApi.getOverview();
-  } catch {
-    /* handled */
+    setOverview(await adminApi.getOverview());
+  } catch (err) {
+    loadError.value = apiErrorMessage(err, t);
   } finally {
     loading.value = false;
   }
@@ -55,11 +76,11 @@ onMounted(() => {
     isStreaming.value = true;
     closeStream = adminApi.connectStream(
       (data) => {
-        overview.value = data;
-        loading.value = false;
+        setOverview(data);
         streamError.value = false;
       },
       () => {
+        // EventSource reconnects on its own; say so instead of claiming a live feed.
         streamError.value = true;
       }
     );
@@ -84,41 +105,66 @@ const isHealthy = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <!-- No snapshot yet: its own loading state, or the failure with a retry. -->
+  <div v-if="!overview" class="flex h-48 flex-col items-center justify-center gap-3 text-sm" data-test="overview-empty">
+    <template v-if="loadError && !loading">
+      <p class="text-danger" role="alert">{{ loadError }}</p>
+      <button
+        type="button"
+        class="press rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surfaceHover"
+        @click="loadData"
+      >
+        {{ $t("common.retry") }}
+      </button>
+    </template>
+    <span v-else class="text-muted">{{ t("common.loading") }}</span>
+  </div>
+
+  <div v-else class="space-y-6">
     <!-- Top System Health & Live Indicator -->
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
+        <!-- Breathes only while the live stream is actually connected. -->
         <span
-          class="inline-block h-3 w-3 rounded-full"
-          :class="isHealthy ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50 animate-pulse' : 'bg-amber-500 animate-pulse'"
+          class="inline-block h-3 w-3 shrink-0 rounded-full"
+          data-test="overview-health-dot"
+          :class="[isHealthy ? 'bg-success' : 'bg-warning', isStreaming && !streamError ? 'live-dot' : '']"
+          aria-hidden="true"
         />
         <h2 class="text-base font-semibold text-ink">
           {{ isHealthy ? t("admin.overview.systemHealthy") : t("admin.overview.systemDegradedTitle") }}
         </h2>
-        <span class="rounded bg-surface px-2 py-0.5 text-xs text-muted">
-          {{ isStreaming && !streamError ? t("admin.overview.liveSse") : t("admin.overview.polling") }}
+        <span class="rounded bg-surface px-2 py-0.5 text-xs text-muted" data-test="overview-stream">
+          {{ isStreaming && !streamError ? t("admin.overview.liveSse") : t("admin.overview.reconnecting") }}
         </span>
       </div>
 
       <button
-        class="flex items-center gap-1.5 rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-surface/80"
+        type="button"
+        class="press flex items-center gap-1.5 rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-ink hover:bg-surfaceHover disabled:opacity-60"
+        :disabled="loading"
+        :aria-busy="loading ? 'true' : undefined"
         @click="loadData"
       >
-        <span>🔄</span>
+        <span class="inline-block leading-none" :class="loading ? 'animate-spin' : ''" aria-hidden="true">↻</span>
         <span>{{ t("admin.overview.refresh") }}</span>
       </button>
     </div>
+    <p v-if="loadError" class="-mt-4 text-right text-xs text-danger" role="alert">{{ loadError }}</p>
 
     <!-- Metric KPI Cards -->
     <div class="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <!-- PostgreSQL Health -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.postgres") }}</span>
           <span class="text-sm">🗄️</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-xl font-bold uppercase text-emerald-400">
+          <span
+            class="text-xl font-bold uppercase"
+            :class="(overview?.system_health?.postgres || 'ok') === 'ok' ? 'text-success' : 'text-danger'"
+          >
             {{ overview?.system_health?.postgres || "ok" }}
           </span>
           <span class="text-xs text-muted">{{ t("admin.overview.active") }}</span>
@@ -126,29 +172,29 @@ const isHealthy = computed(() => {
       </div>
 
       <!-- Active Researches -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.activeResearches") }}</span>
           <span class="text-sm">🔬</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-2xl font-bold text-ink">
+          <span class="text-2xl font-bold tabular-nums text-ink">
             {{ overview?.active_researches_count ?? 0 }}
           </span>
-          <span v-if="(overview?.active_researches_count ?? 0) > 0" class="text-xs text-accent animate-pulse">
+          <span v-if="(overview?.active_researches_count ?? 0) > 0" class="live-dot text-xs text-accent">
             {{ t("admin.overview.running") }}
           </span>
         </div>
       </div>
 
       <!-- Pending Tasks -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.pendingTasks") }}</span>
           <span class="text-sm">⏳</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-2xl font-bold text-ink">
+          <span class="text-2xl font-bold tabular-nums text-ink">
             {{ overview?.pending_tasks_count ?? 0 }}
           </span>
           <span class="text-xs text-muted">{{ t("admin.overview.inQueues") }}</span>
@@ -156,15 +202,15 @@ const isHealthy = computed(() => {
       </div>
 
       <!-- Failed / Dead-Letter Tasks -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.failedTasks") }}</span>
           <span class="text-sm">⚠️</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
           <span
-            class="text-2xl font-bold"
-            :class="(overview?.failed_tasks_count ?? 0) > 0 ? 'text-red-400 font-extrabold' : 'text-ink'"
+            class="text-2xl font-bold tabular-nums"
+            :class="(overview?.failed_tasks_count ?? 0) > 0 ? 'text-danger' : 'text-ink'"
           >
             {{ overview?.failed_tasks_count ?? 0 }}
           </span>
@@ -201,7 +247,7 @@ const isHealthy = computed(() => {
                 <div class="flex items-center gap-2">
                   <span
                     class="h-2 w-2 shrink-0 rounded-full"
-                    :class="w.is_alive ? 'bg-emerald-400 shadow shadow-emerald-400/50' : 'bg-red-400'"
+                    :class="w.is_alive ? 'bg-success' : 'bg-danger'"
                   />
                   <h4 class="truncate font-semibold text-ink text-sm">{{ w.worker_name }}</h4>
                 </div>
@@ -212,7 +258,7 @@ const isHealthy = computed(() => {
 
               <span
                 class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-                :class="w.is_alive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'"
+                :class="w.is_alive ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'"
               >
                 {{ w.is_alive ? t("admin.overview.alive") : t("admin.overview.offline") }}
               </span>
@@ -226,7 +272,7 @@ const isHealthy = computed(() => {
               </div>
               <div>
                 <span class="text-muted block text-[10px] uppercase tracking-wider">{{ t("admin.overview.jobsProcessed") }}</span>
-                <span class="font-bold text-accent">{{ w.processed_jobs }}</span>
+                <span class="font-bold tabular-nums text-accent">{{ w.processed_jobs }}</span>
               </div>
             </div>
 
@@ -237,20 +283,20 @@ const isHealthy = computed(() => {
             >
               <div class="text-[11px] font-medium text-muted flex justify-between">
                 <span>{{ t("admin.overview.metrics") }}:</span>
-                <span class="text-ink">
+                <span class="tabular-nums text-ink">
                   {{ w.extraction_metrics.success_count || 0 }} ok / {{ w.extraction_metrics.attempts || 0 }} total
                 </span>
               </div>
               <div class="text-[11px] text-muted flex justify-between">
                 <span>{{ t("admin.overview.downloaded") }}:</span>
-                <span class="text-ink">{{ formatBytes(w.extraction_metrics.downloaded_bytes || 0) }}</span>
+                <span class="tabular-nums text-ink">{{ formatBytes(w.extraction_metrics.downloaded_bytes || 0) }}</span>
               </div>
             </div>
 
             <!-- Error Banner -->
             <div
               v-if="w.last_error"
-              class="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-2 text-[11px] text-red-300 truncate"
+              class="mt-3 rounded-lg border border-danger/20 bg-danger/10 p-2 text-[11px] text-danger truncate"
               :title="w.last_error"
             >
               {{ w.last_error }}

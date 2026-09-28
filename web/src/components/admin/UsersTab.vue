@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { adminApi, apiErrorMessage, type ApiFile } from "@/lib/api";
+import { confirm, confirmState } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
+import SlideOver from "@/components/SlideOver.vue";
 import type {
   AdminEventLogItem,
   AdminPromptItem,
@@ -13,6 +15,7 @@ import type {
 } from "@/lib/types";
 
 const { t } = useI18n();
+const dangerHintId = useId();
 const auth = useAuthStore();
 const deletingUserId = ref<string | null>(null);
 
@@ -36,6 +39,8 @@ const searchQuery = ref("");
 const roleFilter = ref("");
 const onlineOnly = ref(false);
 const sortBy = ref("activity");
+// True from a keystroke in the search field until the answer for it arrives.
+const searchingUsers = ref(false);
 
 // ── Prompts Stream ───────────────────────────────────────────────────────────
 const prompts = ref<AdminPromptItem[]>([]);
@@ -47,6 +52,7 @@ const promptsPageSize = ref(15);
 const promptsSearch = ref("");
 const promptsTypeFilter = ref<"all" | "research" | "chat">("all");
 const copiedPromptId = ref<string | null>(null);
+const searchingPrompts = ref(false);
 
 // ── Live Feed ────────────────────────────────────────────────────────────────
 const events = ref<AdminEventLogItem[]>([]);
@@ -137,7 +143,12 @@ async function loadSummary() {
   }
 }
 
+// Each request is numbered and only the latest one may write the list: a slow answer
+// for «ан» never lands on top of the newer «анна» (apple-design §1: the screen follows
+// the last input, not the slowest response).
+let usersRequest = 0;
 async function loadUsers() {
+  const id = ++usersRequest;
   try {
     if (users.value.length === 0) {
       usersLoading.value = true;
@@ -151,13 +162,18 @@ async function loadUsers() {
       onlineOnly.value,
       sortBy.value
     );
+    if (id !== usersRequest) return;
     users.value = resp.users;
     totalUsers.value = resp.total_users;
     onlineUsers.value = resp.online_users;
   } catch (err) {
+    if (id !== usersRequest) return;
     usersError.value = apiErrorMessage(err, t);
   } finally {
-    usersLoading.value = false;
+    if (id === usersRequest) {
+      usersLoading.value = false;
+      searchingUsers.value = false;
+    }
   }
 }
 
@@ -183,29 +199,47 @@ async function loadEvents() {
 
 async function openUserDrawer(userId: string) {
   selectedUserId.value = userId;
+  selectedUserDetail.value = null;
   drawerOpen.value = true;
   drawerLoading.value = true;
   drawerError.value = null;
   drawerTab.value = "profile";
   try {
-    selectedUserDetail.value = await adminApi.getUserDetail(userId);
+    const detail = await adminApi.getUserDetail(userId);
+    // A slower answer for a user opened earlier doesn't replace the current one.
+    if (selectedUserId.value === userId) selectedUserDetail.value = detail;
   } catch (err) {
-    drawerError.value = apiErrorMessage(err, t);
+    if (selectedUserId.value === userId) drawerError.value = apiErrorMessage(err, t);
   } finally {
-    drawerLoading.value = false;
+    if (selectedUserId.value === userId) drawerLoading.value = false;
   }
 }
 
+// The sheet slides out with its content still in place; the next open replaces it.
 function closeUserDrawer() {
   drawerOpen.value = false;
-  selectedUserId.value = null;
-  selectedUserDetail.value = null;
+}
+
+function isSelf(user: AdminUserListItem): boolean {
+  return user.id === auth.user?.id || (!!auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase());
 }
 
 // CSV exports need the bearer token too (window.open would send only the cookie).
-// A failed export or user deletion is shown inline, not in a blocking dialog.
+// A failed export or user deletion is shown inline, not in a blocking dialog; a
+// completed deletion says so (apple-design §16: completion feedback) for a few seconds.
 const exporting = ref(false);
 const actionError = ref<string | null>(null);
+const actionNotice = ref<string | null>(null);
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showNotice(text: string) {
+  actionNotice.value = text;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    actionNotice.value = null;
+    noticeTimer = null;
+  }, 5000);
+}
 
 async function runExport(fetchCsv: () => Promise<ApiFile>, fallbackName: string) {
   if (exporting.value) return;
@@ -224,7 +258,9 @@ function exportCsv() {
   return runExport(adminApi.exportUsersCsv, "users_telemetry.csv");
 }
 
+let promptsRequest = 0;
 async function loadPrompts() {
+  const id = ++promptsRequest;
   try {
     promptsLoading.value = true;
     promptsError.value = null;
@@ -235,12 +271,17 @@ async function loadPrompts() {
       undefined,
       promptsTypeFilter.value
     );
+    if (id !== promptsRequest) return;
     prompts.value = res.prompts;
     promptsTotal.value = res.total_count;
   } catch (err) {
+    if (id !== promptsRequest) return;
     promptsError.value = apiErrorMessage(err, t);
   } finally {
-    promptsLoading.value = false;
+    if (id === promptsRequest) {
+      promptsLoading.value = false;
+      searchingPrompts.value = false;
+    }
   }
 }
 
@@ -260,15 +301,20 @@ async function copyPromptText(item: AdminPromptItem) {
   }
 }
 
+// Deleting a user is irreversible, so it (alone) asks first, in the app's own dialog.
 async function handleDeleteUser(user: AdminUserListItem) {
   actionError.value = null;
-  if (user.id === auth.user?.id || (auth.user?.email && user.email.toLowerCase() === auth.user.email.toLowerCase())) {
+  if (isSelf(user)) {
     actionError.value = t("admin.users.cannotDeleteSelf");
     return;
   }
-  const confirmed = window.confirm(
-    t("admin.users.deleteConfirm", { email: user.email })
-  );
+  const confirmed = await confirm({
+    title: t("admin.users.deleteUser"),
+    message: t("admin.users.deleteConfirm", { email: user.email }),
+    confirmText: t("admin.users.deleteUser"),
+    cancelText: t("common.cancel"),
+    danger: true,
+  });
   if (!confirmed) return;
 
   try {
@@ -277,6 +323,7 @@ async function handleDeleteUser(user: AdminUserListItem) {
     if (selectedUserId.value === user.id) {
       closeUserDrawer();
     }
+    showNotice(`${t("admin.users.userDeleted")}: ${user.email}`);
     await loadUsers();
     await loadSummary();
   } catch (err) {
@@ -287,22 +334,28 @@ async function handleDeleteUser(user: AdminUserListItem) {
 }
 
 // ── Watchers & Lifecycle ─────────────────────────────────────────────────────
+// Search reacts on the keystroke (a spinner in the field) and asks the server after a
+// short 200 ms pause; the spinner stops when the answer for the latest query arrives.
+const SEARCH_DEBOUNCE_MS = 200;
+
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
+  searchingUsers.value = true;
   if (searchDebounce) clearTimeout(searchDebounce);
   searchDebounce = setTimeout(() => {
     page.value = 1;
     loadUsers();
-  }, 350);
+  }, SEARCH_DEBOUNCE_MS);
 });
 
 let promptsSearchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(promptsSearch, () => {
+  searchingPrompts.value = true;
   if (promptsSearchDebounce) clearTimeout(promptsSearchDebounce);
   promptsSearchDebounce = setTimeout(() => {
     promptsPage.value = 1;
     loadPrompts();
-  }, 350);
+  }, SEARCH_DEBOUNCE_MS);
 });
 
 watch([roleFilter, onlineOnly, sortBy, page], () => {
@@ -322,6 +375,8 @@ watch(eventCategory, () => {
 });
 
 watch(activeSubView, (val) => {
+  // The table may have gone without a pointerleave.
+  hoverPaused.value = false;
   if (val === "feed") {
     loadEvents();
   } else if (val === "prompts") {
@@ -331,10 +386,16 @@ watch(activeSubView, (val) => {
   }
 });
 
+// Rows sorted by activity re-order on refresh, so nothing refreshes while the pointer is
+// over the table, a user is open or a confirmation is pending: the row under the
+// pointer stays the row that gets clicked (apple-design §2, targets hold still).
+const hoverPaused = ref(false);
+
 function setupAutoRefresh() {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
   if (autoRefresh.value) {
     autoRefreshTimer = setInterval(() => {
+      if (hoverPaused.value || drawerOpen.value || confirmState.open) return;
       if (activeSubView.value === "feed") {
         loadEvents();
       } else if (activeSubView.value === "prompts") {
@@ -364,6 +425,7 @@ onUnmounted(() => {
   }
   if (searchDebounce) clearTimeout(searchDebounce);
   if (promptsSearchDebounce) clearTimeout(promptsSearchDebounce);
+  if (noticeTimer) clearTimeout(noticeTimer);
 });
 
 const totalPages = computed(() => {
@@ -401,7 +463,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(summary?.total_users ?? totalUsers) }}
         </div>
         <div class="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
@@ -410,15 +472,12 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
 
       <!-- Online Now -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 transition-all hover:border-emerald-500/30">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4 transition-all hover:border-success/30">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.users.kpiOnlineNow") }}</span>
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-            <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-          </span>
+          <span class="live-dot inline-flex h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true"></span>
         </div>
-        <div class="mt-2 text-2xl font-black text-emerald-400">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-success">
           {{ formatNumber(summary?.online_users_now ?? summary?.online_now ?? onlineUsers) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -434,7 +493,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
           </svg>
         </div>
-        <div class="mt-2 flex items-baseline gap-1 text-2xl font-black text-ink">
+        <div class="mt-2 flex items-baseline gap-1 text-2xl font-bold tabular-nums text-ink">
           <span>{{ formatNumber(summary?.dau_today ?? summary?.dau ?? 0) }}</span>
           <span class="text-xs font-normal text-muted">/ {{ formatNumber(summary?.wau_7d ?? summary?.wau ?? 0) }} / {{ formatNumber(summary?.mau_30d ?? summary?.mau ?? 0) }}</span>
         </div>
@@ -451,7 +510,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(summary?.total_researches ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -467,7 +526,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-emerald-400">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-success">
           {{ formatCurrency(summary?.total_cost_usd ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -483,7 +542,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'directory' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'directory' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'directory'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -495,14 +554,14 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'prompts' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'prompts' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'prompts'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
           </svg>
           <span>{{ t("admin.users.tabPrompts") }}</span>
-          <span v-if="promptsTotal > 0" class="ml-0.5 rounded-full bg-surface/80 px-1.5 py-0.5 text-[10px] font-mono">
+          <span v-if="promptsTotal > 0" class="ml-0.5 rounded-full bg-surface/80 px-1.5 py-0.5 text-[10px] tabular-nums text-ink">
             {{ promptsTotal }}
           </span>
         </button>
@@ -510,7 +569,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'platforms' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'platforms' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'platforms'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -522,13 +581,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'feed' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'feed' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'feed'"
         >
-          <span class="relative flex h-2 w-2">
-            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
-            <span class="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
-          </span>
+          <span class="live-dot inline-flex h-2 w-2 rounded-full" :class="activeSubView === 'feed' ? 'bg-onAccent' : 'bg-accent'" aria-hidden="true"></span>
           <span>{{ t("admin.users.tabLiveFeed") }}</span>
         </button>
       </div>
@@ -542,7 +598,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <input
             v-model="autoRefresh"
             type="checkbox"
-            class="rounded border-bd text-accent focus:ring-0"
+            class="rounded border-bd text-accent"
           />
           <span>{{ t("admin.users.autoRefresh") }}</span>
         </label>
@@ -561,7 +617,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <button
           type="button"
-          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-onAccent shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
           :disabled="exporting"
           @click="activeSubView === 'prompts' ? exportPromptsCsv() : exportCsv()"
         >
@@ -573,7 +629,8 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
     </div>
 
-    <p v-if="actionError" class="text-right text-xs text-red-400">{{ actionError }}</p>
+    <p v-if="actionError" class="text-right text-xs text-danger" role="alert">{{ actionError }}</p>
+    <p v-else-if="actionNotice" class="text-right text-xs text-success" role="status" data-test="users-notice">{{ actionNotice }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- VIEW 1: USER DIRECTORY                                                  -->
@@ -590,14 +647,21 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             v-model="searchQuery"
             type="text"
             :placeholder="t('admin.users.searchPlaceholder')"
-            class="w-full rounded-xl border border-bd bg-surface/60 py-2 pl-9 pr-4 text-xs text-ink placeholder-muted transition focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            :aria-busy="searchingUsers ? 'true' : undefined"
+            class="w-full rounded-xl border border-bd bg-surface/60 py-2 pl-9 pr-9 text-xs text-ink placeholder-muted transition"
           />
+          <span
+            v-if="searchingUsers"
+            class="pointer-events-none absolute right-3 top-1/2 -mt-2 inline-block h-4 w-4 animate-spin text-center text-xs leading-4 text-muted"
+            aria-hidden="true"
+            data-test="users-searching"
+          >↻</span>
         </div>
 
         <!-- Role Filter -->
         <select
           v-model="roleFilter"
-          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition"
         >
           <option value="">{{ t("admin.users.allRoles") }}</option>
           <option value="user">{{ t("admin.users.roleUsersOnly") }}</option>
@@ -607,7 +671,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <!-- Sort By -->
         <select
           v-model="sortBy"
-          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition"
         >
           <option value="activity">{{ t("admin.users.sortByActivity") }}</option>
           <option value="registered">{{ t("admin.users.sortByRegistered") }}</option>
@@ -621,19 +685,24 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <input
             v-model="onlineOnly"
             type="checkbox"
-            class="rounded border-bd text-accent focus:ring-0"
+            class="rounded border-bd text-accent"
           />
           <span>{{ t("admin.users.filterOnlineOnly") }}</span>
         </label>
       </div>
 
-      <!-- Users Table -->
-      <div class="overflow-hidden rounded-xl border border-bd bg-surface/40">
+      <!-- Users Table (auto-refresh holds while the pointer is over it) -->
+      <div
+        class="overflow-hidden rounded-xl border border-bd bg-surface/40"
+        data-test="users-table"
+        @pointerenter="hoverPaused = true"
+        @pointerleave="hoverPaused = false"
+      >
         <div v-if="usersLoading && users.length === 0" class="flex h-64 items-center justify-center text-xs text-muted">
           {{ t("common.loading") }}
         </div>
 
-        <div v-else-if="usersError" class="p-6 text-center text-xs text-red-400">
+        <div v-else-if="usersError" class="p-6 text-center text-xs text-danger" role="alert">
           {{ usersError }}
         </div>
 
@@ -670,7 +739,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                       </div>
                       <span
                         v-if="u.is_online"
-                        class="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-bg"
+                        class="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-success ring-2 ring-bg"
                         :title="t('admin.users.onlineNow')"
                       ></span>
                     </div>
@@ -679,7 +748,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                         <span>{{ u.name || t("admin.users.unnamed") }}</span>
                         <span
                           v-if="u.is_admin"
-                          class="rounded bg-accent/20 px-1.5 py-0.5 text-[9.5px] font-bold text-accent"
+                          class="rounded bg-accent/20 px-1.5 py-0.5 text-[9.5px] font-semibold text-accent"
                         >
                           ADMIN
                         </span>
@@ -694,9 +763,9 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <div class="flex items-center gap-1.5">
                     <span
                       v-if="u.is_online"
-                      class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                      class="inline-block h-1.5 w-1.5 rounded-full bg-success"
                     ></span>
-                    <span :class="u.is_online ? 'font-semibold text-emerald-400' : 'text-muted'">
+                    <span :class="u.is_online ? 'font-semibold text-success' : 'text-muted'">
                       {{ u.is_online ? t("admin.users.online") : timeAgo(u.last_seen_at) }}
                     </span>
                   </div>
@@ -747,7 +816,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <div class="font-semibold text-ink">
                     {{ formatCurrency(u.total_cost_usd) }}
                   </div>
-                  <div class="font-mono text-[10px] text-muted">
+                  <div class="text-[10px] text-muted">
                     {{ formatNumber(u.total_tokens) }} tok
                   </div>
                 </td>
@@ -763,10 +832,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                       {{ t("admin.users.inspect") }}
                     </button>
                     <button
-                      v-if="u.id !== auth.user?.id && (!auth.user?.email || u.email.toLowerCase() !== auth.user.email.toLowerCase())"
+                      v-if="!isSelf(u)"
                       type="button"
                       :disabled="deletingUserId === u.id"
-                      class="rounded-lg border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                      class="press hit rounded-lg border border-danger/30 bg-danger/10 p-1 text-danger hover:bg-danger/20 hover:text-danger/80 disabled:opacity-50"
                       :title="t('admin.users.deleteUser')"
                       @click="handleDeleteUser(u)"
                     >
@@ -795,7 +864,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               {{ t("admin.users.prev") }}
             </button>
-            <span class="px-2 font-mono text-[11px] text-ink">
+            <span class="px-2 text-[11px] tabular-nums text-ink">
               {{ page }} / {{ totalPages }}
             </span>
             <button
@@ -826,31 +895,38 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             v-model="promptsSearch"
             type="text"
             :placeholder="t('admin.users.searchPromptsPlaceholder')"
-            class="w-full rounded-xl border border-bd bg-surface/50 py-2 pl-9 pr-4 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            :aria-busy="searchingPrompts ? 'true' : undefined"
+            class="w-full rounded-xl border border-bd bg-surface/50 py-2 pl-9 pr-9 text-xs text-ink placeholder:text-muted"
           />
+          <span
+            v-if="searchingPrompts"
+            class="pointer-events-none absolute right-3 top-1/2 -mt-2 inline-block h-4 w-4 animate-spin text-center text-xs leading-4 text-muted"
+            aria-hidden="true"
+          >↻</span>
         </div>
 
         <!-- Filter by Prompt Type -->
         <select
           v-model="promptsTypeFilter"
-          class="rounded-xl border border-bd bg-surface/50 px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/50 px-3 py-2 text-xs text-ink"
         >
           <option value="all">{{ t("admin.users.promptTypeAll") }}</option>
           <option value="research">{{ t("admin.users.promptTypeResearch") }}</option>
           <option value="chat">{{ t("admin.users.promptTypeChat") }}</option>
         </select>
 
-        <span class="text-xs text-muted font-mono">
+        <span class="text-xs tabular-nums text-muted">
           {{ t("admin.users.totalPromptsCount", { count: promptsTotal }) }}
         </span>
       </div>
 
       <!-- Prompts Feed / Cards List -->
-      <div v-if="promptsLoading" class="flex h-64 items-center justify-center text-xs text-muted">
+      <!-- A refresh or a new query keeps the current cards on screen; only a first load shows the placeholder. -->
+      <div v-if="promptsLoading && prompts.length === 0" class="flex h-64 items-center justify-center text-xs text-muted">
         {{ t("common.loading") }}
       </div>
 
-      <div v-else-if="promptsError" class="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+      <div v-else-if="promptsError" class="rounded-xl border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
         {{ promptsError }}
       </div>
 
@@ -879,7 +955,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               </span>
               <span
                 v-else
-                class="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-400"
+                class="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 dark:text-emerald-400"
               >
                 {{ t("admin.users.promptTypeChat") }}
               </span>
@@ -907,13 +983,13 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <!-- Right Actions & Meta -->
             <div class="flex items-center gap-3">
               <!-- Tokens & Cost (if available) -->
-              <span v-if="p.total_tokens > 0" class="font-mono text-[11px] text-muted">
+              <span v-if="p.total_tokens > 0" class="text-[11px] tabular-nums text-muted">
                 {{ formatNumber(p.total_tokens) }} tok
-                <span class="text-emerald-400">({{ formatCurrency(p.cost_usd) }})</span>
+                <span class="text-success">({{ formatCurrency(p.cost_usd) }})</span>
               </span>
 
               <!-- Time -->
-              <span class="font-mono text-[11px] text-muted" :title="formatDate(p.created_at)">
+              <span class="text-[11px] tabular-nums text-muted" :title="formatDate(p.created_at)">
                 {{ timeAgo(p.created_at) }}
               </span>
 
@@ -926,7 +1002,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 <svg v-if="copiedPromptId !== p.id" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <svg v-else class="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg v-else class="h-3 w-3 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
                 <span>{{ copiedPromptId === p.id ? t("admin.users.promptCopied") : t("admin.users.copyPrompt") }}</span>
@@ -944,7 +1020,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <!-- Prompts Pagination Controls -->
         <div v-if="promptsTotalPages > 1" class="flex items-center justify-between border-t border-bd pt-4 text-xs">
-          <span class="text-muted">
+          <span class="tabular-nums text-muted">
             {{ t("admin.users.showingCount", { count: prompts.length, total: promptsTotal }) }}
           </span>
           <div class="flex items-center gap-2">
@@ -956,7 +1032,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               {{ t("admin.users.prev") }}
             </button>
-            <span class="font-mono text-muted">
+            <span class="tabular-nums text-muted">
               {{ promptsPage }} / {{ promptsTotalPages }}
             </span>
             <button
@@ -994,7 +1070,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1027,7 +1103,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1060,7 +1136,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium capitalize text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1093,7 +1169,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium uppercase text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1120,7 +1196,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === '' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === '' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = ''"
           >
             {{ t("admin.users.catAll") }}
@@ -1128,7 +1204,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'ui' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'ui' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'ui'"
           >
             {{ t("admin.users.catUi") }}
@@ -1136,7 +1212,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'prompt' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'prompt' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'prompt'"
           >
             {{ t("admin.users.catPrompts") }}
@@ -1144,22 +1220,22 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'system' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'system' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'system'"
           >
             {{ t("admin.users.catSystem") }}
           </button>
         </div>
 
-        <div class="flex items-center gap-2 text-xs text-muted font-mono">
-          <span class="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <div class="flex items-center gap-2 text-xs tabular-nums text-muted">
+          <span class="live-dot inline-block h-2 w-2 rounded-full bg-success" aria-hidden="true"></span>
           <span>{{ t("admin.users.totalStreamEvents", { count: eventsTotal }) }}</span>
         </div>
       </div>
 
       <!-- Events List -->
       <div class="rounded-xl border border-bd bg-surface/40 overflow-hidden divide-y divide-bd">
-        <div v-if="eventsError" class="p-4 text-center text-xs text-red-400">
+        <div v-if="eventsError" class="p-4 text-center text-xs text-danger" role="alert">
           {{ eventsError }}
         </div>
 
@@ -1179,11 +1255,11 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-2">
               <span
-                class="rounded-full px-2 py-0.5 font-mono text-[10px] font-bold uppercase"
+                class="rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase"
                 :class="{
-                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
-                  'bg-blue-500/15 text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
-                  'bg-purple-500/15 text-purple-400 border border-purple-500/30': ev.event_category === 'system',
+                  'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
+                  'bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
+                  'bg-purple-500/15 text-purple-700 dark:text-purple-400 border border-purple-500/30': ev.event_category === 'system',
                   'bg-surface text-muted border border-bd': !['prompt', 'ui', 'system'].includes(ev.event_category),
                 }"
               >
@@ -1209,12 +1285,18 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
     <!-- ──────────────────────────────────────────────────────────────────────── -->
     <!-- SLIDE-OVER DRAWER: USER DETAIL & TELEMETRY INSPECTOR                     -->
     <!-- ──────────────────────────────────────────────────────────────────────── -->
-    <div
-      v-if="drawerOpen"
-      class="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-opacity"
-      @click.self="closeUserDrawer"
+    <!-- A modal sheet from the right (SlideOver: scrim, Esc, a drag-out-safe backdrop,
+         focus handling, drag to dismiss). Teleported, so the fixed layers sit outside
+         this tab's spaced column. -->
+    <Teleport to="body">
+    <SlideOver
+      :open="drawerOpen"
+      side="right"
+      :label="activeUser?.email ?? t('admin.users.drawerTabProfile')"
+      data-test="user-drawer"
+      @close="closeUserDrawer"
     >
-      <div class="h-full w-full max-w-2xl overflow-y-auto border-l border-bd bg-bg p-6 text-ink shadow-2xl">
+      <div v-if="selectedUserId" class="h-full overflow-y-auto p-6">
         <!-- Drawer Header -->
         <div class="flex items-start justify-between border-b border-bd pb-4">
           <div class="flex items-center gap-3">
@@ -1228,13 +1310,13 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </h3>
                 <span
                   v-if="activeUser?.is_admin"
-                  class="rounded bg-accent/20 px-2 py-0.5 text-[10px] font-bold text-accent"
+                  class="rounded bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent"
                 >
                   ADMIN
                 </span>
                 <span
                   v-if="activeUser?.is_online"
-                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-400"
+                  class="rounded-full bg-success/15 border border-success/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-success"
                 >
                   {{ t("admin.users.online") }}
                 </span>
@@ -1243,33 +1325,21 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <button
-              v-if="activeUser && activeUser.id !== auth.user?.id && (!auth.user?.email || activeUser.email.toLowerCase() !== auth.user.email.toLowerCase())"
-              type="button"
-              :disabled="deletingUserId === activeUser.id"
-              class="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
-              @click="handleDeleteUser(activeUser)"
-            >
-              <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              <span>{{ deletingUserId === activeUser.id ? t("admin.users.deleting") : t("admin.users.deleteUser") }}</span>
-            </button>
-
-            <button
-              type="button"
-              class="rounded-lg border border-bd bg-surface p-1.5 text-muted transition hover:text-ink"
-              @click="closeUserDrawer"
-            >
-              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+          <!-- Close only: the destructive action lives apart, in the profile's danger zone. -->
+          <button
+            type="button"
+            class="press hit shrink-0 rounded-lg border border-bd bg-surface p-1.5 text-muted hover:text-ink"
+            :aria-label="t('common.close')"
+            :title="t('common.close')"
+            @click="closeUserDrawer"
+          >
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
-        <p v-if="actionError" class="mt-3 text-xs text-red-400">{{ actionError }}</p>
+        <p v-if="actionError" class="mt-3 text-xs text-danger" role="alert">{{ actionError }}</p>
 
         <div v-if="drawerLoading && !selectedUserDetail" class="mt-8 space-y-4 animate-pulse">
           <div class="grid grid-cols-3 gap-3">
@@ -1281,7 +1351,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <div class="h-28 rounded-xl bg-surface/60"></div>
         </div>
 
-        <div v-else-if="drawerError" class="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+        <div v-else-if="drawerError" class="mt-6 rounded-xl border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
           {{ drawerError }}
         </div>
 
@@ -1328,21 +1398,21 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <div class="grid grid-cols-3 gap-3 rounded-xl border border-bd bg-surface/40 p-4 text-center">
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.colResearches") }}</div>
-                <div class="mt-1 text-lg font-bold text-ink">{{ activeUser?.researches_count ?? 0 }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-ink">{{ activeUser?.researches_count ?? 0 }}</div>
               </div>
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.totalTokens") }}</div>
-                <div class="mt-1 text-lg font-bold text-ink">{{ formatNumber(activeUser?.total_tokens) }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-ink">{{ formatNumber(activeUser?.total_tokens) }}</div>
               </div>
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.colSpend") }}</div>
-                <div class="mt-1 text-lg font-bold text-emerald-400">{{ formatCurrency(activeUser?.total_cost_usd) }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-success">{{ formatCurrency(activeUser?.total_cost_usd) }}</div>
               </div>
             </div>
 
             <!-- Technical Fingerprint Card -->
             <div class="rounded-xl border border-bd bg-surface/40 p-5 space-y-4">
-              <h4 class="text-xs font-bold uppercase tracking-wider text-muted">
+              <h4 class="text-xs font-semibold uppercase tracking-wider text-muted">
                 {{ t("admin.users.techFingerprint") }}
               </h4>
 
@@ -1373,6 +1443,29 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </div>
               </div>
             </div>
+
+            <!-- Danger zone: set apart at the end, never next to Close (§16 Grouping). -->
+            <section
+              v-if="activeUser && !isSelf(activeUser)"
+              class="!mt-8 rounded-xl border border-danger/30 bg-danger/5 p-4"
+              data-test="danger-zone"
+            >
+              <h4 class="text-xs font-semibold text-danger">{{ t("admin.users.dangerZone") }}</h4>
+              <!-- What the action costs, said before it (and read out with the button). -->
+              <p :id="dangerHintId" class="mt-1 text-2xs text-muted text-pretty" data-test="danger-zone-hint">{{ t("admin.users.dangerZoneHint") }}</p>
+              <button
+                type="button"
+                :aria-describedby="dangerHintId"
+                class="press mt-3 flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                :disabled="deletingUserId === activeUser.id"
+                @click="handleDeleteUser(activeUser)"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>{{ deletingUserId === activeUser.id ? t("admin.users.deleting") : t("admin.users.deleteUser") }}</span>
+              </button>
+            </section>
           </div>
 
           <!-- Drawer Content: Sessions Log -->
@@ -1390,7 +1483,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold text-accent">{{ s.device_type }}</span>
                   <span>{{ s.browser || "Browser" }} on {{ s.os || "OS" }}</span>
                 </div>
-                <span class="font-mono text-[11px] text-muted">{{ timeAgo(s.last_active_at) }}</span>
+                <span class="text-[11px] tabular-nums text-muted">{{ timeAgo(s.last_active_at) }}</span>
               </div>
               <div class="grid grid-cols-2 gap-2 text-[11px] text-muted font-mono">
                 <div>IP: {{ s.ip_address || "—" }}</div>
@@ -1419,7 +1512,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               </div>
               <div class="flex items-center justify-between text-[11px] text-muted">
                 <span>{{ formatDate(r.created_at) }}</span>
-                <span class="font-mono text-ink">{{ formatNumber(r.total_tokens) }} tok ({{ formatCurrency(r.cost_usd) }})</span>
+                <span class="tabular-nums text-ink">{{ formatNumber(r.total_tokens) }} tok ({{ formatCurrency(r.cost_usd) }})</span>
               </div>
             </div>
           </div>
@@ -1436,16 +1529,17 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent">{{ ev.event_category }}</span>
+                  <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-accent">{{ ev.event_category }}</span>
                   <span class="font-medium text-ink">{{ ev.event_name }}</span>
                 </div>
-                <span class="font-mono text-[10px] text-muted">{{ timeAgo(ev.created_at) }}</span>
+                <span class="text-[10px] tabular-nums text-muted">{{ timeAgo(ev.created_at) }}</span>
               </div>
               <pre v-if="ev.details && Object.keys(ev.details).length > 0" class="max-h-20 overflow-y-auto rounded bg-surface/80 p-1.5 font-mono text-[10px] text-muted">{{ JSON.stringify(ev.details, null, 2) }}</pre>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </SlideOver>
+    </Teleport>
   </div>
 </template>

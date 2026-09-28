@@ -275,3 +275,41 @@ describe("router: an emailed link's one-time token", () => {
     for (const route of flagged) expect(linkPageOf(route.path), route.path).toBe(route.name);
   });
 });
+
+describe("router: the browser tab says where you are", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("names the page in the tab title, and follows a language switch", async () => {
+    const router = await loadApp(true);
+    const { i18n } = await import("@/i18n");
+    i18n.global.locale.value = "en";
+
+    await router.push("/settings");
+    expect(document.title).toBe(`${i18n.global.t("settings.title")} — Veris`);
+
+    i18n.global.locale.value = "ru";
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(document.title).toBe(`${i18n.global.t("settings.title")} — Veris`);
+    expect(document.title).not.toContain("Account settings");
+  });
+
+  it("falls back to the product's name on pages that name themselves", async () => {
+    const router = await loadApp(true);
+    await router.push("/settings");
+    await router.push("/");
+
+    expect(document.title).toBe("Veris — verifiable research");
+  });
+
+  it("names only keys that exist", async () => {
+    const router = await loadApp(false);
+    const { i18n } = await import("@/i18n");
+
+    const keys = router.getRoutes().flatMap((r) => (r.meta.titleKey ? [r.meta.titleKey] : []));
+    expect(keys.length).toBeGreaterThanOrEqual(7);
+    for (const key of keys) expect(i18n.global.te(key, "ru"), key).toBe(true);
+  });
+});
