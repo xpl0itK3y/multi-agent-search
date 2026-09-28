@@ -623,13 +623,16 @@ class SQLAlchemyTaskStore:
 
     def put_cached_search(self, cache_key: str, payload: list[dict]) -> None:
         now = datetime.now(timezone.utc)
+        # One statement: two workers caching the same query at once both succeed (a
+        # check-then-insert let the second one fail on the primary key).
         with self.session_scope() as session:
-            row = session.get(SearchCacheORM, cache_key)
-            if row is None:
-                session.add(SearchCacheORM(cache_key=cache_key, payload=payload, created_at=now))
-            else:
-                row.payload = payload
-                row.created_at = now
+            insert_stmt = pg_insert(SearchCacheORM).values(cache_key=cache_key, payload=payload, created_at=now)
+            session.execute(
+                insert_stmt.on_conflict_do_update(
+                    index_elements=[SearchCacheORM.cache_key],
+                    set_={"payload": insert_stmt.excluded.payload, "created_at": insert_stmt.excluded.created_at},
+                )
+            )
 
     def get_research(self, research_id: str) -> ResearchRecord | None:
         with self.session_scope() as session:
@@ -697,20 +700,30 @@ class SQLAlchemyTaskStore:
             if len(research_ids) < self._RETENTION_BATCH_SIZE:
                 return deleted
 
-    def _delete_in_batches(self, model, predicate) -> int:
-        deleted = 0
+    def _delete_batches(self, model, predicate):
+        """Delete the rows matching predicate, one short transaction per batch, yielding each
+        batch's ids. The predicate is also in the DELETE itself, like cleanup_old_researches: a
+        row changed since its batch was picked (a job requeued, a session active again) is kept."""
         while True:
             with self.session_scope() as session:
                 batch = select(model.id).where(predicate).limit(self._RETENTION_BATCH_SIZE)
-                result = session.execute(
-                    delete(model)
-                    .where(model.id.in_(batch.scalar_subquery()))
-                    .execution_options(synchronize_session=False)
+                ids = list(
+                    session.execute(
+                        delete(model)
+                        .where(model.id.in_(batch.scalar_subquery()), predicate)
+                        .returning(model.id)
+                        .execution_options(synchronize_session=False)
+                    ).scalars()
                 )
-            count = result.rowcount or 0
-            deleted += count
-            if count < self._RETENTION_BATCH_SIZE:
-                return deleted
+            yield ids
+            if len(ids) < self._RETENTION_BATCH_SIZE:
+                return
+
+    def _delete_in_batches(self, model, predicate) -> int:
+        return sum(len(ids) for ids in self._delete_batches(model, predicate))
+
+    def _delete_ids_in_batches(self, model, predicate) -> list[str]:
+        return [row_id for ids in self._delete_batches(model, predicate) for row_id in ids]
 
     def cleanup_old_user_events(self, older_than: datetime) -> int:
         return self._delete_in_batches(UserEventORM, UserEventORM.created_at < older_than)
@@ -1536,21 +1549,13 @@ class SQLAlchemyTaskStore:
         self,
         older_than: datetime,
     ) -> list[str]:
-        with self.session_scope() as session:
-            statement = (
-                select(ResearchFinalizeJobORM.id)
-                .where(ResearchFinalizeJobORM.status.in_(
-                    [FinalizeJobStatus.COMPLETED.value, FinalizeJobStatus.DEAD_LETTER.value]
-                ))
-                .where(ResearchFinalizeJobORM.updated_at < older_than)
-            )
-            job_ids = list(session.execute(statement).scalars().all())
-            if not job_ids:
-                return []
-            session.execute(
-                delete(ResearchFinalizeJobORM).where(ResearchFinalizeJobORM.id.in_(job_ids))
-            )
-            return job_ids
+        return self._delete_ids_in_batches(
+            ResearchFinalizeJobORM,
+            and_(
+                ResearchFinalizeJobORM.status.in_([FinalizeJobStatus.COMPLETED.value, FinalizeJobStatus.DEAD_LETTER.value]),
+                ResearchFinalizeJobORM.updated_at < older_than,
+            ),
+        )
 
     def add_search_task_job(
         self,
@@ -1696,7 +1701,7 @@ class SQLAlchemyTaskStore:
         error: str | None = None,
     ) -> SearchTaskJob | None:
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id)
+            job = session.get(SearchTaskJobORM, job_id, with_for_update=True)
             if job is None:
                 return None
 
@@ -1713,7 +1718,9 @@ class SQLAlchemyTaskStore:
         error: str,
     ) -> SearchTaskJob | None:
         with self.session_scope() as session:
-            job = session.get(SearchTaskJobORM, job_id)
+            # Locked: the next status depends on attempt_count, which a concurrent claim
+            # or requeue may be changing.
+            job = session.get(SearchTaskJobORM, job_id, with_for_update=True)
             if job is None:
                 return None
 
@@ -1801,41 +1808,34 @@ class SQLAlchemyTaskStore:
         self,
         stale_before: datetime,
     ) -> list[SearchTaskJob]:
+        # One guarded UPDATE, like the finalize twin: a job its runner completed or failed
+        # after the stale scan began is re-checked here and kept. (Reading the rows first and
+        # writing them back by id reset a just-completed job to PENDING, so it ran twice.)
         with self.session_scope() as session:
-            statement = (
-                select(SearchTaskJobORM)
-                .where(SearchTaskJobORM.status == SearchJobStatus.RUNNING.value)
-                .where(SearchTaskJobORM.updated_at < stale_before)
-            )
-            jobs = session.execute(statement).scalars().all()
-            recovered = []
-            for job in jobs:
-                job.status = SearchJobStatus.PENDING.value
-                job.error = None
-                job.updated_at = datetime.now(timezone.utc)
-                recovered.append(job)
-            session.flush()
-            return [search_task_job_orm_to_schema(job) for job in recovered]
+            recovered = session.execute(
+                update(SearchTaskJobORM)
+                .where(
+                    SearchTaskJobORM.status == SearchJobStatus.RUNNING.value,
+                    SearchTaskJobORM.updated_at < stale_before,
+                )
+                .values(status=SearchJobStatus.PENDING.value, error=None, updated_at=datetime.now(timezone.utc))
+                .returning(SearchTaskJobORM)
+                .execution_options(synchronize_session=False)
+            ).scalars().all()
+            jobs = sorted(recovered, key=lambda item: item.created_at)
+            return [search_task_job_orm_to_schema(job) for job in jobs]
 
     def cleanup_old_search_task_jobs(
         self,
         older_than: datetime,
     ) -> list[str]:
-        with self.session_scope() as session:
-            statement = (
-                select(SearchTaskJobORM.id)
-                .where(SearchTaskJobORM.status.in_(
-                    [SearchJobStatus.COMPLETED.value, SearchJobStatus.DEAD_LETTER.value]
-                ))
-                .where(SearchTaskJobORM.updated_at < older_than)
-            )
-            job_ids = list(session.execute(statement).scalars().all())
-            if not job_ids:
-                return []
-            session.execute(
-                delete(SearchTaskJobORM).where(SearchTaskJobORM.id.in_(job_ids))
-            )
-            return job_ids
+        return self._delete_ids_in_batches(
+            SearchTaskJobORM,
+            and_(
+                SearchTaskJobORM.status.in_([SearchJobStatus.COMPLETED.value, SearchJobStatus.DEAD_LETTER.value]),
+                SearchTaskJobORM.updated_at < older_than,
+            ),
+        )
 
     def cleanup_search_cache(self, older_than: datetime) -> int:
         with self.session_scope() as session:
@@ -1856,10 +1856,15 @@ class SQLAlchemyTaskStore:
         maintenance_summary: dict | None = None,
     ) -> WorkerHeartbeat:
         with self.session_scope() as session:
-            heartbeat = session.get(WorkerHeartbeatORM, worker_name)
-            if heartbeat is None:
-                heartbeat = WorkerHeartbeatORM(worker_name=worker_name)
-                session.add(heartbeat)
+            # Insert-if-missing, then lock: the step events merge with the stored ones, so the
+            # read and the write must not interleave with another writer (and a first beat
+            # racing another no longer fails on the primary key).
+            session.execute(
+                pg_insert(WorkerHeartbeatORM).values(worker_name=worker_name).on_conflict_do_nothing(
+                    index_elements=[WorkerHeartbeatORM.worker_name]
+                )
+            )
+            heartbeat = session.get(WorkerHeartbeatORM, worker_name, with_for_update=True, populate_existing=True)
 
             heartbeat.processed_jobs = processed_jobs
             heartbeat.status = status
