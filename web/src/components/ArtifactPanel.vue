@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch, type Ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch, type Ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { api, apiErrorMessage } from "@/lib/api";
 import { confirm } from "@/lib/confirm";
 import { saveFile } from "@/lib/download";
+import { smoothOrAuto } from "@/lib/motion";
 import { safeHttpUrl } from "@/lib/url";
+import { useDismiss } from "@/lib/useDismiss";
 import type { CitationAudit, ComparisonRow, ComparisonTable, ConfidenceReport, Conflict, CrossLanguageReport, NumericCheck, RedTeamReport, ShareInfo, SourceIndependence, SourceReputation, SourceIntegrity, StanceBalance, SourcePreview, VerificationReport } from "@/lib/types";
 import MarkdownView from "./MarkdownView.vue";
 import ResearchDashboard from "./ResearchDashboard.vue";
@@ -15,7 +17,9 @@ const props = defineProps<{ id: string; report: string; isFinal: boolean }>();
 
 // Declared before every watcher: the immediate isFinal watcher below reads `t` and the
 // share state, and a `const` read before its line throws (a TDZ ReferenceError).
-const { t } = useI18n();
+const { t, locale } = useI18n();
+// Unique per panel: a thread can show several reports, each with its own tabs.
+const uid = useId();
 
 // ── public share link ─────────────────────────────────────────────────────────
 // Private by default: opening the popover only shows the state. A link is created by
@@ -42,6 +46,7 @@ async function ensureShare() {
 function toggleShareMenu() {
   shareMenuOpen.value = !shareMenuOpen.value;
   if (shareMenuOpen.value) {
+    exportMenuOpen.value = false;
     shareError.value = null;
     shareRevoked.value = false;
   }
@@ -92,6 +97,12 @@ async function revokeShare() {
     shareBusy.value = false;
   }
 }
+
+// Both menus grow from their trigger and close on an outside press or Escape, which
+// gives focus back to the trigger (apple-design §7, §16 "how do I get out?").
+const shareRoot = ref<HTMLElement | null>(null);
+const shareBtn = ref<HTMLElement | null>(null);
+useDismiss(shareRoot, shareMenuOpen, { trigger: shareBtn });
 
 type Tab = "report" | "dashboard" | "comparison" | "sources" | "confidence" | "conflicts" | "redteam";
 const tab = ref<Tab>("report");
@@ -380,6 +391,67 @@ const tabKeys = computed<Tab[]>(() => {
   return base;
 });
 
+// ── tab strip ────────────────────────────────────────────────────────────────
+const tabStrip = ref<HTMLElement | null>(null);
+const canScrollRight = ref(false);
+const EDGE_FADE_PX = 28; // .edge-fade-x
+function updateOverflow() {
+  const el = tabStrip.value;
+  canScrollRight.value = !!el && el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+// A vertical wheel scrolls the strip sideways while it can still move that way; at either
+// end the wheel is left to scroll the page.
+function onStripWheel(e: WheelEvent) {
+  const el = tabStrip.value;
+  if (!el || el.scrollWidth <= el.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1; // lines, pages
+  const delta = e.deltaY * unit;
+  const max = el.scrollWidth - el.clientWidth;
+  if ((delta > 0 && el.scrollLeft >= max - 1) || (delta < 0 && el.scrollLeft <= 0)) return;
+  e.preventDefault();
+  el.scrollLeft = Math.min(max, Math.max(0, el.scrollLeft + delta));
+}
+// The chosen tab scrolls fully into view, clear of the fade. Horizontal only, so the
+// thread around the panel never jumps.
+function revealActiveTab() {
+  const strip = tabStrip.value;
+  const btn = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!strip || !btn) return;
+  const s = strip.getBoundingClientRect();
+  const b = btn.getBoundingClientRect();
+  const fade = canScrollRight.value ? EDGE_FADE_PX : 0;
+  const delta = b.left < s.left ? b.left - s.left : b.right > s.right - fade ? b.right - s.right + fade : 0;
+  if (!delta) return;
+  if (typeof strip.scrollBy === "function") strip.scrollBy({ left: delta, behavior: smoothOrAuto() });
+  else strip.scrollLeft += delta;
+}
+// Tabs pattern: arrows, Home and End move the selection and focus along the strip.
+function onTabKey(e: KeyboardEvent) {
+  const keys = tabKeys.value;
+  const i = keys.indexOf(tab.value);
+  const next =
+    e.key === "ArrowRight" ? (i + 1) % keys.length
+    : e.key === "ArrowLeft" ? (i - 1 + keys.length) % keys.length
+    : e.key === "Home" ? 0
+    : e.key === "End" ? keys.length - 1
+    : -1;
+  if (next < 0) return;
+  e.preventDefault();
+  tab.value = keys[next];
+  nextTick(() => tabStrip.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
+}
+let stripObserver: ResizeObserver | undefined;
+onMounted(() => {
+  updateOverflow();
+  if (typeof ResizeObserver !== "undefined" && tabStrip.value) {
+    stripObserver = new ResizeObserver(updateOverflow);
+    stripObserver.observe(tabStrip.value);
+  }
+});
+onBeforeUnmount(() => stripObserver?.disconnect());
+watch([tabKeys, locale], () => nextTick(updateOverflow));
+watch(tab, () => nextTick(revealActiveTab));
+
 function shortUrl(u: string): string {
   try {
     return new URL(u).hostname.replace(/^www\./, "");
@@ -404,7 +476,31 @@ const levelClass: Record<string, string> = {
 const exporting = ref<string | null>(null);
 const exportError = ref<string | null>(null);
 const exportMenuOpen = ref(false);
-const siteMenuOpen = ref(false);
+const exportRoot = ref<HTMLElement | null>(null);
+const exportBtn = ref<HTMLElement | null>(null);
+useDismiss(exportRoot, exportMenuOpen, { trigger: exportBtn });
+function toggleExportMenu() {
+  exportMenuOpen.value = !exportMenuOpen.value;
+  if (exportMenuOpen.value) shareMenuOpen.value = false;
+}
+// Menu keys: the first item takes focus on open; arrows, Home and End move between items.
+function menuItems(): HTMLElement[] {
+  return Array.from(exportRoot.value?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
+}
+watch(exportMenuOpen, (open) => {
+  if (open) nextTick(() => menuItems()[0]?.focus({ preventScroll: true }));
+});
+function onExportMenuKey(e: KeyboardEvent) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const items = menuItems();
+  if (!items.length) return;
+  e.preventDefault();
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  const last = items.length - 1;
+  const next =
+    e.key === "Home" ? 0 : e.key === "End" ? last : e.key === "ArrowDown" ? (i + 1) % items.length : i <= 0 ? last : i - 1;
+  items[next].focus();
+}
 const siteThemes = [
   "auto", "light", "dark", "midnight", "emerald", "rose", "sand",
 ] as const;
@@ -423,7 +519,6 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
     exportError.value = apiErrorMessage(e, t);
   } finally {
     exporting.value = null;
-    siteMenuOpen.value = false;
   }
 }
 
@@ -431,14 +526,27 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 
 <template>
   <div class="flex h-full flex-col">
-    <!-- Tab bar (tabs scroll horizontally if needed, share menu stays pinned on the right) -->
-    <div class="flex items-center justify-between border-b border-bd px-3 sm:px-5 min-w-0">
-      <!-- Tabs list -->
-      <div class="flex items-center gap-1 overflow-x-auto min-w-0 scrollbar-none py-0.5">
+    <!-- Tab bar: a scrolling segmented control. The wheel scrolls it sideways, the chosen
+         tab scrolls into view, and a fade on the right shows only while more tabs wait. -->
+    <div class="flex min-w-0 items-center border-b border-bd px-3">
+      <div
+        ref="tabStrip"
+        role="tablist"
+        class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto scrollbar-none"
+        :class="{ 'edge-fade-x': canScrollRight }"
+        @scroll.passive="updateOverflow"
+        @wheel="onStripWheel"
+        @keydown="onTabKey"
+      >
         <button
           v-for="tb in tabKeys"
+          :id="`${uid}-tab-${tb}`"
           :key="tb"
-          class="border-b-2 px-3 py-3 text-xs sm:text-sm font-medium transition-colors shrink-0 whitespace-nowrap"
+          role="tab"
+          :aria-selected="tab === tb"
+          :aria-controls="`${uid}-panel`"
+          :tabindex="tab === tb ? 0 : -1"
+          class="shrink-0 whitespace-nowrap rounded-t-md border-b-2 px-2.5 py-3 text-[0.8125rem] font-medium transition-colors focus-visible:!outline-offset-[-2px] sm:px-3 sm:text-sm"
           :class="tab === tb ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'"
           @click="tab = tb"
         >
@@ -446,28 +554,99 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
         </button>
       </div>
 
-      <!-- Actions on the right (Share / Generating) - ALWAYS pinned and visible -->
-      <div class="flex items-center gap-2 shrink-0 ml-3">
-        <!-- report is streaming in / being edited live -->
-        <span v-if="report && !isFinal" class="flex shrink-0 items-center gap-1.5 text-xs text-accent whitespace-nowrap">
-          <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-          {{ $t("artifact.generating") }}
-        </span>
+      <!-- The report is streaming in or being edited live. -->
+      <span v-if="report && !isFinal" class="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap pr-1 text-xs text-accent">
+        <span class="live-dot h-1.5 w-1.5 rounded-full bg-accent" />
+        {{ $t("artifact.generating") }}
+      </span>
+    </div>
 
-        <div v-if="report && isFinal" class="relative shrink-0">
-          <button
-            class="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition shrink-0 whitespace-nowrap"
-            :class="share && share.shared ? 'border-accent/50 text-accent bg-accent/5' : 'border-bd text-muted hover:text-ink hover:bg-surface/60'"
-            :title="$t('share.hint')"
-            @click="toggleShareMenu"
+    <!-- Actions for a finished report, on every tab (outside the scroller, so its menus
+         never clip): Download on the left, Share on the right. -->
+    <div v-if="report && isFinal" class="flex shrink-0 items-center gap-2 px-4 py-2 sm:px-6">
+      <div class="relative">
+        <button
+          ref="exportBtn"
+          class="press flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent/15 disabled:opacity-50"
+          :disabled="!!exporting"
+          aria-haspopup="menu"
+          :aria-expanded="exportMenuOpen"
+          @click="toggleExportMenu"
+        >
+          <span aria-hidden="true">⤓</span> {{ $t("artifact.download") }}
+          <span class="text-xs" aria-hidden="true">{{ exporting ? "…" : "▾" }}</span>
+        </button>
+        <Transition name="pop">
+          <div
+            v-if="exportMenuOpen"
+            ref="exportRoot"
+            role="menu"
+            :aria-label="$t('artifact.download')"
+            class="material-popover absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] max-w-[calc(100vw-3rem)] origin-top-left overflow-y-auto overscroll-contain rounded-xl border border-bd p-1.5 text-sm"
+            @keydown="onExportMenuKey"
           >
-            <span>🔗</span>
-            <span>{{ share && share.shared ? $t("share.shared") : $t("share.share") }}</span>
-          </button>
+            <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.docGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.docGroup')" class="grid grid-cols-2 gap-1">
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
+                <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
+                <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
+                <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
+              </button>
+            </div>
 
+            <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.dataGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.dataGroup')" class="grid grid-cols-2 gap-1">
+              <button role="menuitem" class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
+                <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
+              </button>
+              <button role="menuitem" class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
+                <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
+              </button>
+            </div>
+
+            <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted" aria-hidden="true">{{ $t("artifact.webGroup") }}</div>
+            <div role="group" :aria-label="$t('artifact.webGroup')" class="flex flex-wrap gap-1 px-1.5 pb-1">
+              <button
+                v-for="th in siteThemes"
+                :key="th"
+                role="menuitem"
+                class="rounded-md border border-bd px-2 py-0.5 text-xs text-ink hover:bg-surfaceHover"
+                :disabled="!!exporting"
+                @click="exportReport('html', { theme: th }); exportMenuOpen = false"
+              >
+                {{ $t("site." + th) }}
+              </button>
+            </div>
+          </div>
+        </Transition>
+      </div>
+      <p v-if="exportError" role="alert" class="min-w-0 text-xs text-danger">{{ exportError }}</p>
+
+      <div class="relative ml-auto shrink-0">
+        <button
+          ref="shareBtn"
+          class="press flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-1.5 text-sm font-medium"
+          :class="share && share.shared ? 'border-accent/50 bg-accent/5 text-accent' : 'border-bd text-muted hover:bg-surface/60 hover:text-ink'"
+          :title="$t('share.hint')"
+          aria-haspopup="dialog"
+          :aria-expanded="shareMenuOpen"
+          @click="toggleShareMenu"
+        >
+          <span aria-hidden="true">🔗</span>
+          <span>{{ share && share.shared ? $t("share.shared") : $t("share.share") }}</span>
+        </button>
+
+        <Transition name="pop">
           <div
             v-if="shareMenuOpen"
-            class="absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-bd bg-surface p-3.5 text-xs shadow-xl backdrop-blur-md"
+            ref="shareRoot"
+            role="dialog"
+            :aria-label="$t('share.title')"
+            class="material-popover absolute right-0 z-30 mt-1.5 w-80 max-w-[calc(100vw-3rem)] origin-top-right rounded-xl border border-bd p-3.5 text-xs"
           >
             <div class="mb-1 font-semibold text-ink text-xs">{{ $t("share.title") }}</div>
             <p class="mb-2 text-muted leading-relaxed text-2xs">{{ $t("share.desc") }}</p>
@@ -513,68 +692,16 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
             </template>
             <p v-if="shareError" role="alert" class="mt-2 text-2xs text-danger">{{ shareError }}</p>
           </div>
-        </div>
+        </Transition>
       </div>
     </div>
 
-    <!-- Always-visible download bar (outside the scroll area so the menu never clips). -->
     <div
-      v-if="tab === 'report' && report && isFinal"
-      class="flex shrink-0 items-center gap-2 border-b border-bd px-6 py-2"
+      :id="`${uid}-panel`"
+      role="tabpanel"
+      :aria-labelledby="`${uid}-tab-${tab}`"
+      class="min-h-0 flex-1 overflow-y-auto px-6 py-6"
     >
-      <div class="relative">
-        <button
-          class="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-medium text-accent transition hover:bg-accent/15 disabled:opacity-50"
-          :disabled="!!exporting"
-          @click="exportMenuOpen = !exportMenuOpen"
-        >
-          <span>⤓</span> {{ $t("artifact.download") }} <span class="text-xs">{{ exporting ? "…" : "▾" }}</span>
-        </button>
-        <div
-          v-if="exportMenuOpen"
-          class="absolute left-0 z-30 mt-1 max-h-[55vh] w-[22rem] overflow-y-auto overscroll-contain rounded-xl border border-bd bg-surface p-1.5 text-sm shadow-xl"
-        >
-          <div class="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.docGroup") }}</div>
-          <div class="grid grid-cols-2 gap-1">
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('pdf'); exportMenuOpen = false">
-              <span>📄 PDF</span><span class="text-[10px] text-muted">.pdf</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('docx'); exportMenuOpen = false">
-              <span>📝 Word</span><span class="text-[10px] text-muted">.docx</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('md'); exportMenuOpen = false">
-              <span>⬇ Markdown</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-          </div>
-
-          <div class="mt-1 border-t border-bd px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.dataGroup") }}</div>
-          <div class="grid grid-cols-2 gap-1">
-            <button class="export-item" :disabled="!!exporting" @click="exportReport('json'); exportMenuOpen = false">
-              <span>{ } JSON</span><span class="text-[10px] text-muted">.json</span>
-            </button>
-            <button class="export-item" :disabled="!!exporting" :title="$t('audit.hint')" @click="exportReport('trail'); exportMenuOpen = false">
-              <span>🧾 {{ $t("audit.trail") }}</span><span class="text-[10px] text-muted">.md</span>
-            </button>
-          </div>
-
-          <div class="mt-1 border-t border-bd px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wide text-muted">{{ $t("artifact.webGroup") }}</div>
-          <div class="flex flex-wrap gap-1 px-1.5 pb-1">
-            <button
-              v-for="th in siteThemes"
-              :key="th"
-              class="rounded-md border border-bd px-2 py-0.5 text-xs text-ink transition hover:bg-surfaceHover"
-              :disabled="!!exporting"
-              @click="exportReport('html', { theme: th }); exportMenuOpen = false"
-            >
-              {{ $t("site." + th) }}
-            </button>
-          </div>
-        </div>
-      </div>
-      <p v-if="exportError" class="ml-auto text-xs text-red-400">{{ exportError }}</p>
-    </div>
-
-    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
       <!-- A data tab whose request is on the way, or failed: its own skeleton or error. -->
       <div v-if="activeData && activeData.state === 'loading'" class="space-y-2" aria-busy="true">
         <span class="sr-only">{{ $t("common.loading") }}</span>
@@ -1127,10 +1254,13 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
   padding: 0.375rem 0.5rem;
   text-align: left;
   color: rgb(var(--c-ink));
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, opacity 0.2s;
 }
-.export-item:hover {
-  background: rgb(var(--c-surface-hover));
+/* Hover only where a real hover exists, so a tap never leaves an item lit. */
+@media (hover: hover) and (pointer: fine) {
+  .export-item:hover {
+    background: rgb(var(--c-surface-hover));
+  }
 }
 .export-item:disabled {
   opacity: 0.5;

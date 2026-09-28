@@ -267,3 +267,90 @@ describe("ArtifactPanel trust row", () => {
     expect(w.text()).toContain(t("artifact.sourcesEmpty"));
   });
 });
+
+describe("ArtifactPanel menus", () => {
+  it("closes the share popover on Escape, with focus back on its trigger", async () => {
+    const w = await mountPanel();
+    const trigger = buttonWithText(w, t("share.share"));
+
+    await trigger.trigger("click");
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+    expect(w.find("[role=dialog]").exists()).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(w.find("[role=dialog]").exists()).toBe(false);
+    expect(document.activeElement).toBe(trigger.element);
+  });
+
+  it("closes a menu on an outside press, and opening one closes the other", async () => {
+    const w = await mountPanel();
+
+    await buttonWithText(w, t("artifact.download")).trigger("click");
+    expect(w.find("[role=menu]").exists()).toBe(true);
+    // The first item takes focus, so arrows work at once.
+    expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+
+    await buttonWithText(w, t("share.share")).trigger("click");
+    expect(w.find("[role=menu]").exists()).toBe(false);
+    expect(w.find("[role=dialog]").exists()).toBe(true);
+
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    await flushPromises();
+    expect(w.find("[role=dialog]").exists()).toBe(false);
+  });
+});
+
+describe("ArtifactPanel tab strip", () => {
+  // jsdom has no layout: give the strip a width, a wider content and a scroll position.
+  function fakeOverflow(el: HTMLElement, clientWidth: number, scrollWidth: number) {
+    let left = 0;
+    Object.defineProperty(el, "clientWidth", { configurable: true, get: () => clientWidth });
+    Object.defineProperty(el, "scrollWidth", { configurable: true, get: () => scrollWidth });
+    Object.defineProperty(el, "scrollLeft", { configurable: true, get: () => left, set: (v: number) => (left = v) });
+  }
+  function wheel(el: Element, deltaY: number) {
+    const e = new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    return e;
+  }
+
+  it("scrolls sideways on a vertical wheel, and lets the page scroll at the end", async () => {
+    const w = await mountPanel();
+    const strip = w.find("[role=tablist]").element as HTMLElement;
+    fakeOverflow(strip, 300, 600);
+
+    expect(wheel(strip, 120).defaultPrevented).toBe(true);
+    expect(strip.scrollLeft).toBe(120);
+    strip.scrollLeft = 300;
+    expect(wheel(strip, 120).defaultPrevented).toBe(false);
+    expect(wheel(strip, -50).defaultPrevented).toBe(true);
+    expect(strip.scrollLeft).toBe(250);
+  });
+
+  it("shows the overflow fade only while there is more to scroll", async () => {
+    const w = await mountPanel();
+    const strip = w.find("[role=tablist]");
+    fakeOverflow(strip.element as HTMLElement, 300, 600);
+
+    await strip.trigger("scroll");
+    expect(strip.classes()).toContain("edge-fade-x");
+    (strip.element as HTMLElement).scrollLeft = 300;
+    await strip.trigger("scroll");
+    expect(strip.classes()).not.toContain("edge-fade-x");
+  });
+
+  it("moves between tabs with the arrow keys", async () => {
+    mocks.api.getSources.mockResolvedValue([]);
+    const w = await mountPanel();
+    const tabs = () => w.findAll("[role=tab]");
+
+    expect(tabs()[0].attributes("aria-selected")).toBe("true");
+    await tabs()[0].trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(tabs()[1].attributes("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs()[1].element);
+    await tabs()[1].trigger("keydown", { key: "End" });
+    expect(tabs()[tabs().length - 1].attributes("aria-selected")).toBe("true");
+  });
+});
