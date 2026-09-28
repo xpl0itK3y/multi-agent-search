@@ -204,6 +204,49 @@ describe("MarkdownView inline verification", () => {
     expect(wrapper.find(".md-claim-strong").exists()).toBe(true);
   });
 
+  function renderVerified(source: string, extra: Record<string, unknown>) {
+    return mount(MarkdownView, {
+      props: { source, sources, verify: true, ...extra },
+      global: { plugins: [i18n] },
+    });
+  }
+  // The claim's own words, as the underline covers them.
+  const underlined = (w: ReturnType<typeof renderVerified>, band: string) =>
+    w.findAll(`.md-claim-${band} .md-claim-text`).map((s) => s.element.textContent);
+
+  // A decoration on the claim span ran under the chips, their glue and the badge (VIS-2).
+  it("underlines a flagged claim's words only, never its chips, their glue or its badge", () => {
+    const wrapper = renderVerified("Prices **fell** sharply [S1] [S2]. Output doubled in 2024 [S1].", {
+      grounding: [
+        { source_id: "S1", url: "https://one.example/a", title: "", quote: "", supported: false },
+        { source_id: "S2", url: "https://two.example/b", title: "", quote: "", supported: false },
+      ],
+    });
+
+    // Across inline markup too: each text run of the claim is its own underlined span.
+    expect(underlined(wrapper, "weak")).toEqual(["Prices", "fell", "sharply", "Output doubled in 2024"]);
+    const article = wrapper.find("article").element;
+    expect(article.querySelector(".md-claim-text .md-citation, .md-claim-text .md-claim-badge")).toBeNull();
+    for (const run of article.querySelectorAll(".md-claim-text")) {
+      expect(run.textContent).not.toMatch(/[ [\]]|^\s|\s$/);
+    }
+    // The glue still sits between the word and its chips, so no chip starts a line.
+    expect(article.innerHTML).toContain('sharply</span>&nbsp;<a href="https://one.example/a"');
+    expect(wrapper.findAll(".md-claim-weak .md-citation")).toHaveLength(3);
+  });
+
+  it("underlines contested claims the same way, table cells included, and never strong ones", () => {
+    const table = "| Metric | Value |\n|---|---|\n| Energy | 140–175 Wh/kg [S1] [S2] |";
+    const wrapper = renderVerified(`Output doubled in 2024 [S1][S2].\n\n${table}`, {
+      contradictions: ["| Energy | 140–175 Wh/kg [S1] [S2] |"],
+    });
+
+    expect(wrapper.find(".md-claim-strong").exists()).toBe(true);
+    expect(wrapper.find(".md-claim-strong .md-claim-text").exists()).toBe(false);
+    expect(underlined(wrapper, "contested")).toEqual(["140–175 Wh/kg"]);
+    expect(wrapper.find("td .md-claim-contested .md-claim-text").exists()).toBe(true);
+  });
+
   it("leaves the text undecorated with verification off", () => {
     const wrapper = render("Output doubled in 2024 [S1][S2].", sources);
 

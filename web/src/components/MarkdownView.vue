@@ -43,6 +43,8 @@ const OPEN = "\u0001";
 const MID = "\u0002";
 const END = "\u0003";
 const SENTINEL = /\u0001(\d+)([\u0002\u0003])/g;
+// In rendered text: a claim sentinel (idx, kind) or an inline citation [Sn] (n).
+const CLAIM_OR_CITATION = /\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g;
 
 // html:false — report text comes from LLM/web content, never render raw HTML (XSS-safe).
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
@@ -95,6 +97,8 @@ function sourceUrlMap(source: string, explicitSources: SourcePreview[] = []): Ma
 // app already computed: how many INDEPENDENT origins back it, whether the cited
 // sources actually support it, and whether it sits in a numeric contradiction.
 type Band = "strong" | "medium" | "weak" | "contested";
+// The bands that ask for a second look are underlined; strong and medium claims are not.
+const UNDERLINED_BANDS: ReadonlySet<Band> = new Set<Band>(["weak", "contested"]);
 interface Claim {
   band: Band;
   title: string;
@@ -282,23 +286,50 @@ const html = computed(() => {
   //    doesn't actually back the claim. Without grounding it just links.
   //    A citation never starts a line: the whitespace before each [Sn] (and between
   //    consecutive ones) becomes a no-break space that glues it to the preceding word.
-  const rewriteText = (text: string) =>
-    text.replace(/[ \t]+(?=\[S\d+\])/g, "\u00a0").replace(/\u0001(\d+)([\u0002\u0003])|\[S(\d+)\]/g, (_full, idx?: string, kind?: string, n?: string) => {
-      if (n === undefined) {
-        const c = claims[Number(idx)];
-        if (!c || !opened.has(idx!) || !closed.has(idx!)) return "";
-        return kind === MID
-          ? `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`
-          : `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
-      }
-      const g = ground.get(`S${n}`);
-      const url = safeHref(g?.url || urls.get(n));
-      const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
-      const cite = g ? ` data-cite="S${n}" aria-describedby="${escAttr(popId)}"` : "";
-      return url
-        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${cite}>[S${n}]</a>`
-        : `<sup class="${cls}"${cite}${g ? ' tabindex="0"' : ""}>[S${n}]</sup>`;
-    });
+  //
+  //    A flagged claim is underlined under its words only. A decoration set on the claim
+  //    span would spread to every inline child, and so run under the [Sn] chips, the
+  //    spaces that glue them and the badge. So each run of the claim's own text gets its
+  //    own .md-claim-text span, and chips, glue and badge stay outside it. The parts are
+  //    rewritten in order, and a claim can span inline tags (**bold**, a link), so the
+  //    open claim's state carries from one text part to the next.
+  let underlining = false;
+  const underline = (text: string) => {
+    // Glue and punctuation left between or after chips carry no words to mark.
+    if (!underlining || !/[\p{L}\p{N}]/u.test(text)) return text;
+    const m = text.match(/^([\s.,;:!?\u2026]*)([\s\S]*?)(\s*)$/)!;
+    return `${m[1]}<span class="md-claim-text">${m[2]}</span>${m[3]}`;
+  };
+  const claimMark = (idx: string, kind: string) => {
+    const c = claims[Number(idx)];
+    if (!c || !opened.has(idx) || !closed.has(idx)) return "";
+    if (kind === MID) {
+      underlining = UNDERLINED_BANDS.has(c.band);
+      return `<span class="md-claim md-claim-${c.band}" title="${escAttr(c.title)}">`;
+    }
+    underlining = false;
+    return `<sup class="md-claim-badge md-claim-badge-${c.band}">${c.badge}</sup></span>`;
+  };
+  const citation = (n: string) => {
+    const g = ground.get(`S${n}`);
+    const url = safeHref(g?.url || urls.get(n));
+    const cls = g && !g.supported ? "md-citation md-citation-weak" : "md-citation";
+    const cite = g ? ` data-cite="S${n}" aria-describedby="${escAttr(popId)}"` : "";
+    return url
+      ? `<a href="${url}" target="_blank" rel="noopener noreferrer" class="${cls}"${cite}>[S${n}]</a>`
+      : `<sup class="${cls}"${cite}${g ? ' tabindex="0"' : ""}>[S${n}]</sup>`;
+  };
+  const rewriteText = (raw: string) => {
+    const text = raw.replace(/[ \t]+(?=\[S\d+\])/g, "\u00a0");
+    let out = "";
+    let last = 0;
+    for (const m of text.matchAll(CLAIM_OR_CITATION)) {
+      out += underline(text.slice(last, m.index));
+      last = m.index + m[0].length;
+      out += m[3] === undefined ? claimMark(m[1], m[2]) : citation(m[3]);
+    }
+    return out + underline(text.slice(last));
+  };
 
   return parts.map((part, i) => (i % 2 ? part.replace(SENTINEL, "") : rewriteText(part))).join("");
 });
@@ -591,11 +622,12 @@ onBeforeUnmount(() => {
 /* Inline verification: confirm strong claims subtly, flag the problem ones loudly.
    The marks live in v-html, which never carries this component's data-v attribute, so
    every rule goes through :deep(). Colours are the theme's status tokens, readable on
-   their own tint in light and dark. */
-:deep(.md-claim-weak) {
+   their own tint in light and dark. The underline sits on the claim's words
+   (.md-claim-text), never on the claim span: it would spread to the [Sn] chips. */
+:deep(.md-claim-weak .md-claim-text) {
   border-bottom: 1.5px dotted rgb(var(--c-warning) / 0.85);
 }
-:deep(.md-claim-contested) {
+:deep(.md-claim-contested .md-claim-text) {
   text-decoration: underline wavy rgb(var(--c-danger) / 0.9);
   text-underline-offset: 3px;
 }
