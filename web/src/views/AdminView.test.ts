@@ -49,6 +49,8 @@ const OverviewTabStub = defineComponent({
   render: () => h("div", { "data-test": "OverviewTab" }),
 });
 
+let currentRouter: ReturnType<typeof createRouter> | null = null;
+
 async function mountAdmin(url = "/admin") {
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -61,6 +63,7 @@ async function mountAdmin(url = "/admin") {
     ],
   });
   await router.push(url);
+  currentRouter = router;
   const wrapper = mount(AdminView, {
     global: {
       plugins: [pinia, router, i18n],
@@ -125,6 +128,43 @@ describe("AdminView", () => {
 
     expect(adminApi.getOverview).not.toHaveBeenCalled();
     expect(wrapper.find('[data-test="admin-health"]').text()).toBe(t("admin.allSystemsOperational"));
+  });
+
+  it("opens the tab named in the address, and writes the chosen tab back to it", async () => {
+    adminApi.getOverview.mockResolvedValue(snapshot("healthy"));
+    const wrapper = await mountAdmin("/admin?tab=users");
+    expect(wrapper.find('[data-test="UsersTab"]').exists()).toBe(true);
+    const selected = wrapper.find('[role="tab"][aria-selected="true"]');
+    expect(selected.text()).toBe(t("admin.tabs.users"));
+
+    await openTab(wrapper, "operations");
+    expect(currentRouter!.currentRoute.value.query.tab).toBe("operations");
+    expect(wrapper.find('[data-test="OperationsTab"]').exists()).toBe(true);
+
+    await openTab(wrapper, "overview");
+    expect(currentRouter!.currentRoute.value.query.tab).toBeUndefined();
+  });
+
+  it("ignores an unknown tab in the address", async () => {
+    const wrapper = await mountAdmin("/admin?tab=nope");
+    expect(wrapper.find('[data-test="OverviewTab"]').exists()).toBe(true);
+  });
+
+  it("moves between tabs with the arrow keys", async () => {
+    adminApi.getOverview.mockResolvedValue(snapshot("healthy"));
+    const wrapper = await mountAdmin();
+    const list = wrapper.find('[role="tablist"]');
+    await list.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(wrapper.find('[data-test="UsersTab"]').exists()).toBe(true);
+    await list.trigger("keydown", { key: "End" });
+    await flushPromises();
+    expect(wrapper.find('[data-test="OperationsTab"]').exists()).toBe(true);
+    await list.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(wrapper.find('[data-test="OverviewTab"]').exists()).toBe(true);
+    // Only the selected tab is in the Tab order.
+    expect(wrapper.findAll('[role="tab"][tabindex="0"]')).toHaveLength(1);
   });
 
   it("keeps the other tabs usable when the overview request fails", async () => {

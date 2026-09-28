@@ -87,7 +87,7 @@ async function exportCsv() {
       </div>
 
       <button
-        class="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+        class="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-onAccent shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
         :disabled="exporting"
         @click="exportCsv"
       >
@@ -96,10 +96,10 @@ async function exportCsv() {
       </button>
     </div>
 
-    <p v-if="exportError" class="text-right text-xs text-red-400">{{ exportError }}</p>
+    <p v-if="exportError" class="text-right text-xs text-danger" role="alert">{{ exportError }}</p>
 
     <!-- Error state -->
-    <div v-if="error" class="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+    <div v-if="error" class="rounded-lg border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
       {{ error }}
     </div>
 
@@ -108,7 +108,7 @@ async function exportCsv() {
       <!-- Total Tokens -->
       <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="text-xs font-medium text-muted">{{ t("admin.analytics.totalTokens") }}</div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(analytics?.total_tokens ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.promptPlusCompletion") }}</div>
@@ -117,7 +117,7 @@ async function exportCsv() {
       <!-- Total Cost -->
       <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="text-xs font-medium text-muted">{{ t("admin.analytics.totalCost") }}</div>
-        <div class="mt-2 text-2xl font-black text-emerald-400">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-success">
           {{ formatCurrency(analytics?.total_cost_usd ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.estimatedSpend") }}</div>
@@ -126,7 +126,7 @@ async function exportCsv() {
       <!-- Prompt Tokens -->
       <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="text-xs font-medium text-muted">{{ t("admin.analytics.promptTokens") }}</div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(analytics?.total_prompt_tokens ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.inputContextProcessed") }}</div>
@@ -135,7 +135,7 @@ async function exportCsv() {
       <!-- Completion Tokens -->
       <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="text-xs font-medium text-muted">{{ t("admin.analytics.completionTokens") }}</div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(analytics?.total_completion_tokens ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">{{ t("admin.analytics.generatedReports") }}</div>
@@ -146,7 +146,7 @@ async function exportCsv() {
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <!-- By Model -->
       <div class="rounded-xl border border-bd bg-surface/30 p-5">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-muted mb-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-muted mb-4">
           {{ t("admin.analytics.byModel") }}
         </h3>
 
@@ -162,7 +162,7 @@ async function exportCsv() {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-mono font-semibold text-ink">{{ m.model }}</span>
-              <span class="font-bold text-emerald-400">{{ formatCurrency(m.estimated_cost_usd) }}</span>
+              <span class="font-bold tabular-nums text-success">{{ formatCurrency(m.estimated_cost_usd) }}</span>
             </div>
 
             <!-- Mini Progress bar -->
@@ -175,7 +175,7 @@ async function exportCsv() {
               />
             </div>
 
-            <div class="flex items-center justify-between text-[11px] text-muted pt-1">
+            <div class="flex items-center justify-between text-[11px] tabular-nums text-muted pt-1">
               <span>{{ formatNumber(m.total_tokens) }} {{ t("admin.analytics.tokens") }} ({{ m.calls_count }} {{ t("admin.analytics.calls") }})</span>
               <span>{{ t("admin.analytics.inTokens") }}: {{ formatNumber(m.prompt_tokens) }} / {{ t("admin.analytics.outTokens") }}: {{ formatNumber(m.completion_tokens) }}</span>
             </div>
@@ -185,7 +185,7 @@ async function exportCsv() {
 
       <!-- By Depth -->
       <div class="rounded-xl border border-bd bg-surface/30 p-5">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-muted mb-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-muted mb-4">
           {{ t("admin.analytics.byDepth") }}
         </h3>
 
@@ -199,18 +199,18 @@ async function exportCsv() {
             :key="d.depth"
             class="rounded-xl border border-bd bg-bg/60 p-4 text-center"
           >
-            <div class="inline-block rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+            <div class="inline-block rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
               :class="{
-                'bg-emerald-500/15 text-emerald-400': d.depth.toLowerCase() === 'easy',
-                'bg-blue-500/15 text-blue-400': d.depth.toLowerCase() === 'medium',
-                'bg-purple-500/15 text-purple-400': d.depth.toLowerCase() === 'hard',
+                'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400': d.depth.toLowerCase() === 'easy',
+                'bg-blue-500/15 text-blue-700 dark:text-blue-400': d.depth.toLowerCase() === 'medium',
+                'bg-purple-500/15 text-purple-700 dark:text-purple-400': d.depth.toLowerCase() === 'hard',
               }"
             >
               {{ d.depth }}
             </div>
-            <div class="mt-2 text-lg font-bold text-ink">{{ formatNumber(d.total_tokens) }}</div>
-            <div class="text-[11px] text-emerald-400 font-semibold">{{ formatCurrency(d.estimated_cost_usd) }}</div>
-            <div class="mt-1 text-[10px] text-muted">{{ d.researches_count }} {{ t("admin.analytics.researches") }}</div>
+            <div class="mt-2 text-lg font-bold tabular-nums text-ink">{{ formatNumber(d.total_tokens) }}</div>
+            <div class="text-[11px] tabular-nums text-success font-semibold">{{ formatCurrency(d.estimated_cost_usd) }}</div>
+            <div class="mt-1 text-[10px] tabular-nums text-muted">{{ d.researches_count }} {{ t("admin.analytics.researches") }}</div>
           </div>
         </div>
       </div>
@@ -219,7 +219,7 @@ async function exportCsv() {
     <!-- Researches Usage Table -->
     <div class="space-y-3">
       <div class="flex items-center justify-between">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-muted">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-muted">
           {{ t("admin.analytics.researchesTitle") }} ({{ analytics?.total_researches ?? 0 }})
         </h3>
       </div>
@@ -259,11 +259,11 @@ async function exportCsv() {
               </td>
               <td class="px-4 py-3 whitespace-nowrap">
                 <span
-                  class="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                  class="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
                   :class="{
-                    'bg-emerald-500/15 text-emerald-400': r.depth.toLowerCase() === 'easy',
-                    'bg-blue-500/15 text-blue-400': r.depth.toLowerCase() === 'medium',
-                    'bg-purple-500/15 text-purple-400': r.depth.toLowerCase() === 'hard',
+                    'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400': r.depth.toLowerCase() === 'easy',
+                    'bg-blue-500/15 text-blue-700 dark:text-blue-400': r.depth.toLowerCase() === 'medium',
+                    'bg-purple-500/15 text-purple-700 dark:text-purple-400': r.depth.toLowerCase() === 'hard',
                   }"
                 >
                   {{ r.depth }}
@@ -274,10 +274,10 @@ async function exportCsv() {
                   {{ r.status }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-right font-mono font-bold text-ink whitespace-nowrap">
+              <td class="px-4 py-3 text-right font-bold text-ink whitespace-nowrap">
                 {{ formatNumber(r.total_tokens) }}
               </td>
-              <td class="px-4 py-3 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
+              <td class="px-4 py-3 text-right font-semibold text-success whitespace-nowrap">
                 {{ formatCurrency(r.estimated_cost_usd) }}
               </td>
               <td class="px-4 py-3 text-right text-muted whitespace-nowrap">
@@ -291,7 +291,7 @@ async function exportCsv() {
       <!-- Pagination Controls -->
       <div class="flex items-center justify-between px-2 pt-2 text-xs text-muted">
         <div>
-          <span>{{ t("admin.analytics.page") }} {{ page }} {{ t("admin.analytics.of") }} {{ totalPages }}</span>
+          <span class="tabular-nums">{{ t("admin.analytics.page") }} {{ page }} {{ t("admin.analytics.of") }} {{ totalPages }}</span>
         </div>
 
         <div class="flex items-center gap-2">

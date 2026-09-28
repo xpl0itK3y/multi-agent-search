@@ -172,3 +172,28 @@ export function unclampPanSoft(shown: number, min: number, max: number, dim: num
 export function clampPan(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
+
+// ── Stage colours (§16 Craft: readable in light and dark) ──────────────────────
+// Categorical hues, not status: a -700 text shade on its 10% tint in light themes
+// (≥ 4.5:1 on white), the -400 shade in dark ones (rose: -300). Written out in full so
+// Tailwind sees every class.
+export type StageTone = "trigger" | "planning" | "search" | "synthesis" | "delivery" | "return";
+
+export const STAGE_TEXT: Record<StageTone, string> = {
+  trigger: "text-orange-700 dark:text-orange-400",
+  planning: "text-blue-700 dark:text-blue-400",
+  search: "text-emerald-700 dark:text-emerald-400",
+  synthesis: "text-purple-700 dark:text-purple-400",
+  delivery: "text-amber-700 dark:text-amber-400",
+  return: "text-rose-700 dark:text-rose-300",
+};
+
+/** Text, tint and border for a stage chip or badge. */
+export const STAGE_TONE: Record<StageTone, string> = {
+  trigger: "text-orange-700 dark:text-orange-400 bg-orange-500/10 border-orange-500/30",
+  planning: "text-blue-700 dark:text-blue-400 bg-blue-500/10 border-blue-500/30",
+  search: "text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+  synthesis: "text-purple-700 dark:text-purple-400 bg-purple-500/10 border-purple-500/30",
+  delivery: "text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/30",
+  return: "text-rose-700 dark:text-rose-300 bg-rose-500/10 border-rose-500/30",
+};

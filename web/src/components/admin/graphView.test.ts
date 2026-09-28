@@ -22,6 +22,8 @@ import {
   zoomAt,
   ZMAX,
   ZMIN,
+  STAGE_TEXT,
+  STAGE_TONE,
   type View,
 } from "./graphView";
 
@@ -689,5 +691,15 @@ describe("AgentsGraphTab frame cost and reduced motion", () => {
     await viewport().trigger("pointerup", pointer("pointerup", 100, 100));
     expect(world().classes()).not.toContain("will-change-transform");
     expect(wrapper!.find(".interactive-node .backdrop-blur").exists()).toBe(false);
+  });
+});
+
+describe("graphView: stage tones", () => {
+  it("pairs a light-theme -700 shade with a dark-theme shade for every stage", () => {
+    for (const [stage, tone] of Object.entries(STAGE_TONE)) {
+      expect(tone).toMatch(/\btext-[a-z]+-700\b/);
+      expect(tone).toMatch(/\bdark:text-[a-z]+-(300|400)\b/);
+      expect(tone.startsWith(STAGE_TEXT[stage as keyof typeof STAGE_TEXT])).toBe(true);
+    }
   });
 });

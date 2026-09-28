@@ -328,7 +328,7 @@ function onBackdropClick(e: MouseEvent) {
       <div class="mt-4 flex flex-wrap items-center gap-3">
         <select
           v-model="requeueJobType"
-          class="rounded-lg border border-bd bg-bg px-3 py-1.5 text-xs text-ink focus:outline-none"
+          class="rounded-lg border border-bd bg-bg px-3 py-1.5 text-xs text-ink"
         >
           <option value="finalize">{{ t("admin.operations.finalizeJobOpt") }}</option>
           <option value="search">{{ t("admin.operations.searchJobOpt") }}</option>
@@ -338,11 +338,11 @@ function onBackdropClick(e: MouseEvent) {
           v-model="requeueJobId"
           type="text"
           :placeholder="t('admin.operations.jobIdPlaceholder')"
-          class="min-w-64 flex-1 rounded-lg border border-bd bg-bg px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none"
+          class="min-w-64 flex-1 rounded-lg border border-bd bg-bg px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted"
         />
 
         <button
-          class="rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-accent/90 disabled:opacity-50"
+          class="press rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-onAccent hover:bg-accent/90 disabled:opacity-50"
           :disabled="!requeueJobId.trim() || actionLoading"
           @click="executeRequeue"
         >
@@ -355,7 +355,7 @@ function onBackdropClick(e: MouseEvent) {
     <div class="space-y-3">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-xs font-bold uppercase tracking-wider text-muted">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-muted">
             {{ t("admin.operations.auditTitle") }}
           </h3>
           <p class="text-[11px] text-muted">{{ t("admin.operations.auditSubtitle") }}</p>

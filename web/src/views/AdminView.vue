@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { adminApi } from "@/lib/api";
+import { smoothOrAuto } from "@/lib/motion";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore } from "@/stores/ui";
 import type { AdminOverviewResponse } from "@/lib/types";
@@ -14,11 +15,57 @@ import OperationsTab from "@/components/admin/OperationsTab.vue";
 
 const { t } = useI18n();
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 const ui = useUiStore();
 
 type Tab = "overview" | "users" | "analytics" | "agents" | "operations";
-const activeTab = ref<Tab>("overview");
+const TABS: { id: Tab; label: string }[] = [
+  { id: "overview", label: "admin.tabs.overview" },
+  { id: "users", label: "admin.tabs.users" },
+  { id: "analytics", label: "admin.tabs.analytics" },
+  { id: "agents", label: "admin.tabs.agents" },
+  { id: "operations", label: "admin.tabs.operations" },
+];
+
+// The open tab lives in the address (/admin?tab=users), so a reload, a shared link or
+// Back lands on the same tab (§16 Wayfinding: where am I?).
+function tabFromQuery(): Tab {
+  const q = route.query.tab;
+  return typeof q === "string" && TABS.some((tab) => tab.id === q) ? (q as Tab) : "overview";
+}
+const activeTab = ref<Tab>(tabFromQuery());
+
+watch(activeTab, (tab) => {
+  if (tabFromQuery() === tab) return;
+  router.replace({ query: { ...route.query, tab: tab === "overview" ? undefined : tab } });
+});
+watch(
+  () => route.query.tab,
+  () => {
+    activeTab.value = tabFromQuery();
+  },
+);
+
+// Tabs follow the WAI-ARIA pattern: arrows move between them, Home/End jump to the ends.
+function selectTab(tab: Tab, focus = false) {
+  activeTab.value = tab;
+  nextTick(() => {
+    const btn = typeof document !== "undefined" ? document.getElementById(`admin-tab-${tab}`) : null;
+    if (!btn) return;
+    if (focus) btn.focus({ preventScroll: true });
+    // On a narrow screen the strip scrolls sideways: keep the chosen tab in view.
+    btn.scrollIntoView?.({ inline: "nearest", block: "nearest", behavior: smoothOrAuto() });
+  });
+}
+function onTabKey(e: KeyboardEvent) {
+  const i = TABS.findIndex((tab) => tab.id === activeTab.value);
+  const n = TABS.length;
+  const next: Record<string, number> = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 };
+  if (!(e.key in next)) return;
+  e.preventDefault();
+  selectTab(TABS[next[e.key]].id, true);
+}
 
 // The header's status line (apple-design §16 Feedback: status must reflect reality).
 // On the Overview tab it follows that tab's data, live stream included; elsewhere the
@@ -82,7 +129,7 @@ onMounted(() => {
       v-if="!auth.user?.is_admin"
       class="flex flex-1 items-center justify-center py-8"
     >
-      <div class="w-full max-w-md rounded-2xl border border-bd bg-surface/80 p-8 shadow-2xl backdrop-blur text-center">
+      <div class="w-full max-w-md rounded-2xl border border-bd bg-surface p-8 shadow-e3 text-center">
         <!-- Language Switcher in Guard Card -->
         <div class="mb-4 flex justify-end">
           <div class="flex items-center gap-0.5 rounded-xl border border-bd bg-surface/70 p-1 text-xs font-mono">
@@ -90,8 +137,9 @@ onMounted(() => {
               v-for="loc in (['ru', 'en', 'es'] as const)"
               :key="loc"
               type="button"
-              class="rounded-lg px-2.5 py-1 text-[10.5px] font-bold uppercase transition"
-              :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+              class="press hit rounded-lg px-2.5 py-1 text-[10.5px] font-semibold uppercase"
+              :class="ui.locale === loc ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
+              :aria-pressed="ui.locale === loc ? 'true' : 'false'"
               @click="ui.setLocale(loc)"
             >
               {{ loc }}
@@ -101,7 +149,7 @@ onMounted(() => {
 
         <!-- Shield / Warning Icon & Title -->
         <div class="mb-6 flex flex-col items-center">
-          <div class="grid h-16 w-16 place-items-center rounded-2xl bg-amber-500/15 text-3xl text-amber-400 mb-3 shadow-inner">
+          <div class="grid h-16 w-16 place-items-center rounded-2xl bg-warning/15 text-3xl text-warning mb-3 shadow-inner">
             🛡️
           </div>
           <h2 class="text-xl font-bold tracking-tight text-ink">
@@ -116,7 +164,7 @@ onMounted(() => {
         <div class="space-y-3">
           <button
             type="button"
-            class="w-full rounded-xl bg-accent py-2.5 text-xs font-bold text-white shadow transition hover:bg-accent/90"
+            class="press w-full rounded-xl bg-accent py-2.5 text-xs font-bold text-onAccent shadow hover:bg-accent/90"
             @click="router.push('/')"
           >
             {{ t("admin.backToSearch") }}
@@ -168,8 +216,10 @@ onMounted(() => {
             <button
               v-for="loc in (['ru', 'en', 'es'] as const)"
               :key="loc"
-              class="rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase transition"
-              :class="ui.locale === loc ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+              type="button"
+              class="press hit rounded-lg px-2.5 py-1 text-[11px] font-semibold uppercase"
+              :class="ui.locale === loc ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
+              :aria-pressed="ui.locale === loc ? 'true' : 'false'"
               @click="ui.setLocale(loc)"
             >
               {{ loc }}
@@ -179,7 +229,7 @@ onMounted(() => {
           <!-- Dev mode warning banner if auth is disabled -->
           <div
             v-if="overview?.is_dev_mode"
-            class="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-400"
+            class="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs font-medium text-warning"
           >
             <span>⚠️</span>
             <span>{{ t("admin.devModeBadge") }}</span>
@@ -187,7 +237,8 @@ onMounted(() => {
 
           <!-- Logout / Switch account button -->
           <button
-            class="rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surface/80 transition"
+            type="button"
+            class="press rounded-lg border border-bd bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-ink hover:bg-surfaceHover"
             :title="t('auth.logoutEverywhereHint')"
             @click="handleLogout"
           >
@@ -196,48 +247,33 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Navigation Tabs -->
-      <div class="mb-6 flex border-b border-bd">
+      <!-- Navigation Tabs: one line that scrolls sideways on a phone, and sticks under a
+           translucent bar while the page scrolls (the view root, p-6, is the scroller). -->
+      <div
+        class="sticky -top-6 z-20 -mx-6 mb-6 flex overflow-x-auto scrollbar-none border-b border-bd px-6 material-bar"
+        role="tablist"
+        :aria-label="t('admin.title')"
+        @keydown="onTabKey"
+      >
         <button
-          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-          :class="activeTab === 'overview' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="activeTab = 'overview'"
+          v-for="tab in TABS"
+          :id="`admin-tab-${tab.id}`"
+          :key="tab.id"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === tab.id ? 'true' : 'false'"
+          aria-controls="admin-tabpanel"
+          :tabindex="activeTab === tab.id ? 0 : -1"
+          class="shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
+          :class="activeTab === tab.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
+          @click="selectTab(tab.id)"
         >
-          {{ t("admin.tabs.overview") }}
-        </button>
-        <button
-          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-          :class="activeTab === 'users' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="activeTab = 'users'"
-        >
-          {{ t("admin.tabs.users") }}
-        </button>
-        <button
-          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-          :class="activeTab === 'analytics' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="activeTab = 'analytics'"
-        >
-          {{ t("admin.tabs.analytics") }}
-        </button>
-        <button
-          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-          :class="activeTab === 'agents' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="activeTab = 'agents'"
-        >
-          {{ t("admin.tabs.agents") }}
-        </button>
-        <button
-          class="border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
-          :class="activeTab === 'operations' ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'"
-          @click="activeTab = 'operations'"
-        >
-          {{ t("admin.tabs.operations") }}
+          {{ t(tab.label) }}
         </button>
       </div>
 
-      <!-- Tab Viewport -->
       <!-- Every tab renders on its own; each one shows its own loading and errors. -->
-      <div class="flex-1">
+      <div id="admin-tabpanel" class="flex-1" role="tabpanel" :aria-labelledby="`admin-tab-${activeTab}`">
         <OverviewTab v-if="activeTab === 'overview'" :initial-overview="overview" @update="onOverviewUpdate" />
 
         <UsersTab v-else-if="activeTab === 'users'" />

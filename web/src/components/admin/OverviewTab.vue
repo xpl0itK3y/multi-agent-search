@@ -124,9 +124,11 @@ const isHealthy = computed(() => {
     <!-- Top System Health & Live Indicator -->
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
+        <!-- Breathes only while the live stream is actually connected. -->
         <span
           class="inline-block h-3 w-3 rounded-full"
-          :class="isHealthy ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50 animate-pulse' : 'bg-amber-500 animate-pulse'"
+          :class="[isHealthy ? 'bg-success' : 'bg-warning', isStreaming && !streamError ? 'live-dot' : '']"
+          aria-hidden="true"
         />
         <h2 class="text-base font-semibold text-ink">
           {{ isHealthy ? t("admin.overview.systemHealthy") : t("admin.overview.systemDegradedTitle") }}
@@ -152,13 +154,16 @@ const isHealthy = computed(() => {
     <!-- Metric KPI Cards -->
     <div class="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <!-- PostgreSQL Health -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.postgres") }}</span>
           <span class="text-sm">🗄️</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-xl font-bold uppercase text-emerald-400">
+          <span
+            class="text-xl font-bold uppercase"
+            :class="(overview?.system_health?.postgres || 'ok') === 'ok' ? 'text-success' : 'text-danger'"
+          >
             {{ overview?.system_health?.postgres || "ok" }}
           </span>
           <span class="text-xs text-muted">{{ t("admin.overview.active") }}</span>
@@ -166,29 +171,29 @@ const isHealthy = computed(() => {
       </div>
 
       <!-- Active Researches -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.activeResearches") }}</span>
           <span class="text-sm">🔬</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-2xl font-bold text-ink">
+          <span class="text-2xl font-bold tabular-nums text-ink">
             {{ overview?.active_researches_count ?? 0 }}
           </span>
-          <span v-if="(overview?.active_researches_count ?? 0) > 0" class="text-xs text-accent animate-pulse">
+          <span v-if="(overview?.active_researches_count ?? 0) > 0" class="live-dot text-xs text-accent">
             {{ t("admin.overview.running") }}
           </span>
         </div>
       </div>
 
       <!-- Pending Tasks -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.pendingTasks") }}</span>
           <span class="text-sm">⏳</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
-          <span class="text-2xl font-bold text-ink">
+          <span class="text-2xl font-bold tabular-nums text-ink">
             {{ overview?.pending_tasks_count ?? 0 }}
           </span>
           <span class="text-xs text-muted">{{ t("admin.overview.inQueues") }}</span>
@@ -196,15 +201,15 @@ const isHealthy = computed(() => {
       </div>
 
       <!-- Failed / Dead-Letter Tasks -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 backdrop-blur">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.overview.failedTasks") }}</span>
           <span class="text-sm">⚠️</span>
         </div>
         <div class="mt-2 flex items-baseline gap-2">
           <span
-            class="text-2xl font-bold"
-            :class="(overview?.failed_tasks_count ?? 0) > 0 ? 'text-red-400 font-extrabold' : 'text-ink'"
+            class="text-2xl font-bold tabular-nums"
+            :class="(overview?.failed_tasks_count ?? 0) > 0 ? 'text-danger' : 'text-ink'"
           >
             {{ overview?.failed_tasks_count ?? 0 }}
           </span>
@@ -241,7 +246,7 @@ const isHealthy = computed(() => {
                 <div class="flex items-center gap-2">
                   <span
                     class="h-2 w-2 shrink-0 rounded-full"
-                    :class="w.is_alive ? 'bg-emerald-400 shadow shadow-emerald-400/50' : 'bg-red-400'"
+                    :class="w.is_alive ? 'bg-success' : 'bg-danger'"
                   />
                   <h4 class="truncate font-semibold text-ink text-sm">{{ w.worker_name }}</h4>
                 </div>
@@ -252,7 +257,7 @@ const isHealthy = computed(() => {
 
               <span
                 class="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-                :class="w.is_alive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'"
+                :class="w.is_alive ? 'bg-success/15 text-success' : 'bg-danger/15 text-danger'"
               >
                 {{ w.is_alive ? t("admin.overview.alive") : t("admin.overview.offline") }}
               </span>
@@ -266,7 +271,7 @@ const isHealthy = computed(() => {
               </div>
               <div>
                 <span class="text-muted block text-[10px] uppercase tracking-wider">{{ t("admin.overview.jobsProcessed") }}</span>
-                <span class="font-bold text-accent">{{ w.processed_jobs }}</span>
+                <span class="font-bold tabular-nums text-accent">{{ w.processed_jobs }}</span>
               </div>
             </div>
 
@@ -277,20 +282,20 @@ const isHealthy = computed(() => {
             >
               <div class="text-[11px] font-medium text-muted flex justify-between">
                 <span>{{ t("admin.overview.metrics") }}:</span>
-                <span class="text-ink">
+                <span class="tabular-nums text-ink">
                   {{ w.extraction_metrics.success_count || 0 }} ok / {{ w.extraction_metrics.attempts || 0 }} total
                 </span>
               </div>
               <div class="text-[11px] text-muted flex justify-between">
                 <span>{{ t("admin.overview.downloaded") }}:</span>
-                <span class="text-ink">{{ formatBytes(w.extraction_metrics.downloaded_bytes || 0) }}</span>
+                <span class="tabular-nums text-ink">{{ formatBytes(w.extraction_metrics.downloaded_bytes || 0) }}</span>
               </div>
             </div>
 
             <!-- Error Banner -->
             <div
               v-if="w.last_error"
-              class="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-2 text-[11px] text-red-300 truncate"
+              class="mt-3 rounded-lg border border-danger/20 bg-danger/10 p-2 text-[11px] text-danger truncate"
               :title="w.last_error"
             >
               {{ w.last_error }}

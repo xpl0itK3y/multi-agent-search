@@ -462,7 +462,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(summary?.total_users ?? totalUsers) }}
         </div>
         <div class="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
@@ -471,15 +471,12 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
 
       <!-- Online Now -->
-      <div class="rounded-xl border border-bd bg-surface/40 p-4 transition-all hover:border-emerald-500/30">
+      <div class="rounded-xl border border-bd bg-surface/40 p-4 transition-all hover:border-success/30">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted">{{ t("admin.users.kpiOnlineNow") }}</span>
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-            <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-          </span>
+          <span class="live-dot inline-flex h-2.5 w-2.5 rounded-full bg-success" aria-hidden="true"></span>
         </div>
-        <div class="mt-2 text-2xl font-black text-emerald-400">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-success">
           {{ formatNumber(summary?.online_users_now ?? summary?.online_now ?? onlineUsers) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -495,7 +492,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
           </svg>
         </div>
-        <div class="mt-2 flex items-baseline gap-1 text-2xl font-black text-ink">
+        <div class="mt-2 flex items-baseline gap-1 text-2xl font-bold tabular-nums text-ink">
           <span>{{ formatNumber(summary?.dau_today ?? summary?.dau ?? 0) }}</span>
           <span class="text-xs font-normal text-muted">/ {{ formatNumber(summary?.wau_7d ?? summary?.wau ?? 0) }} / {{ formatNumber(summary?.mau_30d ?? summary?.mau ?? 0) }}</span>
         </div>
@@ -512,7 +509,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-ink">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-ink">
           {{ formatNumber(summary?.total_researches ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -528,7 +525,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <div class="mt-2 text-2xl font-black text-emerald-400">
+        <div class="mt-2 text-2xl font-bold tabular-nums text-success">
           {{ formatCurrency(summary?.total_cost_usd ?? 0) }}
         </div>
         <div class="mt-1 text-[11px] text-muted">
@@ -544,7 +541,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'directory' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'directory' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'directory'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -556,14 +553,14 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'prompts' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'prompts' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'prompts'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
           </svg>
           <span>{{ t("admin.users.tabPrompts") }}</span>
-          <span v-if="promptsTotal > 0" class="ml-0.5 rounded-full bg-surface/80 px-1.5 py-0.5 text-[10px] font-mono">
+          <span v-if="promptsTotal > 0" class="ml-0.5 rounded-full bg-surface/80 px-1.5 py-0.5 text-[10px] tabular-nums text-ink">
             {{ promptsTotal }}
           </span>
         </button>
@@ -571,7 +568,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'platforms' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'platforms' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'platforms'"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -583,13 +580,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <button
           type="button"
           class="flex items-center gap-2 rounded-lg px-3 py-1.5 font-semibold transition"
-          :class="activeSubView === 'feed' ? 'bg-accent text-white shadow' : 'text-muted hover:text-ink'"
+          :class="activeSubView === 'feed' ? 'bg-accent text-onAccent shadow' : 'text-muted hover:text-ink'"
           @click="activeSubView = 'feed'"
         >
-          <span class="relative flex h-2 w-2">
-            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
-            <span class="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
-          </span>
+          <span class="live-dot inline-flex h-2 w-2 rounded-full" :class="activeSubView === 'feed' ? 'bg-onAccent' : 'bg-accent'" aria-hidden="true"></span>
           <span>{{ t("admin.users.tabLiveFeed") }}</span>
         </button>
       </div>
@@ -603,7 +597,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <input
             v-model="autoRefresh"
             type="checkbox"
-            class="rounded border-bd text-accent focus:ring-0"
+            class="rounded border-bd text-accent"
           />
           <span>{{ t("admin.users.autoRefresh") }}</span>
         </label>
@@ -622,7 +616,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <button
           type="button"
-          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
+          class="flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-onAccent shadow-sm transition hover:bg-accent/90 disabled:opacity-50"
           :disabled="exporting"
           @click="activeSubView === 'prompts' ? exportPromptsCsv() : exportCsv()"
         >
@@ -634,7 +628,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
       </div>
     </div>
 
-    <p v-if="actionError" class="text-right text-xs text-red-400">{{ actionError }}</p>
+    <p v-if="actionError" class="text-right text-xs text-danger" role="alert">{{ actionError }}</p>
     <p v-else-if="actionNotice" class="text-right text-xs text-success" role="status" data-test="users-notice">{{ actionNotice }}</p>
 
     <!-- ──────────────────────────────────────────────────────────────────────── -->
@@ -666,7 +660,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <!-- Role Filter -->
         <select
           v-model="roleFilter"
-          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition"
         >
           <option value="">{{ t("admin.users.allRoles") }}</option>
           <option value="user">{{ t("admin.users.roleUsersOnly") }}</option>
@@ -676,7 +670,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <!-- Sort By -->
         <select
           v-model="sortBy"
-          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/60 px-3 py-2 text-xs text-ink transition"
         >
           <option value="activity">{{ t("admin.users.sortByActivity") }}</option>
           <option value="registered">{{ t("admin.users.sortByRegistered") }}</option>
@@ -690,7 +684,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <input
             v-model="onlineOnly"
             type="checkbox"
-            class="rounded border-bd text-accent focus:ring-0"
+            class="rounded border-bd text-accent"
           />
           <span>{{ t("admin.users.filterOnlineOnly") }}</span>
         </label>
@@ -707,7 +701,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           {{ t("common.loading") }}
         </div>
 
-        <div v-else-if="usersError" class="p-6 text-center text-xs text-red-400">
+        <div v-else-if="usersError" class="p-6 text-center text-xs text-danger" role="alert">
           {{ usersError }}
         </div>
 
@@ -744,7 +738,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                       </div>
                       <span
                         v-if="u.is_online"
-                        class="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-bg"
+                        class="absolute bottom-0 right-0 block h-2.5 w-2.5 rounded-full bg-success ring-2 ring-bg"
                         :title="t('admin.users.onlineNow')"
                       ></span>
                     </div>
@@ -753,7 +747,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                         <span>{{ u.name || t("admin.users.unnamed") }}</span>
                         <span
                           v-if="u.is_admin"
-                          class="rounded bg-accent/20 px-1.5 py-0.5 text-[9.5px] font-bold text-accent"
+                          class="rounded bg-accent/20 px-1.5 py-0.5 text-[9.5px] font-semibold text-accent"
                         >
                           ADMIN
                         </span>
@@ -768,9 +762,9 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <div class="flex items-center gap-1.5">
                     <span
                       v-if="u.is_online"
-                      class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+                      class="inline-block h-1.5 w-1.5 rounded-full bg-success"
                     ></span>
-                    <span :class="u.is_online ? 'font-semibold text-emerald-400' : 'text-muted'">
+                    <span :class="u.is_online ? 'font-semibold text-success' : 'text-muted'">
                       {{ u.is_online ? t("admin.users.online") : timeAgo(u.last_seen_at) }}
                     </span>
                   </div>
@@ -821,7 +815,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <div class="font-semibold text-ink">
                     {{ formatCurrency(u.total_cost_usd) }}
                   </div>
-                  <div class="font-mono text-[10px] text-muted">
+                  <div class="text-[10px] text-muted">
                     {{ formatNumber(u.total_tokens) }} tok
                   </div>
                 </td>
@@ -840,7 +834,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                       v-if="!isSelf(u)"
                       type="button"
                       :disabled="deletingUserId === u.id"
-                      class="rounded-lg border border-red-500/30 bg-red-500/10 p-1 text-red-400 transition hover:bg-red-500/20 hover:text-red-300 disabled:opacity-50"
+                      class="press hit rounded-lg border border-danger/30 bg-danger/10 p-1 text-danger hover:bg-danger/20 hover:text-danger/80 disabled:opacity-50"
                       :title="t('admin.users.deleteUser')"
                       @click="handleDeleteUser(u)"
                     >
@@ -869,7 +863,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               {{ t("admin.users.prev") }}
             </button>
-            <span class="px-2 font-mono text-[11px] text-ink">
+            <span class="px-2 text-[11px] tabular-nums text-ink">
               {{ page }} / {{ totalPages }}
             </span>
             <button
@@ -913,14 +907,14 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         <!-- Filter by Prompt Type -->
         <select
           v-model="promptsTypeFilter"
-          class="rounded-xl border border-bd bg-surface/50 px-3 py-2 text-xs text-ink focus:border-accent focus:outline-none"
+          class="rounded-xl border border-bd bg-surface/50 px-3 py-2 text-xs text-ink"
         >
           <option value="all">{{ t("admin.users.promptTypeAll") }}</option>
           <option value="research">{{ t("admin.users.promptTypeResearch") }}</option>
           <option value="chat">{{ t("admin.users.promptTypeChat") }}</option>
         </select>
 
-        <span class="text-xs text-muted font-mono">
+        <span class="text-xs tabular-nums text-muted">
           {{ t("admin.users.totalPromptsCount", { count: promptsTotal }) }}
         </span>
       </div>
@@ -931,7 +925,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
         {{ t("common.loading") }}
       </div>
 
-      <div v-else-if="promptsError" class="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+      <div v-else-if="promptsError" class="rounded-xl border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
         {{ promptsError }}
       </div>
 
@@ -960,7 +954,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               </span>
               <span
                 v-else
-                class="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-400"
+                class="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 dark:text-emerald-400"
               >
                 {{ t("admin.users.promptTypeChat") }}
               </span>
@@ -988,13 +982,13 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <!-- Right Actions & Meta -->
             <div class="flex items-center gap-3">
               <!-- Tokens & Cost (if available) -->
-              <span v-if="p.total_tokens > 0" class="font-mono text-[11px] text-muted">
+              <span v-if="p.total_tokens > 0" class="text-[11px] tabular-nums text-muted">
                 {{ formatNumber(p.total_tokens) }} tok
-                <span class="text-emerald-400">({{ formatCurrency(p.cost_usd) }})</span>
+                <span class="text-success">({{ formatCurrency(p.cost_usd) }})</span>
               </span>
 
               <!-- Time -->
-              <span class="font-mono text-[11px] text-muted" :title="formatDate(p.created_at)">
+              <span class="text-[11px] tabular-nums text-muted" :title="formatDate(p.created_at)">
                 {{ timeAgo(p.created_at) }}
               </span>
 
@@ -1007,7 +1001,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 <svg v-if="copiedPromptId !== p.id" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <svg v-else class="h-3 w-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg v-else class="h-3 w-3 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                 </svg>
                 <span>{{ copiedPromptId === p.id ? t("admin.users.promptCopied") : t("admin.users.copyPrompt") }}</span>
@@ -1025,7 +1019,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
 
         <!-- Prompts Pagination Controls -->
         <div v-if="promptsTotalPages > 1" class="flex items-center justify-between border-t border-bd pt-4 text-xs">
-          <span class="text-muted">
+          <span class="tabular-nums text-muted">
             {{ t("admin.users.showingCount", { count: prompts.length, total: promptsTotal }) }}
           </span>
           <div class="flex items-center gap-2">
@@ -1037,7 +1031,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               {{ t("admin.users.prev") }}
             </button>
-            <span class="font-mono text-muted">
+            <span class="tabular-nums text-muted">
               {{ promptsPage }} / {{ promptsTotalPages }}
             </span>
             <button
@@ -1075,7 +1069,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1108,7 +1102,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1141,7 +1135,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium capitalize text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1174,7 +1168,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           >
             <div class="flex items-center justify-between text-xs">
               <span class="font-medium uppercase text-ink">{{ item.key }}</span>
-              <span class="font-mono text-muted">{{ item.count }} ({{ item.percent }}%)</span>
+              <span class="tabular-nums text-muted">{{ item.count }} ({{ item.percent }}%)</span>
             </div>
             <div class="h-2 w-full overflow-hidden rounded-full bg-surface">
               <div
@@ -1201,7 +1195,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === '' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === '' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = ''"
           >
             {{ t("admin.users.catAll") }}
@@ -1209,7 +1203,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'ui' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'ui' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'ui'"
           >
             {{ t("admin.users.catUi") }}
@@ -1217,7 +1211,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'prompt' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'prompt' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'prompt'"
           >
             {{ t("admin.users.catPrompts") }}
@@ -1225,22 +1219,22 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <button
             type="button"
             class="rounded-lg px-2.5 py-1 font-medium transition"
-            :class="eventCategory === 'system' ? 'bg-accent text-white' : 'border border-bd bg-surface text-muted hover:text-ink'"
+            :class="eventCategory === 'system' ? 'bg-accent text-onAccent' : 'border border-bd bg-surface text-muted hover:text-ink'"
             @click="eventCategory = 'system'"
           >
             {{ t("admin.users.catSystem") }}
           </button>
         </div>
 
-        <div class="flex items-center gap-2 text-xs text-muted font-mono">
-          <span class="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <div class="flex items-center gap-2 text-xs tabular-nums text-muted">
+          <span class="live-dot inline-block h-2 w-2 rounded-full bg-success" aria-hidden="true"></span>
           <span>{{ t("admin.users.totalStreamEvents", { count: eventsTotal }) }}</span>
         </div>
       </div>
 
       <!-- Events List -->
       <div class="rounded-xl border border-bd bg-surface/40 overflow-hidden divide-y divide-bd">
-        <div v-if="eventsError" class="p-4 text-center text-xs text-red-400">
+        <div v-if="eventsError" class="p-4 text-center text-xs text-danger" role="alert">
           {{ eventsError }}
         </div>
 
@@ -1260,11 +1254,11 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-2">
               <span
-                class="rounded-full px-2 py-0.5 font-mono text-[10px] font-bold uppercase"
+                class="rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase"
                 :class="{
-                  'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
-                  'bg-blue-500/15 text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
-                  'bg-purple-500/15 text-purple-400 border border-purple-500/30': ev.event_category === 'system',
+                  'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30': ev.event_category === 'prompt',
+                  'bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/30': ev.event_category === 'ui',
+                  'bg-purple-500/15 text-purple-700 dark:text-purple-400 border border-purple-500/30': ev.event_category === 'system',
                   'bg-surface text-muted border border-bd': !['prompt', 'ui', 'system'].includes(ev.event_category),
                 }"
               >
@@ -1315,13 +1309,13 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                 </h3>
                 <span
                   v-if="activeUser?.is_admin"
-                  class="rounded bg-accent/20 px-2 py-0.5 text-[10px] font-bold text-accent"
+                  class="rounded bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent"
                 >
                   ADMIN
                 </span>
                 <span
                   v-if="activeUser?.is_online"
-                  class="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-emerald-400"
+                  class="rounded-full bg-success/15 border border-success/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-success"
                 >
                   {{ t("admin.users.online") }}
                 </span>
@@ -1344,7 +1338,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           </button>
         </div>
 
-        <p v-if="actionError" class="mt-3 text-xs text-red-400">{{ actionError }}</p>
+        <p v-if="actionError" class="mt-3 text-xs text-danger" role="alert">{{ actionError }}</p>
 
         <div v-if="drawerLoading && !selectedUserDetail" class="mt-8 space-y-4 animate-pulse">
           <div class="grid grid-cols-3 gap-3">
@@ -1356,7 +1350,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
           <div class="h-28 rounded-xl bg-surface/60"></div>
         </div>
 
-        <div v-else-if="drawerError" class="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+        <div v-else-if="drawerError" class="mt-6 rounded-xl border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
           {{ drawerError }}
         </div>
 
@@ -1403,21 +1397,21 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             <div class="grid grid-cols-3 gap-3 rounded-xl border border-bd bg-surface/40 p-4 text-center">
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.colResearches") }}</div>
-                <div class="mt-1 text-lg font-bold text-ink">{{ activeUser?.researches_count ?? 0 }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-ink">{{ activeUser?.researches_count ?? 0 }}</div>
               </div>
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.totalTokens") }}</div>
-                <div class="mt-1 text-lg font-bold text-ink">{{ formatNumber(activeUser?.total_tokens) }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-ink">{{ formatNumber(activeUser?.total_tokens) }}</div>
               </div>
               <div>
                 <div class="text-[11px] text-muted">{{ t("admin.users.colSpend") }}</div>
-                <div class="mt-1 text-lg font-bold text-emerald-400">{{ formatCurrency(activeUser?.total_cost_usd) }}</div>
+                <div class="mt-1 text-lg font-bold tabular-nums text-success">{{ formatCurrency(activeUser?.total_cost_usd) }}</div>
               </div>
             </div>
 
             <!-- Technical Fingerprint Card -->
             <div class="rounded-xl border border-bd bg-surface/40 p-5 space-y-4">
-              <h4 class="text-xs font-bold uppercase tracking-wider text-muted">
+              <h4 class="text-xs font-semibold uppercase tracking-wider text-muted">
                 {{ t("admin.users.techFingerprint") }}
               </h4>
 
@@ -1485,7 +1479,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
                   <span class="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold text-accent">{{ s.device_type }}</span>
                   <span>{{ s.browser || "Browser" }} on {{ s.os || "OS" }}</span>
                 </div>
-                <span class="font-mono text-[11px] text-muted">{{ timeAgo(s.last_active_at) }}</span>
+                <span class="text-[11px] tabular-nums text-muted">{{ timeAgo(s.last_active_at) }}</span>
               </div>
               <div class="grid grid-cols-2 gap-2 text-[11px] text-muted font-mono">
                 <div>IP: {{ s.ip_address || "—" }}</div>
@@ -1514,7 +1508,7 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
               </div>
               <div class="flex items-center justify-between text-[11px] text-muted">
                 <span>{{ formatDate(r.created_at) }}</span>
-                <span class="font-mono text-ink">{{ formatNumber(r.total_tokens) }} tok ({{ formatCurrency(r.cost_usd) }})</span>
+                <span class="tabular-nums text-ink">{{ formatNumber(r.total_tokens) }} tok ({{ formatCurrency(r.cost_usd) }})</span>
               </div>
             </div>
           </div>
@@ -1531,10 +1525,10 @@ function getSortedBreakdown(mapObj: Record<string, number> | undefined) {
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2">
-                  <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[9.5px] font-bold text-accent">{{ ev.event_category }}</span>
+                  <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-accent">{{ ev.event_category }}</span>
                   <span class="font-medium text-ink">{{ ev.event_name }}</span>
                 </div>
-                <span class="font-mono text-[10px] text-muted">{{ timeAgo(ev.created_at) }}</span>
+                <span class="text-[10px] tabular-nums text-muted">{{ timeAgo(ev.created_at) }}</span>
               </div>
               <pre v-if="ev.details && Object.keys(ev.details).length > 0" class="max-h-20 overflow-y-auto rounded bg-surface/80 p-1.5 font-mono text-[10px] text-muted">{{ JSON.stringify(ev.details, null, 2) }}</pre>
             </div>

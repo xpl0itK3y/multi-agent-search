@@ -17,6 +17,8 @@ import {
   wheelUnit,
   wheelZoomFactor,
   zoomAt,
+  STAGE_TEXT,
+  STAGE_TONE,
   ZOOM_LIMITS,
   type BBox,
   type PanRange,
@@ -633,7 +635,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "trigger",
     icon: "⚡",
     iconBg: "bg-orange-500/15 border-orange-500/30",
-    iconColor: "text-orange-400",
+    iconColor: STAGE_TEXT.trigger,
     x: 60,
     y: 300,
     width: 230,
@@ -648,7 +650,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "💬",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 420,
     y: 300,
     width: NODE_WIDTH,
@@ -663,7 +665,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "✨",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 790,
     y: 300,
     width: NODE_WIDTH,
@@ -678,7 +680,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "🧭",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 1160,
     y: 300,
     width: NODE_WIDTH,
@@ -693,7 +695,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "planning",
     icon: "🌐",
     iconBg: "bg-blue-500/15 border-blue-500/30",
-    iconColor: "text-blue-400",
+    iconColor: STAGE_TEXT.planning,
     x: 1490,
     y: 450,
     width: NODE_WIDTH,
@@ -708,7 +710,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🔎",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 1850,
     y: 300,
     width: NODE_WIDTH,
@@ -722,7 +724,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🛡️",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2220,
     y: 300,
     width: NODE_WIDTH,
@@ -736,7 +738,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "⭐",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2590,
     y: 300,
     width: NODE_WIDTH,
@@ -750,7 +752,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "🔗",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 2960,
     y: 300,
     width: NODE_WIDTH,
@@ -764,7 +766,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "search",
     icon: "📑",
     iconBg: "bg-emerald-500/15 border-emerald-500/30",
-    iconColor: "text-emerald-400",
+    iconColor: STAGE_TEXT.search,
     x: 3330,
     y: 300,
     width: NODE_WIDTH,
@@ -778,7 +780,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🔁",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 3700,
     y: 300,
     width: NODE_WIDTH,
@@ -793,7 +795,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🧠",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4070,
     y: 300,
     width: NODE_WIDTH,
@@ -808,7 +810,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🔢",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4440,
     y: 300,
     width: NODE_WIDTH,
@@ -822,7 +824,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "✓",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 4810,
     y: 300,
     width: NODE_WIDTH,
@@ -837,7 +839,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📌",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5180,
     y: 160,
     width: NODE_WIDTH,
@@ -851,7 +853,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "⚠️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5550,
     y: 160,
     width: NODE_WIDTH,
@@ -865,7 +867,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "🎯",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5180,
     y: 440,
     width: NODE_WIDTH,
@@ -880,7 +882,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "⚖️",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5550,
     y: 440,
     width: NODE_WIDTH,
@@ -895,7 +897,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📝",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 5920,
     y: 300,
     width: NODE_WIDTH,
@@ -910,7 +912,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "synthesis",
     icon: "📊",
     iconBg: "bg-purple-500/15 border-purple-500/30",
-    iconColor: "text-purple-400",
+    iconColor: STAGE_TEXT.synthesis,
     x: 6290,
     y: 300,
     width: NODE_WIDTH,
@@ -924,7 +926,7 @@ const VISUAL_NODES_CONFIG: Record<string, Omit<VisualNode, "id">> = {
     stage: "delivery",
     icon: "💬",
     iconBg: "bg-amber-500/15 border-amber-500/30",
-    iconColor: "text-amber-400",
+    iconColor: STAGE_TEXT.delivery,
     x: 6660,
     y: 300,
     width: NODE_WIDTH,
@@ -1024,7 +1026,7 @@ function nodeCardState(nodeId: string): string {
   if (sim === "active") {
     return "scale-[1.03] border-sky-400 bg-surface ring-4 ring-sky-400/50 shadow-xl shadow-sky-400/25 duration-200 ease-out";
   }
-  if (sim === "completed") return "border-emerald-500/60 bg-surface duration-200 ease-out";
+  if (sim === "completed") return "border-success/60 bg-surface duration-200 ease-out";
   return "border-bd bg-surface hover:border-accent/50 hover:bg-surfaceHover hover:shadow-lg duration-200 ease-out";
 }
 
@@ -1398,7 +1400,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 1,
     stageName: "Planning",
-    stageColor: "text-orange-400 border-orange-500/30 bg-orange-500/10",
+    stageColor: STAGE_TONE.trigger,
     agentIds: ["trigger_start", "clarifier"],
     activeEdges: ["trigger_start->clarifier"],
     payloadInfo: "user_query ➔ clarification_needed, suggested_followups",
@@ -1406,7 +1408,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 2,
     stageName: "Planning",
-    stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
+    stageColor: STAGE_TONE.planning,
     agentIds: ["optimizer"],
     activeEdges: ["clarifier->optimizer"],
     payloadInfo: "clarified_intent ➔ optimized_prompt, angles, hypotheses",
@@ -1414,7 +1416,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 3,
     stageName: "Planning",
-    stageColor: "text-blue-400 border-blue-500/30 bg-blue-500/10",
+    stageColor: STAGE_TONE.planning,
     agentIds: ["orchestrator", "cross_language"],
     activeEdges: ["optimizer->orchestrator", "orchestrator->cross_language"],
     payloadInfo: "optimized_prompt ➔ subtasks, translated_queries",
@@ -1422,7 +1424,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 4,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["search"],
     activeEdges: ["orchestrator->search", "cross_language->search"],
     payloadInfo: "primary_queries + translated_queries ➔ scraped_pages, raw_snippets",
@@ -1430,7 +1432,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 5,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["source_critic", "source_reputation", "source_independence"],
     activeEdges: [
       "search->source_critic",
@@ -1443,7 +1445,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 6,
     stageName: "Search & Ingest",
-    stageColor: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
+    stageColor: STAGE_TONE.search,
     agentIds: ["evidence_mapper"],
     activeEdges: ["source_independence->evidence_mapper"],
     payloadInfo: "canonical_sources ➔ evidence_blocks, coverage_matrix",
@@ -1451,7 +1453,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 7,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["replan", "search"],
     activeEdges: ["evidence_mapper->replan", "replan->search"],
     payloadInfo: "evidence_blocks ➔ gap_detected, ↩ gap_queries ➔ SearchAgent",
@@ -1459,7 +1461,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 8,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["analyzer"],
     activeEdges: ["replan->analyzer"],
     payloadInfo: "verified_evidence ➔ draft_report, reasoning_steps, key_findings",
@@ -1467,7 +1469,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 9,
     stageName: "Synthesis & Logic",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["numeric_check", "claim_verifier"],
     activeEdges: ["analyzer->numeric_check", "numeric_check->claim_verifier", "claim_verifier->analyzer"],
     payloadInfo: "draft_report ➔ verified_numbers, verified_claims / ↩ fact_fix",
@@ -1475,7 +1477,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 10,
     stageName: "Synthesis & Verification",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["citation_audit", "retraction", "red_team", "stance"],
     activeEdges: [
       "claim_verifier->citation_audit",
@@ -1488,7 +1490,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 11,
     stageName: "Synthesis & Polish",
-    stageColor: "text-rose-400 border-rose-500/30 bg-rose-500/10",
+    stageColor: STAGE_TONE.return,
     agentIds: ["report_critic", "analyzer", "replan"],
     activeEdges: [
       "stance->report_critic",
@@ -1501,7 +1503,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 12,
     stageName: "Synthesis & Polish",
-    stageColor: "text-purple-400 border-purple-500/30 bg-purple-500/10",
+    stageColor: STAGE_TONE.synthesis,
     agentIds: ["report_critic", "confidence"],
     activeEdges: [
       "report_critic->confidence",
@@ -1511,7 +1513,7 @@ const SIMULATION_STEPS: SimulationStep[] = [
   {
     stepNumber: 13,
     stageName: "Delivery & Follow-Up",
-    stageColor: "text-amber-400 border-amber-500/30 bg-amber-500/10",
+    stageColor: STAGE_TONE.delivery,
     agentIds: ["chat"],
     activeEdges: ["confidence->chat"],
     payloadInfo: "final_report + trust_badge ➔ grounded_interactive_answers",
@@ -1718,7 +1720,7 @@ function isNodeDimmed(nodeId: string): boolean {
           v-model="searchQuery"
           type="text"
           :placeholder="t('admin.agents.searchPlaceholder')"
-          class="w-full rounded-xl border border-bd bg-surface/60 py-1.5 pl-8 pr-3 text-xs text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          class="w-full rounded-xl border border-bd bg-surface/60 py-1.5 pl-8 pr-3 text-xs text-ink placeholder:text-muted"
         />
         <button
           v-if="searchQuery"
@@ -1731,34 +1733,38 @@ function isNodeDimmed(nodeId: string): boolean {
 
       <!-- Quick Stage Legend Indicators -->
       <div class="hidden lg:flex items-center gap-2 text-[11px] font-mono">
-        <div class="flex items-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-orange-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.trigger">
           <span>⚡</span>
           <span>{{ t("admin.agents.legendTrigger") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.planning">
           <span>🟣</span>
           <span>{{ t("admin.agents.legendPlanning") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.search">
           <span>🟢</span>
           <span>{{ t("admin.agents.legendSearch") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-purple-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.synthesis">
           <span>🟠</span>
           <span>{{ t("admin.agents.legendSynthesis") }}</span>
         </div>
-        <div class="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">
+        <div class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1" :class="STAGE_TONE.delivery">
           <span>🔵</span>
           <span>{{ t("admin.agents.legendDelivery") }}</span>
         </div>
-        <div
-          class="flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-rose-400 cursor-pointer hover:bg-rose-500/20 transition"
+        <!-- A real toggle (keyboard, state announced), not a clickable div. -->
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1 hover:bg-rose-500/20"
+          :class="STAGE_TONE.return"
           :title="t('admin.agents.toggleReturnLoopsTooltip')"
+          :aria-pressed="showReturnLoops ? 'true' : 'false'"
           @click="showReturnLoops = !showReturnLoops"
         >
-          <span>↩</span>
+          <span aria-hidden="true">↩</span>
           <span>{{ t("admin.agents.legendReturn") }}</span>
-        </div>
+        </button>
       </div>
 
       <!-- Right Action Group: Simulation Controls, Zoom, Language & Layout -->
@@ -1768,7 +1774,7 @@ function isNodeDimmed(nodeId: string): boolean {
           class="flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition shadow-sm"
           :class="[
             showReturnLoops
-              ? 'border-rose-500/60 bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40'
+              ? 'border-rose-500/60 bg-rose-500/15 text-rose-700 dark:text-rose-300'
               : 'border-bd bg-surface/70 text-muted hover:text-ink hover:border-rose-500/40'
           ]"
           :title="t('admin.agents.toggleReturnLoopsTooltip')"
@@ -1777,8 +1783,8 @@ function isNodeDimmed(nodeId: string): boolean {
           <span class="text-sm">↩</span>
           <span class="hidden sm:inline">{{ t("admin.agents.showReturnLoops") }}</span>
           <span
-            class="rounded-full px-1.5 py-0.2 text-[9.5px] font-mono font-bold"
-            :class="showReturnLoops ? 'bg-rose-500/30 text-rose-200' : 'bg-surface text-muted'"
+            class="rounded-full px-1.5 py-px text-3xs font-semibold tabular-nums"
+            :class="showReturnLoops ? 'bg-rose-500/20 text-rose-700 dark:text-rose-200' : 'bg-surface text-muted'"
           >
             {{ RETURN_CONNECTIONS.length }}
           </span>
@@ -1797,7 +1803,7 @@ function isNodeDimmed(nodeId: string): boolean {
           </button>
           <button
             v-else
-            class="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-xs font-semibold text-amber-400 hover:bg-amber-500/30 transition"
+            class="flex items-center gap-1.5 rounded-lg bg-warning/15 border border-warning/40 px-3 py-1 text-xs font-semibold text-warning hover:bg-warning/25 transition"
             :title="t('admin.agents.pauseSim')"
             @click="pauseSimulation"
           >
@@ -1815,7 +1821,7 @@ function isNodeDimmed(nodeId: string): boolean {
           </button>
 
           <button
-            class="rounded px-2 py-1 font-mono text-[10px] font-semibold text-muted hover:text-ink"
+            class="rounded px-2 py-1 text-[10px] font-semibold tabular-nums text-muted hover:text-ink"
             @click="simSpeed = simSpeed === 1 ? 2 : 1"
           >
             {{ simSpeed }}x
@@ -1866,7 +1872,7 @@ function isNodeDimmed(nodeId: string): boolean {
     </div>
 
     <!-- Error State -->
-    <div v-if="error" class="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+    <div v-if="error" class="rounded-lg border border-danger/30 bg-danger/10 p-4 text-xs text-danger" role="alert">
       {{ error }}
     </div>
 
@@ -2094,12 +2100,12 @@ function isNodeDimmed(nodeId: string): boolean {
                   :class="[
                     edge.isReturn
                       ? edge.isActive || edge.isHighlighted
-                        ? 'fill-rose-400'
-                        : 'fill-rose-500'
+                        ? 'fill-rose-700 dark:fill-rose-300'
+                        : 'fill-rose-700 dark:fill-rose-400'
                       : edge.isActive
-                      ? 'fill-sky-500'
+                      ? 'fill-sky-700 dark:fill-sky-400'
                       : edge.isHighlighted
-                      ? 'fill-indigo-500'
+                      ? 'fill-indigo-700 dark:fill-indigo-400'
                       : 'fill-muted',
                   ]"
                 >
@@ -2187,7 +2193,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Return Capability Badge (Critics / Loop Nodes) -->
             <div
               v-if="hasReturnCapability(node.id)"
-              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-400 shadow transition-transform hover:scale-105 cursor-help"
+              class="absolute -top-2.5 left-2 flex items-center gap-1 rounded-full bg-rose-500/20 border border-rose-500/40 px-2 py-0.5 text-[8.5px] font-bold text-rose-700 dark:text-rose-300 shadow transition-transform hover:scale-105 cursor-help"
               :title="getReturnCapabilityTooltip(node.id)"
             >
               <span class="text-[9px]">↩</span>
@@ -2196,12 +2202,12 @@ function isNodeDimmed(nodeId: string): boolean {
 
             <!-- Active / Done Simulation Status Badges -->
             <div v-if="getAgentSimStatus(node.id) === 'active'" class="absolute -top-2 right-2">
-              <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-sky-400 animate-pulse shadow">
+              <span class="flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-500/40 px-2 py-0.5 text-[9px] font-bold text-info animate-pulse shadow">
                 ● {{ t("admin.agents.activeBadge") }}
               </span>
             </div>
             <div v-else-if="getAgentSimStatus(node.id) === 'completed'" class="absolute -top-2 right-2">
-              <span class="flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-bold text-emerald-400 shadow">
+              <span class="flex items-center gap-1 rounded-full bg-success/15 border border-success/30 px-2 py-0.5 text-[9px] font-bold text-success shadow">
                 ✓ {{ t("admin.agents.doneBadge") }}
               </span>
             </div>
@@ -2228,7 +2234,7 @@ function isNodeDimmed(nodeId: string): boolean {
             <!-- Bottom Diamond Port + Model Badge (Screenshot 2 Style) -->
             <div
               v-if="node.llmModel && zoom >= 0.45"
-              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-0.2 font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm"
+              class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-bd bg-surface px-2 py-px font-mono text-[8.5px] text-muted whitespace-nowrap shadow-sm"
             >
               <span class="text-accent text-[7px]">◆</span>
               <span>{{ node.llmModel }}</span>
@@ -2254,7 +2260,7 @@ function isNodeDimmed(nodeId: string): boolean {
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-bd/60 pb-3">
         <div class="flex items-center gap-2">
           <span
-            class="rounded-lg border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider"
+            class="rounded-lg border px-2 py-0.5 text-3xs font-semibold uppercase tracking-wider"
             :class="currentStep.stageColor"
           >
             {{ currentStep.stageName }}
@@ -2288,7 +2294,7 @@ function isNodeDimmed(nodeId: string): boolean {
           >
             ◀ {{ t("admin.agents.prevStep") }}
           </button>
-          <span class="font-mono text-xs text-muted">
+          <span class="text-xs tabular-nums text-muted">
             {{ currentStep.stepNumber }} / {{ SIMULATION_STEPS.length }}
           </span>
           <button
