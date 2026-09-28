@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { captureLinkToken, holdLinkToken, linkPageOf, linkTokenFromHash, takeLinkToken } from "./linkToken";
+import {
+  captureLinkToken,
+  holdLinkToken,
+  linkPageOf,
+  linkTokenFromHash,
+  takeLinkToken,
+  watchLinkTokens,
+} from "./linkToken";
 
 describe("linkTokenFromHash", () => {
   it("reads the token parameter of a fragment", () => {
@@ -82,5 +89,22 @@ describe("captureLinkToken", () => {
 
     expect(window.location.hash).toBe("#token=not-a-link");
     expect(takeLinkToken("forgot-password")).toBeNull();
+  });
+});
+
+describe("watchLinkTokens", () => {
+  it("captures a link opened into the running page, until stopped", async () => {
+    window.history.replaceState(null, "", "/reset-password");
+    const stop = watchLinkTokens();
+
+    window.location.hash = "#token=again-tok";
+    await vi.waitFor(() => expect(window.location.hash).toBe(""));
+    expect(takeLinkToken("reset-password")).toBe("again-tok");
+
+    stop();
+    window.location.hash = "#token=later-tok";
+    await new Promise((resolve) => window.addEventListener("hashchange", resolve, { once: true }));
+    expect(window.location.hash).toBe("#token=later-tok");
+    expect(takeLinkToken("reset-password")).toBeNull();
   });
 });

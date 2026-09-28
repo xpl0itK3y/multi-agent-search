@@ -7,7 +7,11 @@
 // memory only, for that page to take once.
 //
 // A bare history.replaceState is enough there: the router does not exist yet, so it
-// builds its record of the entry (history.state.current) from the clean address.
+// builds its record of the entry (history.state.current) from the clean address. A link
+// opened again into a tab already on its page is a same-document navigation to the new
+// fragment, with no page load: watchLinkTokens() catches it in a popstate listener that
+// runs before the router's own, which then only sees the clean address too. The router
+// never holds the token, so no route (redirectedFrom, query, params) carries it.
 
 let held: { page: string; token: string } | null = null;
 
@@ -54,4 +58,19 @@ export function captureLinkToken(): void {
   if (!page || !hash) return;
   holdLinkToken(page, hash);
   window.history.replaceState(window.history.state, "", pathname + search);
+}
+
+/**
+ * Captures the token of a link opened into the running page as well: a same-document
+ * navigation to a new fragment fires popstate (and hashchange, the fallback where it does
+ * not). Must be called before the router is created, so that its popstate listener runs
+ * after this one. Returns the function that stops it.
+ */
+export function watchLinkTokens(): () => void {
+  window.addEventListener("popstate", captureLinkToken);
+  window.addEventListener("hashchange", captureLinkToken);
+  return () => {
+    window.removeEventListener("popstate", captureLinkToken);
+    window.removeEventListener("hashchange", captureLinkToken);
+  };
 }

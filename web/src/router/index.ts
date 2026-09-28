@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { googleReturnRedirect } from "@/lib/googleSignIn";
-import { holdLinkToken } from "@/lib/linkToken";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -15,8 +14,7 @@ const router = createRouter({
       meta: { public: true, bare: true },
     },
     // meta.linkToken: opened from an emailed link, whose one-time token lib/linkToken.ts
-    // takes out of the address before the router starts (src/linkCapture.ts). The guard
-    // below does it for a link that reaches a running app (opened again into this tab).
+    // takes out of the address before the router ever sees it (src/linkCapture.ts).
     {
       path: "/reset-password",
       name: "reset-password",
@@ -76,10 +74,6 @@ router.beforeEach((to) => {
     pageLoadNavigation = false;
     const back = googleReturnRedirect(to, auth.user !== null);
     if (back) return back;
-  }
-  if (to.meta.linkToken && to.hash) {
-    holdLinkToken(String(to.name), to.hash);
-    return { path: to.path, query: to.query, hash: "", replace: true };
   }
   if (to.meta.public) return true;
   if (to.name !== "login" && !auth.user) {
