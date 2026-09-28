@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { onMounted, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import AppSidebar from "@/components/AppSidebar.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import SparkLogo from "@/components/SparkLogo.vue";
+import { confirmState } from "@/lib/confirm";
+import { useMediaQuery, useReducedMotion } from "@/lib/motion";
+import { useDragDismiss } from "@/lib/useDragDismiss";
+import { useAuthStore } from "@/stores/auth";
 import { useResearchStore } from "@/stores/research";
 import { useUiStore } from "@/stores/ui";
 
 const store = useResearchStore();
 const ui = useUiStore();
+const auth = useAuthStore();
 const route = useRoute();
 
 onMounted(() => {
@@ -15,49 +21,141 @@ onMounted(() => {
   store.fetchHistory();
 });
 
+// Sign-in screens, and a shared report opened by someone who isn't signed in, have no
+// app shell. (/r/:token keeps its router meta: a signed-in reader sees it in the shell.)
+const bare = computed(() => !!route.meta.bare || (route.name === "public-report" && !auth.user));
+
+// Below lg the sidebar is an off-canvas drawer that comes from the left edge, where the
+// ☰ that opens it sits (apple-design §7: it leaves the way it came).
+const isLg = useMediaQuery("(min-width: 1024px)");
+const reducedMotion = useReducedMotion();
+const drawer = ref<HTMLElement | null>(null);
+const scrim = ref<HTMLElement | null>(null);
+const menuButton = ref<HTMLButtonElement | null>(null);
+const drawerOpen = computed(() => ui.mobileOpen && !isLg.value);
+// Closed below lg: out of the tab order and the accessibility tree.
+const drawerHidden = computed(() => !ui.mobileOpen && !isLg.value);
+
+// A finger drags the open drawer away 1:1; a flick closes it at the release velocity.
+useDragDismiss({ panel: drawer, side: "left", enabled: () => drawerOpen.value, onDismiss: () => ui.closeMobile(), scrim });
+
 // Close the mobile drawer on any navigation.
 watch(() => route.fullPath, () => ui.closeMobile());
+
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+
+function firstFocusable(root: HTMLElement): HTMLElement | null {
+  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  // Skip controls that aren't rendered at this width (the lg-only resize handle).
+  return all.find((el) => el.getClientRects().length > 0) ?? all[0] ?? null;
+}
+
+function onKeydown(e: KeyboardEvent) {
+  // An open popover in the drawer (the theme menu) takes Escape first; a confirmation
+  // handles its own keys.
+  if (e.key !== "Escape" || !drawerOpen.value || e.defaultPrevented || confirmState.open) return;
+  e.preventDefault();
+  ui.closeMobile();
+}
+
+// Open: focus moves into the drawer. Closed: back to ☰, unless the reader already moved on.
+watch(drawerOpen, async (open) => {
+  if (typeof document === "undefined") return;
+  if (open) {
+    document.addEventListener("keydown", onKeydown);
+    await nextTick();
+    if (!drawerOpen.value || !drawer.value) return;
+    firstFocusable(drawer.value)?.focus({ preventScroll: true });
+  } else {
+    document.removeEventListener("keydown", onKeydown);
+    // Read before the drawer turns inert (this watcher runs before the DOM update).
+    const active = document.activeElement;
+    const focusWasInside = !active || active === document.body || !!drawer.value?.contains(active);
+    if (!focusWasInside || isLg.value) return;
+    await nextTick();
+    menuButton.value?.focus({ preventScroll: true });
+  }
+});
+onBeforeUnmount(() => {
+  if (typeof document !== "undefined") document.removeEventListener("keydown", onKeydown);
+});
+
+const drawerClass = computed(() => {
+  if (reducedMotion.value) {
+    // §14: a short cross-fade instead of a slide.
+    return [
+      "transition-opacity duration-150 lg:opacity-100 lg:pointer-events-auto",
+      ui.mobileOpen ? "opacity-100 shadow-e3" : "pointer-events-none opacity-0",
+    ];
+  }
+  // The sheet curve: a fast start that settles softly, a little quicker on the way out.
+  return [
+    "transition-[transform,box-shadow] ease-sheet",
+    ui.mobileOpen ? "translate-x-0 shadow-e3 duration-300" : "-translate-x-full duration-[220ms]",
+  ];
+});
 </script>
 
 <template>
   <!-- Site-styled confirm modal (replaces window.confirm), available app-wide -->
   <ConfirmDialog />
 
-  <!-- Sign-in screens (login, password reset, email verification): no app shell -->
-  <div v-if="route.meta.bare" class="h-screen w-screen overflow-hidden bg-bg text-ink">
+  <!-- Sign-in screens (login, password reset, email verification) and a signed-out
+       reader's shared report: no app shell -->
+  <div v-if="bare" class="h-screen h-dvh w-screen overflow-hidden bg-bg text-ink">
     <router-view />
   </div>
 
-  <div v-else class="flex h-screen w-screen overflow-hidden bg-bg text-ink">
+  <div v-else class="flex h-screen h-dvh w-screen overflow-hidden bg-bg text-ink">
     <!-- Sidebar: static on lg+, off-canvas drawer on mobile -->
     <div
-      class="fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0"
-      :class="ui.mobileOpen ? 'translate-x-0' : '-translate-x-full'"
+      id="app-drawer"
+      ref="drawer"
+      class="fixed inset-y-0 left-0 z-40 lg:static lg:z-auto lg:translate-x-0 lg:shadow-none"
+      :class="drawerClass"
+      :role="isLg ? undefined : 'dialog'"
+      :aria-modal="drawerOpen ? 'true' : undefined"
+      :aria-label="isLg ? undefined : $t('common.menu')"
+      :aria-hidden="drawerHidden ? 'true' : undefined"
+      :inert="drawerHidden ? true : undefined"
     >
       <AppSidebar />
     </div>
 
-    <!-- Mobile backdrop -->
+    <!-- Mobile scrim: always mounted, so it fades in with the slide instead of popping -->
     <div
-      v-if="ui.mobileOpen"
-      class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+      ref="scrim"
+      class="scrim fixed inset-0 z-30 transition-[opacity,visibility] duration-200 lg:hidden"
+      :class="ui.mobileOpen ? 'opacity-100' : 'pointer-events-none invisible opacity-0'"
+      aria-hidden="true"
       @click="ui.closeMobile()"
     />
 
-    <main class="relative min-h-0 flex-1 overflow-hidden">
-      <!-- Mobile menu button (top-right avoids the views' top-left back button) -->
-      <button
-        class="absolute right-3 top-3 z-20 grid h-9 w-9 place-items-center rounded-lg border border-bd bg-rail text-ink lg:hidden"
-        aria-label="Menu"
-        @click="ui.toggleMobile()"
-      >
-        ☰
-      </button>
-      <router-view v-slot="{ Component }">
-        <transition name="view" mode="out-in">
-          <component :is="Component" :key="route.fullPath" />
-        </transition>
-      </router-view>
+    <!-- inert while the drawer is open below lg: the drawer is the modal task then -->
+    <main class="relative flex min-h-0 flex-1 flex-col overflow-hidden" :inert="drawerOpen ? true : undefined">
+      <!-- Mobile bar: opaque, since nothing scrolls beneath it; views start below it -->
+      <header class="flex h-12 shrink-0 items-center gap-2 border-b border-bd/60 bg-bg px-1.5 lg:hidden">
+        <button
+          ref="menuButton"
+          type="button"
+          class="press grid h-11 w-11 place-items-center rounded-lg text-ink hover:bg-surface"
+          :aria-label="$t('common.menu')"
+          :aria-expanded="ui.mobileOpen ? 'true' : 'false'"
+          aria-controls="app-drawer"
+          @click="ui.toggleMobile()"
+        >
+          <span aria-hidden="true">☰</span>
+        </button>
+        <SparkLogo :size="22" />
+        <span class="veris-wordmark text-base font-semibold tracking-tight">{{ $t("sidebar.brand") }}</span>
+      </header>
+      <div class="relative min-h-0 flex-1">
+        <router-view v-slot="{ Component }">
+          <transition name="view" mode="out-in">
+            <component :is="Component" :key="route.fullPath" />
+          </transition>
+        </router-view>
+      </div>
     </main>
   </div>
 </template>

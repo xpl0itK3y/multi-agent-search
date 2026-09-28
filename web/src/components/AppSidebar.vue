@@ -196,7 +196,7 @@ function openSettings() {
   <!-- Expanded sidebar (user-resizable) -->
   <aside
     v-else
-    class="relative flex h-full flex-col border-r border-bd bg-rail"
+    class="relative flex h-full max-w-[85vw] flex-col border-r border-bd bg-rail lg:max-w-none"
     :style="{ width: ui.sidebarWidth + 'px' }"
   >
     <!-- Drag handle to resize the sidebar -->
