@@ -1014,7 +1014,7 @@ def test_a_new_link_invalidates_the_older_unused_links_of_its_purpose(store):
     assert first.id != second.id != verification.id
     assert store.reset_password_with_token(_hash("reset-1"), "hash-2") is None  # superseded
     assert store.reset_password_with_token(_hash("reset-2"), "hash-2").password_hash == "hash-2"
-    assert store.verify_email_with_token(_hash("verify-1")) is not None  # another purpose: kept
+    assert store.verify_email_with_token(_hash("verify-1"), user.id) is not None  # another purpose: kept
 
     assert store.create_auth_action_token(
         f"missing-{uuid.uuid4().hex[:8]}", AuthActionPurpose.PASSWORD_RESET, _hash("nobody"), "x@example.com", _in(60)
@@ -1027,7 +1027,7 @@ def test_a_reset_link_redeems_once_and_revokes_every_session(store):
     _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-other")
     _backdate(store, "token", link.id, used_at=None)  # two live links (as two racing requests could leave)
 
-    assert store.verify_email_with_token(_hash("reset-once")) is None  # the wrong purpose
+    assert store.verify_email_with_token(_hash("reset-once"), user.id) is None  # the wrong purpose
     reset = store.reset_password_with_token(_hash("reset-once"), "hash-2")
 
     assert (reset.password_hash, reset.token_version) == ("hash-2", user.token_version + 1)
@@ -1043,9 +1043,11 @@ def test_an_expired_link_or_one_sent_to_another_address_does_not_redeem(store):
     user = store.create_user(f"e-{uuid.uuid4().hex[:8]}", f"e-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
     expired = _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-expired")
     _backdate(store, "token", expired.id, expires_at=_in(-1))
-    assert store.verify_email_with_token(_hash("verify-expired")) is None
+    assert store.verify_email_with_token(_hash("verify-expired"), user.id) is None
+    assert store.get_live_auth_action_token(_hash("verify-expired"), AuthActionPurpose.EMAIL_VERIFICATION) is None
 
     _link(store, user, AuthActionPurpose.PASSWORD_RESET, "reset-elsewhere", email="previous@example.com")
+    assert store.get_live_auth_action_token(_hash("reset-elsewhere"), AuthActionPurpose.PASSWORD_RESET) is None
     assert store.reset_password_with_token(_hash("reset-elsewhere"), "hash-2") is None
     unchanged = store.get_user_by_id(user.id)
     assert (unchanged.password_hash, unchanged.token_version, unchanged.email_verified_at) == (
@@ -1059,13 +1061,44 @@ def test_a_verification_link_marks_the_email_verified_once_and_keeps_the_first_s
     user = store.create_user(f"m-{uuid.uuid4().hex[:8]}", f"m-{uuid.uuid4().hex[:8]}@example.com", "hash-1")
     _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-a")
 
-    verified = store.verify_email_with_token(_hash("verify-a"))
+    verified = store.verify_email_with_token(_hash("verify-a"), user.id)
 
     assert verified.email_verified_at is not None
     assert (verified.password_hash, verified.token_version) == ("hash-1", user.token_version)
-    assert store.verify_email_with_token(_hash("verify-a")) is None
+    assert store.verify_email_with_token(_hash("verify-a"), user.id) is None
     _link(store, user, AuthActionPurpose.EMAIL_VERIFICATION, "verify-b")
-    assert store.verify_email_with_token(_hash("verify-b")).email_verified_at == verified.email_verified_at
+    assert store.verify_email_with_token(_hash("verify-b"), user.id).email_verified_at == verified.email_verified_at
+
+
+def test_a_verification_link_redeems_only_for_its_own_account(store):
+    """SEC-REC-1: the verify route passes the signed-in account; another account's link is
+    left unused (for its own account to redeem), and the peek tells it from a dead one."""
+    tag = uuid.uuid4().hex[:8]
+    owner = store.create_user(f"vo-{tag}", f"vo-{tag}@example.com", "hash-o")
+    other = store.create_user(f"vx-{tag}", f"vx-{tag}@example.com", "hash-x")
+    link = _link(store, owner, AuthActionPurpose.EMAIL_VERIFICATION, "verify-own")
+
+    assert store.verify_email_with_token(_hash("verify-own"), other.id) is None
+    assert store.verify_email_with_token(_hash("verify-own"), f"missing-{tag}") is None
+
+    assert store.get_user_by_id(owner.id).email_verified_at is None
+    assert store.get_user_by_id(other.id).email_verified_at is None
+    live = store.get_live_auth_action_token(_hash("verify-own"), AuthActionPurpose.EMAIL_VERIFICATION)
+    assert (live.id, live.user_id, live.purpose, live.email, live.used_at) == (
+        link.id,
+        owner.id,
+        AuthActionPurpose.EMAIL_VERIFICATION,
+        owner.email,
+        None,
+    )
+    assert store.get_live_auth_action_token(_hash("verify-own"), AuthActionPurpose.PASSWORD_RESET) is None
+    assert store.get_live_auth_action_token(_hash("never-issued"), AuthActionPurpose.EMAIL_VERIFICATION) is None
+
+    verified = store.verify_email_with_token(_hash("verify-own"), owner.id)
+
+    assert verified.id == owner.id and verified.email_verified_at is not None
+    assert store.get_live_auth_action_token(_hash("verify-own"), AuthActionPurpose.EMAIL_VERIFICATION) is None
+    assert store.get_user_by_id(other.id).email_verified_at is None
 
 
 def test_a_link_redeems_once_under_concurrent_redeems(store):

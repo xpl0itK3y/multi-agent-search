@@ -130,9 +130,18 @@ class TaskStore(Protocol):
     # and invalidates the user's other unused reset tokens. None when it does not redeem.
     def reset_password_with_token(self, token_hash: str, password_hash: str) -> UserRecord | None: ...
 
-    # The same for an email verification token: consumes it, marks the email verified (a
-    # first stamp is kept) and invalidates the user's other unused verification tokens.
-    def verify_email_with_token(self, token_hash: str) -> UserRecord | None: ...
+    # The same for an email verification token, redeemed only for `user_id` (the signed-in
+    # account): consumes it, marks the email verified (a first stamp is kept) and
+    # invalidates the user's other unused verification tokens. None when it does not
+    # redeem; a live token of another account is then left unused.
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None: ...
+
+    # The token with this hash while it would redeem for `purpose` (unused, unexpired, its
+    # account's email still the address it was sent to), read without consuming it; None
+    # otherwise. Tells a link of another account apart from a dead one.
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None: ...
 
     # Retention: deletes the tokens that expired or were used before `older_than`, in
     # short batches; returns how many went.

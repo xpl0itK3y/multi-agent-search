@@ -70,13 +70,23 @@ def test_login_register_exempt(auth_on):
     assert _is_csrf_violation(_req(path="/v1/auth/register")) is False
 
 
-def test_the_anonymous_recovery_forms_are_exempt_and_the_signed_in_resend_is_not(auth_on):
-    """Forgot-password, reset and verify act only on what their body proves (an address to
-    mail, a link token), never on the session a cross-site request could ride on."""
+def test_the_anonymous_recovery_forms_are_exempt_and_the_signed_in_ones_are_not(auth_on):
+    """Forgot-password and reset act only on what their body proves (an address to mail, a
+    reset token), never on the session a cross-site request could ride on. Email verify
+    redeems in the signed-in session (SEC-REC-1), so it is checked like the resend."""
     session = {"access_token": "cookie.session.jwt", "csrf_token": "tok123"}
-    for path in ("/v1/auth/password/forgot", "/v1/auth/password/reset", "/v1/auth/email/verify"):
+    for path in ("/v1/auth/password/forgot", "/v1/auth/password/reset"):
         assert _is_csrf_violation(_req(path=path, cookies=session)) is False, path
-    assert _is_csrf_violation(_req(path="/v1/auth/email/verification", cookies=session)) is True
+    for path in ("/v1/auth/email/verify", "/v1/auth/email/verification"):
+        assert _is_csrf_violation(_req(path=path, cookies=session)) is True, path
+        assert _is_csrf_violation(_req(path=path, headers={"X-CSRF-Token": "forged"}, cookies=session)) is True
+        assert _is_csrf_violation(_req(path=path, headers={"X-CSRF-Token": "tok123"}, cookies=session)) is False
+
+
+def test_email_verify_without_a_session_cookie_is_not_checked(auth_on):
+    # It answers 401 Not authenticated then: nothing a cross-site request could ride on.
+    assert _is_csrf_violation(_req(path="/v1/auth/email/verify")) is False
+    assert _is_csrf_violation(_req(path="/v1/auth/email/verify", cookies={"csrf_token": "tok123"})) is False
 
 
 def test_telemetry_ingest_is_not_exempt(auth_on):

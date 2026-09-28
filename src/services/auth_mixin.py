@@ -106,7 +106,8 @@ class AuthMixin:
 
         - The subject is linked already: that account.
         - A local account has this email and no google_subject: Google is linked to it.
-          Its email verified, the password stays. Not verified (a legacy Google account
+          Its email verified (a reset link, a verification link redeemed in that account's
+          own session, the operator), the password stays. Not verified (a legacy Google account
           from before 20260904_000019, or a sign-up by whoever typed the address first):
           the password it was registered with is removed and every session revoked in the
           same write, and the email is marked verified. Only the owner of the address can

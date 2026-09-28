@@ -408,19 +408,34 @@ class InMemoryTaskStore:
             self.auth_action_tokens[row["id"]] = row
             return self._auth_action_token_record(row)
 
-    def _consume_auth_action_token(
-        self, token_hash: str, purpose: AuthActionPurpose, now: datetime
-    ) -> UserRecord | None:
-        """Mark the token used and return its account, when it redeems: the right purpose,
-        unused, unexpired, and the account's email is still the one it was sent to."""
+    def _live_auth_action_token(self, token_hash: str, purpose: AuthActionPurpose, now: datetime) -> dict | None:
+        """The token's row while it would redeem: the right purpose, unused, unexpired, and
+        the account's email is still the one it was sent to."""
         row = next((row for row in self.auth_action_tokens.values() if row["token_hash"] == token_hash), None)
         if row is None or row["purpose"] != purpose or row["used_at"] is not None or row["expires_at"] <= now:
             return None
         user = self.users.get(row["user_id"])
         if user is None or user.email.strip().lower() != row["email"]:
             return None
+        return row
+
+    def _consume_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose, now: datetime, user_id: str | None = None
+    ) -> UserRecord | None:
+        """Mark the token used and return its account, when it redeems (for ``user_id``
+        only, when given: another account's token is left unused)."""
+        row = self._live_auth_action_token(token_hash, purpose, now)
+        if row is None or (user_id is not None and row["user_id"] != user_id):
+            return None
         row["used_at"] = now
-        return user
+        return self.users[row["user_id"]]
+
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None:
+        with self._user_lock:
+            row = self._live_auth_action_token(token_hash, AuthActionPurpose(purpose), datetime.now(timezone.utc))
+            return self._auth_action_token_record(row) if row is not None else None
 
     def reset_password_with_token(self, token_hash: str, password_hash: str) -> UserRecord | None:
         now = datetime.now(timezone.utc)
@@ -439,10 +454,10 @@ class InMemoryTaskStore:
             self._invalidate_auth_action_tokens(user.id, AuthActionPurpose.PASSWORD_RESET, now)
             return updated
 
-    def verify_email_with_token(self, token_hash: str) -> UserRecord | None:
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None:
         now = datetime.now(timezone.utc)
         with self._user_lock:
-            user = self._consume_auth_action_token(token_hash, AuthActionPurpose.EMAIL_VERIFICATION, now)
+            user = self._consume_auth_action_token(token_hash, AuthActionPurpose.EMAIL_VERIFICATION, now, user_id)
             if user is None:
                 return None
             updated = user.model_copy(update={"email_verified_at": user.email_verified_at or now})

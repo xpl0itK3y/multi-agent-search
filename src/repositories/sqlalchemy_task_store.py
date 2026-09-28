@@ -480,27 +480,49 @@ class SQLAlchemyTaskStore:
             session.flush()
             return _auth_action_token_record(row)
 
+    @staticmethod
+    def _live_auth_action_token(token_hash: str, purpose: AuthActionPurpose, now: datetime) -> tuple:
+        """WHERE clauses of a token that would redeem: this purpose, unused, unexpired, and
+        its account's email still the one it was sent to."""
+        return (
+            AuthActionTokenORM.token_hash == token_hash,
+            AuthActionTokenORM.purpose == purpose.value,
+            AuthActionTokenORM.used_at.is_(None),
+            AuthActionTokenORM.expires_at > now,
+            select(UserORM.id)
+            .where(UserORM.id == AuthActionTokenORM.user_id, UserORM.email == AuthActionTokenORM.email)
+            .exists(),
+        )
+
+    def get_live_auth_action_token(
+        self, token_hash: str, purpose: AuthActionPurpose
+    ) -> AuthActionTokenRecord | None:
+        live = self._live_auth_action_token(token_hash, AuthActionPurpose(purpose), datetime.now(timezone.utc))
+        with self.session_scope() as session:
+            row = session.execute(select(AuthActionTokenORM).where(*live)).scalar_one_or_none()
+            return _auth_action_token_record(row) if row is not None else None
+
     def _redeem_auth_action_token(
-        self, token_hash: str, purpose: AuthActionPurpose, user_values: dict, now: datetime
+        self,
+        token_hash: str,
+        purpose: AuthActionPurpose,
+        user_values: dict,
+        now: datetime,
+        user_id: str | None = None,
     ) -> UserRecord | None:
         """One transaction: consume the token, apply ``user_values`` to its account and
         invalidate the account's other unused tokens of the purpose.
 
-        The token redeems when it has this purpose, is unused and unexpired, and the
-        account's email is still the one it was sent to. Consuming is one conditional
-        UPDATE: of two concurrent redeems, the second re-checks used_at once the first
-        commits and matches nothing, so a link works once."""
+        The token redeems when it would (_live_auth_action_token), and only for the
+        account ``user_id`` when given: another account's token matches nothing and stays
+        unused. Consuming is one conditional UPDATE: of two concurrent redeems, the second
+        re-checks used_at once the first commits and matches nothing, so a link works once."""
+        conditions = self._live_auth_action_token(token_hash, purpose, now)
+        if user_id is not None:
+            conditions += (AuthActionTokenORM.user_id == user_id,)
         consume = (
             update(AuthActionTokenORM)
-            .where(
-                AuthActionTokenORM.token_hash == token_hash,
-                AuthActionTokenORM.purpose == purpose.value,
-                AuthActionTokenORM.used_at.is_(None),
-                AuthActionTokenORM.expires_at > now,
-                select(UserORM.id)
-                .where(UserORM.id == AuthActionTokenORM.user_id, UserORM.email == AuthActionTokenORM.email)
-                .exists(),
-            )
+            .where(*conditions)
             .values(used_at=now)
             .returning(AuthActionTokenORM.user_id, AuthActionTokenORM.email)
             .execution_options(synchronize_session=False)
@@ -533,13 +555,14 @@ class SQLAlchemyTaskStore:
             now,
         )
 
-    def verify_email_with_token(self, token_hash: str) -> UserRecord | None:
+    def verify_email_with_token(self, token_hash: str, user_id: str) -> UserRecord | None:
         now = datetime.now(timezone.utc)
         return self._redeem_auth_action_token(
             token_hash,
             AuthActionPurpose.EMAIL_VERIFICATION,
             {"email_verified_at": func.coalesce(UserORM.email_verified_at, now)},
             now,
+            user_id=user_id,
         )
 
     def cleanup_auth_action_tokens(self, older_than: datetime) -> int:

@@ -137,17 +137,22 @@ ADMIN_STREAM_INTERVAL_SECONDS = 2.0
 
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # Anonymous auth forms: none acts on the session a cross-site request could ride on. The
-# recovery routes act only on what the body proves (an address to mail, a link token).
+# recovery routes act only on what the body proves (an address to mail, a reset token).
+# Email verify is not one of them: it redeems in the signed-in session.
 _CSRF_EXEMPT_PATHS = frozenset(
     {
         "/v1/auth/login",
         "/v1/auth/register",
         "/v1/auth/password/forgot",
         "/v1/auth/password/reset",
-        "/v1/auth/email/verify",
     }
 )
 _LOGOUT_PATH = "/v1/auth/logout"
+_EMAIL_VERIFY_PATH = "/v1/auth/email/verify"
+# Mutations checked only when a session cookie comes with them: with none there is
+# nothing a cross-site request could ride on, and the route answers as it would anyway
+# (logout 200; email verify 401 Not authenticated rather than a CSRF 403).
+_CSRF_SESSION_COOKIE_PATHS = frozenset({_LOGOUT_PATH, _EMAIL_VERIFY_PATH})
 # GETs with side effects, checked like mutations: each admin CSV export writes an audit
 # row and spends the shared admin rate budget, and a SameSite=Lax session cookie rides
 # along on a cross-site top-level GET (a link or a redirect to the export URL).
@@ -179,10 +184,10 @@ def _is_csrf_violation(request: Request) -> bool:
         return False
     if request_bearer_token(request):
         return False
-    # Logout answers 200 even without a session. With no session cookie there is nothing
-    # a cross-site request could ride on; with one, the check stops a forced sign-out of
-    # every device.
-    if request.url.path == _LOGOUT_PATH and not request.cookies.get(settings.auth_cookie_name):
+    # Logout answers 200 even without a session, email verify 401. With no session cookie
+    # there is nothing a cross-site request could ride on; with one, the check stops a
+    # forced sign-out of every device, or a link redeemed in the victim's session.
+    if request.url.path in _CSRF_SESSION_COOKIE_PATHS and not request.cookies.get(settings.auth_cookie_name):
         return False
     cookie = request.cookies.get(settings.csrf_cookie_name)
     header = request.headers.get("x-csrf-token")
@@ -766,8 +771,9 @@ def register_routes(app: FastAPI) -> None:
 
     # ── account recovery and email verification (AUTH-RECOVERY) ───────────────
     # One-time links: {PUBLIC_APP_URL}/reset-password#token=... and /verify-email#token=...
-    # (src/services/account_recovery_mixin.py). Forgot-password, reset and verify are
-    # anonymous and CSRF-exempt like login; their throttles are hourly and always on.
+    # (src/services/account_recovery_mixin.py). Forgot-password and reset are anonymous
+    # and CSRF-exempt like login; verify needs the session of the account the link was
+    # sent to. Their throttles are hourly and always on.
 
     @app.post(
         "/v1/auth/password/forgot",
@@ -818,11 +824,16 @@ def register_routes(app: FastAPI) -> None:
         response.status_code = 202
         return {"status": "sent"}
 
-    @app.post("/v1/auth/email/verify", dependencies=[Depends(enforce_email_verify_rate_limit)])
-    def verify_email(payload: VerifyEmailRequest, request: Request):
-        """Confirm the address with a verification link's token; needs no session. 400
-        verification_token_invalid when the link is unknown, used or expired."""
-        get_research_service(request).verify_email_with_token(payload.token)
+    @app.post(_EMAIL_VERIFY_PATH, dependencies=[Depends(enforce_email_verify_rate_limit)])
+    def verify_email(payload: VerifyEmailRequest, request: Request, user: AuthUser = Depends(get_current_user)):
+        """Confirm the signed-in account's address with its verification link's token.
+
+        A verification lets the password survive a later Google link, so it must show that
+        whoever holds the password controls the inbox: the link redeems only in a session
+        of the account it was sent to (401 without a session). 403 verification_wrong_account
+        in another account's session, and the link stays unused; 400
+        verification_token_invalid when it is unknown, used or expired."""
+        get_research_service(request).verify_email_with_token(payload.token, user.id)
         return {"status": "verified"}
 
     @app.delete("/v1/auth/account")

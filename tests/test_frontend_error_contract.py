@@ -326,23 +326,26 @@ def test_a_web_mapping_of_a_requeue_refusal_matches_its_text(text):
     assert all(p.source.startswith("API_DETAIL_KEYS.") for p in mapped)
 
 
-# The 400s of a dead one-time link (account_recovery_mixin), which the reset-password and
-# verify-email pages key on by their prefix. Pinned like the requeue refusals above.
+# The refusals of a one-time link (account_recovery_mixin), which the reset-password and
+# verify-email pages key on by their prefix: the 400s of a dead link, and the 403 of a
+# verification link opened in another account's session. Pinned like the requeue
+# refusals above.
 ACCOUNT_LINK_DETAILS = [
-    "reset_token_invalid: this password reset link is invalid or has expired",
-    "verification_token_invalid: this verification link is invalid or has expired",
+    (400, "reset_token_invalid: this password reset link is invalid or has expired"),
+    (400, "verification_token_invalid: this verification link is invalid or has expired"),
+    (403, "verification_wrong_account: sign in to the account this link was sent to"),
 ]
 
 
-@pytest.mark.parametrize("text", ACCOUNT_LINK_DETAILS)
-def test_the_dead_link_refusals_are_raised_as_400(text):
-    assert [d for d in BACKEND_DETAILS if d.status == 400 and d.text == text], text
+@pytest.mark.parametrize(("status", "text"), ACCOUNT_LINK_DETAILS)
+def test_the_link_refusals_are_raised_with_their_status(status, text):
+    assert [d for d in BACKEND_DETAILS if d.status == status and d.text == text], text
 
 
-@pytest.mark.parametrize("text", ACCOUNT_LINK_DETAILS)
-def test_a_web_mapping_of_a_dead_link_refusal_matches_its_text(text):
+@pytest.mark.parametrize(("status", "text"), ACCOUNT_LINK_DETAILS)
+def test_a_web_mapping_of_a_link_refusal_matches_its_text(status, text):
     prefix = text.partition(":")[0]
-    mapped = [p for p in FRONTEND_PATTERNS if p.status == 400 and p.regex.search(text)]
+    mapped = [p for p in FRONTEND_PATTERNS if p.status == status and p.regex.search(text)]
     if not mapped:
         pytest.skip("the web UI does not map this detail yet")
     # Keyed on the stable code before the colon, not on the English explanation after it.

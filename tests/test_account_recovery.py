@@ -26,11 +26,13 @@ from src.services import ResearchService
 from src.services.account_recovery_mixin import (
     RESET_TOKEN_INVALID_DETAIL,
     VERIFICATION_TOKEN_INVALID_DETAIL,
+    VERIFICATION_WRONG_ACCOUNT_DETAIL,
     hash_link_token,
 )
 
 RESET_DETAIL = "reset_token_invalid: this password reset link is invalid or has expired"
 VERIFY_DETAIL = "verification_token_invalid: this verification link is invalid or has expired"
+WRONG_ACCOUNT_DETAIL = "verification_wrong_account: sign in to the account this link was sent to"
 TOO_MANY = "Too many attempts, please slow down"
 _LINK = re.compile(r"(https?://\S+?)(/reset-password|/verify-email)#token=([A-Za-z0-9_-]+)")
 
@@ -184,11 +186,12 @@ async def test_the_anonymous_recovery_routes_need_no_csrf_token(recovery):
 
     assert (await client.post("/v1/auth/password/forgot", json={"email": email})).status_code == 202
     assert (await client.post("/v1/auth/password/reset", json={"token": "x", "password": "new-pass1"})).status_code == 400
-    assert (await client.post("/v1/auth/email/verify", json={"token": "x"})).status_code == 400
-    # The authenticated one keeps the CSRF check.
-    assert (await client.post("/v1/auth/email/verification")).status_code == 403
+    # The signed-in ones keep the CSRF check, email verify included: it redeems in the session.
     csrf = {"X-CSRF-Token": client.cookies.get(settings.csrf_cookie_name)}
-    assert (await client.post("/v1/auth/email/verification", headers=csrf)).status_code == 202
+    for path, body, status in (("/v1/auth/email/verify", {"token": "x"}, 400), ("/v1/auth/email/verification", None, 202)):
+        forged = await client.post(path, json=body)
+        assert (forged.status_code, forged.json()["detail"]) == (403, "CSRF token missing or invalid"), path
+        assert (await client.post(path, json=body, headers=csrf)).status_code == status, path
     assert response.json()["user"]["email_verified"] is False
 
 
@@ -292,12 +295,12 @@ async def test_sign_up_sends_a_verification_link_that_verifies_the_address_once(
     assert "24 часа" in sender.sent[0].body
     token = _links(sender, "/verify-email")[0]
 
-    verified = await client.post("/v1/auth/email/verify", json={"token": token})
+    verified = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(session))
 
     assert (verified.status_code, verified.json()) == (200, {"status": "verified"})
     me = await client.get("/v1/auth/me", headers=_bearer(session))
     assert me.status_code == 200 and me.json()["email_verified"] is True  # the session survives
-    again = await client.post("/v1/auth/email/verify", json={"token": token})
+    again = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(session))
     assert (again.status_code, again.json()["detail"]) == (400, VERIFY_DETAIL)
     assert again.json()["detail"].startswith("verification_token_invalid")
     assert VERIFICATION_TOKEN_INVALID_DETAIL == VERIFY_DETAIL
@@ -313,7 +316,7 @@ async def test_resending_a_verification_link(recovery):
 
     assert (sent.status_code, sent.json()) == (202, {"status": "sent"})
     assert len(_links(sender, "/verify-email")) == 1
-    await client.post("/v1/auth/email/verify", json={"token": _links(sender, "/verify-email")[0]})
+    await client.post("/v1/auth/email/verify", json={"token": _links(sender, "/verify-email")[0]}, headers=_bearer(session))
     done = await client.post("/v1/auth/email/verification", headers=_bearer(session))
     assert (done.status_code, done.json()) == (200, {"status": "already_verified"})
     assert len(sender.sent) == 1
@@ -332,8 +335,9 @@ async def test_resending_is_throttled_per_user_and_refused_without_email(recover
     # Each resend replaced the previous link: only the newest one works.
     tokens = _links(sender, "/verify-email")
     assert len(tokens) == 6  # the sign-up's and five resends
-    assert (await client.post("/v1/auth/email/verify", json={"token": tokens[-2]})).status_code == 400
-    assert (await client.post("/v1/auth/email/verify", json={"token": tokens[-1]})).status_code == 200
+    for token, status in ((tokens[-2], 400), (tokens[-1], 200)):
+        redeemed = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(session))
+        assert redeemed.status_code == status
 
     other = await _register(client, _email())
     service.mail_sender = None
@@ -345,8 +349,45 @@ async def test_resending_is_throttled_per_user_and_refused_without_email(recover
 @pytest.mark.anyio
 async def test_verify_is_throttled_per_client(recovery):
     client, _service, _sender = recovery
-    codes = [(await client.post("/v1/auth/email/verify", json={"token": f"t{index}"})).status_code for index in range(31)]
+    session = _bearer(await _register(client, _email()))
+    codes = [
+        (await client.post("/v1/auth/email/verify", json={"token": f"t{index}"}, headers=session)).status_code
+        for index in range(31)
+    ]
     assert codes == [400] * 30 + [429]
+
+
+@pytest.mark.anyio
+async def test_a_verification_link_redeems_only_in_the_session_of_its_account(recovery):
+    """SEC-REC-1: a verification must show that whoever holds the password controls the
+    inbox. An anonymous click, or one in another account's session, shows the inbox alone."""
+    client, service, sender = recovery
+    email = _email()
+    session = await _register(client, email)
+    token = _links(sender, "/verify-email")[0]
+    other = await _register(client, _email())
+
+    anonymous = await client.post("/v1/auth/email/verify", json={"token": token})
+    wrong = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(other))
+
+    assert (anonymous.status_code, anonymous.json()["detail"]) == (401, "Not authenticated")
+    assert (wrong.status_code, wrong.json()["detail"]) == (403, VERIFICATION_WRONG_ACCOUNT_DETAIL)
+    assert wrong.json()["detail"].startswith("verification_wrong_account")
+    assert VERIFICATION_WRONG_ACCOUNT_DETAIL == WRONG_ACCOUNT_DETAIL
+    # Neither consumed the link nor verified an address.
+    live = service.task_store.get_live_auth_action_token(hash_link_token(token), AuthActionPurpose.EMAIL_VERIFICATION)
+    assert live is not None and live.used_at is None
+    for bearer in (session, other):
+        assert (await client.get("/v1/auth/me", headers=_bearer(bearer))).json()["email_verified"] is False
+
+    verified = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(session))
+
+    assert (verified.status_code, verified.json()) == (200, {"status": "verified"})
+    # Used up now: a dead link, whoever's session.
+    used = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(other))
+    assert (used.status_code, used.json()["detail"]) == (400, VERIFY_DETAIL)
+    garbage = await client.post("/v1/auth/email/verify", json={"token": "not-a-token"}, headers=_bearer(other))
+    assert (garbage.status_code, garbage.json()["detail"]) == (400, VERIFY_DETAIL)
 
 
 @pytest.mark.anyio
@@ -429,7 +470,11 @@ async def test_google_sign_in_links_a_verified_local_account_and_keeps_its_passw
     client, service, sender = recovery
     email = _email()
     session = await _register(client, email)
-    await client.post("/v1/auth/email/verify", json={"token": _links(sender, "/verify-email")[0]})
+    # Verified in its own session: the password holder showed control of the inbox.
+    verify = await client.post(
+        "/v1/auth/email/verify", json={"token": _links(sender, "/verify-email")[0]}, headers=_bearer(session)
+    )
+    assert verify.status_code == 200
     sender.sent.clear()
 
     callback = await _google_callback(client, monkeypatch, email, "g-verified")
@@ -520,6 +565,73 @@ async def test_a_linked_admin_email_gets_admin_rights_once_linked(recovery, monk
 
     assert (await client.get("/v1/admin/users", headers=_bearer(token))).status_code == 401
     assert (await client.get("/v1/admin/users", headers=_bearer(owner))).status_code == 200
+
+
+async def _owner_clicks_the_verification_link(client, sender, token_path: str = "/verify-email") -> str:
+    """What the address's owner can do with a link a stranger's sign-up sent them: open it
+    signed out (or a link scanner that runs the page), or signed in to their own account.
+    Neither redeems it. Returns the (still live) token."""
+    token = _links(sender, token_path)[-1]
+    anonymous = await client.post("/v1/auth/email/verify", json={"token": token})
+    assert (anonymous.status_code, anonymous.json()["detail"]) == (401, "Not authenticated")
+    own_account = await _register(client, _email("own"))
+    elsewhere = await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(own_account))
+    assert (elsewhere.status_code, elsewhere.json()["detail"]) == (403, WRONG_ACCOUNT_DETAIL)
+    return token
+
+
+@pytest.mark.anyio
+async def test_a_squatted_sign_up_clicked_by_the_owner_stays_unverified_and_google_takes_it(recovery, monkeypatch):
+    """SEC-REC-1: someone signs up with the owner's address and password P. The owner opens
+    the verification mail. The account must stay unverified, so the owner's Google sign-in
+    still clears P and revokes the squatter's sessions."""
+    client, service, sender = recovery
+    email = _email()
+    squatter = await _register(client, email, password="squatter-pass1")
+
+    token = await _owner_clicks_the_verification_link(client, sender)
+
+    me = await client.get("/v1/auth/me", headers=_bearer(squatter))
+    assert me.status_code == 200 and me.json()["email_verified"] is False
+    assert service.task_store.get_user_by_email(email).email_verified_at is None
+    sender.sent.clear()
+
+    callback = await _google_callback(client, monkeypatch, email, "g-owner")
+
+    assert (callback.status_code, callback.headers["location"]) == (302, "/")
+    owner = client.cookies.get(settings.auth_cookie_name)
+    client.cookies.clear()
+    assert (await client.get("/v1/auth/me", headers=_bearer(squatter))).status_code == 401
+    login = await client.post("/v1/auth/login", json={"email": email, "password": "squatter-pass1"})
+    assert login.status_code == 401
+    assert service.task_store.get_user_by_email(email).password_hash is None
+    assert [message.subject for message in sender.sent] == ["Google sign-in was linked to your Veris account"]
+    assert "the password the account was registered with was removed" in sender.sent[0].body
+    assert (await client.get("/v1/auth/me", headers=_bearer(owner))).json()["email_verified"] is True
+    # The squatter's link, if they got hold of it, no longer buys a session.
+    assert (await client.post("/v1/auth/email/verify", json={"token": token}, headers=_bearer(squatter))).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_a_squatted_admin_address_gives_the_squatter_no_admin_rights(recovery, monkeypatch):
+    """SEC-REC-1, ADMIN_EMAILS: the address was registered before the operator listed it.
+    The owner's click on the verification mail and Google sign-in must leave the squatter's
+    password and sessions without admin rights (they die, in fact)."""
+    client, service, sender = recovery
+    squatter = await _register(client, "ops@example.com", password="squatter-pass1")
+    monkeypatch.setattr(settings, "admin_emails", "ops@example.com", raising=False)
+    assert (await client.get("/v1/admin/users", headers=_bearer(squatter))).status_code == 403
+
+    await _owner_clicks_the_verification_link(client, sender)
+    await _google_callback(client, monkeypatch, "ops@example.com", "g-ops")
+    owner = client.cookies.get(settings.auth_cookie_name)
+    client.cookies.clear()
+
+    assert (await client.get("/v1/admin/users", headers=_bearer(squatter))).status_code == 401
+    login = await client.post("/v1/auth/login", json={"email": "ops@example.com", "password": "squatter-pass1"})
+    assert login.status_code == 401
+    assert (await client.get("/v1/admin/users", headers=_bearer(owner))).status_code == 200
+    assert service.task_store.get_user_by_email("ops@example.com").password_hash is None
 
 
 # ── maintenance ───────────────────────────────────────────────────────────────

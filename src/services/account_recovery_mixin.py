@@ -11,6 +11,15 @@ holds nothing that redeems. A token works once, until it expires, and only while
 account's email is still the address it was sent to; issuing one invalidates the
 account's earlier unused ones of the same purpose.
 
+Who may redeem. A reset link is anonymous: it replaces the password and revokes every
+session, so it proves inbox control for the only credential left. A verification link
+redeems only in a session of the account it was sent to. Verification is what lets a
+password survive a later Google link (AuthMixin._link_google_identity), so it has to show
+that whoever holds the password also controls the inbox. An anonymous click shows the
+inbox alone: a stranger's sign-up with someone's address would turn verified at its
+owner's click and keep the stranger's password and sessions (and admin rights, for an
+ADMIN_EMAILS address) once the owner signs in with Google.
+
 Email goes out off the request path: the routes hand the methods documented as
 "background" to FastAPI BackgroundTasks. Those never raise: a failure is logged by kind,
 account id and exception class (never a token, a link or the error text) and changes no
@@ -25,7 +34,7 @@ from typing import Callable
 
 from src.config import settings
 from src.domain import AuthActionPurpose, AuthUser, UserRecord
-from src.domain.errors import BadRequestError, UnprocessableError
+from src.domain.errors import BadRequestError, ForbiddenError, UnprocessableError
 from src.notifications import (
     AccountEmail,
     MailSender,
@@ -40,6 +49,9 @@ logger = logging.getLogger(__name__)
 # address the account no longer has). The web UI keys on the prefix before the colon.
 RESET_TOKEN_INVALID_DETAIL = "reset_token_invalid: this password reset link is invalid or has expired"
 VERIFICATION_TOKEN_INVALID_DETAIL = "verification_token_invalid: this verification link is invalid or has expired"
+# The 403 of a live verification link redeemed in another account's session: it is left
+# unused, for its own account to redeem. The web UI keys on the prefix too.
+VERIFICATION_WRONG_ACCOUNT_DETAIL = "verification_wrong_account: sign in to the account this link was sent to"
 
 # The SPA routes the links open.
 PASSWORD_RESET_PATH = "/reset-password"
@@ -238,14 +250,22 @@ class AccountRecoveryMixin:
         logger.info("password_reset_completed user_id=%s", user.id)
         return self._to_auth_user(user)
 
-    def verify_email_with_token(self, token: str) -> AuthUser:
-        """POST /v1/auth/email/verify: use up the token and mark the email verified.
+    def verify_email_with_token(self, token: str, user_id: str) -> AuthUser:
+        """POST /v1/auth/email/verify for the signed-in account ``user_id``: use up the
+        token and mark the email verified, when the link was sent to this account.
 
-        BadRequestError(VERIFICATION_TOKEN_INVALID_DETAIL) when the link does not redeem."""
+        ForbiddenError(VERIFICATION_WRONG_ACCOUNT_DETAIL) for a live link of another
+        account, which stays unused; BadRequestError(VERIFICATION_TOKEN_INVALID_DETAIL)
+        when the link does not redeem at all."""
         if not token:
             raise BadRequestError(VERIFICATION_TOKEN_INVALID_DETAIL)
-        user = self.task_store.verify_email_with_token(hash_link_token(token))
+        token_hash = hash_link_token(token)
+        user = self.task_store.verify_email_with_token(token_hash, user_id)
         if user is None:
+            live = self.task_store.get_live_auth_action_token(token_hash, AuthActionPurpose.EMAIL_VERIFICATION)
+            if live is not None and live.user_id != user_id:
+                logger.info("email_verification_refused_other_account user_id=%s", user_id)
+                raise ForbiddenError(VERIFICATION_WRONG_ACCOUNT_DETAIL)
             raise BadRequestError(VERIFICATION_TOKEN_INVALID_DETAIL)
         logger.info("email_verified user_id=%s", user.id)
         return self._to_auth_user(user)

@@ -606,7 +606,8 @@ class ResetPasswordRequest(BaseModel):
 
 
 class VerifyEmailRequest(BaseModel):
-    """POST /v1/auth/email/verify: the token from the verification link's fragment."""
+    """POST /v1/auth/email/verify (signed in to the account the link was sent to): the
+    token from the verification link's fragment."""
     token: str = Field(..., max_length=256)
 
 
