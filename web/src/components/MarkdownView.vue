@@ -429,12 +429,20 @@ function scheduleClose() {
 }
 
 // Fixed position from the citation's box: below it when it fits, else above; kept inside
-// the viewport, and growing from the citation's side (transform-origin).
+// the viewport, and coming out of the citation (§7, §8). It grows from the edge next to
+// the citation (transform-origin top when below, bottom when above), and the pop
+// transition's small offset (--pop-dy, .cite-pop below) starts it on the citation's side
+// too, so it moves away from the citation, not towards it.
 async function place() {
   const anchor = popAnchor.value;
   if (!anchor) return;
   const r = anchor.getBoundingClientRect();
-  popStyle.value = { top: `${r.bottom + GAP}px`, left: `${Math.max(MARGIN, r.left)}px`, transformOrigin: "left top" };
+  popStyle.value = {
+    top: `${r.bottom + GAP}px`,
+    left: `${Math.max(MARGIN, r.left)}px`,
+    transformOrigin: "left top",
+    "--pop-dy": "-4px",
+  };
   await nextTick();
   const pop = popEl.value;
   if (!pop || !popOpen.value || popAnchor.value !== anchor) return;
@@ -447,6 +455,7 @@ async function place() {
     top: `${below ? r.bottom + GAP : r.top - GAP - h}px`,
     left: `${left}px`,
     transformOrigin: `${Math.min(Math.max(0, center - left), w)}px ${below ? "0" : "100%"}`,
+    "--pop-dy": below ? "-4px" : "4px",
   };
 }
 function openFor(el: HTMLElement) {
@@ -580,7 +589,7 @@ onBeforeUnmount(() => {
           v-if="popOpen && popInfo"
           :id="popId"
           ref="popEl"
-          class="material-popover fixed z-50 w-max max-w-[min(20rem,calc(100vw-1rem))] rounded-xl border border-bd p-3 text-xs"
+          class="cite-pop material-popover fixed z-50 w-max max-w-[min(20rem,calc(100vw-1rem))] rounded-xl border border-bd p-3 text-xs"
           :style="popStyle"
           @pointerenter="onPopEnter"
           @pointerleave="onPopLeave"
@@ -617,6 +626,15 @@ onBeforeUnmount(() => {
 :deep(.md-table-scroll) {
   overflow-x: auto;
   overscroll-behavior-x: contain;
+}
+
+/* The shared pop transition always starts 4px higher. A citation popover placed above
+   its citation must start 4px lower instead, so it rises out of the citation while it
+   grows from its bottom edge (place() sets --pop-dy; §7, §8). Reduced motion keeps its
+   global `transform: none !important`. */
+.cite-pop.pop-enter-from,
+.cite-pop.pop-leave-to {
+  transform: translateY(var(--pop-dy, -4px)) scale(0.96);
 }
 
 /* Inline verification: confirm strong claims subtly, flag the problem ones loudly.

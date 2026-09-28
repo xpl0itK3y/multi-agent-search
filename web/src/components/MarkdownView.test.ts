@@ -428,6 +428,45 @@ describe("MarkdownView citation popover", () => {
     expect(tap()).toBe(false);
   });
 
+  // A popover above its citation grew up from its bottom edge but dropped 4px towards it.
+  it.each<[string, number, string, string]>([
+    ["below a citation that has room under it", 100, "-4px", "0"],
+    ["above a citation near the bottom of the view", 700, "4px", "100%"],
+  ])("comes out of the citation when placed %s", async (_name, top, dy, originY) => {
+    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(120);
+    try {
+      const link = renderCited().find("a.md-citation");
+      vi.spyOn(link.element, "getBoundingClientRect").mockReturnValue(
+        { top, bottom: top + 18, left: 100, right: 130, width: 30, height: 18, x: 100, y: top, toJSON: () => ({}) } as DOMRect,
+      );
+
+      await link.trigger("focusin");
+      await nextTick();
+      const pop = popoverFor(link.element)!;
+      expect(pop.classList).toContain("cite-pop");
+      // jsdom's viewport is 768px tall: 700 + 18 + 6 + 120 does not fit below it.
+      expect(pop.style.top).toBe(dy === "4px" ? `${top - 6 - 120}px` : `${top + 18 + 6}px`);
+      expect(pop.style.getPropertyValue("--pop-dy")).toBe(dy);
+      expect(pop.getAttribute("style")).toMatch(new RegExp(`transform-origin: \\S+ ${originY.replace("%", "\\%")}`));
+    } finally {
+      height.mockRestore();
+    }
+  });
+
+  it("points the pop offset through --pop-dy for the citation popover only", () => {
+    const { descriptor } = parse(markdownViewSource);
+    const { code } = compileStyle({
+      source: descriptor.styles.find((s) => s.scoped)!.content,
+      id: "data-v-test",
+      scoped: true,
+      filename: "MarkdownView.vue",
+    });
+
+    expect(code).toMatch(
+      /\.cite-pop\.pop-enter-from\[data-v-test\],\s*\.cite-pop\.pop-leave-to\[data-v-test\] \{\s*transform: translateY\(var\(--pop-dy, -4px\)\) scale\(0\.96\);/,
+    );
+  });
+
   it("closes on Escape", async () => {
     const link = renderCited().find("a.md-citation");
 
