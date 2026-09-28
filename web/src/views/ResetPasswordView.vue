@@ -1,26 +1,42 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { apiErrorMessage, isResetTokenInvalid, PASSWORD_MIN_LENGTH } from "@/lib/api";
-import { takeLinkToken } from "@/lib/linkToken";
+import { onLinkToken, takeLinkToken } from "@/lib/linkToken";
 import { useAuthStore } from "@/stores/auth";
 import AuthScreen from "@/components/AuthScreen.vue";
 
-// Opened from a password reset email: /reset-password#token=<token>. The router already
-// took the token out of the address (lib/linkToken.ts). A link opened again, or copied
-// without its fragment, has none and is as dead as an expired one.
+// Opened from a password reset email: /reset-password#token=<token>. The token was taken
+// out of the address before the app started (lib/linkToken.ts). A page without one (a
+// reload, Back, a link copied without its fragment) knows nothing about the link, which
+// may well still work: it asks to open the link from the email again, and only a 400
+// from the server says the link is dead.
 const auth = useAuthStore();
 const { t } = useI18n();
 
-const token = takeLinkToken("reset-password");
-const state = ref<"form" | "done" | "invalid">(token ? "form" : "invalid");
+const token = ref(takeLinkToken("reset-password"));
+const state = ref<"form" | "done" | "invalid" | "nolink">(token.value ? "form" : "nolink");
 const password = ref("");
 const confirm = ref("");
 const busy = ref(false);
 const error = ref<string | null>(null);
 
+// A link opened again into this tab while the page is open mounts nothing new: start over
+// with its token.
+const stopListening = onLinkToken("reset-password", () => {
+  const next = takeLinkToken("reset-password");
+  if (!next) return;
+  token.value = next;
+  state.value = "form";
+  password.value = "";
+  confirm.value = "";
+  error.value = null;
+});
+onBeforeUnmount(stopListening);
+
 async function submit() {
-  if (busy.value || !token) return;
+  const current = token.value;
+  if (busy.value || !current) return;
   if (password.value.length < PASSWORD_MIN_LENGTH) {
     error.value = t("resetPassword.tooShort", { min: PASSWORD_MIN_LENGTH });
     return;
@@ -33,11 +49,13 @@ async function submit() {
   error.value = null;
   try {
     // Signs out whoever was signed in here: the server revoked every session.
-    await auth.resetPassword(token, password.value);
+    await auth.resetPassword(current, password.value);
+    if (token.value !== current) return; // a newer link took over meanwhile
     state.value = "done";
     password.value = "";
     confirm.value = "";
   } catch (e) {
+    if (token.value !== current) return;
     if (isResetTokenInvalid(e)) state.value = "invalid";
     else error.value = apiErrorMessage(e, t);
   } finally {
@@ -67,6 +85,22 @@ async function submit() {
       <router-link
         to="/forgot-password"
         class="mt-4 block w-full rounded-lg bg-accent px-4 py-2 text-center text-sm font-medium text-bg transition"
+      >
+        {{ $t("resetPassword.requestNew") }}
+      </router-link>
+      <router-link to="/login" class="mt-4 block text-center text-sm text-muted hover:text-ink">
+        {{ $t("forgotPassword.backToLogin") }}
+      </router-link>
+    </template>
+
+    <template v-else-if="state === 'nolink'">
+      <p role="status" class="rounded-lg border border-bd bg-surface p-3 text-sm leading-relaxed text-muted">
+        {{ $t("resetPassword.noLink") }}
+      </p>
+      <!-- Secondary: a new link costs one of the hourly sends and retires the emailed one. -->
+      <router-link
+        to="/forgot-password"
+        class="mt-4 block w-full rounded-lg border border-bd px-4 py-2 text-center text-sm font-medium text-ink transition hover:border-accent/40"
       >
         {{ $t("resetPassword.requestNew") }}
       </router-link>

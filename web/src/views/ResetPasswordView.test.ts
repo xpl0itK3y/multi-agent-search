@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 import { i18n } from "@/i18n";
-import { holdLinkToken } from "@/lib/linkToken";
+import { holdLinkToken, takeLinkToken } from "@/lib/linkToken";
 import { useAuthStore } from "@/stores/auth";
 
 const resetPassword = vi.hoisted(() => vi.fn());
@@ -58,6 +58,19 @@ function expectDeadLink(wrapper: Wrapper) {
   expect(wrapper.text()).not.toContain("reset_token_invalid");
 }
 
+// No token on this page load: nothing is known about the link, which may still work.
+function expectNoLink(wrapper: Wrapper) {
+  expect(wrapper.find('[role="status"]').text()).toBe(t("resetPassword.noLink"));
+  expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+  expect(wrapper.text()).not.toContain(t("errors.api.resetTokenInvalid"));
+  expect(wrapper.find('a[href="/forgot-password"]').text()).toBe(t("resetPassword.requestNew"));
+  expect(wrapper.find('a[href="/login"]').text()).toBe(t("forgotPassword.backToLogin"));
+  expect(wrapper.find("form").exists()).toBe(false);
+}
+
+// A page left mounted would still take the next test's link (onLinkToken).
+enableAutoUnmount(afterEach);
+
 describe("ResetPasswordView", () => {
   beforeEach(() => {
     i18n.global.locale.value = "en";
@@ -108,11 +121,11 @@ describe("ResetPasswordView", () => {
     expect(useAuthStore().user).not.toBeNull();
   });
 
-  it("treats a link without a token as dead, without asking the server", async () => {
+  it("without a token, asks to open the emailed link again: no word of a dead link, no request", async () => {
     for (const hash of [undefined, "#", "#section"]) {
       const wrapper = await mountView(hash);
 
-      expectDeadLink(wrapper);
+      expectNoLink(wrapper);
       expect(resetPassword).not.toHaveBeenCalled();
     }
   });
@@ -121,7 +134,55 @@ describe("ResetPasswordView", () => {
     await mountView("#token=reset-tok");
     const again = await mountView();
 
-    expectDeadLink(again);
+    expectNoLink(again);
+  });
+
+  it("takes a link opened again into the open page, and uses its token", async () => {
+    const wrapper = await mountView();
+    expectNoLink(wrapper);
+
+    // What the link capture does for a same-document navigation to a new fragment.
+    holdLinkToken("reset-password", "#token=again-tok");
+    await flushPromises();
+    await submit(wrapper, "new-password");
+
+    expect(resetPassword).toHaveBeenCalledWith("again-tok", "new-password");
+    expect(wrapper.find('[role="status"]').text()).toBe(t("resetPassword.done"));
+  });
+
+  it("a new link replaces the one the open form had, and clears the form", async () => {
+    const wrapper = await mountView("#token=first-tok");
+    await wrapper.findAll('input[type="password"]')[0].setValue("typed");
+
+    holdLinkToken("reset-password", "#token=again-tok");
+    await flushPromises();
+
+    expect((wrapper.findAll('input[type="password"]')[0].element as HTMLInputElement).value).toBe("");
+    await submit(wrapper, "new-password");
+    expect(resetPassword).toHaveBeenCalledOnce();
+    expect(resetPassword).toHaveBeenCalledWith("again-tok", "new-password");
+  });
+
+  it("a dead link's page takes a new link too", async () => {
+    resetPassword.mockRejectedValueOnce(new ApiError(400, DEAD_LINK));
+    const wrapper = await mountView("#token=used-tok");
+    await submit(wrapper, "new-password");
+    expectDeadLink(wrapper);
+
+    holdLinkToken("reset-password", "#token=again-tok");
+    await flushPromises();
+    await submit(wrapper, "new-password");
+
+    expect(resetPassword).toHaveBeenLastCalledWith("again-tok", "new-password");
+  });
+
+  it("leaves a new link alone once it is gone", async () => {
+    const wrapper = await mountView();
+    wrapper.unmount();
+
+    holdLinkToken("reset-password", "#token=later-tok");
+
+    expect(takeLinkToken("reset-password")).toBe("later-tok");
   });
 
   it("keeps the form, with the reason, for other refusals", async () => {

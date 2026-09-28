@@ -34,10 +34,26 @@ export function linkTokenFromHash(hash: string): string | null {
   return match ? match[1] : null;
 }
 
-/** Holds the token of `hash`, for `page` (a route name), in place of any held before. */
+// The open pages that want a link's new token (onLinkToken).
+const listeners = new Set<{ page: string; fn: () => void }>();
+
+/** Holds the token of `hash`, for `page` (a route name), in place of any held before, and
+ * tells that page if it is open. */
 export function holdLinkToken(page: string, hash: string): void {
   const token = linkTokenFromHash(hash);
   held = token ? { page, token } : null;
+  if (!token) return;
+  for (const listener of [...listeners]) if (listener.page === page) listener.fn();
+}
+
+/** Calls `fn` whenever a new token is held for `page`: a link opened again into this tab
+ * while the page is open, which mounts nothing new. Returns the function that stops it. */
+export function onLinkToken(page: string, fn: () => void): () => void {
+  const listener = { page, fn };
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 /** The token held for `page`, once: the next call returns null. */

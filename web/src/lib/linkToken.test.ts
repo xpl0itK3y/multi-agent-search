@@ -6,6 +6,7 @@ import {
   holdLinkToken,
   linkPageOf,
   linkTokenFromHash,
+  onLinkToken,
   takeLinkToken,
   watchLinkTokens,
 } from "./linkToken";
@@ -106,5 +107,22 @@ describe("watchLinkTokens", () => {
     await new Promise((resolve) => window.addEventListener("hashchange", resolve, { once: true }));
     expect(window.location.hash).toBe("#token=later-tok");
     expect(takeLinkToken("reset-password")).toBeNull();
+  });
+});
+
+describe("onLinkToken", () => {
+  it("tells an open page of each new token for it, until stopped", () => {
+    const seen: string[] = [];
+    const stop = onLinkToken("reset-password", () => seen.push(takeLinkToken("reset-password") ?? "none"));
+
+    holdLinkToken("reset-password", "#token=one");
+    holdLinkToken("verify-email", "#token=other-page");
+    holdLinkToken("reset-password", "#section");
+    holdLinkToken("reset-password", "#token=two");
+    stop();
+    holdLinkToken("reset-password", "#token=three");
+
+    expect(seen).toEqual(["one", "two"]);
+    expect(takeLinkToken("reset-password")).toBe("three");
   });
 });

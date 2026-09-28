@@ -364,6 +364,7 @@ const ru = {
     done: "Пароль изменён, все устройства вышли из аккаунта. Войдите с новым паролем.",
     toLogin: "Войти",
     requestNew: "Запросить новую ссылку",
+    noLink: "Чтобы задать новый пароль, откройте ссылку из письма, которое мы вам отправили. Если ссылка уже не работает, запросите новую.",
   },
   verifyEmail: {
     title: "Подтверждение email",
@@ -1546,6 +1547,7 @@ const en: typeof ru = {
     done: "Your password has been changed and every device has been signed out. Sign in with the new password.",
     toLogin: "Sign in",
     requestNew: "Request a new link",
+    noLink: "To set a new password, open the link in the email we sent you. If the link no longer works, request a new one.",
   },
   verifyEmail: {
     title: "Email verification",
@@ -2728,6 +2730,7 @@ const es: typeof ru = {
     done: "Tu contraseña se ha cambiado y se ha cerrado la sesión en todos los dispositivos. Inicia sesión con la contraseña nueva.",
     toLogin: "Iniciar sesión",
     requestNew: "Solicitar un enlace nuevo",
+    noLink: "Para establecer una contraseña nueva, abre el enlace del email que te enviamos. Si el enlace ya no funciona, solicita uno nuevo.",
   },
   verifyEmail: {
     title: "Verificación del email",
