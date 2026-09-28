@@ -527,7 +527,10 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
 <template>
   <div class="flex h-full flex-col">
     <!-- Tab bar: a scrolling segmented control. The wheel scrolls it sideways, the chosen
-         tab scrolls into view, and a fade on the right shows only while more tabs wait. -->
+         tab scrolls into view, and a fade on the right shows only while more tabs wait.
+         Only the chosen tab has a border (its underline). Other tabs make up its 2px in
+         padding: a transparent border would be painted in forced colours, and then every
+         tab would look chosen. In forced colours the underline is Highlight. -->
     <div class="flex min-w-0 items-center border-b border-bd px-3">
       <div
         ref="tabStrip"
@@ -546,8 +549,8 @@ async function exportReport(fmt: "pdf" | "docx" | "html" | "md" | "json" | "trai
           :aria-selected="tab === tb"
           :aria-controls="`${uid}-panel`"
           :tabindex="tab === tb ? 0 : -1"
-          class="shrink-0 whitespace-nowrap rounded-t-md border-b-2 px-2.5 py-3 text-[0.8125rem] font-medium transition-colors focus-visible:!outline-offset-[-2px] sm:px-3 sm:text-sm"
-          :class="tab === tb ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'"
+          class="shrink-0 whitespace-nowrap rounded-t-md px-2.5 pt-3 text-[0.8125rem] font-medium transition-colors focus-visible:!outline-offset-[-2px] sm:px-3 sm:text-sm"
+          :class="tab === tb ? 'border-b-2 border-accent pb-3 text-ink forced-colors:border-[color:Highlight]' : 'pb-3.5 text-muted hover:text-ink'"
           @click="tab = tb"
         >
           {{ $t("artifact." + tb) }}

@@ -400,6 +400,29 @@ describe("ArtifactPanel tab strip", () => {
     expect(strip.classes()).not.toContain("edge-fade-x");
   });
 
+  // Forced colours paint a transparent border, so every tab looked chosen (VIS-6).
+  it("gives only the chosen tab a border, and the others the same height in padding", async () => {
+    mocks.api.getSources.mockResolvedValue([]);
+    const w = await mountPanel();
+    const borders = (cls: string[]) => cls.filter((c) => /^(forced-colors:)?border/.test(c));
+    const check = () => {
+      for (const tb of w.findAll("[role=tab]")) {
+        if (tb.attributes("aria-selected") === "true") {
+          expect(borders(tb.classes()).sort()).toEqual(["border-accent", "border-b-2", "forced-colors:border-[color:Highlight]"]);
+          expect(tb.classes()).toContain("pb-3"); // 12px + the 2px border
+        } else {
+          expect(borders(tb.classes())).toEqual([]);
+          expect(tb.classes()).toContain("pb-3.5"); // 14px
+        }
+      }
+    };
+
+    check();
+    await tabButton(w, "sources").trigger("click");
+    expect(tabButton(w, "sources").attributes("aria-selected")).toBe("true");
+    check();
+  });
+
   it("moves between tabs with the arrow keys", async () => {
     mocks.api.getSources.mockResolvedValue([]);
     const w = await mountPanel();
