@@ -383,7 +383,7 @@ function openSettings() {
       <div class="flex items-center gap-1 text-muted">
         <button
           type="button"
-          class="icon-btn hit press after:-inset-x-0.5"
+          class="icon-btn hit press [@media(pointer:coarse)]:after:-inset-x-0.5"
           :title="$t('sidebar.search')"
           :aria-label="$t('sidebar.search')"
           :aria-expanded="searchOpen ? 'true' : 'false'"
@@ -393,7 +393,7 @@ function openSettings() {
         </button>
         <button
           type="button"
-          class="icon-btn hit press text-2xs font-medium after:-inset-x-0.5"
+          class="icon-btn hit press text-2xs font-medium [@media(pointer:coarse)]:after:-inset-x-0.5"
           :title="LOCALE_LABEL[ui.locale]"
           @click="cycleLocale()"
         >
@@ -403,7 +403,7 @@ function openSettings() {
           <button
             ref="themeTrigger"
             type="button"
-            class="icon-btn hit press after:-inset-x-0.5"
+            class="icon-btn hit press [@media(pointer:coarse)]:after:-inset-x-0.5"
             :title="$t('sidebar.theme')"
             :aria-label="$t('sidebar.theme')"
             aria-haspopup="menu"
@@ -439,7 +439,7 @@ function openSettings() {
         </div>
         <button
           type="button"
-          class="icon-btn hit press after:-inset-x-0.5"
+          class="icon-btn hit press [@media(pointer:coarse)]:after:-inset-x-0.5"
           :title="$t('sidebar.collapse')"
           :aria-label="$t('sidebar.collapse')"
           @click="ui.toggleSidebar()"
@@ -476,7 +476,10 @@ function openSettings() {
         />
       </div>
 
-      <div class="min-h-0 flex-1 overflow-y-auto px-2">
+      <!-- touch-pan-y: a scroller is where the browser stops looking for touch-action, so
+           without its own pan-y a sideways drag here would be taken by the browser and never
+           reach the drawer's drag-to-close (it scrolls only vertically anyway). -->
+      <div class="min-h-0 flex-1 touch-pan-y overflow-y-auto px-2">
         <!-- Skeleton only on a first load: a refresh keeps the list in place. -->
         <div v-if="store.loadingHistory && !store.history.length" class="space-y-2 px-3 py-2">
           <div v-for="i in 5" :key="i" class="h-4 animate-pulse rounded bg-surface" :style="{ width: 70 + ((i * 7) % 25) + '%' }" />

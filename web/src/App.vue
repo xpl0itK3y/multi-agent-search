@@ -55,6 +55,14 @@ const drawerHidden = computed(() => !ui.mobileOpen && !isLg.value);
 // A finger drags the open drawer away 1:1; a flick closes it at the release velocity.
 useDragDismiss({ panel: drawer, side: "left", enabled: () => drawerOpen.value, onDismiss: () => ui.closeMobile(), scrim });
 
+// A touch is implicitly captured by the element under the finger. When useDragDismiss
+// takes the capture for the drawer, that child's lostpointercapture bubbles up to the
+// drawer, where useDragDismiss also listens for it and would take it for the end of its
+// own capture, cancelling the drag it just claimed. Only the drawer's own event counts.
+function onDrawerLostCapture(e: PointerEvent) {
+  if (drawerOpen.value && e.target !== e.currentTarget) e.stopPropagation();
+}
+
 // Close the mobile drawer on any navigation.
 watch(() => route.fullPath, () => ui.closeMobile());
 
@@ -134,6 +142,7 @@ const drawerClass = computed(() => {
       :aria-label="isLg ? undefined : $t('common.menu')"
       :aria-hidden="drawerHidden ? 'true' : undefined"
       :inert="drawerHidden ? true : undefined"
+      @lostpointercapture.capture="onDrawerLostCapture"
     >
       <AppSidebar />
     </div>

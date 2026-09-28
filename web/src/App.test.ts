@@ -95,6 +95,21 @@ describe("App shell", () => {
     expect(document.activeElement).toBe(menuButton(wrapper).element);
   });
 
+  it("keeps a child's lost implicit capture from cancelling the drawer's drag", async () => {
+    const { wrapper } = await mountApp("/");
+    await menuButton(wrapper).trigger("click");
+    await flushPromises();
+    const seen: EventTarget[] = [];
+    drawer().addEventListener("lostpointercapture", (e) => seen.push(e.target!));
+
+    // A touch starts on a row: the row holds the implicit capture until the drawer takes it.
+    drawer().querySelector("button")!.dispatchEvent(new Event("lostpointercapture", { bubbles: true }));
+    expect(seen).toEqual([]);
+
+    drawer().dispatchEvent(new Event("lostpointercapture", { bubbles: true }));
+    expect(seen).toEqual([drawer()]);
+  });
+
   it("closes on a scrim tap and on navigation", async () => {
     const { wrapper, router, ui } = await mountApp("/");
     await menuButton(wrapper).trigger("click");
