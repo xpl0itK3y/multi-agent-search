@@ -56,6 +56,24 @@ describe("PublicReportView", () => {
     expect(wrapper.find("header").classes()).toEqual(expect.arrayContaining(["sticky", "material-bar"]));
   });
 
+  it("takes focus on arrival, so the keys scroll the report without a click first", async () => {
+    // The document cannot scroll (the frames clip at the viewport): with focus on <body>,
+    // PageDown, Space, the arrows and End did nothing until the reader clicked in.
+    getPublicReport.mockResolvedValue(report());
+    setActivePinia(createPinia());
+    const wrapper = mount(PublicReportView, {
+      props: { token: "tok" },
+      global: { plugins: [i18n], stubs: { MarkdownView: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+
+    expect(document.activeElement).toBe(wrapper.element);
+    expect(wrapper.attributes("tabindex")).toBe("-1"); // focusable from script, never a Tab stop
+    expect(wrapper.attributes()).toHaveProperty("data-scroll-root"); // no ring (style.css), also in contrast themes
+    wrapper.unmount();
+  });
+
   it("says what was asked, when, how deep and on how many sources", async () => {
     getPublicReport.mockResolvedValue(report());
     const wrapper = await mountView();
